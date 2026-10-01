@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  WDK_VERSION: '10.0.26100.0'
+
+jobs:
+  m1probe:
+    name: m1probe (ARM64, test-signed)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+
+      - name: Build
+        shell: pwsh
+        run: |
+          msbuild drivers\m1probe\m1probe.vcxproj `
+            /p:Configuration=Release /p:Platform=ARM64 `
+            /p:WindowsTargetPlatformVersion=$env:WDK_VERSION `
+            /p:SignMode=Off /m /nologo /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw "msbuild failed" }
+
+      - name: Test-sign
+        shell: pwsh
+        run: |
+          # testsigning on the target accepts a signature that does not chain to
+          # a trusted root; it does not accept no signature at all.
+          $out = 'pkg\m1probe'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Get-ChildItem drivers\m1probe -Recurse -Include m1probe.sys,m1probe.inf |
+            Where-Object { $_.FullName -match '\\ARM64\\Release\\' } |
+            Copy-Item -Destination $out -Force
+          if (-not (Test-Path "$out\m1probe.sys")) { throw 'no m1probe.sys came out of the build' }
+          $kits = 'C:\Program Files (x86)\Windows Kits\10'
+          $st   = Join-Path $kits "bin\$env:WDK_VERSION\x86\signtool.exe"
+          $i2c  = Join-Path $kits "bin\$env:WDK_VERSION\x86\inf2cat.exe"
+          $pw   = 'rk3576-test'
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=wddm-mali-g52 test signing' `
+                    -CertStoreLocation Cert:\CurrentUser\My -HashAlgorithm SHA256 -NotAfter (Get-Date).AddYears(5)
+          Export-PfxCertificate -Cert $cert -FilePath C:\t.pfx -Password (ConvertTo-SecureString $pw -Force -AsPlainText) | Out-Null
+          & $i2c /driver:"$((Resolve-Path $out).Path)" /os:10_RS3_ARM64
+          if ($LASTEXITCODE) { throw "inf2cat failed: $LASTEXITCODE" }
+          & $st sign /fd sha256 /f C:\t.pfx /p $pw "$out\m1probe.sys" "$out\m1probe.cat"
+          if ($LASTEXITCODE) { throw "signtool failed: $LASTEXITCODE" }
+          Get-ChildItem $out | Format-Table Name, Length
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: m1probe-arm64
+          path: pkg/
+          if-no-files-found: error

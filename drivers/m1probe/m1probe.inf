@@ -1,0 +1,58 @@
+;
+; m1probe.inf - milestone M1: run one job on the RK3576 Mali-G52.
+; Binds ACPI\RKCP7402 (GPU0 in the edk2-rk3576 CM5-IO DSDT).
+;
+; SPDX-License-Identifier: GPL-2.0
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = m1probe.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+m1probe.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64.10.0...16299
+
+[Standard.NTARM64.10.0...16299]
+%M1.DeviceDesc% = M1_Inst,ACPI\RKCP7402
+
+[M1_Inst.NT]
+CopyFiles = M1_CopyFiles
+
+[M1_CopyFiles]
+m1probe.sys
+
+[M1_Inst.NT.Services]
+AddService = m1probe,0x00000002,M1_Service
+
+[M1_Service]
+DisplayName   = %M1.SvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\m1probe.sys
+
+[M1_Inst.NT.Wdf]
+KmdfService = m1probe, M1_wdfsect
+
+[M1_wdfsect]
+KmdfLibraryVersion = 1.33
+
+[Strings]
+ProviderName  = "wddm-mali-g52"
+DiskName      = "Mali-G52 M1 probe"
+M1.DeviceDesc = "Arm Mali-G52 (M1 probe)"
+M1.SvcDesc    = "Arm Mali-G52 M1 probe"
