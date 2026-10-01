@@ -211,7 +211,11 @@ jobs:
             -Dopengl=false -Dgles1=disabled -Dgles2=disabled `
             -Degl=disabled -Dglx=disabled -Dgbm=disabled `
             '-Dvideo-codecs=' -Dmicrosoft-clc=disabled -Dspirv-to-dxil=false `
-            -Dzstd=disabled -Dshader-cache=disabled -Dbuild-tests=false
+            -Dzstd=disabled -Dshader-cache=disabled -Dbuild-tests=false `
+            '-Dc_args=-DHAVE_FUNC_ATTRIBUTE_PACKED' '-Dcpp_args=-DHAVE_FUNC_ATTRIBUTE_PACKED'
+          # meson decides clang-cl has no __attribute__((packed)), so PACKED
+          # expands to nothing; it does have it, and libpan's kernel argument
+          # structs (uint64_t + uint32_t, 12 bytes on the GPU side) need it.
           if ($LASTEXITCODE) { if (Test-Path build\meson-logs\meson-log.txt) { Get-Content build\meson-logs\meson-log.txt -Tail 80 }; throw 'meson setup failed' }
       - name: Build
         shell: pwsh
