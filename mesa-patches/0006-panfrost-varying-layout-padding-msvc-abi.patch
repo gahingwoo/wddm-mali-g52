@@ -1,0 +1,16 @@
+diff --git a/src/panfrost/compiler/pan_compiler.h b/src/panfrost/compiler/pan_compiler.h
+index 9024a9a..213a0bf 100644
+--- a/src/panfrost/compiler/pan_compiler.h
++++ b/src/panfrost/compiler/pan_compiler.h
+@@ -289,7 +289,11 @@ enum ENUM_PACKED pan_varying_knowledge {
+  * ignored by finding functions.
+  */
+ PRAGMA_DIAGNOSTIC_PUSH
++/* Under the MSVC ABI ENUM_PACKED is empty, the enum below is 4 bytes and the
++ * struct gains padding; that is harmless there, so only enforce it elsewhere. */
++#ifndef _MSC_VER
+ PRAGMA_DIAGNOSTIC_ERROR(-Wpadded)
++#endif
+ struct pan_varying_layout {
+    uint8_t count;
+    enum pan_varying_knowledge known;

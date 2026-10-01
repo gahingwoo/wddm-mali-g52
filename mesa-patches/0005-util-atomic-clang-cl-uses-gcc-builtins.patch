@@ -1,0 +1,15 @@
+diff --git a/src/util/u_atomic.h b/src/util/u_atomic.h
+index 9f79113..ef67bbe 100644
+--- a/src/util/u_atomic.h
++++ b/src/util/u_atomic.h
+@@ -22,6 +22,10 @@
+  */
+ #if defined(__sun)
+ #define PIPE_ATOMIC_OS_SOLARIS
++#elif defined(__clang__)
++/* clang-cl defines _MSC_VER but does not declare the MSVC ARM64 interlocked
++ * intrinsics this header would use; it has the GCC __atomic builtins. */
++#define PIPE_ATOMIC_GCC_INTRINSIC
+ #elif defined(_MSC_VER)
+ #define PIPE_ATOMIC_MSVC_INTRINSIC
+ #elif defined(__GNUC__)
