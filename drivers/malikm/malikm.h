@@ -13,6 +13,9 @@
 #include <wdf.h>
 #include "malikm_ioctl.h"
 
+/* ntifs.h, which cannot be included next to ntddk.h. */
+NTKERNELAPI BOOLEAN PsIsThreadTerminating(PETHREAD Thread);
+
 /* ---- registers (names and offsets as in Linux panfrost_regs.h) ---- */
 #define PMU_PA                  0x27380000ULL
 #define PMU_ACK0                0x120

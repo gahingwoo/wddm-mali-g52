@@ -106,7 +106,7 @@ static BOOLEAN SoftReset(PDEVICE_CONTEXT Dev)
     return TRUE;
 }
 
-static BOOLEAN PowerOn(PDEVICE_CONTEXT Dev)
+static BOOLEAN GpuPowerOn(PDEVICE_CONTEXT Dev)
 {
     GPU_FEATURES *f = &Dev->F;
 
@@ -152,7 +152,7 @@ static BOOLEAN Bringup(PDEVICE_CONTEXT Dev)
 {
     if (!SoftReset(Dev))
         return FALSE;
-    if (!PowerOn(Dev))
+    if (!GpuPowerOn(Dev))
         return FALSE;
     AsEnable(Dev);
     WR(Dev, JOB_INT_CLEAR, 0xffffffff);
@@ -179,7 +179,7 @@ NTSTATUS MkGpuInit(PDEVICE_CONTEXT Dev)
     MkLog(Dev, L"MmuFeatures", Dev->F.MmuFeatures);
 
     MkLog(Dev, L"Step", STEP_POWER);
-    if (!PowerOn(Dev))
+    if (!GpuPowerOn(Dev))
         return STATUS_DEVICE_NOT_READY;
 
     MkLog(Dev, L"Step", STEP_MMU);
