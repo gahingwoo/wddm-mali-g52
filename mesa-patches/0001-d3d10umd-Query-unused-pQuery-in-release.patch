@@ -1,0 +1,12 @@
+diff --git a/src/gallium/frontends/d3d10umd/Query.cpp b/src/gallium/frontends/d3d10umd/Query.cpp
+index 8e76023..721256b 100644
+--- a/src/gallium/frontends/d3d10umd/Query.cpp
++++ b/src/gallium/frontends/d3d10umd/Query.cpp
+@@ -169,6 +169,7 @@ QueryBegin(D3D10DDI_HDEVICE hDevice,   // IN
+ 
+    Query *pQuery = CastQuery(hQuery);
+    struct pipe_query *state = CastPipeQuery(hQuery);
++   (void)pQuery; /* only read by assert(); MSVC's /we4189 trips on release builds */
+ 
+    if (state) {
+       assert(pQuery->pipe_type < PIPE_QUERY_TYPES);
