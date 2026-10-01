@@ -1,3 +1,17 @@
+diff --git a/src/gallium/auxiliary/meson.build b/src/gallium/auxiliary/meson.build
+index e4815f8..61f4e02 100644
+--- a/src/gallium/auxiliary/meson.build
++++ b/src/gallium/auxiliary/meson.build
+@@ -284,7 +284,8 @@ if with_gfx_compute
+   )
+ endif
+ 
+-if dep_libdrm.found()
++# Panfrost on Windows uses renderonly too; its libdrm calls go to the shims.
++if dep_libdrm.found() or (host_machine.system() == 'windows' and with_gallium_panfrost)
+   files_libgallium += files(
+     'renderonly/renderonly.c',
+     'renderonly/renderonly.h',
 diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
 index cafc790..40491c5 100644
 --- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
@@ -32,7 +46,7 @@ index cafc790..40491c5 100644
        screen = softpipe_create_screen( winsys );
     }
 diff --git a/src/gallium/targets/d3d10umd/meson.build b/src/gallium/targets/d3d10umd/meson.build
-index ab1cf05..8d931bb 100644
+index ab1cf05..bf4f160 100644
 --- a/src/gallium/targets/d3d10umd/meson.build
 +++ b/src/gallium/targets/d3d10umd/meson.build
 @@ -10,9 +10,17 @@ libgallium_d3d10_def = custom_target(
@@ -43,7 +57,7 @@ index ab1cf05..8d931bb 100644
 +d3d10_panfrost_deps = []
 +if with_gallium_panfrost
 +  d3d10_panfrost_args = ['-DGALLIUM_PANFROST']
-+  d3d10_panfrost_deps = [driver_panfrost]
++  d3d10_panfrost_deps = [driver_panfrost, idep_xmlconfig]
 +endif
 +
  libgallium_d3d10 = shared_library(
