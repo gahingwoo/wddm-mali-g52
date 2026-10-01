@@ -6,7 +6,7 @@ rem
 rem Expected layout next to this script:
 rem   malikm\malikm.sys .inf .cat     (CI artifact malikm-arm64)
 rem   m3test.exe                      (CI artifact m3test-arm64)
-rem   mesa\libgallium_d3d10.dll, mesa\triangle.exe  (artifact mesa-d3d10umd-panfrost-arm64)
+rem   mesa\libgallium_d3d10.dll, triangle.exe, present.exe  (artifact mesa-d3d10umd-panfrost-arm64)
 net session >nul 2>&1 || (echo Run this from an ADMINISTRATOR command prompt. & exit /b 1)
 set HERE=%~dp0
 set OUT=%HERE%m3-out.txt
@@ -52,6 +52,12 @@ set PAN_MESA_DEBUG=sync
 "%HERE%mesa\triangle.exe" "%HERE%mesa\libgallium_d3d10.dll" >> "%OUT%" 2>&1
 echo exit code %errorlevel% >> "%OUT%"
 set PAN_MESA_DEBUG=
+
+rem A window and a swap chain: three cleared frames (red, green, blue) should
+rem flash in a small window, through the GDI copy in mesa-patches/0014.
+echo == present, panfrost >> "%OUT%"
+"%HERE%mesa\present.exe" "%HERE%mesa\libgallium_d3d10.dll" >> "%OUT%" 2>&1
+echo exit code %errorlevel% >> "%OUT%"
 set GALLIUM_DRIVER=
 
 echo == driver registry values after >> "%OUT%"
