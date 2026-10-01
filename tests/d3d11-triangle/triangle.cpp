@@ -118,6 +118,42 @@ int main(int argc, char **argv)
     CHECK(ctx->Map(st, 0, D3D11_MAP_READ, 0, &m), "Map");
     auto px = [&](int x, int y) { return *(const UINT *)((const BYTE *)m.pData + y * m.RowPitch + x * 4); };
     UINT centre = px(32, 32), corner = px(1, 1);
+
+    // The whole image, coarsely: '#' red, '.' the clear colour, '?' anything
+    // else; then the distinct colours and a PPM of all 64x64 pixels.
+    UINT colours[8] = {}, counts[8] = {}, ncol = 0;
+    for (int y = 0; y < 64; y++)
+        for (int x = 0; x < 64; x++) {
+            UINT c = px(x, y), i;
+            for (i = 0; i < ncol && colours[i] != c; i++)
+                ;
+            if (i == ncol && ncol < 8)
+                colours[ncol++] = c;
+            if (i < 8)
+                counts[i]++;
+        }
+    for (int y = 0; y < 64; y += 4) {
+        char line[33];
+        for (int x = 0; x < 64; x += 2) {
+            UINT c = px(x, y);
+            line[x / 2] = c == 0xff0000ffu ? '#' : c == 0xffff0000u ? '.' : '?';
+        }
+        line[32] = 0;
+        printf("  %s\n", line);
+    }
+    for (UINT i = 0; i < ncol; i++)
+        printf("  colour 0x%08x: %u pixels\n", colours[i], counts[i]);
+    FILE *f = fopen("triangle.ppm", "wb");
+    if (f) {
+        fprintf(f, "P6 64 64 255\n");
+        for (int y = 0; y < 64; y++)
+            for (int x = 0; x < 64; x++) {
+                UINT c = px(x, y);
+                unsigned char rgb[3] = { (unsigned char)c, (unsigned char)(c >> 8), (unsigned char)(c >> 16) };
+                fwrite(rgb, 1, 3, f);
+            }
+        fclose(f);
+    }
     ctx->Unmap(st, 0);
 
     // RGBA8 little-endian: red = 0xff0000ff, blue = 0xffff0000
