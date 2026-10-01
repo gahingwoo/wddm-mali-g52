@@ -18,7 +18,7 @@ rem triangle.exe, present.exe and the Mesa DLL need the VC++ runtime.
 if not exist "%SystemRoot%\System32\vcruntime140.dll" (
   echo Installing the VC++ runtime ^(vc_redist.arm64.exe^)...
   "%HERE%vc_redist.arm64.exe" /install /quiet /norestart
-  echo vc_redist exit code %errorlevel% >> "%OUT%"
+  if errorlevel 1 (echo vc_redist failed >> "%OUT%") else (echo vc_redist installed >> "%OUT%")
 )
 
 echo == GPU device before >> "%OUT%"
