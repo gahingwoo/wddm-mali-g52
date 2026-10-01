@@ -9,6 +9,7 @@ on:
       - '.github/workflows/mesa.yml'
       - 'mesa-patches/**'
       - 'tests/**'
+      - 'ci/**'
   workflow_dispatch:
 
 permissions:
@@ -96,3 +97,104 @@ jobs:
         with:
           name: mesa-d3d10umd-softpipe-arm64
           path: out/
+
+  libpan-spirv:
+    # Panfrost precompiles a few OpenCL C kernels (libpan). mesa_clc needs
+    # LLVM and clang, which the Windows build avoids: generate the SPIR-V and
+    # vtn_bindgen2's C++ here (both platform independent) and hand them over.
+    name: libpan SPIR-V (Linux, LLVM)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            llvm-18-dev libclang-18-dev libclang-cpp18-dev libclc-18-dev \
+            libllvmspirvlib-18-dev spirv-tools glslang-tools libdrm-dev \
+            python3-mako python3-yaml python3-packaging bison flex pkg-config \
+            libexpat1-dev zlib1g-dev ninja-build
+          python3 -m pip install --break-system-packages meson
+      - name: Mesa source
+        run: git clone --depth 1 --branch "$MESA_TAG" "$MESA_URL" mesa
+      - name: Configure
+        run: |
+          meson setup build mesa -Dbuildtype=release \
+            -Dgallium-drivers=panfrost -Dvulkan-drivers= -Dplatforms= \
+            -Dglx=disabled -Degl=disabled -Dgbm=disabled \
+            -Dllvm=enabled -Dmesa-clc=enabled -Dvideo-codecs= -Dbuild-tests=false \
+            || { tail -60 build/meson-logs/meson-log.txt; exit 1; }
+      - name: Build libpan
+        run: |
+          targets=""
+          for v in 4 5 6 7 9 10 12 13 14; do
+            targets="$targets src/panfrost/libpan/libpan_v$v.spv src/panfrost/libpan/libpan_v$v.cpp src/panfrost/libpan/libpan_v$v.h"
+          done
+          ninja -C build $targets
+          mkdir -p libpan && cp build/src/panfrost/libpan/libpan_v*.spv build/src/panfrost/libpan/libpan_v*.cpp build/src/panfrost/libpan/libpan_v*.h libpan/
+          ls -la libpan
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libpan-generated
+          path: libpan/
+
+  panfrost:
+    name: d3d10umd + softpipe + Panfrost (ARM64)
+    needs: libpan-spirv
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: libpan-generated
+          path: libpan
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: arm64
+      - name: Build tools
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install meson ninja mako pyyaml packaging
+          $u = 'https://github.com/lexxmark/winflexbison/releases/download/v2.5.25/win_flex_bison-2.5.25.zip'
+          Invoke-WebRequest $u -OutFile wfb.zip
+          Expand-Archive wfb.zip -DestinationPath C:\winflexbison
+          "C:\winflexbison" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          "$pwd\ci\clc-stubs" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          "LIBPAN_PREBUILT=$pwd\libpan" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: arm64
+      - name: Mesa source
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch $env:MESA_TAG $env:MESA_URL mesa
+          Get-ChildItem mesa-patches -Filter *.patch -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object {
+            Write-Host "applying $($_.Name)"
+            git -C mesa apply --whitespace=nowarn $_.FullName
+            if ($LASTEXITCODE) { throw "patch failed: $($_.Name)" }
+          }
+      - name: Configure
+        shell: pwsh
+        run: |
+          meson setup build mesa --backend=ninja `
+            -Dbuildtype=release `
+            -Dplatforms=windows `
+            -Dgallium-drivers=softpipe,panfrost `
+            -Dgallium-d3d10umd=true `
+            -Dmesa-clc=system `
+            '-Dvulkan-drivers=' `
+            -Dllvm=disabled `
+            -Dopengl=false -Dgles1=disabled -Dgles2=disabled `
+            -Degl=disabled -Dglx=disabled -Dgbm=disabled `
+            '-Dvideo-codecs=' -Dmicrosoft-clc=disabled -Dspirv-to-dxil=false `
+            -Dzstd=disabled -Dshader-cache=disabled -Dbuild-tests=false
+          if ($LASTEXITCODE) { if (Test-Path build\meson-logs\meson-log.txt) { Get-Content build\meson-logs\meson-log.txt -Tail 80 }; throw 'meson setup failed' }
+      - name: Build
+        shell: pwsh
+        run: |
+          meson compile -C build -- -k 0 2>&1 | Tee-Object build.log
+          $fail = Select-String -Path build.log -Pattern 'FAILED:' | Measure-Object
+          Write-Host "failed build steps: $($fail.Count)"
+          Select-String -Path build.log -Pattern ' error C| error LNK|fatal error' | Select-Object -First 80 | ForEach-Object { $_.Line }
+          if ($fail.Count -gt 0) { throw 'build failed' }

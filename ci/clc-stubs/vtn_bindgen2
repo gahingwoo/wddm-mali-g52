@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0
+# Stand-in for Mesa's vtn_bindgen2 on the Windows ARM64 build: copies the C++
+# bindings the Linux CI job generated from the same SPIR-V.
+#   vtn_bindgen2 libpan_vN.spv OUT.cpp OUT.h
+import os, shutil, sys
+spv, cpp, h = sys.argv[1:4]
+base = os.path.splitext(os.path.basename(spv))[0]        # libpan_vN
+pre = os.environ["LIBPAN_PREBUILT"]
+shutil.copyfile(os.path.join(pre, base + ".cpp"), cpp)
+shutil.copyfile(os.path.join(pre, base + ".h"), h)
