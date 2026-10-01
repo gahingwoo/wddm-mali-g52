@@ -86,6 +86,9 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $false
           .\out\m3test.exe
           if ($LASTEXITCODE -ne 1) { throw "unexpected exit code $LASTEXITCODE" }
+          # How the UCRT treats a handle of FILE_TYPE_UNKNOWN (what \\.\MaliG52 is).
+          cl /nologo /O2 /MD tests\osfhandle\osfhandle.c /Fe:osfhandle.exe
+          .\osfhandle.exe
           exit 0
       - uses: actions/upload-artifact@v4
         with:
