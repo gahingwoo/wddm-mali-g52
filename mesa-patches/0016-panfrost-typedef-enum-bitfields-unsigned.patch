@@ -1,0 +1,37 @@
+diff --git a/src/gallium/drivers/panfrost/pan_fb_preload.c b/src/gallium/drivers/panfrost/pan_fb_preload.c
+index b9eeec9..5c03301 100644
+--- a/src/gallium/drivers/panfrost/pan_fb_preload.c
++++ b/src/gallium/drivers/panfrost/pan_fb_preload.c
+@@ -62,8 +62,8 @@ enum pan_preload_resource_table {
+ };
+ 
+ struct pan_preload_surface {
+-   gl_frag_result loc              : 4;
+-   nir_alu_type type               : 8;
++   unsigned loc                    : 4; /* gl_frag_result */
++   unsigned type                   : 8; /* nir_alu_type */
+    unsigned dim : 3; /* enum mali_texture_dimension */
+    bool array                      : 1;
+    unsigned samples                : 5;
+@@ -84,7 +84,7 @@ struct pan_preload_shader_data {
+ struct pan_preload_rsd_key {
+    struct {
+       enum pipe_format format;
+-      nir_alu_type type               : 8;
++      unsigned type                   : 8; /* nir_alu_type */
+       unsigned samples                : 5;
+       unsigned dim : 3; /* enum mali_texture_dimension */
+       bool array                      : 1;
+diff --git a/src/panfrost/compiler/pan_compiler.h b/src/panfrost/compiler/pan_compiler.h
+index 21a5175..ae939a2 100644
+--- a/src/panfrost/compiler/pan_compiler.h
++++ b/src/panfrost/compiler/pan_compiler.h
+@@ -236,7 +236,7 @@ enum pan_varying_section {
+ 
+ struct pan_varying_slot {
+    /* GLSL/SPIR-V location of the varying slot */
+-   gl_varying_slot location : 7;
++   unsigned location : 7; /* gl_varying_slot; unsigned for the MSVC ABI */
+ 
+    /* Format of the varying slot in memory
+     * (really nir_alu_type, but the compiler screams at you if you don't lie) */

@@ -88,7 +88,7 @@ jobs:
         run: |
           $dll = (Get-ChildItem build -Recurse -Filter libgallium_d3d10.dll | Select-Object -First 1).FullName
           if (-not $dll) { throw 'libgallium_d3d10.dll was not built' }
-          cl /nologo /EHsc /O2 tests\d3d11-triangle\triangle.cpp /Fe:triangle.exe
+          cl /nologo /EHsc /O2 /MD tests\d3d11-triangle\triangle.cpp /Fe:triangle.exe
           if ($LASTEXITCODE) { throw 'test build failed' }
           .\triangle.exe $dll
           if ($LASTEXITCODE) { throw "smoke test failed ($LASTEXITCODE)" }
@@ -233,7 +233,7 @@ jobs:
         run: |
           $dll = (Get-ChildItem build -Recurse -Filter libgallium_d3d10.dll | Select-Object -First 1).FullName
           if (-not $dll) { throw 'libgallium_d3d10.dll was not built' }
-          cl /nologo /EHsc /O2 tests\d3d11-triangle\triangle.cpp /Fe:triangle.exe
+          cl /nologo /EHsc /O2 /MD tests\d3d11-triangle\triangle.cpp /Fe:triangle.exe
           if ($LASTEXITCODE) { throw 'test build failed' }
           .\triangle.exe $dll
           if ($LASTEXITCODE) { throw "softpipe smoke test failed ($LASTEXITCODE)" }

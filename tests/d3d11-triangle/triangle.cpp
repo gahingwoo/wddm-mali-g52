@@ -13,6 +13,7 @@
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "d3dcompiler.lib")
@@ -31,6 +32,12 @@ static const char kHlsl[] =
 
 int main(int argc, char **argv)
 {
+    /* Built /MD, so this reaches the CRT the driver DLL uses too: a failed
+     * assert in a debug Mesa prints and aborts instead of opening a dialog
+     * nobody will click on a CI runner. */
+    _set_error_mode(_OUT_TO_STDERR);
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
     const char *dll = argc > 1 ? argv[1] : "libgallium_d3d10.dll";
     HMODULE sw = LoadLibraryA(dll);
     if (!sw) {
