@@ -7,11 +7,19 @@ rem Expected layout next to this script:
 rem   malikm\malikm.sys .inf .cat     (CI artifact malikm-arm64)
 rem   m3test.exe                      (CI artifact m3test-arm64)
 rem   mesa\libgallium_d3d10.dll, triangle.exe, present.exe  (artifact mesa-d3d10umd-panfrost-arm64)
+rem   vc_redist.arm64.exe             (https://aka.ms/vs/17/release/vc_redist.arm64.exe)
 net session >nul 2>&1 || (echo Run this from an ADMINISTRATOR command prompt. & exit /b 1)
 set HERE=%~dp0
 set OUT=%HERE%m3-out.txt
 set KEY="HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters"
 echo m3-test %date% %time% > "%OUT%"
+
+rem triangle.exe, present.exe and the Mesa DLL need the VC++ runtime.
+if not exist "%SystemRoot%\System32\vcruntime140.dll" (
+  echo Installing the VC++ runtime ^(vc_redist.arm64.exe^)...
+  "%HERE%vc_redist.arm64.exe" /install /quiet /norestart
+  echo vc_redist exit code %errorlevel% >> "%OUT%"
+)
 
 echo == GPU device before >> "%OUT%"
 pnputil /enum-devices /instanceid "ACPI\RKCP7402\0" >> "%OUT%" 2>&1
