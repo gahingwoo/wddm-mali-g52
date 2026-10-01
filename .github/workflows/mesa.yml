@@ -247,49 +247,70 @@ jobs:
           Copy-Item $dll, triangle.exe out\
 
       - name: Panfrost on the emulated driver (MALIKM_FAKE)
+        timeout-minutes: 15
         shell: pwsh
         run: |
           # The shim emulates malikm in-process: Panfrost creates its screen,
           # compiles the shaders, builds and submits the job chains; nothing
           # executes them, so the pixels are arbitrary (exit code 2).
-          $PSNativeCommandUseErrorActionPreference = $false
           $env:GALLIUM_DRIVER = 'panfrost'
           $env:MALIKM_FAKE = '2'
           Copy-Item (Get-ChildItem build -Recurse -Filter libgallium_d3d10.pdb | Select-Object -First 1).FullName out\ -ErrorAction SilentlyContinue
-          .\out\triangle.exe (Resolve-Path out\libgallium_d3d10.dll) 2>&1 | Tee-Object fake.txt
-          $code = $LASTEXITCODE
-          Write-Host "exit code $code"
-          if ($code -lt 0) {
-            # Crashed: the same run under cdb, for a stack.
-            $cdb = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Debuggers' -Recurse -Filter cdb.exe -ErrorAction SilentlyContinue |
-                     Where-Object { $_.FullName -match 'arm64' } | Select-Object -First 1
-            if ($cdb) {
-              & $cdb.FullName -g -G -y "$pwd\out" -c '.lines -e; .ecxr; kn 40; r; q' .\out\triangle.exe (Resolve-Path out\libgallium_d3d10.dll) 2>&1 | Tee-Object cdb.txt | Select-Object -Last 80
-            } else { Write-Host 'no cdb on this runner' }
+          $dll = (Resolve-Path out\libgallium_d3d10.dll).Path
+          $cdb = (Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Debuggers' -Recurse -Filter cdb.exe -ErrorAction SilentlyContinue |
+                    Where-Object { $_.FullName -match 'arm64' } | Select-Object -First 1).FullName
+
+          # Run with a time limit; on a hang, every thread's stack; on a
+          # crash, the faulting stack. stdout and stderr go to files.
+          function Run-Triangle($tag) {
+            $p = Start-Process -FilePath (Resolve-Path out\triangle.exe).Path -ArgumentList "`"$dll`"" -NoNewWindow -PassThru `
+                   -RedirectStandardOutput "$tag.out" -RedirectStandardError "$tag.err"
+            if (-not $p.WaitForExit(120000)) {
+              Write-Host "$tag: still running after 120 s, dumping threads"
+              if ($cdb) { & $cdb -p $p.Id -y "$pwd\out" -c '.lines -e; ~*kn 40; q' 2>&1 | Out-File "$tag-hang.txt" }
+              Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+              return 'hang'
+            }
+            $code = $p.ExitCode
+            Write-Host "$tag: exit code $code"
+            if ($code -lt 0 -and $cdb) {
+              & $cdb -g -G -y "$pwd\out" -c '.lines -e; kn 40; r; q' (Resolve-Path out\triangle.exe).Path $dll 2>&1 | Out-File "$tag-crash.txt"
+            }
+            return $code
           }
-          if (-not (Test-Path fake.txt)) { New-Item fake.txt | Out-Null }
-          if (Select-String -Path fake.txt -Pattern 'using softpipe' -Quiet) { throw 'fell back to softpipe' }
-          if (-not (Select-String -Path fake.txt -Pattern 'malikm-fake: submit' -Quiet)) { throw 'no job was submitted' }
-          if ($code -ne 0 -and $code -ne 2) { throw "triangle.exe died ($code)" }
-          # Same again with pandecode: the job chains Panfrost built on Windows,
-          # decoded, for comparison with Linux's.
-          New-Item -ItemType Directory -Force trace | Out-Null
-          Push-Location trace
-          $env:PAN_MESA_DEBUG = 'trace'
-          ..\out\triangle.exe (Resolve-Path ..\out\libgallium_d3d10.dll) 2>&1 | Tee-Object ..\trace.txt
-          Write-Host "trace run exit code $LASTEXITCODE"
-          Pop-Location
-          Get-ChildItem trace | Format-Table Name, Length
-          exit 0
+
+          $r = Run-Triangle 'fake'
+          Get-Content fake.out, fake.err -ErrorAction SilentlyContinue | Select-String -NotMatch 'ioctl|  ->' | Select-Object -Last 40
+          if (Test-Path fake-hang.txt) { Get-Content fake-hang.txt | Select-String -NotMatch 'NatVis|ModLoad' | Select-Object -Last 150 }
+          if (Test-Path fake-crash.txt) { Get-Content fake-crash.txt | Select-String -NotMatch 'NatVis|ModLoad' | Select-Object -Last 60 }
+
+          # Same again with pandecode: the job chains Panfrost built on Windows.
+          if ($r -eq 0 -or $r -eq 2) {
+            New-Item -ItemType Directory -Force trace | Out-Null
+            Push-Location trace
+            $env:PAN_MESA_DEBUG = 'trace'
+            $env:MALIKM_FAKE = '1'
+            $p = Start-Process -FilePath (Resolve-Path ..\out\triangle.exe).Path -ArgumentList "`"$dll`"" -NoNewWindow -PassThru `
+                   -RedirectStandardOutput ..\trace.out -RedirectStandardError ..\trace.err
+            if (-not $p.WaitForExit(120000)) { Stop-Process -Id $p.Id -Force; Write-Host 'trace run hung' }
+            Pop-Location
+            Get-ChildItem trace | Format-Table Name, Length
+          }
+
+          $all = (Get-Content fake.out, fake.err -ErrorAction SilentlyContinue) -join "`n"
+          if ($r -eq 'hang') { throw 'triangle.exe hung' }
+          if ($all -match 'using softpipe') { throw 'fell back to softpipe' }
+          if ($all -notmatch 'malikm-fake: submit') { throw 'no job was submitted' }
+          if ($r -ne 0 -and $r -ne 2) { throw "triangle.exe died ($r)" }
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: panfrost-fake-trace
           path: |
-            fake.txt
-            cdb.txt
-            trace.txt
+            fake.*
+            fake-*.txt
+            trace.*
             trace/
 
       - uses: actions/upload-artifact@v4
