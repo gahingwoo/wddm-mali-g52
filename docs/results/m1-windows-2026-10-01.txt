@@ -1,0 +1,54 @@
+m1-test Thu 01/10/2026  9:46:19.81 
+== GPU device from the firmware 
+Microsoft PnP Utility
+
+Instance ID:                ACPI\RKCP7402\0
+Device Description:         Unknown
+Class Name:                 Unknown
+Class GUID:                 Unknown
+Manufacturer Name:          Unknown
+Status:                     Problem
+Problem Code:               28 (0x1C) [CM_PROB_FAILED_INSTALL]
+Problem Status:             0xC0000490
+
+== installing E:\mali\m1probe\m1probe.inf 
+Microsoft PnP Utility
+
+Adding driver package:  m1probe.inf
+Driver package added successfully.
+Published Name:         oem0.inf
+Driver package installed on device: ACPI\RKCP7402\0
+
+Total driver packages:  1
+Added driver packages:  1
+== device after install 
+Microsoft PnP Utility
+
+Instance ID:                ACPI\RKCP7402\0
+Device Description:         Arm Mali-G52 (M1 probe)
+Class Name:                 System
+Class GUID:                 {4d36e97d-e325-11ce-bfc1-08002be10318}
+Manufacturer Name:          wddm-mali-g52
+Status:                     Started
+Driver Name:                oem0.inf
+
+== results 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters
+    Result    REG_DWORD    0x1
+    Step    REG_DWORD    0x8
+    PmuStatus0    REG_DWORD    0x0
+    PmuAck0    REG_DWORD    0x0
+    GpuId    REG_DWORD    0x74021000
+    ShaderReady    REG_DWORD    0x7
+    MemPhysLo    REG_DWORD    0x2e41a000
+    MemPhysHi    REG_DWORD    0x1
+    JobIntRaw    REG_DWORD    0x1
+    Js0Status    REG_DWORD    0x0
+    MmuIntRaw    REG_DWORD    0x0
+    As0FaultStatus    REG_DWORD    0x0
+    JobException    REG_DWORD    0x1
+    Target    REG_DWORD    0xc0ffee42
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\Interrupt Management
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\WDF

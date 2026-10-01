@@ -91,8 +91,11 @@ Panfrost kernel driver unbound, where a mistake is cheaper to debug.
 
 ## M1 status (2026-10-01)
 
-Done on Linux, not yet on Windows. `tools/m1/m1_raw.c` runs a WRITE_VALUE job
-with no GPU driver loaded and checks the result; it passes. The sequence:
+Done on Linux and on Windows. `tools/m1/m1_raw.c` runs a WRITE_VALUE job from
+Linux userspace with no GPU driver loaded; `drivers/m1probe` does the same in a
+KMDF driver on Windows 11 23H2, with edk2-rk3576 `778163b` powering the GPU and
+publishing it as `ACPI\RKCP7402`. Both write 0xC0FFEE42 with no MMU fault; on
+Windows the page tables and job sat above 4 GB (0x1_2E41A000). The sequence:
 
 1. Supply: `vdd_gpu_s0` (RK806 DCDC5) must be on. Linux switches unused
    regulators off 30 s after boot, so Panfrost-less Linux needs
@@ -111,8 +114,7 @@ with no GPU driver loaded and checks the result; it passes. The sequence:
 6. Job slot 0: head, affinity = shader cores, config = AS 0 | priority 8 |
    flush on start and end, then START.
 
-Next: the same sequence as a KMDF driver on Windows, with the firmware doing
-steps 1 to 3 and publishing the GPU in the DSDT.
+On Windows the firmware does steps 1 to 3 and the driver steps 4 to 6.
 
 ## Risks, in order
 

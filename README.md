@@ -2,7 +2,8 @@
 
 A Windows (WDDM) driver for the Arm Mali-G52 GPU in the Rockchip RK3576.
 
-Nothing works yet. Windows on RK3576 boards
+The Mali-G52 has run its first job under Windows (M1, 2026-10-01). Nothing
+is drawn on it yet. Windows on RK3576 boards
 ([woa-rk3576](https://github.com/gahingwoo/woa-rk3576)) draws its desktop on the
 CPU today: there is no GPU driver, so DWM renders through WARP into the
 framebuffer the firmware leaves behind. No Windows driver for any Mali GPU
@@ -22,8 +23,8 @@ Milestones, the reasoning behind them, and the risks:
 | | Milestone | State |
 |---|---|---|
 | M0 | Feasibility checks | done, see the plan |
-| M1 | Mali runs a job under Windows (plain KMDF driver) | sequence proven on Linux without a GPU driver; Windows next |
-| M2 | WDDM driver skeleton, D3D runtime loads the UMD | |
+| M1 | Mali runs a job under Windows (plain KMDF driver) | **done**: [result](docs/results/m1-windows-2026-10-01.txt) |
+| M2 | WDDM driver skeleton, D3D runtime loads the UMD | next |
 | M3 | Clear and copy | |
 | M4 | First triangle | |
 | M5 | DWM composites on the Mali | |
