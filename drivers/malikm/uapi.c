@@ -566,8 +566,10 @@ mk_s32 MkMap(PDEVICE_CONTEXT Dev, PFILE_CONTEXT File, MALIKM_MAP *Map)
         r = -MK_EINVAL;
     } else {
         __try {
+            /* Plain priority, no MdlMapping* flags: the fewest assumptions
+             * for a user-mode mapping until the board has shown one works. */
             va = MmMapLockedPagesSpecifyCache(bo->Mdl, UserMode, MmWriteCombined, NULL, FALSE,
-                                              NormalPagePriority | MdlMappingNoExecute);
+                                              NormalPagePriority);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             va = NULL;
         }
