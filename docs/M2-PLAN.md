@@ -41,6 +41,32 @@ Other facts this rests on:
   builds natively for ARM64 in CI, and D3D11 programs can run there against
   the software driver as a smoke test (no GPU needed for softpipe).
 
+## M2 result (2026-10-02)
+
+Done. `.github/workflows/mesa.yml` builds Mesa 26.2 natively on
+`windows-11-arm`: d3d10umd with softpipe (MSVC), and d3d10umd with softpipe
+and Panfrost (clang-cl). The triangle test passes on both; with
+`GALLIUM_DRIVER=panfrost` the DLL looks for `\\.\MaliG52`, finds none on the
+runner and falls back to softpipe.
+
+What it took, in `mesa-patches/` and `win32-compat/`:
+
+- **clang-cl instead of cl** for the Panfrost build: same MSVC ABI, but it
+  accepts the GNU C Panfrost is written in.
+- **MSVC-ABI bitfields.** Mixed-type bitfields are laid out differently and
+  enum bitfields are signed. The Bifrost hardware encodings are now packed
+  explicitly (0003, checked against GCC's layout on Linux in CI), every
+  enum-typed bitfield is unsigned (0011; signed `bi_size` crashed the compiler),
+  and `bi_index`'s hash key is built from its fields (0007).
+- **libpan without LLVM on Windows**: the Linux job generates the SPIR-V and
+  bindings; two Python stand-ins for `mesa_clc` and `vtn_bindgen2` copy them
+  in; `panfrost_compile` runs natively (0010).
+- **POSIX and libdrm shims** (`win32-compat/`): every kernel call fails with
+  ENOSYS for now. In M3 they become DeviceIoControl calls with Linux Panfrost
+  semantics, so `panfrost_kmod.c` stays as it is.
+- `PACKED` must be real under clang-cl (`-DHAVE_FUNC_ATTRIBUTE_PACKED`):
+  libpan's kernel argument structs are 12 bytes on the GPU side.
+
 ## Milestones
 
 | | Milestone | Where it runs | Done when |

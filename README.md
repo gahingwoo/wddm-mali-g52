@@ -24,8 +24,8 @@ Milestones, the reasoning behind them, and the risks:
 |---|---|---|
 | M0 | Feasibility checks | done, see the plan |
 | M1 | Mali runs a job under Windows (plain KMDF driver) | **done**: [result](docs/results/m1-windows-2026-10-01.txt) |
-| M2 | Mesa 26.2 (D3D10 frontend, softpipe, then Panfrost) built for Windows ARM64 in CI | next |
-| M3 | Panfrost drives the Mali on Windows through our own kernel interface; first clear | |
+| M2 | Mesa 26.2 (D3D10 frontend, softpipe, then Panfrost) built for Windows ARM64 in CI | **done**: builds, and falls back cleanly with no Mali device |
+| M3 | Panfrost drives the Mali on Windows through our own kernel interface; first clear | next |
 | M4 | First triangle | |
 | M5 | WDDM 2.0 driver and hardware UMD; DWM composites on the Mali | |
 
