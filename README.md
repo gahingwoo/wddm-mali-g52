@@ -13,9 +13,9 @@ drivers only.
 ## Plan
 
 The user-mode half comes from Mesa: the Panfrost Gallium driver and its
-Bifrost shader compiler, under Mesa's D3D10 user-mode driver frontend. The
-kernel-mode half is new: a WDDM driver that powers the GPU, manages its MMU,
-submits jobs and scans out the desktop.
+Bifrost shader compiler, under Mesa's D3D10 frontend. The kernel-mode half is
+new: first a plain driver with its own job-submission interface, finally a
+WDDM driver that also scans out the desktop.
 
 Milestones, the reasoning behind them, and the risks:
 [docs/PLAN.md](docs/PLAN.md).
@@ -24,10 +24,14 @@ Milestones, the reasoning behind them, and the risks:
 |---|---|---|
 | M0 | Feasibility checks | done, see the plan |
 | M1 | Mali runs a job under Windows (plain KMDF driver) | **done**: [result](docs/results/m1-windows-2026-10-01.txt) |
-| M2 | WDDM driver skeleton, D3D runtime loads the UMD | next |
-| M3 | Clear and copy | |
+| M2 | Mesa 26.2 (D3D10 frontend, softpipe, then Panfrost) built for Windows ARM64 in CI | next |
+| M3 | Panfrost drives the Mali on Windows through our own kernel interface; first clear | |
 | M4 | First triangle | |
-| M5 | DWM composites on the Mali | |
+| M5 | WDDM 2.0 driver and hardware UMD; DWM composites on the Mali | |
+
+M2 onwards: [docs/M2-PLAN.md](docs/M2-PLAN.md). Mesa's D3D10 frontend is a
+software-driver interface, so M3 and M4 run D3D11 programs that ask for the
+software driver; only M5 puts the desktop on the GPU.
 
 ## Hardware
 
