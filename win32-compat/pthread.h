@@ -1,16 +1,20 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/* Panfrost only uses plain mutexes; map them onto Mesa's C11 threads. */
+/* Panfrost only uses plain mutexes. They map onto Mesa's simple_mtx, which
+ * (like a Linux pthread mutex, unlike a Windows CRITICAL_SECTION) is valid
+ * when zeroed: Panfrost never initialises dev->bo_map_lock and relies on
+ * that. A CRITICAL_SECTION here crashed the first panfrost_bo_unreference. */
 #pragma once
-#include "c11/threads.h"
-typedef mtx_t pthread_mutex_t;
+#include "util/simple_mtx.h"
+typedef simple_mtx_t pthread_mutex_t;
 static inline int pthread_mutex_init(pthread_mutex_t *m, const void *attr)
 {
    (void)attr;
-   return mtx_init(m, mtx_plain) == thrd_success ? 0 : -1;
+   simple_mtx_init(m, mtx_plain);
+   return 0;
 }
-static inline int pthread_mutex_lock(pthread_mutex_t *m) { return mtx_lock(m) == thrd_success ? 0 : -1; }
-static inline int pthread_mutex_unlock(pthread_mutex_t *m) { return mtx_unlock(m) == thrd_success ? 0 : -1; }
-static inline int pthread_mutex_destroy(pthread_mutex_t *m) { mtx_destroy(m); return 0; }
+static inline int pthread_mutex_lock(pthread_mutex_t *m) { simple_mtx_lock(m); return 0; }
+static inline int pthread_mutex_unlock(pthread_mutex_t *m) { simple_mtx_unlock(m); return 0; }
+static inline int pthread_mutex_destroy(pthread_mutex_t *m) { simple_mtx_destroy(m); return 0; }
 
 /* panfrost_kmod.c raises its event thread to SCHED_FIFO; on Windows that
  * thread is replaced in M3, so the request simply fails. */
