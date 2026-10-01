@@ -83,8 +83,10 @@ jobs:
           cl /nologo /W4 /WX /O2 /I include tools\windows\m3test.c /Fe:out\m3test.exe
           if ($LASTEXITCODE) { throw 'm3test build failed' }
           # No Mali here: it must say so and fail cleanly.
+          $PSNativeCommandUseErrorActionPreference = $false
           .\out\m3test.exe
           if ($LASTEXITCODE -ne 1) { throw "unexpected exit code $LASTEXITCODE" }
+          exit 0
       - uses: actions/upload-artifact@v4
         with:
           name: m3test-arm64
