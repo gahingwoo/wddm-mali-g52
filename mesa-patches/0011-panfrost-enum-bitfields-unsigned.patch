@@ -1,0 +1,234 @@
+diff --git a/src/gallium/drivers/panfrost/pan_fb_preload.c b/src/gallium/drivers/panfrost/pan_fb_preload.c
+index f321509..b9eeec9 100644
+--- a/src/gallium/drivers/panfrost/pan_fb_preload.c
++++ b/src/gallium/drivers/panfrost/pan_fb_preload.c
+@@ -64,7 +64,7 @@ enum pan_preload_resource_table {
+ struct pan_preload_surface {
+    gl_frag_result loc              : 4;
+    nir_alu_type type               : 8;
+-   enum mali_texture_dimension dim : 3;
++   unsigned dim : 3; /* enum mali_texture_dimension */
+    bool array                      : 1;
+    unsigned samples                : 5;
+ };
+@@ -86,7 +86,7 @@ struct pan_preload_rsd_key {
+       enum pipe_format format;
+       nir_alu_type type               : 8;
+       unsigned samples                : 5;
+-      enum mali_texture_dimension dim : 3;
++      unsigned dim : 3; /* enum mali_texture_dimension */
+       bool array                      : 1;
+    } rts[8], z, s;
+ };
+diff --git a/src/panfrost/compiler/bifrost/bi_opcodes.h.py b/src/panfrost/compiler/bifrost/bi_opcodes.h.py
+index 30cf720..13092d9 100644
+--- a/src/panfrost/compiler/bifrost/bi_opcodes.h.py
++++ b/src/panfrost/compiler/bifrost/bi_opcodes.h.py
+@@ -61,9 +61,9 @@ enum bi_size {
+ struct bi_op_props {
+         const char *name;
+ 
+-        enum bifrost_message_type message : 4;
+-        enum bi_size size : 3;
+-        enum bi_sr_count sr_count : 3;
++        unsigned message : 4; /* enum bifrost_message_type */
++        unsigned size : 3; /* enum bi_size */
++        unsigned sr_count : 3; /* enum bi_sr_count */
+         bool sr_read : 1;
+         bool sr_write : 1;
+         bool last : 1;
+diff --git a/src/panfrost/compiler/bifrost/bifrost.h b/src/panfrost/compiler/bifrost/bifrost.h
+index c2a900c..cdefafc 100644
+--- a/src/panfrost/compiler/bifrost/bifrost.h
++++ b/src/panfrost/compiler/bifrost/bifrost.h
+@@ -105,7 +105,7 @@ struct bifrost_header {
+    unsigned zero1 : 5;
+ 
+    /* Flush-to-zero mode, leave zero for GL */
+-   enum bifrost_ftz flush_to_zero : 2;
++   unsigned flush_to_zero : 2; /* enum bifrost_ftz */
+ 
+    /* Convert any infinite result of any floating-point operation to the
+     * biggest representable number */
+@@ -115,11 +115,11 @@ struct bifrost_header {
+    unsigned suppress_nan : 1;
+ 
+    /* Floating-point excception handling mode */
+-   enum bifrost_exceptions float_exceptions : 2;
++   unsigned float_exceptions : 2; /* enum bifrost_exceptions */
+ 
+    /* Enum describing the flow control, which matters for handling
+     * divergence and reconvergence efficiently */
+-   enum bifrost_flow flow_control : 3;
++   unsigned flow_control : 3; /* enum bifrost_flow */
+ 
+    /* Reserved */
+    unsigned zero2 : 1;
+@@ -145,8 +145,8 @@ struct bifrost_header {
+    unsigned dependency_wait : 8;
+    unsigned dependency_slot : 3;
+ 
+-   enum bifrost_message_type message_type      : 5;
+-   enum bifrost_message_type next_message_type : 5;
++   unsigned message_type      : 5; /* enum bifrost_message_type */
++   unsigned next_message_type : 5; /* enum bifrost_message_type */
+ } PACKED;
+ 
+ /* Packs struct bifrost_header in GCC's packed, LSB-first bitfield layout, which is the
+@@ -549,7 +549,7 @@ struct bifrost_texture_operation {
+          unsigned sampler_index_or_mode : 4;
+          unsigned index                 : 7;
+          bool immediate_indices         : 1;
+-         enum bifrost_tex_op op         : 3;
++         unsigned op         : 3; /* enum bifrost_tex_op */
+ 
+          /* If set for TEX/FETCH, loads texel offsets and multisample index from
+           * a staging register containing offset_x:offset_y:offset_z:ms_index
+@@ -576,7 +576,7 @@ struct bifrost_texture_operation {
+          unsigned zero : 1;
+ 
+          /* Register format for the result */
+-         enum bifrost_texture_format_full format : 4;
++         unsigned format : 4; /* enum bifrost_texture_format_full */
+ 
+          /* Write mask for the result */
+          unsigned mask : 4;
+@@ -623,10 +623,10 @@ struct bifrost_dual_texture_operation {
+    unsigned secondary_register : 6;
+ 
+    /* Format/mask for each texture */
+-   enum bifrost_texture_format secondary_format : 3;
++   unsigned secondary_format : 3; /* enum bifrost_texture_format */
+    unsigned secondary_mask                      : 4;
+ 
+-   enum bifrost_texture_format primary_format : 3;
++   unsigned primary_format : 3; /* enum bifrost_texture_format */
+    unsigned primary_mask                      : 4;
+ } PACKED;
+ 
+diff --git a/src/panfrost/compiler/bifrost/compiler.h b/src/panfrost/compiler/bifrost/compiler.h
+index 95a012d..a32fe00 100644
+--- a/src/panfrost/compiler/bifrost/compiler.h
++++ b/src/panfrost/compiler/bifrost/compiler.h
+@@ -290,6 +290,9 @@ enum bi_index_type {
+    BI_INDEX_FAU = 5
+ };
+ 
++/* Enum-typed bitfields are declared unsigned throughout Panfrost: under the
++ * MSVC ABI an enum bitfield is signed, so e.g. a 3-bit enum bi_size field read
++ * back BI_SIZE_64 as a negative number. */
+ typedef struct {
+    uint32_t value;
+ 
+@@ -306,9 +309,9 @@ typedef struct {
+    /* For a source, the swizzle. For a destination, acts a bit like a
+     * write mask. Identity for the full 32-bit, H00 for only caring about
+     * the lower half, other values unused. */
+-   enum bi_swizzle swizzle : 5;
++   unsigned swizzle : 5; /* enum bi_swizzle */
+    uint32_t offset         : 3;
+-   enum bi_index_type type : 3;
++   unsigned type : 3; /* enum bi_index_type */
+ 
+    /* Last use of an SSA value; similar to discard, but applies to the
+     * SSA analysis and does not have any HW restrictions (discard gets
+diff --git a/src/panfrost/compiler/bifrost/valhall/valhall.h b/src/panfrost/compiler/bifrost/valhall/valhall.h
+index 905df1e..6a86af7 100644
+--- a/src/panfrost/compiler/bifrost/valhall/valhall.h
++++ b/src/panfrost/compiler/bifrost/valhall/valhall.h
+@@ -62,14 +62,14 @@ struct va_src_info {
+    bool halfswizzle  : 1;
+    bool widen        : 1;
+    bool combine      : 1;
+-   enum va_size size : 2;
++   unsigned size : 2; /* enum va_size */
+ } PACKED;
+ 
+ struct va_opcode_info {
+    uint64_t exact;
+    struct va_src_info srcs[4];
+    uint8_t type_size         : 8;
+-   enum va_unit unit         : 3;
++   unsigned unit         : 3; /* enum va_unit */
+    unsigned nr_srcs          : 3;
+    unsigned nr_staging_srcs  : 2;
+    unsigned nr_staging_dests : 2;
+diff --git a/src/panfrost/compiler/midgard/midgard.h b/src/panfrost/compiler/midgard/midgard.h
+index 79ce024..9ea7d22 100644
+--- a/src/panfrost/compiler/midgard/midgard.h
++++ b/src/panfrost/compiler/midgard/midgard.h
+@@ -375,7 +375,7 @@ enum midgard_call_mode {
+ typedef struct __attribute__((__packed__)) {
+    midgard_jmp_writeout_op op       : 3; /* == branch_uncond */
+    unsigned dest_tag                : 4; /* tag of branch destination */
+-   enum midgard_call_mode call_mode : 2;
++   unsigned call_mode : 2; /* enum midgard_call_mode */
+    int offset                       : 7;
+ } midgard_branch_uncond;
+ 
+@@ -389,7 +389,7 @@ typedef struct __attribute__((__packed__)) {
+ typedef struct __attribute__((__packed__)) {
+    midgard_jmp_writeout_op op       : 3; /* == branch_cond */
+    unsigned dest_tag                : 4; /* tag of branch destination */
+-   enum midgard_call_mode call_mode : 2;
++   unsigned call_mode : 2; /* enum midgard_call_mode */
+    signed offset                    : 23;
+ 
+    /* Extended branches permit inputting up to 4 conditions loaded into
+@@ -821,9 +821,9 @@ typedef struct __attribute__((__packed__)) {
+    unsigned type      : 4;
+    unsigned next_type : 4;
+ 
+-   enum mali_texture_op op             : 4;
++   unsigned op             : 4; /* enum mali_texture_op */
+    unsigned mode                       : 4;
+-   enum midgard_partial_execution exec : 2;
++   unsigned exec : 2; /* enum midgard_partial_execution */
+ 
+    unsigned format : 2;
+ 
+@@ -855,7 +855,7 @@ typedef struct __attribute__((__packed__)) {
+ 
+    unsigned out_full : 1;
+ 
+-   enum mali_sampler_type sampler_type : 2;
++   unsigned sampler_type : 2; /* enum mali_sampler_type */
+ 
+    unsigned out_reg_select : 1;
+    unsigned out_upper      : 1;
+diff --git a/src/panfrost/compiler/pan_compiler.h b/src/panfrost/compiler/pan_compiler.h
+index 213a0bf..21a5175 100644
+--- a/src/panfrost/compiler/pan_compiler.h
++++ b/src/panfrost/compiler/pan_compiler.h
+@@ -243,7 +243,7 @@ struct pan_varying_slot {
+    unsigned alu_type : 8;
+    unsigned ncomps : 3;
+ 
+-   enum pan_varying_section section : 2;
++   unsigned section : 2; /* enum pan_varying_section */
+ 
+    /* Offset of the varying slot in the specified section of the varying
+     * buffer.  For special VS outputs (see PAN_ATTRIB_VARYING_BITS), this is
+diff --git a/src/panfrost/lib/pan_blend.h b/src/panfrost/lib/pan_blend.h
+index 0a84d4a..49ed35d 100644
+--- a/src/panfrost/lib/pan_blend.h
++++ b/src/panfrost/lib/pan_blend.h
+@@ -18,12 +18,12 @@ struct MALI_BLEND_EQUATION;
+ struct pan_blend_equation {
+    unsigned blend_enable                  : 1;
+    unsigned is_float                      : 1;
+-   enum pipe_blend_func rgb_func          : 3;
+-   enum pipe_blendfactor rgb_src_factor   : 5;
+-   enum pipe_blendfactor rgb_dst_factor   : 5;
+-   enum pipe_blend_func alpha_func        : 3;
+-   enum pipe_blendfactor alpha_src_factor : 5;
+-   enum pipe_blendfactor alpha_dst_factor : 5;
++   unsigned rgb_func          : 3; /* enum pipe_blend_func */
++   unsigned rgb_src_factor   : 5; /* enum pipe_blendfactor */
++   unsigned rgb_dst_factor   : 5; /* enum pipe_blendfactor */
++   unsigned alpha_func        : 3; /* enum pipe_blend_func */
++   unsigned alpha_src_factor : 5; /* enum pipe_blendfactor */
++   unsigned alpha_dst_factor : 5; /* enum pipe_blendfactor */
+    unsigned color_mask                    : 4;
+ };
+ 
