@@ -2,10 +2,11 @@ diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d1
 index 40491c5..0c9d41c 100644
 --- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
 +++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
-@@ -32,8 +32,22 @@
+@@ -32,8 +32,23 @@
  #include "llvmpipe/lp_public.h"
  #include "softpipe/sp_public.h"
  #ifdef GALLIUM_PANFROST
++#include <windows.h>
 +#include <io.h>
  #include <stdio.h>
  #include "panfrost/drm/panfrost_drm_public.h"
@@ -25,7 +26,7 @@ index 40491c5..0c9d41c 100644
  #endif
  #include "sw/gdi/gdi_sw_winsys.h"
  
-@@ -92,7 +106,11 @@ d3d10_create_screen(void)
+@@ -92,7 +107,11 @@ d3d10_create_screen(void)
        /* Arm Mali through Panfrost (wddm-mali-g52). The fd will name the Mali
         * kernel driver; until that exists Panfrost finds no device and
         * softpipe takes over. */
