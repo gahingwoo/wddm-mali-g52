@@ -225,6 +225,10 @@ static mk_s32 Submit(PDEVICE_CONTEXT Dev, PFILE_CONTEXT F, MK_SUBMIT *A, SIZE_T 
 
     if (!Dev->Ready || Dev->StopWorker)
         return -MK_ENODEV;
+    /* The job descriptors were written by this thread, on this CPU, through
+     * write-combined mappings; the worker that starts the job may run on
+     * another CPU. */
+    MkStoreBarrier();
     job = (MK_JOB *)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(*job), POOL_TAG_JOB);
     if (job == NULL)
         return -MK_ENOMEM;

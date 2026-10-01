@@ -358,7 +358,7 @@ NTSTATUS MkMmuMap(PDEVICE_CONTEXT Dev, MK_BO *Bo)
         }
         l3[(va >> 12) & 511] = ((ULONG64)pfn[i] << PAGE_SHIFT) | attr;
     }
-    KeMemoryBarrier();
+    MkStoreBarrier();
     FlushRange(Dev, Bo->GpuVa, Bo->Size);
     return STATUS_SUCCESS;
 }
@@ -373,7 +373,7 @@ void MkMmuUnmap(PDEVICE_CONTEXT Dev, MK_BO *Bo)
         if (l3 != NULL)
             l3[(va >> 12) & 511] = 0;
     }
-    KeMemoryBarrier();
+    MkStoreBarrier();
     FlushRange(Dev, Bo->GpuVa, Bo->Size);
     RtlClearBits(&Dev->VaMap, (ULONG)((Bo->GpuVa - MK_VA_START) >> PAGE_SHIFT), pages);
 }
@@ -434,6 +434,7 @@ static void RunJob(PDEVICE_CONTEXT Dev, MK_JOB *Job)
     WR(Dev, JS_SLOT(slot) + JS_AFFINITY_NEXT_LO, (ULONG)Dev->F.ShaderPresent);
     WR(Dev, JS_SLOT(slot) + JS_AFFINITY_NEXT_HI, (ULONG)(Dev->F.ShaderPresent >> 32));
     WR(Dev, JS_SLOT(slot) + JS_CONFIG_NEXT, cfg);
+    MkStoreBarrier();
     WR(Dev, JS_SLOT(slot) + JS_COMMAND_NEXT, JS_COMMAND_START);
 
     /* The interrupt wakes us; the raw status is also read every tick, so a

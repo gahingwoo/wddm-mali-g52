@@ -67,3 +67,25 @@ jobs:
           name: ${{ matrix.driver }}-arm64
           path: pkg/
           if-no-files-found: error
+
+  m3test:
+    name: m3test (ARM64)
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: arm64
+      - name: Build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          cl /nologo /W4 /WX /O2 /I include tools\windows\m3test.c /Fe:out\m3test.exe
+          if ($LASTEXITCODE) { throw 'm3test build failed' }
+          # No Mali here: it must say so and fail cleanly.
+          .\out\m3test.exe
+          if ($LASTEXITCODE -ne 1) { throw "unexpected exit code $LASTEXITCODE" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m3test-arm64
+          path: out/m3test.exe

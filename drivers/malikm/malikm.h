@@ -245,6 +245,10 @@ typedef struct _DEVICE_CONTEXT {
 } DEVICE_CONTEXT, *PDEVICE_CONTEXT;
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DEVICE_CONTEXT, GetDeviceContext)
 
+/* Complete every store this CPU has made, to memory the GPU reads through a
+ * write-combined (Normal non-cacheable) mapping, before the GPU is told. */
+#define MkStoreBarrier() __dsb(_ARM64_BARRIER_SY)
+
 #define RD(d, o)        READ_REGISTER_ULONG((PULONG)((PUCHAR)(d)->Gpu + (o)))
 #define WR(d, o, v)     WRITE_REGISTER_ULONG((PULONG)((PUCHAR)(d)->Gpu + (o)), (v))
 
