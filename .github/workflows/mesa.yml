@@ -65,11 +65,11 @@ jobs:
             -Dplatforms=windows `
             -Dgallium-drivers=softpipe `
             -Dgallium-d3d10umd=true `
-            -Dvulkan-drivers=[] `
+            '-Dvulkan-drivers=' `
             -Dllvm=disabled `
             -Dopengl=false -Dgles1=disabled -Dgles2=disabled `
             -Degl=disabled -Dglx=disabled -Dgbm=disabled `
-            -Dvideo-codecs=[] -Dmicrosoft-clc=disabled -Dspirv-to-dxil=false `
+            '-Dvideo-codecs=' -Dmicrosoft-clc=disabled -Dspirv-to-dxil=false `
             -Dzstd=disabled -Dshader-cache=disabled -Dbuild-tests=false
           if ($LASTEXITCODE) { Get-Content build\meson-logs\meson-log.txt -Tail 80; throw 'meson setup failed' }
 
