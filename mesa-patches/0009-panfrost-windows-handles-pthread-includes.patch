@@ -1,0 +1,155 @@
+diff --git a/src/gallium/auxiliary/renderonly/renderonly.h b/src/gallium/auxiliary/renderonly/renderonly.h
+index de22b37..f790b23 100644
+--- a/src/gallium/auxiliary/renderonly/renderonly.h
++++ b/src/gallium/auxiliary/renderonly/renderonly.h
+@@ -105,7 +105,12 @@ renderonly_get_handle(struct renderonly_scanout *scanout,
+       return false;
+ 
+    assert(handle->type == WINSYS_HANDLE_TYPE_KMS);
++#ifdef _WIN32
++   /* struct winsys_handle carries a HANDLE on Windows */
++   handle->handle = (HANDLE)(uintptr_t)scanout->handle;
++#else
+    handle->handle = scanout->handle;
++#endif
+    handle->stride = scanout->stride;
+ 
+    return true;
+diff --git a/src/gallium/drivers/panfrost/pan_blend_cso.h b/src/gallium/drivers/panfrost/pan_blend_cso.h
+index caeb6d4..6ff064e 100644
+--- a/src/gallium/drivers/panfrost/pan_blend_cso.h
++++ b/src/gallium/drivers/panfrost/pan_blend_cso.h
+@@ -6,6 +6,7 @@
+ #ifndef __PAN_BLEND_CSO_H
+ #define __PAN_BLEND_CSO_H
+ 
++#include <pthread.h>
+ #include "util/hash_table.h"
+ #include "nir.h"
+ #include "pipe/p_state.h"
+diff --git a/src/gallium/drivers/panfrost/pan_device.h b/src/gallium/drivers/panfrost/pan_device.h
+index 3512273..34c239c 100644
+--- a/src/gallium/drivers/panfrost/pan_device.h
++++ b/src/gallium/drivers/panfrost/pan_device.h
+@@ -9,6 +9,7 @@
+ #ifndef PAN_DEVICE_H
+ #define PAN_DEVICE_H
+ 
++#include <pthread.h>
+ #include <xf86drm.h>
+ #include "renderonly/renderonly.h"
+ #include "util/bitset.h"
+diff --git a/src/gallium/drivers/panfrost/pan_fb_preload.h b/src/gallium/drivers/panfrost/pan_fb_preload.h
+index c4eac6a..1dbd593 100644
+--- a/src/gallium/drivers/panfrost/pan_fb_preload.h
++++ b/src/gallium/drivers/panfrost/pan_fb_preload.h
+@@ -6,6 +6,7 @@
+ #ifndef __PAN_FB_PRELOAD_H
+ #define __PAN_FB_PRELOAD_H
+ 
++#include <pthread.h>
+ #include "util/format/u_format.h"
+ #include "pan_desc.h"
+ #include "pan_pool.h"
+diff --git a/src/gallium/drivers/panfrost/pan_mempool.c b/src/gallium/drivers/panfrost/pan_mempool.c
+index 1c90261..788af8c 100644
+--- a/src/gallium/drivers/panfrost/pan_mempool.c
++++ b/src/gallium/drivers/panfrost/pan_mempool.c
+@@ -179,7 +179,7 @@ panfrost_pool_alloc_aligned(struct panfrost_pool *pool, size_t sz,
+ 
+    /* The first 32MB are reserved, so pick a dumb address from there. */
+    if (dev->fault_injection_rate &&
+-       !(random() % dev->fault_injection_rate)) {
++       !(rand() % dev->fault_injection_rate)) {
+       ret.gpu =
+          0x1a7af00ull & ~((uint64_t)util_next_power_of_two(alignment) - 1);
+    }
+diff --git a/src/gallium/drivers/panfrost/pan_mod_conv_cso.h b/src/gallium/drivers/panfrost/pan_mod_conv_cso.h
+index 7a69f4e..e338cd0 100644
+--- a/src/gallium/drivers/panfrost/pan_mod_conv_cso.h
++++ b/src/gallium/drivers/panfrost/pan_mod_conv_cso.h
+@@ -6,6 +6,7 @@
+ #ifndef __PAN_MOD_CONV_CSO_H__
+ #define __PAN_MOD_CONV_CSO_H__
+ 
++#include <pthread.h>
+ #include "util/hash_table.h"
+ 
+ #include "panfrost/compiler/pan_compiler.h"
+diff --git a/src/gallium/drivers/panfrost/pan_resource.c b/src/gallium/drivers/panfrost/pan_resource.c
+index 6fa2aad..caa6379 100644
+--- a/src/gallium/drivers/panfrost/pan_resource.c
++++ b/src/gallium/drivers/panfrost/pan_resource.c
+@@ -8,6 +8,17 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "util/u_string.h"
++
++/* struct winsys_handle carries a HANDLE on Windows and an int/unsigned
++ * elsewhere; Panfrost's handles are GEM handles and fds either way. */
++#ifdef _WIN32
++#define PAN_WSH_TO_INT(h) ((int)(intptr_t)(h))
++#define PAN_INT_TO_WSH(i) ((HANDLE)(intptr_t)(i))
++#else
++#define PAN_WSH_TO_INT(h) (h)
++#define PAN_INT_TO_WSH(i) (i)
++#endif
+ #include <fcntl.h>
+ #include <xf86drm.h>
+ #include "drm-uapi/drm_fourcc.h"
+@@ -422,7 +433,7 @@ panfrost_resource_from_handle(struct pipe_screen *pscreen,
+       return NULL;
+    }
+ 
+-   int ret = panfrost_resource_import_bo(rsc, dev, whandle->handle);
++   int ret = panfrost_resource_import_bo(rsc, dev, PAN_WSH_TO_INT(whandle->handle));
+    /* Sometimes an import can fail e.g. on an invalid buffer fd, out of
+     * memory space to mmap it etc.
+     */
+@@ -490,14 +501,14 @@ panfrost_resource_get_handle(struct pipe_screen *pscreen,
+    if (handle->type == WINSYS_HANDLE_TYPE_KMS && dev->ro) {
+       return renderonly_get_handle(scanout, handle);
+    } else if (handle->type == WINSYS_HANDLE_TYPE_KMS) {
+-      handle->handle = panfrost_bo_handle(rsrc->bo);
++      handle->handle = PAN_INT_TO_WSH(panfrost_bo_handle(rsrc->bo));
+    } else if (handle->type == WINSYS_HANDLE_TYPE_FD) {
+       int fd = panfrost_bo_export(rsrc->bo);
+ 
+       if (fd < 0)
+          return false;
+ 
+-      handle->handle = fd;
++      handle->handle = PAN_INT_TO_WSH(fd);
+    } else {
+       /* Other handle types not supported */
+       return false;
+@@ -1150,8 +1161,8 @@ panfrost_resource_create_with_modifier(struct pipe_screen *screen,
+          return NULL;
+       }
+       assert(handle.type == WINSYS_HANDLE_TYPE_FD);
+-      int ret = panfrost_resource_import_bo(so, dev, handle.handle);
+-      close(handle.handle);
++      int ret = panfrost_resource_import_bo(so, dev, PAN_WSH_TO_INT(handle.handle));
++      close(PAN_WSH_TO_INT(handle.handle));
+ 
+       if (ret) {
+          panfrost_resource_destroy(screen, &so->base);
+diff --git a/src/panfrost/perf/pan_perf.h b/src/panfrost/perf/pan_perf.h
+index 854b849..7666ef5 100644
+--- a/src/panfrost/perf/pan_perf.h
++++ b/src/panfrost/perf/pan_perf.h
+@@ -45,6 +45,13 @@ int pan_perf_disable(struct pan_perf *perf);
+ 
+ int pan_perf_dump(struct pan_perf *perf);
+ 
++#ifdef _WIN32
++typedef int clockid_t;
++#ifndef CLOCK_MONOTONIC_RAW
++#define CLOCK_MONOTONIC_RAW 4
++#endif
++#endif
++
+ static inline clockid_t
+ pan_perf_gpu_clock_id(const struct pan_perf *perf)
+ {

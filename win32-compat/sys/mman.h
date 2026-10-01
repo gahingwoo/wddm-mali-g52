@@ -20,3 +20,4 @@ static inline void *mmap(void *addr, size_t len, int prot, int flags, int fd, of
    return MAP_FAILED;
 }
 static inline int munmap(void *addr, size_t len) { (void)addr; (void)len; errno = ENOSYS; return -1; }
+static inline int mprotect(void *addr, size_t len, int prot) { (void)addr; (void)len; (void)prot; errno = ENOSYS; return -1; }
