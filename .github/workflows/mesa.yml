@@ -93,7 +93,11 @@ jobs:
           .\triangle.exe $dll
           if ($LASTEXITCODE) { throw "smoke test failed ($LASTEXITCODE)" }
           New-Item -ItemType Directory -Force out | Out-Null
-          Copy-Item $dll, triangle.exe out\
+          cl /nologo /EHsc /O2 /MD tests\d3d11-present\present.cpp /Fe:present.exe
+          if ($LASTEXITCODE) { throw 'present build failed' }
+          .\present.exe $dll
+          if ($LASTEXITCODE) { throw "softpipe present test failed ($LASTEXITCODE)" }
+          Copy-Item $dll, triangle.exe, present.exe out\
 
       - uses: actions/upload-artifact@v4
         with:
@@ -235,6 +239,8 @@ jobs:
           if (-not $dll) { throw 'libgallium_d3d10.dll was not built' }
           cl /nologo /EHsc /O2 /MD tests\d3d11-triangle\triangle.cpp /Fe:triangle.exe
           if ($LASTEXITCODE) { throw 'test build failed' }
+          cl /nologo /EHsc /O2 /MD tests\d3d11-present\present.cpp /Fe:present.exe
+          if ($LASTEXITCODE) { throw 'test build failed' }
           .\triangle.exe $dll
           if ($LASTEXITCODE) { throw "softpipe smoke test failed ($LASTEXITCODE)" }
           # No Mali on the runner: Panfrost must report no device and hand
@@ -244,7 +250,9 @@ jobs:
           if ($LASTEXITCODE) { throw "panfrost fallback smoke test failed ($LASTEXITCODE)" }
           if (-not (Select-String -Path pan.txt -Pattern 'Panfrost found no Mali device' -Quiet)) { throw 'Panfrost was not tried' }
           New-Item -ItemType Directory -Force out | Out-Null
-          Copy-Item $dll, triangle.exe out\
+          .\present.exe $dll
+          if ($LASTEXITCODE) { throw "softpipe present test failed ($LASTEXITCODE)" }
+          Copy-Item $dll, triangle.exe, present.exe out\
 
       - name: Panfrost on the emulated driver (MALIKM_FAKE)
         timeout-minutes: 15
@@ -262,8 +270,8 @@ jobs:
 
           # Run with a time limit; on a hang, every thread's stack; on a
           # crash, the faulting stack. stdout and stderr go to files.
-          function Run-Triangle($tag) {
-            $p = Start-Process -FilePath (Resolve-Path out\triangle.exe).Path -ArgumentList "`"$dll`"" -NoNewWindow -PassThru `
+          function Run-Triangle($tag, $exe = 'triangle.exe') {
+            $p = Start-Process -FilePath (Resolve-Path out\$exe).Path -ArgumentList "`"$dll`"" -NoNewWindow -PassThru `
                    -RedirectStandardOutput "$tag.out" -RedirectStandardError "$tag.err"
             if (-not $p.WaitForExit(120000)) {
               Write-Host "${tag}: still running after 120 s, dumping threads"
@@ -274,7 +282,7 @@ jobs:
             $code = $p.ExitCode
             Write-Host "${tag}: exit code $code"
             if ($code -lt 0 -and $cdb) {
-              & $cdb -g -G -y "$pwd\out" -c '.lines -e; kn 40; r; q' (Resolve-Path out\triangle.exe).Path $dll 2>&1 | Out-File "$tag-crash.txt"
+              & $cdb -g -G -y "$pwd\out" -c '.lines -e; kn 40; r; q' (Resolve-Path out\$exe).Path $dll 2>&1 | Out-File "$tag-crash.txt"
             }
             return $code
           }
@@ -297,11 +305,18 @@ jobs:
             Get-ChildItem trace | Format-Table Name, Length
           }
 
+          # Present through the Panfrost GDI path (mesa-patches/0014).
+          $pr = Run-Triangle 'present' 'present.exe'
+          Get-Content present.out, present.err -ErrorAction SilentlyContinue | Select-String -NotMatch 'ioctl|  ->' | Select-Object -Last 20
+          if (Test-Path present-crash.txt) { Get-Content present-crash.txt | Select-String -NotMatch 'NatVis|ModLoad' | Select-Object -Last 60 }
+          if (Test-Path present-hang.txt) { Get-Content present-hang.txt | Select-String -NotMatch 'NatVis|ModLoad' | Select-Object -Last 150 }
+
           $all = (Get-Content fake.out, fake.err -ErrorAction SilentlyContinue) -join "`n"
           if ($r -eq 'hang') { throw 'triangle.exe hung' }
           if ($all -match 'using softpipe') { throw 'fell back to softpipe' }
           if ($all -notmatch 'malikm-fake: submit') { throw 'no job was submitted' }
           if ($r -ne 0 -and $r -ne 2) { throw "triangle.exe died ($r)" }
+          if ($pr -ne 0) { throw "present.exe failed ($pr)" }
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -310,6 +325,8 @@ jobs:
           path: |
             fake.*
             fake-*.txt
+            present.*
+            present-*.txt
             trace.*
             trace/
 

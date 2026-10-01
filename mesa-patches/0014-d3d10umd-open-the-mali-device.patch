@@ -1,8 +1,8 @@
 diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
-index 40491c5..5285aec 100644
+index 40491c5..2c56490 100644
 --- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
 +++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
-@@ -32,8 +32,45 @@
+@@ -32,8 +32,47 @@
  #include "llvmpipe/lp_public.h"
  #include "softpipe/sp_public.h"
  #ifdef GALLIUM_PANFROST
@@ -15,6 +15,8 @@ index 40491c5..5285aec 100644
 +#include "util/driconf.h"
 +#include "util/macros.h"
 +#include "util/xmlconfig.h"
++#include "util/u_inlines.h"
++#include "util/format/u_format.h"
 +
 +/* Panfrost reads its driconf options from the screen config; the pipe-loader
 + * normally builds that, d3d10umd has none. */
@@ -48,7 +50,70 @@ index 40491c5..5285aec 100644
  #endif
  #include "sw/gdi/gdi_sw_winsys.h"
  
-@@ -92,7 +129,20 @@ d3d10_create_screen(void)
+@@ -59,6 +98,62 @@ d3d10_gdi_release_hdc(void *winsys_drawable_handle, HDC hDC) {
+    ReleaseDC(hWnd, hDC);
+ }
+ 
++#ifdef GALLIUM_PANFROST
++/* Present for Panfrost. d3d10umd presents through the screen's
++ * flush_frontbuffer, which Panfrost (a DRM driver, normally scanned out by
++ * KMS) does not have. Map the back buffer for reading, which also resolves
++ * Panfrost's tiled or AFBC layout, and draw it into the window with GDI as
++ * the software winsys does. One copy per frame: enough until a WDDM driver
++ * owns the display. */
++static void
++d3d10_pan_flush_frontbuffer(struct pipe_screen *screen, struct pipe_context *pipe,
++                            struct pipe_resource *res, unsigned level, unsigned layer,
++                            void *context_private, unsigned nboxes, struct pipe_box *sub_box)
++{
++   const struct util_format_description *desc = util_format_description(res->format);
++   unsigned w = res->width0, h = res->height0;
++   struct pipe_transfer *xfer;
++   (void)screen; (void)nboxes; (void)sub_box;
++
++   if (!pipe || !desc || desc->block.bits != 32)
++      return;
++   const uint8_t *map = pipe_texture_map(pipe, res, level, layer, PIPE_MAP_READ,
++                                         0, 0, w, h, &xfer);
++   if (!map)
++      return;
++
++   /* GDI wants B, G, R, X in memory. */
++   bool rgba = desc->swizzle[0] == PIPE_SWIZZLE_X;
++   uint32_t *bits = malloc((size_t)w * h * 4);
++   if (bits) {
++      for (unsigned y = 0; y < h; y++) {
++         const uint32_t *src = (const uint32_t *)(map + (size_t)y * xfer->stride);
++         uint32_t *dst = bits + (size_t)y * w;
++         for (unsigned x = 0; x < w; x++) {
++            uint32_t p = src[x];
++            dst[x] = rgba ? (p & 0xff00ff00u) | ((p & 0xffu) << 16) | ((p >> 16) & 0xffu) : p;
++         }
++      }
++   }
++   pipe_texture_unmap(pipe, xfer);
++   if (!bits)
++      return;
++
++   BITMAPINFO bmi = {0};
++   bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
++   bmi.bmiHeader.biWidth = (LONG)w;
++   bmi.bmiHeader.biHeight = -(LONG)h; /* top-down */
++   bmi.bmiHeader.biPlanes = 1;
++   bmi.bmiHeader.biBitCount = 32;
++   bmi.bmiHeader.biCompression = BI_RGB;
++   HDC hdc = d3d10_gdi_acquire_hdc(context_private);
++   StretchDIBits(hdc, 0, 0, (int)w, (int)h, 0, 0, (int)w, (int)h, bits, &bmi,
++                 DIB_RGB_COLORS, SRCCOPY);
++   d3d10_gdi_release_hdc(context_private, hdc);
++   free(bits);
++}
++#endif
++
+ struct pipe_screen *
+ d3d10_create_screen(void)
+ {
+@@ -92,7 +187,22 @@ d3d10_create_screen(void)
        /* Arm Mali through Panfrost (wddm-mali-g52). The fd will name the Mali
         * kernel driver; until that exists Panfrost finds no device and
         * softpipe takes over. */
@@ -66,6 +131,8 @@ index 40491c5..5285aec 100644
 +         }
 +         screen = panfrost_drm_screen_create(fd, &config);
 +         _close(fd); /* the screen keeps its own duplicate */
++         if (screen)
++            screen->flush_frontbuffer = d3d10_pan_flush_frontbuffer;
 +      }
        if (screen == NULL)
           fprintf(stderr, "d3d10umd: Panfrost found no Mali device, using softpipe\n");
