@@ -1,0 +1,18 @@
+diff --git a/include/meson.build b/include/meson.build
+index 397d4b4..c1b3d86 100644
+--- a/include/meson.build
++++ b/include/meson.build
+@@ -2,6 +2,13 @@
+ # SPDX-License-Identifier: MIT
+ 
+ inc_include = [include_directories('.')]
++
++# Panfrost on Windows: the POSIX and libdrm headers it includes unconditionally
++# (win32-compat in wddm-mali-g52, copied here by its CI). Compilation only:
++# meson's has_header() checks do not see target include directories.
++if host_machine.system() == 'windows' and get_option('gallium-drivers').contains('panfrost')
++  inc_include += [include_directories('win32-compat')]
++endif
+ inc_winddk = include_directories('winddk')
+ 
+ # Most things assume that Android headers are in the default include

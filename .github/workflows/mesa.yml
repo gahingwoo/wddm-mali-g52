@@ -10,6 +10,7 @@ on:
       - 'mesa-patches/**'
       - 'tests/**'
       - 'ci/**'
+      - 'win32-compat/**'
   workflow_dispatch:
 
 permissions:
@@ -182,6 +183,7 @@ jobs:
         shell: pwsh
         run: |
           git clone --depth 1 --branch $env:MESA_TAG $env:MESA_URL mesa
+          Copy-Item -Recurse win32-compat mesa\include\win32-compat
           Get-ChildItem mesa-patches -Filter *.patch -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object {
             Write-Host "applying $($_.Name)"
             git -C mesa apply --whitespace=nowarn $_.FullName
