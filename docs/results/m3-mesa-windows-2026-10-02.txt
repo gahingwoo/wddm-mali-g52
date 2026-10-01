@@ -1,0 +1,185 @@
+m3-mesa Thu 01/10/2026 10:59:28.93 
+Microsoft PnP Utility
+
+Instance ID:                ACPI\RKCP7402\0
+Device Description:         Arm Mali-G52 (Panfrost uAPI)
+Class Name:                 System
+Class GUID:                 {4d36e97d-e325-11ce-bfc1-08002be10318}
+Manufacturer Name:          wddm-mali-g52
+Status:                     Started
+Driver Name:                oem0.inf
+
+== triangle, panfrost, traced 
+malikm: opened \\.\MaliG52 as fd 3
+malikm: VERSION panfrost 1.1
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> -22 (got 32)
+malikm: ioctl 0x8a522000 nr 0x42 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x42 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x43 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522004 nr 0x0 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x42 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x43 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522004 nr 0x0 len 40 -> 0 (got 40)
+malikm: opened \\.\MaliG52 as fd 3
+os_same_file_description couldn't determine if two DRM fds reference the same file description. (Invalid argument)
+Let's just assume that file descriptors for the same file probablyshare the file description instead. This may cause problems whenthat isn't the case.
+malikm: VERSION panfrost 1.1
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x44 len 32 -> -22 (got 32)
+malikm: ioctl 0x8a522000 nr 0x42 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x42 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x43 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522004 nr 0x0 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x42 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x43 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522004 nr 0x0 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0xbf len 24 -> 0 (got 24)
+malikm: ioctl 0x8a522000 nr 0x42 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x43 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522004 nr 0x0 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x42 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x43 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522004 nr 0x0 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0xbf len 24 -> 0 (got 24)
+malikm: ioctl 0x8a522000 nr 0x42 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x43 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522004 nr 0x0 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522008 nr 0x0 len 24 -> 0 (got 16)
+malikm: ioctl 0x8a522000 nr 0x48 len 28 -> 0 (got 28)
+malikm: ioctl 0x8a522000 nr 0x48 len 28 -> 0 (got 28)
+malikm: ioctl 0x8a522008 nr 0x0 len 24 -> 0 (got 16)
+malikm: ioctl 0x8a522000 nr 0x48 len 28 -> 0 (got 28)
+malikm: ioctl 0x8a522000 nr 0x9 len 24 -> 0 (got 24)
+malikm: ioctl 0x8a522000 nr 0x9 len 24 -> 0 (got 24)
+malikm: ioctl 0x8a522000 nr 0x9 len 24 -> 0 (got 24)
+malikm: ioctl 0x8a522000 nr 0x42 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x43 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522004 nr 0x0 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x42 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x43 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522004 nr 0x0 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x42 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x43 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522004 nr 0x0 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x42 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x43 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522004 nr 0x0 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x42 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x42 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x43 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522004 nr 0x0 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x42 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x42 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x43 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522004 nr 0x0 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x40 len 100 -> 0 (got 64)
+malikm: ioctl 0x8a522000 nr 0x40 len 100 -> 0 (got 64)
+malikm: ioctl 0x8a522008 nr 0x0 len 24 -> 0 (got 16)
+malikm: ioctl 0x8a522000 nr 0x48 len 28 -> 0 (got 28)
+malikm: ioctl 0x8a522000 nr 0x48 len 28 -> 0 (got 28)
+malikm: ioctl 0x8a522000 nr 0x41 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x48 len 28 -> 0 (got 28)
+malikm: ioctl 0x8a522000 nr 0x40 len 100 -> 0 (got 64)
+malikm: ioctl 0x8a522000 nr 0x40 len 100 -> 0 (got 64)
+malikm: ioctl 0x8a522008 nr 0x0 len 24 -> 0 (got 16)
+malikm: ioctl 0x8a522000 nr 0x48 len 28 -> 0 (got 28)
+malikm: ioctl 0x8a522000 nr 0x48 len 28 -> 0 (got 28)
+malikm: ioctl 0x8a522000 nr 0x41 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x43 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522004 nr 0x0 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x42 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x43 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522004 nr 0x0 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x41 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x48 len 28 -> 0 (got 28)
+malikm: ioctl 0x8a522000 nr 0x43 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522004 nr 0x0 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x41 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x48 len 28 -> 0 (got 28)
+malikm: ioctl 0x8a522000 nr 0x40 len 100 -> 0 (got 64)
+malikm: ioctl 0x8a522000 nr 0x40 len 100 -> 0 (got 64)
+malikm: ioctl 0x8a522008 nr 0x0 len 24 -> 0 (got 16)
+malikm: ioctl 0x8a522000 nr 0x48 len 28 -> 0 (got 28)
+malikm: ioctl 0x8a522000 nr 0x48 len 28 -> 0 (got 28)
+malikm: ioctl 0x8a522008 nr 0x0 len 24 -> 0 (got 16)
+malikm: ioctl 0x8a522000 nr 0x48 len 28 -> 0 (got 28)
+malikm: ioctl 0x8a522008 nr 0x0 len 24 -> 0 (got 16)
+malikm: ioctl 0x8a522000 nr 0x48 len 28 -> 0 (got 28)
+malikm: ioctl 0x8a522000 nr 0x41 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x48 len 28 -> 0 (got 28)
+malikm: ioctl 0x8a522000 nr 0x41 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x48 len 28 -> 0 (got 28)
+malikm: ioctl 0x8a522000 nr 0x43 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522004 nr 0x0 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522000 nr 0x41 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x48 len 28 -> 0 (got 28)
+malikm: ioctl 0x8a522000 nr 0x40 len 100 -> 0 (got 64)
+malikm: ioctl 0x8a522000 nr 0x40 len 100 -> 0 (got 64)
+malikm: ioctl 0x8a522008 nr 0x0 len 24 -> 0 (got 16)
+malikm: ioctl 0x8a522000 nr 0x48 len 28 -> 0 (got 28)
+malikm: ioctl 0x8a522000 nr 0x48 len 28 -> 0 (got 28)
+malikm: ioctl 0x8a522000 nr 0x41 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522000 nr 0x43 len 32 -> 0 (got 32)
+malikm: ioctl 0x8a522004 nr 0x0 len 40 -> 0 (got 40)
+malikm: ioctl 0x8a522008 nr 0x0 len 24 -> 0 (got 16)
+malikm: ioctl 0x8a522000 nr 0x48 len 28 -> 0 (got 28)
+device created, feature level 0xa000
+centre=0xffff0000 (want 0xff0000ff) corner=0xffff0000 (want 0xffff0000) -> FAIL
+exit code 2 
+== triangle, panfrost, PAN_MESA_DEBUG=sync 
+os_same_file_description couldn't determine if two DRM fds reference the same file description. (Invalid argument)
+Let's just assume that file descriptors for the same file probablyshare the file description instead. This may cause problems whenthat isn't the case.
+device created, feature level 0xa000
+centre=0xffff0000 (want 0xff0000ff) corner=0xffff0000 (want 0xffff0000) -> FAIL
+exit code 2 
+== present, panfrost 
+os_same_file_description couldn't determine if two DRM fds reference the same file description. (Invalid argument)
+Let's just assume that file descriptors for the same file probablyshare the file description instead. This may cause problems whenthat isn't the case.
+swap chain created, feature level 0xa000
+presented 3 frames
+PASS
+exit code 0 
+== driver registry values 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters
+    FirmwareIdentified    REG_DWORD    0x1
+    Interrupts    REG_DWORD    0x3
+    Step    REG_DWORD    0x6
+    GpuId    REG_DWORD    0x74021000
+    ShaderPresent    REG_DWORD    0x7
+    MmuFeatures    REG_DWORD    0x2823
+    JobsDone    REG_DWORD    0x400
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\Interrupt Management
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\WDF
