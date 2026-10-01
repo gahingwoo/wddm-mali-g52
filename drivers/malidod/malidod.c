@@ -628,7 +628,7 @@ NTSTATUS APIENTRY MdPresentDisplayOnly(IN_CONST_HANDLE hAdapter, const DXGKARG_P
 
 NTSTATUS MdSystemDisplayEnable(IN_CONST_PVOID MiniportDeviceContext,
                                IN_CONST_D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId,
-                               IN_PDXGKARG_SYSTEM_DISPLAY_ENABLE_FLAGS Flags,
+                               PDXGKARG_SYSTEM_DISPLAY_ENABLE_FLAGS Flags,
                                OUT UINT *Width, OUT UINT *Height, OUT D3DDDIFORMAT *ColorFormat)
 {
     PMD_DEVICE dev = (PMD_DEVICE)MiniportDeviceContext;
@@ -643,8 +643,8 @@ NTSTATUS MdSystemDisplayEnable(IN_CONST_PVOID MiniportDeviceContext,
 }
 
 VOID MdSystemDisplayWrite(IN_CONST_PVOID MiniportDeviceContext, IN_CONST_PVOID Source,
-                          IN_UINT SourceWidth, IN_UINT SourceHeight, IN_UINT SourceStride,
-                          IN_UINT PositionX, IN_UINT PositionY)
+                          UINT SourceWidth, UINT SourceHeight, UINT SourceStride,
+                          UINT PositionX, UINT PositionY)
 {
     PMD_DEVICE dev = (PMD_DEVICE)MiniportDeviceContext;
     if (dev->FbVa == NULL)
