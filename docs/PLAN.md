@@ -89,6 +89,31 @@ Done when step 5 passes on hardware. Before writing the Windows driver, the
 same sequence can be tried from Linux userspace through `/dev/mem` with the
 Panfrost kernel driver unbound, where a mistake is cheaper to debug.
 
+## M1 status (2026-10-01)
+
+Done on Linux, not yet on Windows. `tools/m1/m1_raw.c` runs a WRITE_VALUE job
+with no GPU driver loaded and checks the result; it passes. The sequence:
+
+1. Supply: `vdd_gpu_s0` (RK806 DCDC5) must be on. Linux switches unused
+   regulators off 30 s after boot, so Panfrost-less Linux needs
+   `regulator_ignore_unused`; the firmware boots with it on.
+2. Clock: `CLKSEL_CON(165)` = GPLL / 6 (198 MHz). The reset default selects
+   AUPLL.
+3. Power domain: ungate `CLK_GPU` and `PCLK_GPU_ROOT` (`CLKGATE_CON(69)` bits
+   1, 3, 8) and the PMU clock ungate (0x140 bit 0); clear PMU `PWR_CON1` bit 9;
+   wait for status bit 25 clear and repair bit 25 set; clear `REQ0` bit 0 and
+   wait for `ACK0`/`IDLE0` bit 0 clear. Touching any GPU register before the
+   ACK clears is an SError.
+4. GPU: soft reset, then power the L2, tiler and shader cores.
+5. MMU AS0: `TRANSTAB` = level-0 table | 0x7, `MEMATTR` = 0x888d88,
+   `TRANSCFG` = 0, then `UPDATE`. Mali LPAE: tables `pa | 3`, leaves
+   `pa | 0x2C5` (type 1 even at level 3, no AF).
+6. Job slot 0: head, affinity = shader cores, config = AS 0 | priority 8 |
+   flush on start and end, then START.
+
+Next: the same sequence as a KMDF driver on Windows, with the firmware doing
+steps 1 to 3 and publishing the GPU in the DSDT.
+
 ## Risks, in order
 
 1. The display half: VOP2 flips from Windows, and how DWM's primary surfaces

@@ -4,10 +4,11 @@
  * driver at all, from Linux userspace through /dev/mem. Every register value
  * here is what the Windows driver will have to write.
  *
- * Preconditions (root):
- *   echo 27800000.gpu > /sys/bus/platform/drivers/panfrost/unbind
- * Afterwards:
- *   echo 27800000.gpu > /sys/bus/platform/drivers/panfrost/bind
+ * Preconditions: boot with "modprobe.blacklist=panfrost regulator_ignore_unused".
+ * Do not unbind Panfrost at runtime: on this kernel that panics. And without
+ * regulator_ignore_unused Linux switches vdd_gpu_s0 (RK806 DCDC5) off 30 s
+ * after boot because no driver claims it; PD_GPU then powers "on" with no
+ * supply and its bus never leaves idle (PMU ACK0 bit 0 stays set).
  *
  * Reference values were read back from Panfrost on this board (2026-10-01):
  *   AS0 TRANSTAB = pgd | 0x7, MEMATTR = 0x888d88, TRANSCFG = 0 (legacy)
@@ -160,6 +161,9 @@ int main(void)
 	 * acknowledge never clears. Linux gates them again afterwards, which is
 	 * why a read-back of a running GPU shows PCLK_GPU_ROOT gated.
 	 */
+	/* GPLL / 6 = 198 MHz, what Linux programs (DT assigned-clock-rates).
+	 * The reset default, 0x40, selects AUPLL. */
+	W(cru, CRU_CLKSEL165, (0xFFu << 16) | 0x05);
 	W(cru, CRU_GATE69, (0x10Au << 16) | 0);          /* ungate bits 1, 3, 8 */
 	W(pmu, PMU_CLK_UNGATE, (1u << 16) | 1u);
 	W(pmu, PMU_PWR_CON1, (1u << (9 + 16)) | 0);      /* PD_GPU on */

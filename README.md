@@ -22,7 +22,7 @@ Milestones, the reasoning behind them, and the risks:
 | | Milestone | State |
 |---|---|---|
 | M0 | Feasibility checks | done, see the plan |
-| M1 | Mali runs a job under Windows (plain KMDF driver) | next |
+| M1 | Mali runs a job under Windows (plain KMDF driver) | sequence proven on Linux without a GPU driver; Windows next |
 | M2 | WDDM driver skeleton, D3D runtime loads the UMD | |
 | M3 | Clear and copy | |
 | M4 | First triangle | |
