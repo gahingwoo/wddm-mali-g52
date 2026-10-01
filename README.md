@@ -25,8 +25,8 @@ Milestones, the reasoning behind them, and the risks:
 | M0 | Feasibility checks | done, see the plan |
 | M1 | Mali runs a job under Windows (plain KMDF driver) | **done**: [result](docs/results/m1-windows-2026-10-01.txt) |
 | M2 | Mesa 26.2 (D3D10 frontend, softpipe, then Panfrost) built for Windows ARM64 in CI | **done**: builds, and falls back cleanly with no Mali device |
-| M3 | Panfrost drives the Mali on Windows through our own kernel interface; first clear | written; in CI, Panfrost runs the D3D11 triangle end to end against an emulated driver. Not yet run on the board: [docs/M3.md](docs/M3.md) |
-| M4 | First triangle | |
+| M3 | Panfrost drives the Mali on Windows through our own kernel interface; first clear | **done** 2026-10-02: Panfrost clears a render target on the Mali and reads it back ([result](docs/results/m3-mesa-windows-2026-10-02.txt); [driver alone](docs/results/m3-windows-2026-10-02.txt); [design](docs/M3.md)) |
+| M4 | First triangle | next: the clear is right, the triangle is missing, no GPU fault |
 | M5 | WDDM 2.0 driver and hardware UMD; DWM composites on the Mali | planned: [docs/M5-PLAN.md](docs/M5-PLAN.md) |
 
 M2 onwards: [docs/M2-PLAN.md](docs/M2-PLAN.md). Mesa's D3D10 frontend is a
