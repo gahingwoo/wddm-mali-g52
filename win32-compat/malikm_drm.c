@@ -48,12 +48,24 @@ fd_handle(int fd)
 
 /* Send Buf (a MALIKM_DRM_HEADER and what follows) and return the driver's
  * result, 0 or -1 with errno set. */
+static int fake_on(void);
+static void fake_ioctl(DWORD code, void *buf, DWORD len);
+
 static int
 call(int fd, DWORD code, void *buf, DWORD len)
 {
    HANDLE h = fd_handle(fd);
    DWORD got = 0;
 
+   if (fake_on()) {
+      fake_ioctl(code, buf, len);
+      int r = ((MALIKM_DRM_HEADER *)buf)->Result;
+      if (r < 0) {
+         errno = crt_errno(-r);
+         return -1;
+      }
+      return 0;
+   }
    if (h == INVALID_HANDLE_VALUE) {
       errno = EBADF;
       return -1;
@@ -180,9 +192,11 @@ drmGetVersion(int fd)
    HANDLE h = fd_handle(fd);
    DWORD got = 0;
 
-   if (h == INVALID_HANDLE_VALUE ||
-       !DeviceIoControl(h, IOCTL_MALIKM_VERSION, &v, sizeof(v), &v, sizeof(v), &got, NULL) ||
-       got < sizeof(v)) {
+   if (fake_on())
+      fake_ioctl(IOCTL_MALIKM_VERSION, &v, sizeof(v));
+   else if (h == INVALID_HANDLE_VALUE ||
+            !DeviceIoControl(h, IOCTL_MALIKM_VERSION, &v, sizeof(v), &v, sizeof(v), &got, NULL) ||
+            got < sizeof(v)) {
       errno = ENODEV;
       return NULL;
    }
@@ -431,4 +445,201 @@ munmap(void *addr, size_t len)
       MALIKM_UNMAP u;
    } m = {{0}, {(uint64_t)(uintptr_t)addr}};
    return call(fd, IOCTL_MALIKM_UNMAP, &m, sizeof(m));
+}
+
+/* ---- MALIKM_FAKE ----
+ * The driver, emulated in this process on the same marshalled buffers, for
+ * CI runners with no Mali: buffers are ordinary memory, the GET_PARAM values
+ * are the RK3576's G52 as Linux Panfrost reported it, and every job
+ * "completes" the moment it is submitted without anything running. It drives
+ * Panfrost's whole Windows path (screen, compiler, command streams, the shim's
+ * marshalling) short of the GPU. Pixels read back are whatever was there. */
+
+struct fake_bo {
+   void *cpu;
+   uint64_t size, va;
+   uint32_t flags;
+};
+static struct fake_bo *fbo;
+static uint32_t fbo_cap, fsync_next = 1;
+static uint64_t fva = 0x2000000, fseq, fsubmits;
+static SRWLOCK fake_lock = SRWLOCK_INIT;
+static int fake = -1;
+
+static int
+fake_on(void)
+{
+   if (fake < 0) {
+      const char *e = getenv("MALIKM_FAKE");
+      fake = e && *e && *e != '0';
+   }
+   return fake;
+}
+
+static struct fake_bo *
+fake_bo(uint32_t h)
+{
+   return h && h <= fbo_cap && fbo[h - 1].cpu ? &fbo[h - 1] : NULL;
+}
+
+static int
+fake_drm(uint32_t nr, uint8_t *b, uint32_t size)
+{
+   switch (nr) {
+   case MALIKM_NR_PANFROST_GET_PARAM: {
+      struct drm_panfrost_get_param *a = (void *)b;
+      static const uint64_t v[] = {
+         [DRM_PANFROST_PARAM_GPU_PROD_ID] = 0x7402,
+         [DRM_PANFROST_PARAM_GPU_REVISION] = 0x1000,
+         [DRM_PANFROST_PARAM_SHADER_PRESENT] = 0x7,
+         [DRM_PANFROST_PARAM_TILER_PRESENT] = 0x1,
+         [DRM_PANFROST_PARAM_L2_PRESENT] = 0x1,
+         [DRM_PANFROST_PARAM_AS_PRESENT] = 0xff,
+         [DRM_PANFROST_PARAM_JS_PRESENT] = 0x7,
+         [DRM_PANFROST_PARAM_L2_FEATURES] = 0x07120206,
+         [DRM_PANFROST_PARAM_CORE_FEATURES] = 0x2,
+         [DRM_PANFROST_PARAM_TILER_FEATURES] = 0x209,
+         [DRM_PANFROST_PARAM_MEM_FEATURES] = 0x1,
+         [DRM_PANFROST_PARAM_MMU_FEATURES] = 0x2823,
+         [DRM_PANFROST_PARAM_NR_CORE_GROUPS] = 1,
+         [DRM_PANFROST_PARAM_SELECTED_COHERENCY] = DRM_PANFROST_GPU_COHERENCY_NONE,
+      };
+      if (a->param > DRM_PANFROST_PARAM_AFBC_FEATURES &&
+          a->param != DRM_PANFROST_PARAM_SELECTED_COHERENCY)
+         return -MK_EINVAL;
+      a->value = v[a->param];
+      return 0;
+   }
+   case MALIKM_NR_PANFROST_CREATE_BO: {
+      struct drm_panfrost_create_bo *a = (void *)b;
+      uint64_t sz = ((uint64_t)a->size + 4095) & ~4095ull;
+      if (a->flags & PANFROST_BO_HEAP)
+         sz = (sz + 0x1fffff) & ~0x1fffffull;
+      void *cpu = VirtualAlloc(NULL, (SIZE_T)sz, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+      if (!cpu)
+         return -MK_ENOMEM;
+      uint32_t h = 0;
+      for (uint32_t i = 0; i < fbo_cap && !h; i++)
+         if (!fbo[i].cpu)
+            h = i + 1;
+      if (!h) {
+         uint32_t cap = fbo_cap ? fbo_cap * 2 : 256;
+         struct fake_bo *n = realloc(fbo, cap * sizeof(*n));
+         if (!n) {
+            VirtualFree(cpu, 0, MEM_RELEASE);
+            return -MK_ENOMEM;
+         }
+         memset(n + fbo_cap, 0, (cap - fbo_cap) * sizeof(*n));
+         fbo = n;
+         h = fbo_cap + 1;
+         fbo_cap = cap;
+      }
+      /* Executable buffers stay inside one 16 MB window, as in the driver. */
+      if (!(a->flags & PANFROST_BO_NOEXEC) && (fva >> 24) != ((fva + sz - 1) >> 24))
+         fva = (fva + 0xffffff) & ~0xffffffull;
+      fbo[h - 1] = (struct fake_bo){cpu, sz, fva, a->flags};
+      fva += sz;
+      a->handle = h;
+      a->offset = fbo[h - 1].va;
+      return 0;
+   }
+   case MALIKM_NR_PANFROST_MMAP_BO: {
+      struct drm_panfrost_mmap_bo *a = (void *)b;
+      if (!fake_bo(a->handle))
+         return -MK_ENOENT;
+      a->offset = MALIKM_MMAP_OFFSET(a->handle);
+      return 0;
+   }
+   case MALIKM_NR_PANFROST_GET_BO_OFFSET: {
+      struct drm_panfrost_get_bo_offset *a = (void *)b;
+      struct fake_bo *bo = fake_bo(a->handle);
+      if (!bo)
+         return -MK_ENOENT;
+      a->offset = bo->va;
+      return 0;
+   }
+   case MALIKM_NR_PANFROST_MADVISE:
+      ((struct drm_panfrost_madvise *)b)->retained = 1;
+      return 0;
+   case MALIKM_NR_PANFROST_WAIT_BO:
+      return fake_bo(((struct drm_panfrost_wait_bo *)b)->handle) ? 0 : -MK_ENOENT;
+   case MALIKM_NR_PANFROST_SUBMIT: {
+      struct drm_panfrost_submit *a = (void *)b;
+      const uint32_t *bos = (const uint32_t *)(b + a->bo_handles);
+      for (uint32_t i = 0; i < a->bo_handle_count; i++)
+         if (!fake_bo(bos[i]))
+            return -MK_ENOENT;
+      if (!a->jc)
+         return -MK_EINVAL;
+      fseq++;
+      if (++fsubmits <= 16 || (fsubmits & 255) == 0)
+         fprintf(stderr, "malikm-fake: submit %llu jc=0x%llx reqs=%u bos=%u in=%u out=%u\n",
+                 (unsigned long long)fsubmits, (unsigned long long)a->jc, a->requirements,
+                 a->bo_handle_count, a->in_sync_count, a->out_sync);
+      return 0;
+   }
+   case MALIKM_NR_GEM_CLOSE: {
+      struct fake_bo *bo = fake_bo(((struct drm_gem_close *)b)->handle);
+      if (!bo)
+         return -MK_EINVAL;
+      VirtualFree(bo->cpu, 0, MEM_RELEASE);
+      bo->cpu = NULL;
+      return 0;
+   }
+   case MALIKM_NR_SYNCOBJ_CREATE:
+      ((struct drm_syncobj_create *)b)->handle = fsync_next++;
+      return 0;
+   case MALIKM_NR_SYNCOBJ_WAIT:
+      ((struct drm_syncobj_wait *)b)->first_signaled = 0;
+      return 0;
+   case MALIKM_NR_SYNCOBJ_DESTROY:
+   case MALIKM_NR_SYNCOBJ_RESET:
+   case MALIKM_NR_SYNCOBJ_SIGNAL:
+      return 0;
+   case MALIKM_NR_SYNCOBJ_EXPORT_SEQ:
+      ((MALIKM_SYNCOBJ_SEQ *)b)->Seq = fseq;
+      return 0;
+   case MALIKM_NR_SYNCOBJ_IMPORT_SEQ:
+      return 0;
+   default:
+      (void)size;
+      return -MK_ENOSYS;
+   }
+}
+
+static void
+fake_ioctl(DWORD code, void *buf, DWORD len)
+{
+   MALIKM_DRM_HEADER *h = buf;
+   (void)len;
+
+   AcquireSRWLockExclusive(&fake_lock);
+   switch (code) {
+   case IOCTL_MALIKM_VERSION: {
+      MALIKM_VERSION *v = buf;
+      memset(v, 0, sizeof(*v));
+      v->Major = MALIKM_DRM_MAJOR;
+      v->Minor = MALIKM_DRM_MINOR;
+      strcpy(v->Name, "panfrost");
+      break;
+   }
+   case IOCTL_MALIKM_MAP: {
+      MALIKM_MAP *m = (MALIKM_MAP *)(h + 1);
+      struct fake_bo *bo = fake_bo(MALIKM_MMAP_HANDLE(m->Offset));
+      h->Result = bo && m->Size <= bo->size ? 0 : -MK_EINVAL;
+      if (bo)
+         m->Address = (uint64_t)(uintptr_t)bo->cpu;
+      break;
+   }
+   case IOCTL_MALIKM_UNMAP:
+      h->Result = 0;
+      break;
+   case IOCTL_MALIKM_DRM:
+      h->Result = fake_drm(h->Nr, (uint8_t *)(h + 1), h->Size);
+      break;
+   default:
+      h->Result = -MK_ENOSYS;
+      break;
+   }
+   ReleaseSRWLockExclusive(&fake_lock);
 }

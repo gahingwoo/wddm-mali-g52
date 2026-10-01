@@ -246,6 +246,41 @@ jobs:
           New-Item -ItemType Directory -Force out | Out-Null
           Copy-Item $dll, triangle.exe out\
 
+      - name: Panfrost on the emulated driver (MALIKM_FAKE)
+        shell: pwsh
+        run: |
+          # The shim emulates malikm in-process: Panfrost creates its screen,
+          # compiles the shaders, builds and submits the job chains; nothing
+          # executes them, so the pixels are arbitrary (exit code 2).
+          $PSNativeCommandUseErrorActionPreference = $false
+          $env:GALLIUM_DRIVER = 'panfrost'
+          $env:MALIKM_FAKE = '1'
+          .\out\triangle.exe (Resolve-Path out\libgallium_d3d10.dll) 2>&1 | Tee-Object fake.txt
+          $code = $LASTEXITCODE
+          Write-Host "exit code $code"
+          if (Select-String -Path fake.txt -Pattern 'using softpipe' -Quiet) { throw 'fell back to softpipe' }
+          if (-not (Select-String -Path fake.txt -Pattern 'malikm-fake: submit' -Quiet)) { throw 'no job was submitted' }
+          if ($code -ne 0 -and $code -ne 2) { throw "triangle.exe died ($code)" }
+          # Same again with pandecode: the job chains Panfrost built on Windows,
+          # decoded, for comparison with Linux's.
+          New-Item -ItemType Directory -Force trace | Out-Null
+          Push-Location trace
+          $env:PAN_MESA_DEBUG = 'trace'
+          ..\out\triangle.exe (Resolve-Path ..\out\libgallium_d3d10.dll) 2>&1 | Tee-Object ..\trace.txt
+          Write-Host "trace run exit code $LASTEXITCODE"
+          Pop-Location
+          Get-ChildItem trace | Format-Table Name, Length
+          exit 0
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: panfrost-fake-trace
+          path: |
+            fake.txt
+            trace.txt
+            trace/
+
       - uses: actions/upload-artifact@v4
         with:
           name: mesa-d3d10umd-panfrost-arm64
