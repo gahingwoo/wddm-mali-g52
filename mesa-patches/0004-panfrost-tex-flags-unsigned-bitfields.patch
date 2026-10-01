@@ -1,0 +1,46 @@
+diff --git a/src/panfrost/compiler/pan_nir.h b/src/panfrost/compiler/pan_nir.h
+index aef31d9..cc4aaa2 100644
+--- a/src/panfrost/compiler/pan_nir.h
++++ b/src/panfrost/compiler/pan_nir.h
+@@ -210,11 +210,13 @@ bool pan_nir_lower_image_index(nir_shader *shader,
+ bool pan_nir_lower_texel_buffer_fetch_index(nir_shader *shader,
+                                             unsigned attrib_offset);
+ 
++/* unsigned rather than bool bitfields: MSVC-ABI compilers give each bool
++ * bitfield run its own storage unit, and the struct must stay 32 bits. */
+ PRAGMA_DIAGNOSTIC_PUSH
+ PRAGMA_DIAGNOSTIC_ERROR(-Wpadded)
+ struct pan_bi_tex_flags {
+-   bool skip : 1;
+-   bool explicit_lod : 1;
++   unsigned skip : 1;
++   unsigned explicit_lod : 1;
+    unsigned _pad : 14;
+    unsigned sampler_idx : 8;
+    unsigned texture_idx : 8;
+@@ -234,16 +236,16 @@ nir_intrinsic_pan_bi_tex_flags(const nir_intrinsic_instr *instr)
+ PRAGMA_DIAGNOSTIC_PUSH
+ PRAGMA_DIAGNOSTIC_ERROR(-Wpadded)
+ struct pan_va_tex_flags {
+-   bool skip : 1;
+-   bool wide_indices : 1;
+-   bool array_enable : 1;
+-   bool texel_offset : 1;
+-   bool compare_enable : 1;
++   unsigned skip : 1;
++   unsigned wide_indices : 1;
++   unsigned array_enable : 1;
++   unsigned texel_offset : 1;
++   unsigned compare_enable : 1;
+    unsigned lod_mode : 3;
+-   bool derivative_enable : 1;
+-   bool force_delta_enable : 1;
+-   bool lod_bias_disable : 1;
+-   bool lod_clamp_disable : 1;
++   unsigned derivative_enable : 1;
++   unsigned force_delta_enable : 1;
++   unsigned lod_bias_disable : 1;
++   unsigned lod_clamp_disable : 1;
+    unsigned _pad : 20;
+ };
+ PRAGMA_DIAGNOSTIC_POP

@@ -190,6 +190,14 @@ jobs:
       - name: Configure
         shell: pwsh
         run: |
+          # clang-cl, not cl: same MSVC ABI (so the D3D runtime and the DLL
+          # agree), but it accepts the GNU C Panfrost is written in (?:,
+          # statement expressions, case ranges). Bitfield layout is still MSVC's,
+          # which mesa-patches/0003 makes irrelevant for the hardware encodings.
+          $llvm = Join-Path $env:VCINSTALLDIR 'Tools\Llvm\ARM64\bin'
+          $env:CC = Join-Path $llvm 'clang-cl.exe'
+          $env:CXX = $env:CC
+          & $env:CC --version
           meson setup build mesa --backend=ninja `
             -Dbuildtype=release `
             -Dplatforms=windows `
