@@ -1,0 +1,98 @@
+name: Mesa
+
+# M2: Mesa 26.2 (the last release with the d3d10umd frontend) built natively
+# for Windows ARM64, with a D3D11 smoke test run on the runner.
+
+on:
+  push:
+    paths:
+      - '.github/workflows/mesa.yml'
+      - 'mesa-patches/**'
+      - 'tests/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MESA_TAG: mesa-26.2.0
+  # gitlab.freedesktop.org was returning 502/504 when this was written; the
+  # GitHub mirror carries the same tags.
+  MESA_URL: https://github.com/chaotic-cx/mesa-mirror.git
+
+jobs:
+  softpipe:
+    name: d3d10umd + softpipe (ARM64)
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: arm64
+
+      - name: Build tools
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install meson ninja mako pyyaml packaging
+          # flex/bison: x64 binaries, run under emulation on ARM64 Windows.
+          $u = 'https://github.com/lexxmark/winflexbison/releases/download/v2.5.25/win_flex_bison-2.5.25.zip'
+          Invoke-WebRequest $u -OutFile wfb.zip
+          Expand-Archive wfb.zip -DestinationPath C:\winflexbison
+          "C:\winflexbison" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: arm64
+
+      - name: Mesa source
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch $env:MESA_TAG $env:MESA_URL mesa
+          Get-ChildItem mesa-patches -Filter *.patch -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object {
+            Write-Host "applying $($_.Name)"
+            git -C mesa apply --whitespace=nowarn $_.FullName
+            if ($LASTEXITCODE) { throw "patch failed: $($_.Name)" }
+          }
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          meson setup build mesa --backend=ninja `
+            -Dbuildtype=release `
+            -Dplatforms=windows `
+            -Dgallium-drivers=softpipe `
+            -Dgallium-d3d10umd=true `
+            -Dvulkan-drivers=[] `
+            -Dllvm=disabled `
+            -Dopengl=false -Dgles1=disabled -Dgles2=disabled `
+            -Degl=disabled -Dglx=disabled -Dgbm=disabled `
+            -Dvideo-codecs=[] -Dmicrosoft-clc=disabled -Dspirv-to-dxil=false `
+            -Dzstd=disabled -Dshader-cache=disabled -Dbuild-tests=false
+          if ($LASTEXITCODE) { Get-Content build\meson-logs\meson-log.txt -Tail 80; throw 'meson setup failed' }
+
+      - name: Build
+        shell: pwsh
+        run: |
+          meson compile -C build
+          if ($LASTEXITCODE) { throw 'build failed' }
+          Get-ChildItem build -Recurse -Filter *.dll | Format-Table FullName, Length
+
+      - name: D3D11 smoke test
+        shell: pwsh
+        run: |
+          $dll = (Get-ChildItem build -Recurse -Filter libgallium_d3d10.dll | Select-Object -First 1).FullName
+          if (-not $dll) { throw 'libgallium_d3d10.dll was not built' }
+          cl /nologo /EHsc /O2 tests\d3d11-triangle\triangle.cpp /Fe:triangle.exe
+          if ($LASTEXITCODE) { throw 'test build failed' }
+          .\triangle.exe $dll
+          if ($LASTEXITCODE) { throw "smoke test failed ($LASTEXITCODE)" }
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item $dll, triangle.exe out\
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mesa-d3d10umd-softpipe-arm64
+          path: out/
