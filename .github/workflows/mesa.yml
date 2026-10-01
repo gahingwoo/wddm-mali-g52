@@ -193,7 +193,7 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
-          meson compile -C build -- -k 0 2>&1 | Tee-Object build.log
+          ninja -C build -k 0 2>&1 | Tee-Object build.log
           $fail = Select-String -Path build.log -Pattern 'FAILED:' | Measure-Object
           Write-Host "failed build steps: $($fail.Count)"
           Select-String -Path build.log -Pattern ' error C| error LNK|fatal error' | Select-Object -First 80 | ForEach-Object { $_.Line }
