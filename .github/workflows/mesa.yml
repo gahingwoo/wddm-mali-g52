@@ -225,3 +225,27 @@ jobs:
           Write-Host "failed build steps: $($fail.Count)"
           Select-String -Path build.log -Pattern ' error C| error LNK|fatal error' | Select-Object -First 80 | ForEach-Object { $_.Line }
           if ($fail.Count -gt 0) { throw 'build failed' }
+
+      - name: Smoke test (softpipe, then GALLIUM_DRIVER=panfrost)
+        shell: pwsh
+        run: |
+          $dll = (Get-ChildItem build -Recurse -Filter libgallium_d3d10.dll | Select-Object -First 1).FullName
+          if (-not $dll) { throw 'libgallium_d3d10.dll was not built' }
+          cl /nologo /EHsc /O2 tests\d3d11-triangle\triangle.cpp /Fe:triangle.exe
+          if ($LASTEXITCODE) { throw 'test build failed' }
+          .\triangle.exe $dll
+          if ($LASTEXITCODE) { throw "softpipe smoke test failed ($LASTEXITCODE)" }
+          # No Mali on the runner: Panfrost must report no device and hand
+          # over to softpipe without crashing, and the triangle still draws.
+          $env:GALLIUM_DRIVER = 'panfrost'
+          .\triangle.exe $dll 2>&1 | Tee-Object pan.txt
+          if ($LASTEXITCODE) { throw "panfrost fallback smoke test failed ($LASTEXITCODE)" }
+          if (-not (Select-String -Path pan.txt -Pattern 'Panfrost found no Mali device' -Quiet)) { throw 'Panfrost was not tried' }
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item $dll, triangle.exe out\
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mesa-d3d10umd-panfrost-arm64
+          path: out/
+

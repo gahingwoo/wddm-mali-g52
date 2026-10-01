@@ -1,0 +1,64 @@
+diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+index cafc790..40491c5 100644
+--- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
++++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+@@ -31,6 +31,10 @@
+ #include "target-helpers/inline_debug_helper.h"
+ #include "llvmpipe/lp_public.h"
+ #include "softpipe/sp_public.h"
++#ifdef GALLIUM_PANFROST
++#include <stdio.h>
++#include "panfrost/drm/panfrost_drm_public.h"
++#endif
+ #include "sw/gdi/gdi_sw_winsys.h"
+ 
+ #include "winddk_compat.h"
+@@ -83,6 +87,17 @@ d3d10_create_screen(void)
+    (void)driver;
+ #endif
+ 
++#ifdef GALLIUM_PANFROST
++   if (strcmp(driver, "panfrost") == 0) {
++      /* Arm Mali through Panfrost (wddm-mali-g52). The fd will name the Mali
++       * kernel driver; until that exists Panfrost finds no device and
++       * softpipe takes over. */
++      screen = panfrost_drm_screen_create(-1, NULL);
++      if (screen == NULL)
++         fprintf(stderr, "d3d10umd: Panfrost found no Mali device, using softpipe\n");
++   }
++#endif
++
+    if (screen == NULL) {
+       screen = softpipe_create_screen( winsys );
+    }
+diff --git a/src/gallium/targets/d3d10umd/meson.build b/src/gallium/targets/d3d10umd/meson.build
+index ab1cf05..8d931bb 100644
+--- a/src/gallium/targets/d3d10umd/meson.build
++++ b/src/gallium/targets/d3d10umd/meson.build
+@@ -10,9 +10,17 @@ libgallium_d3d10_def = custom_target(
+ )
+ 
+ gallium_d3d10_name = get_option('gallium-d3d10-dll-name')
++d3d10_panfrost_args = []
++d3d10_panfrost_deps = []
++if with_gallium_panfrost
++  d3d10_panfrost_args = ['-DGALLIUM_PANFROST']
++  d3d10_panfrost_deps = [driver_panfrost]
++endif
++
+ libgallium_d3d10 = shared_library(
+   gallium_d3d10_name,
+   ['d3d10_gdi.c'],
++  c_args : d3d10_panfrost_args,
+   vs_module_defs : libgallium_d3d10_def,
+   include_directories : [
+     inc_include, inc_src, inc_gallium, inc_gallium_aux, inc_d3d10umd, inc_gallium_winsys, inc_gallium_winsys_sw, inc_gallium_drivers, inc_winddk
+@@ -22,7 +30,7 @@ libgallium_d3d10 = shared_library(
+     libgallium, libwsgdi
+   ],
+   dependencies : [
+-    dep_ws2_32, idep_nir, driver_swrast, idep_mesautil
++    dep_ws2_32, idep_nir, driver_swrast, idep_mesautil, d3d10_panfrost_deps
+   ],
+   name_prefix: '',
+   install : true,
