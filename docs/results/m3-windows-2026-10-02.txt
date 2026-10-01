@@ -1,0 +1,98 @@
+m3-test Thu 01/10/2026 10:13:01.70 
+== GPU device before 
+Microsoft PnP Utility
+
+Instance ID:                ACPI\RKCP7402\0
+Device Description:         Arm Mali-G52 (M1 probe)
+Class Name:                 System
+Class GUID:                 {4d36e97d-e325-11ce-bfc1-08002be10318}
+Manufacturer Name:          wddm-mali-g52
+Status:                     Started
+Driver Name:                oem0.inf
+
+== removing m1probe, if installed 
+Microsoft PnP Utility
+
+Driver package uninstalled.
+Driver package deleted successfully.
+== installing malikm 
+Microsoft PnP Utility
+
+Adding driver package:  malikm.inf
+Driver package added successfully.
+Published Name:         oem0.inf
+Driver package installed on device: ACPI\RKCP7402\0
+
+Total driver packages:  1
+Added driver packages:  1
+== device after install 
+Microsoft PnP Utility
+
+Instance ID:                ACPI\RKCP7402\0
+Device Description:         Arm Mali-G52 (Panfrost uAPI)
+Class Name:                 System
+Class GUID:                 {4d36e97d-e325-11ce-bfc1-08002be10318}
+Manufacturer Name:          wddm-mali-g52
+Status:                     Started
+Driver Name:                oem0.inf
+
+== driver registry values 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters
+    FirmwareIdentified    REG_DWORD    0x1
+    Interrupts    REG_DWORD    0x3
+    Step    REG_DWORD    0x6
+    GpuId    REG_DWORD    0x74021000
+    ShaderPresent    REG_DWORD    0x7
+    MmuFeatures    REG_DWORD    0x2823
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\Interrupt Management
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\WDF
+== m3test 
+driver: panfrost 1.1
+GPU_PROD_ID 0x7402  REVISION 0x1000  SHADER_PRESENT 0x7  L2_PRESENT 0x1
+MMU_FEATURES 0x2823  THREAD_FEATURES 0xa046000  MAX_THREADS 768  JS_PRESENT 0x7
+BO handle 1 at GPU 0x2000000
+mapped at 0000018E29530000
+slot 1: result 0, read 0xc0ffee00, want 0xc0ffee00: ok
+slot 0: result 0, read 0xc0ffee01, want 0xc0ffee01: ok
+WAIT_BO (poll, idle): 0
+1000 jobs: 75.8 ms (75.8 us each), 0 wrong
+PASS
+m3test exit code 0 
+== triangle, softpipe 
+device created, feature level 0xa000
+centre=0xff0000ff (want 0xff0000ff) corner=0xffff0000 (want 0xffff0000) -> PASS
+exit code 0 
+== triangle, panfrost 
+d3d10umd: Panfrost found no Mali device, using softpipe
+d3d10umd: Panfrost found no Mali device, using softpipe
+device created, feature level 0xa000
+centre=0xff0000ff (want 0xff0000ff) corner=0xffff0000 (want 0xffff0000) -> PASS
+exit code 0 
+== triangle, panfrost, PAN_MESA_DEBUG=sync 
+d3d10umd: Panfrost found no Mali device, using softpipe
+d3d10umd: Panfrost found no Mali device, using softpipe
+device created, feature level 0xa000
+centre=0xff0000ff (want 0xff0000ff) corner=0xffff0000 (want 0xffff0000) -> PASS
+exit code 0 
+== present, panfrost 
+d3d10umd: Panfrost found no Mali device, using softpipe
+d3d10umd: Panfrost found no Mali device, using softpipe
+swap chain created, feature level 0xa000
+presented 3 frames
+PASS
+exit code 0 
+== driver registry values after 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters
+    FirmwareIdentified    REG_DWORD    0x1
+    Interrupts    REG_DWORD    0x3
+    Step    REG_DWORD    0x6
+    GpuId    REG_DWORD    0x74021000
+    ShaderPresent    REG_DWORD    0x7
+    MmuFeatures    REG_DWORD    0x2823
+    JobsDone    REG_DWORD    0x300
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\Interrupt Management
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\WDF
