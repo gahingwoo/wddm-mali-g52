@@ -203,7 +203,7 @@ jobs:
           $env:CXX = $env:CC
           & $env:CC --version
           meson setup build mesa --backend=ninja `
-            -Dbuildtype=release `
+            -Dbuildtype=debugoptimized `
             -Dplatforms=windows `
             '-Dgallium-drivers=softpipe,panfrost' `
             -Dgallium-d3d10umd=true `
@@ -254,10 +254,20 @@ jobs:
           # executes them, so the pixels are arbitrary (exit code 2).
           $PSNativeCommandUseErrorActionPreference = $false
           $env:GALLIUM_DRIVER = 'panfrost'
-          $env:MALIKM_FAKE = '1'
+          $env:MALIKM_FAKE = '2'
+          Copy-Item (Get-ChildItem build -Recurse -Filter libgallium_d3d10.pdb | Select-Object -First 1).FullName out\ -ErrorAction SilentlyContinue
           .\out\triangle.exe (Resolve-Path out\libgallium_d3d10.dll) 2>&1 | Tee-Object fake.txt
           $code = $LASTEXITCODE
           Write-Host "exit code $code"
+          if ($code -lt 0) {
+            # Crashed: the same run under cdb, for a stack.
+            $cdb = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Debuggers' -Recurse -Filter cdb.exe -ErrorAction SilentlyContinue |
+                     Where-Object { $_.FullName -match 'arm64' } | Select-Object -First 1
+            if ($cdb) {
+              & $cdb.FullName -g -G -y "$pwd\out" -c '.lines -e; .ecxr; kn 40; r; q' .\out\triangle.exe (Resolve-Path out\libgallium_d3d10.dll) 2>&1 | Tee-Object cdb.txt | Select-Object -Last 80
+            } else { Write-Host 'no cdb on this runner' }
+          }
+          if (-not (Test-Path fake.txt)) { New-Item fake.txt | Out-Null }
           if (Select-String -Path fake.txt -Pattern 'using softpipe' -Quiet) { throw 'fell back to softpipe' }
           if (-not (Select-String -Path fake.txt -Pattern 'malikm-fake: submit' -Quiet)) { throw 'no job was submitted' }
           if ($code -ne 0 -and $code -ne 2) { throw "triangle.exe died ($code)" }
@@ -278,6 +288,7 @@ jobs:
           name: panfrost-fake-trace
           path: |
             fake.txt
+            cdb.txt
             trace.txt
             trace/
 

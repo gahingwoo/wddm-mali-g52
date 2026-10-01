@@ -477,6 +477,14 @@ fake_on(void)
    return fake;
 }
 
+/* MALIKM_FAKE=2: also log every call. */
+static int
+fake_trace(void)
+{
+   const char *e = getenv("MALIKM_FAKE");
+   return e && *e == '2';
+}
+
 static struct fake_bo *
 fake_bo(uint32_t h)
 {
@@ -615,6 +623,9 @@ fake_ioctl(DWORD code, void *buf, DWORD len)
    (void)len;
 
    AcquireSRWLockExclusive(&fake_lock);
+   if (fake_trace())
+      fprintf(stderr, "malikm-fake: ioctl 0x%lx nr 0x%x size %u\n", (unsigned long)code,
+              code == IOCTL_MALIKM_DRM ? h->Nr : 0, code == IOCTL_MALIKM_DRM ? h->Size : 0);
    switch (code) {
    case IOCTL_MALIKM_VERSION: {
       MALIKM_VERSION *v = buf;
@@ -642,5 +653,7 @@ fake_ioctl(DWORD code, void *buf, DWORD len)
       h->Result = -MK_ENOSYS;
       break;
    }
+   if (fake_trace() && code != IOCTL_MALIKM_VERSION)
+      fprintf(stderr, "malikm-fake:   -> %d\n", h->Result);
    ReleaseSRWLockExclusive(&fake_lock);
 }
