@@ -1,0 +1,327 @@
+diff --git a/src/panfrost/compiler/bifrost/bifrost.h b/src/panfrost/compiler/bifrost/bifrost.h
+index 9f98d11..c2a900c 100644
+--- a/src/panfrost/compiler/bifrost/bifrost.h
++++ b/src/panfrost/compiler/bifrost/bifrost.h
+@@ -13,6 +13,8 @@
+ #include <stdint.h>
+ #include <string.h>
+ 
++#include "util/macros.h"
++
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+@@ -145,7 +147,32 @@ struct bifrost_header {
+ 
+    enum bifrost_message_type message_type      : 5;
+    enum bifrost_message_type next_message_type : 5;
+-} __attribute__((packed));
++} PACKED;
++
++/* Packs struct bifrost_header in GCC's packed, LSB-first bitfield layout, which is the
++ * hardware encoding. MSVC lays mixed-type bitfields out differently, so the
++ * encoding must not depend on the struct's in-memory layout. */
++static inline uint64_t
++bifrost_header_pack(const struct bifrost_header *f)
++{
++   uint64_t v = 0;
++   v |= ((uint64_t)f->zero1 & 0x1full) << 0;
++   v |= ((uint64_t)f->flush_to_zero & 0x3ull) << 5;
++   v |= ((uint64_t)f->suppress_inf & 0x1ull) << 7;
++   v |= ((uint64_t)f->suppress_nan & 0x1ull) << 8;
++   v |= ((uint64_t)f->float_exceptions & 0x3ull) << 9;
++   v |= ((uint64_t)f->flow_control & 0x7ull) << 11;
++   v |= ((uint64_t)f->zero2 & 0x1ull) << 14;
++   v |= ((uint64_t)f->terminate_discarded_threads & 0x1ull) << 15;
++   v |= ((uint64_t)f->next_clause_prefetch & 0x1ull) << 16;
++   v |= ((uint64_t)f->staging_barrier & 0x1ull) << 17;
++   v |= ((uint64_t)f->staging_register & 0x3full) << 18;
++   v |= ((uint64_t)f->dependency_wait & 0xffull) << 24;
++   v |= ((uint64_t)f->dependency_slot & 0x7ull) << 32;
++   v |= ((uint64_t)f->message_type & 0x1full) << 35;
++   v |= ((uint64_t)f->next_message_type & 0x1full) << 40;
++   return (uint64_t)v;
++}
+ 
+ enum bifrost_packed_src {
+    BIFROST_SRC_PORT0 = 0,
+@@ -161,12 +188,12 @@ enum bifrost_packed_src {
+ struct bifrost_fma_inst {
+    unsigned src0 : 3;
+    unsigned op   : 20;
+-} __attribute__((packed));
++} PACKED;
+ 
+ struct bifrost_add_inst {
+    unsigned src0 : 3;
+    unsigned op   : 17;
+-} __attribute__((packed));
++} PACKED;
+ 
+ enum branch_bit_size {
+    BR_SIZE_32 = 0,
+@@ -195,7 +222,23 @@ struct bifrost_regs {
+    unsigned reg0    : 5;
+    unsigned reg1    : 6;
+    unsigned ctrl    : 4;
+-} __attribute__((packed));
++} PACKED;
++
++/* Packs struct bifrost_regs in GCC's packed, LSB-first bitfield layout, which is the
++ * hardware encoding. MSVC lays mixed-type bitfields out differently, so the
++ * encoding must not depend on the struct's in-memory layout. */
++static inline uint64_t
++bifrost_regs_pack(const struct bifrost_regs *f)
++{
++   uint64_t v = 0;
++   v |= ((uint64_t)f->fau_idx & 0xffull) << 0;
++   v |= ((uint64_t)f->reg3 & 0x3full) << 8;
++   v |= ((uint64_t)f->reg2 & 0x3full) << 14;
++   v |= ((uint64_t)f->reg0 & 0x1full) << 20;
++   v |= ((uint64_t)f->reg1 & 0x3full) << 25;
++   v |= ((uint64_t)f->ctrl & 0xfull) << 31;
++   return (uint64_t)v;
++}
+ 
+ #define BIFROST_FMTC_CONSTANTS 0b0011
+ #define BIFROST_FMTC_FINAL     0b0111
+@@ -205,7 +248,19 @@ struct bifrost_fmt_constant {
+    unsigned tag   : 4;
+    uint64_t imm_1 : 60;
+    uint64_t imm_2 : 60;
+-} __attribute__((packed));
++} PACKED;
++
++/* Packs struct bifrost_fmt_constant (128 bits: pos 4, tag 4, imm_1 60,
++ * imm_2 60) in GCC's packed bitfield layout; imm_1 straddles bit 64. */
++static inline void
++bifrost_fmt_constant_pack(const struct bifrost_fmt_constant *f, uint64_t out[2])
++{
++   uint64_t imm_1 = f->imm_1 & ((1ull << 60) - 1);
++   uint64_t imm_2 = f->imm_2 & ((1ull << 60) - 1);
++
++   out[0] = (f->pos & 0xfull) | ((f->tag & 0xfull) << 4) | (imm_1 << 8);
++   out[1] = (imm_1 >> 56) | (imm_2 << 4);
++}
+ 
+ /* Clause formats, encoded in a table */
+ 
+@@ -529,7 +584,29 @@ struct bifrost_texture_operation {
+ 
+       uint32_t packed;
+    };
+-} __attribute__((packed));
++} PACKED;
++
++/* Packs struct bifrost_texture_operation in GCC's packed, LSB-first bitfield layout, which is the
++ * hardware encoding. MSVC lays mixed-type bitfields out differently, so the
++ * encoding must not depend on the struct's in-memory layout. */
++static inline uint32_t
++bifrost_texture_operation_pack(const struct bifrost_texture_operation *f)
++{
++   uint64_t v = 0;
++   v |= ((uint64_t)f->sampler_index_or_mode & 0xfull) << 0;
++   v |= ((uint64_t)f->index & 0x7full) << 4;
++   v |= ((uint64_t)f->immediate_indices & 0x1ull) << 11;
++   v |= ((uint64_t)f->op & 0x7ull) << 12;
++   v |= ((uint64_t)f->offset_or_bias_disable & 0x1ull) << 15;
++   v |= ((uint64_t)f->shadow_or_clamp_disable & 0x1ull) << 16;
++   v |= ((uint64_t)f->array & 0x1ull) << 17;
++   v |= ((uint64_t)f->dimension & 0x3ull) << 18;
++   v |= ((uint64_t)f->lod_or_fetch & 0x7ull) << 20;
++   v |= ((uint64_t)f->zero & 0x1ull) << 23;
++   v |= ((uint64_t)f->format & 0xfull) << 24;
++   v |= ((uint64_t)f->mask & 0xfull) << 28;
++   return (uint32_t)v;
++}
+ 
+ struct bifrost_dual_texture_operation {
+    unsigned primary_sampler_index   : 2;
+@@ -551,15 +628,34 @@ struct bifrost_dual_texture_operation {
+ 
+    enum bifrost_texture_format primary_format : 3;
+    unsigned primary_mask                      : 4;
+-} __attribute__((packed));
++} PACKED;
+ 
++/* Packs struct bifrost_dual_texture_operation in GCC's packed, LSB-first bitfield layout, which is the
++ * hardware encoding. MSVC lays mixed-type bitfields out differently, so the
++ * encoding must not depend on the struct's in-memory layout. */
+ static inline uint32_t
+-bi_dual_tex_as_u32(struct bifrost_dual_texture_operation desc)
++bifrost_dual_texture_operation_pack(const struct bifrost_dual_texture_operation *f)
+ {
+-   uint32_t desc_u;
+-   memcpy(&desc_u, &desc, sizeof(desc));
++   uint64_t v = 0;
++   v |= ((uint64_t)f->primary_sampler_index & 0x3ull) << 0;
++   v |= ((uint64_t)f->mode & 0x3ull) << 2;
++   v |= ((uint64_t)f->primary_texture_index & 0x3ull) << 4;
++   v |= ((uint64_t)f->secondary_sampler_index & 0x3ull) << 6;
++   v |= ((uint64_t)f->secondary_texture_index & 0x3ull) << 8;
++   v |= ((uint64_t)f->reserved & 0x1ull) << 10;
++   v |= ((uint64_t)f->index_mode_zero & 0x1ull) << 11;
++   v |= ((uint64_t)f->secondary_register & 0x3full) << 12;
++   v |= ((uint64_t)f->secondary_format & 0x7ull) << 18;
++   v |= ((uint64_t)f->secondary_mask & 0xfull) << 21;
++   v |= ((uint64_t)f->primary_format & 0x7ull) << 25;
++   v |= ((uint64_t)f->primary_mask & 0xfull) << 28;
++   return (uint32_t)v;
++}
+ 
+-   return desc_u;
++static inline uint32_t
++bi_dual_tex_as_u32(struct bifrost_dual_texture_operation desc)
++{
++   return bifrost_dual_texture_operation_pack(&desc);
+ }
+ 
+ #define BIFROST_MEGA_SAMPLE   128
+@@ -571,7 +667,7 @@ struct bifrost_pixel_indices {
+    unsigned rt     : 8;
+    unsigned x      : 8;
+    unsigned y      : 8;
+-} __attribute__((packed));
++} PACKED;
+ 
+ enum bi_constmod {
+    BI_CONSTMOD_NONE,
+diff --git a/src/panfrost/compiler/bifrost/bifrost/bi_pack.c b/src/panfrost/compiler/bifrost/bifrost/bi_pack.c
+index 9056128..dc8eff8 100644
+--- a/src/panfrost/compiler/bifrost/bifrost/bi_pack.c
++++ b/src/panfrost/compiler/bifrost/bifrost/bi_pack.c
+@@ -42,9 +42,7 @@ bi_pack_header(bi_clause *clause, bi_clause *next_1, bi_clause *next_2)
+       .flush_to_zero = clause->ftz ? BIFROST_FTZ_ALWAYS : BIFROST_FTZ_DISABLE,
+    };
+ 
+-   uint64_t u = 0;
+-   memcpy(&u, &header, sizeof(header));
+-   return u;
++   return bifrost_header_pack(&header);
+ }
+ 
+ /* Assigns a slot for reading, before anything is written */
+@@ -251,7 +249,7 @@ bi_pack_registers(bi_registers regs)
+    s.reg3 = regs.slot[3];
+    s.fau_idx = regs.fau_idx;
+ 
+-   memcpy(&packed, &s, sizeof(s));
++   packed = bifrost_regs_pack(&s);
+    return packed;
+ }
+ 
+@@ -413,7 +411,10 @@ bi_pack_constants(unsigned tuple_count, uint64_t *constants, unsigned word_idx,
+       .imm_2 = constants[index + 1] >> 4,
+    };
+ 
+-   util_dynarray_append(emission, quad);
++   uint64_t words[2];
++   bifrost_fmt_constant_pack(&quad, words);
++   util_dynarray_append(emission, words[0]);
++   util_dynarray_append(emission, words[1]);
+ }
+ 
+ uint8_t
+diff --git a/src/panfrost/compiler/bifrost/valhall/valhall.h b/src/panfrost/compiler/bifrost/valhall/valhall.h
+index ae716c3..905df1e 100644
+--- a/src/panfrost/compiler/bifrost/valhall/valhall.h
++++ b/src/panfrost/compiler/bifrost/valhall/valhall.h
+@@ -63,7 +63,7 @@ struct va_src_info {
+    bool widen        : 1;
+    bool combine      : 1;
+    enum va_size size : 2;
+-} __attribute__((packed));
++} PACKED;
+ 
+ struct va_opcode_info {
+    uint64_t exact;
+diff --git a/src/panfrost/compiler/pan_nir_lower_tex.c b/src/panfrost/compiler/pan_nir_lower_tex.c
+index c349ec8..a8935bf 100644
+--- a/src/panfrost/compiler/pan_nir_lower_tex.c
++++ b/src/panfrost/compiler/pan_nir_lower_tex.c
+@@ -169,12 +169,16 @@ scalar_as_imm_i4(nir_scalar s)
+    return nir_scalar_as_uint(s) & 0xf;
+ }
+ 
+-#define PAN_AS_U32(x) ({\
+-   static_assert(sizeof(x) == 4, "x must be 4 bytes"); \
+-   uint32_t _u; \
+-   memcpy(&_u, &(x), 4); \
+-   _u; \
+-})
++/* Not a statement expression: MSVC has none. */
++static inline uint32_t
++pan_as_u32(const void *p, size_t size)
++{
++   uint32_t u;
++   assert(size == 4);
++   memcpy(&u, p, 4);
++   return u;
++}
++#define PAN_AS_U32(x) pan_as_u32(&(x), sizeof(x))
+ 
+ static bool
+ bi_lower_txf_buf(nir_builder *b, nir_tex_instr *tex, uint64_t gpu_id)
+@@ -399,18 +403,18 @@ build_bi_texc(nir_builder *b, nir_alu_type dest_type,
+ 
+    if (sr_count == 0) {
+       return nir_texc0_pan(b, nir_alu_type_get_type_size(dest_type),
+-                           coord_x, coord_y, nir_imm_int(b, desc.packed),
++                           coord_x, coord_y, nir_imm_int(b, bifrost_texture_operation_pack(&desc)),
+                            .dest_type = dest_type,
+                            .flags = PAN_AS_U32(flags));
+    } else if (sr_count <= 4) {
+       return nir_texc1_pan(b, nir_alu_type_get_type_size(dest_type),
+-                           coord_x, coord_y, nir_imm_int(b, desc.packed),
++                           coord_x, coord_y, nir_imm_int(b, bifrost_texture_operation_pack(&desc)),
+                            nir_vec(b, sr, sr_count),
+                            .dest_type = dest_type,
+                            .flags = PAN_AS_U32(flags));
+    } else {
+       return nir_texc2_pan(b, nir_alu_type_get_type_size(dest_type),
+-                           coord_x, coord_y, nir_imm_int(b, desc.packed),
++                           coord_x, coord_y, nir_imm_int(b, bifrost_texture_operation_pack(&desc)),
+                            nir_vec(b, sr, 4),
+                            nir_vec(b, sr + 4, sr_count - 4),
+                            .dest_type = dest_type,
+diff --git a/src/panfrost/genxml/decode.h b/src/panfrost/genxml/decode.h
+index e5829b0..a817c24 100644
+--- a/src/panfrost/genxml/decode.h
++++ b/src/panfrost/genxml/decode.h
+@@ -69,7 +69,7 @@ __pandecode_fetch_gpu_mem(struct pandecode_context *ctx, uint64_t gpu_va,
+ 
+    assert(size + (gpu_va - mem->gpu_va) <= mem->length);
+ 
+-   return mem->addr + gpu_va - mem->gpu_va;
++   return (uint8_t *)mem->addr + (gpu_va - mem->gpu_va);
+ }
+ 
+ #define pandecode_fetch_gpu_mem(ctx, gpu_va, size)                             \
+diff --git a/src/panfrost/lib/pan_samples.c b/src/panfrost/lib/pan_samples.c
+index 8c6b65a..e1a8688 100644
+--- a/src/panfrost/lib/pan_samples.c
++++ b/src/panfrost/lib/pan_samples.c
+@@ -6,6 +6,7 @@
+ #include <stdint.h>
+ 
+ #include "pan_samples.h"
++#include "util/macros.h"
+ 
+ /* Sample positions are specified partially in hardware, partially in software
+  * on Mali. On Midgard, sample positions are completely fixed but need to be
+@@ -24,13 +25,13 @@
+ 
+ struct mali_sample_position {
+    uint16_t x, y;
+-} __attribute__((packed));
++} PACKED;
+ 
+ struct mali_sample_positions {
+    struct mali_sample_position positions[32];
+    struct mali_sample_position origin;
+    struct mali_sample_position padding[64 - (32 + 1)];
+-} __attribute__((packed));
++} PACKED;
+ 
+ /* SAMPLE16 constructs a single sample in terms of 1/16's of the grid, centered
+  * at the origin. SAMPLE4/8 swap the units for legibility. */

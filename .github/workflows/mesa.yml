@@ -114,8 +114,21 @@ jobs:
             python3-mako python3-yaml python3-packaging bison flex pkg-config \
             libexpat1-dev zlib1g-dev ninja-build
           python3 -m pip install --break-system-packages meson
+      - uses: actions/checkout@v4
+        with:
+          path: repo
       - name: Mesa source
-        run: git clone --depth 1 --branch "$MESA_TAG" "$MESA_URL" mesa
+        run: |
+          git clone --depth 1 --branch "$MESA_TAG" "$MESA_URL" mesa
+          for p in repo/mesa-patches/*.patch; do echo "applying $p"; git -C mesa apply --whitespace=nowarn "$PWD/$p"; done
+      - name: Bifrost packing equals GCC's layout
+        run: |
+          # mesa-patches/0003 replaces memcpy-of-bitfield-struct with explicit
+          # packing so MSVC builds encode instructions correctly. Prove the two
+          # agree where GCC's layout is still the reference.
+          gcc -O1 -w -DHAVE_FUNC_ATTRIBUTE_PACKED -Imesa/src -Imesa/include \
+            -Imesa/src/panfrost/compiler/bifrost repo/tests/bifrost-pack/check.c -o bpcheck
+          ./bpcheck
       - name: Configure
         run: |
           meson setup build mesa -Dbuildtype=release \
