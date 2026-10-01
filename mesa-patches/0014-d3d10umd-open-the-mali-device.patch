@@ -1,0 +1,40 @@
+diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+index 40491c5..0c9d41c 100644
+--- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
++++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+@@ -32,8 +32,22 @@
+ #include "llvmpipe/lp_public.h"
+ #include "softpipe/sp_public.h"
+ #ifdef GALLIUM_PANFROST
++#include <io.h>
+ #include <stdio.h>
+ #include "panfrost/drm/panfrost_drm_public.h"
++
++/* The Mali kernel driver (wddm-mali-g52) exposes \\.\MaliG52. Panfrost gets a
++ * CRT fd for it; its libdrm calls reach the driver through that. */
++static int
++d3d10_open_mali(void)
++{
++   HANDLE h = CreateFileW(L"\\\\.\\MaliG52", GENERIC_READ | GENERIC_WRITE,
++                          FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
++                          OPEN_EXISTING, 0, NULL);
++   if (h == INVALID_HANDLE_VALUE)
++      return -1;
++   return _open_osfhandle((intptr_t)h, 0);
++}
+ #endif
+ #include "sw/gdi/gdi_sw_winsys.h"
+ 
+@@ -92,7 +106,11 @@ d3d10_create_screen(void)
+       /* Arm Mali through Panfrost (wddm-mali-g52). The fd will name the Mali
+        * kernel driver; until that exists Panfrost finds no device and
+        * softpipe takes over. */
+-      screen = panfrost_drm_screen_create(-1, NULL);
++      int fd = d3d10_open_mali();
++      if (fd >= 0) {
++         screen = panfrost_drm_screen_create(fd, NULL);
++         _close(fd); /* the screen keeps its own duplicate */
++      }
+       if (screen == NULL)
+          fprintf(stderr, "d3d10umd: Panfrost found no Mali device, using softpipe\n");
+    }
