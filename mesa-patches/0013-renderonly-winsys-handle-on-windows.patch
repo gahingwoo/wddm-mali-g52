@@ -1,0 +1,16 @@
+diff --git a/src/gallium/auxiliary/renderonly/renderonly.c b/src/gallium/auxiliary/renderonly/renderonly.c
+index 6eef804..a9d12a6 100644
+--- a/src/gallium/auxiliary/renderonly/renderonly.c
++++ b/src/gallium/auxiliary/renderonly/renderonly.c
+@@ -146,7 +146,11 @@ renderonly_create_gpu_import_for_resource(struct pipe_resource *rsc,
+    if (!status)
+       return NULL;
+ 
++#ifdef _WIN32
++   fd = (int)(intptr_t)handle.handle;  /* struct winsys_handle carries a HANDLE */
++#else
+    fd = handle.handle;
++#endif
+ 
+    simple_mtx_lock(&ro->bo_map_lock);
+    err = drmPrimeFDToHandle(ro->kms_fd, fd, &scanout_handle);

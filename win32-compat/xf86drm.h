@@ -10,6 +10,9 @@
 #include <fcntl.h>
 #include <stdint.h>
 
+/* libdrm's xf86drm.h brings in drm.h (and with it drm_mode.h); so does this. */
+#include "drm-uapi/drm.h"
+
 #ifndef O_CLOEXEC
 #define O_CLOEXEC 0x80000
 #endif
