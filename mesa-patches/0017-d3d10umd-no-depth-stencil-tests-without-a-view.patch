@@ -1,0 +1,108 @@
+diff --git a/src/gallium/frontends/d3d10umd/OutputMerger.cpp b/src/gallium/frontends/d3d10umd/OutputMerger.cpp
+index 2a38864..ccda02e 100644
+--- a/src/gallium/frontends/d3d10umd/OutputMerger.cpp
++++ b/src/gallium/frontends/d3d10umd/OutputMerger.cpp
+@@ -724,6 +724,25 @@ SetBlendState(D3D10DDI_HDEVICE hDevice,      // IN
+ }
+ 
+ 
++/*
++ * D3D10: with no depth-stencil view bound, the depth and stencil tests do
++ * not run. Gallium leaves that to the frontend (st/mesa disables the tests
++ * when the framebuffer has no depth or stencil), and hardware drivers rely
++ * on it: Panfrost tests against an uninitialised depth tile buffer and drops
++ * every fragment. softpipe happens to skip the tests itself.
++ */
++static void
++BindDepthStencilState(Device *pDevice)
++{
++   struct DepthStencilState *dss = pDevice->bound_dss;
++   void *handle = NULL;
++
++   if (dss)
++      handle = pDevice->fb.zsbuf.texture ? dss->handle : dss->handle_no_zs;
++   pDevice->pipe->bind_depth_stencil_alpha_state(pDevice->pipe, handle);
++}
++
++
+ /*
+  * ----------------------------------------------------------------------
+  *
+@@ -779,6 +798,9 @@ SetRenderTargets(D3D10DDI_HDEVICE hDevice,                              // IN
+    pDevice->fb.height = height;
+ 
+    pipe->set_framebuffer_state(pipe, &pDevice->fb);
++
++   /* Whether a depth-stencil view is bound decides the effective state. */
++   BindDepthStencilState(pDevice);
+ }
+ 
+ 
+@@ -945,6 +967,13 @@ CreateDepthStencilState(
+ 
+    pDepthStencilState->handle =
+       pipe->create_depth_stencil_alpha_state(pipe, &state);
++
++   state.depth_enabled = 0;
++   state.depth_writemask = 0;
++   state.stencil[0].enabled = 0;
++   state.stencil[1].enabled = 0;
++   pDepthStencilState->handle_no_zs =
++      pipe->create_depth_stencil_alpha_state(pipe, &state);
+ }
+ 
+ 
+@@ -968,6 +997,11 @@ DestroyDepthStencilState(D3D10DDI_HDEVICE hDevice,                         // IN
+    DepthStencilState *pDepthStencilState = CastDepthStencilState(hDepthStencilState);
+ 
+    pipe->delete_depth_stencil_alpha_state(pipe, pDepthStencilState->handle);
++   pipe->delete_depth_stencil_alpha_state(pipe, pDepthStencilState->handle_no_zs);
++
++   Device *pDevice = CastDevice(hDevice);
++   if (pDevice->bound_dss == pDepthStencilState)
++      pDevice->bound_dss = NULL;
+ }
+ 
+ 
+@@ -988,13 +1022,14 @@ SetDepthStencilState(D3D10DDI_HDEVICE hDevice,           // IN
+ {
+    LOG_ENTRYPOINT();
+ 
+-   struct pipe_context *pipe = CastPipeContext(hDevice);
+-   void *state = CastPipeDepthStencilState(hState);
++   Device *pDevice = CastDevice(hDevice);
++   struct pipe_context *pipe = pDevice->pipe;
+    struct pipe_stencil_ref psr;
+ 
+    psr.ref_value[0] = StencilRef;
+    psr.ref_value[1] = StencilRef;
+ 
+-   pipe->bind_depth_stencil_alpha_state(pipe, state);
++   pDevice->bound_dss = CastDepthStencilState(hState);
++   BindDepthStencilState(pDevice);
+    pipe->set_stencil_ref(pipe, psr);
+ }
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index 7c7f2c2..fcdad23 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -109,6 +109,11 @@ struct Device
+    ElementLayout *element_layout;
+    BOOL velems_changed;
+    BOOL vbuffers_changed;
++
++   /* The depth-stencil state the application bound; what reaches the pipe
++    * depends on whether a depth-stencil view is bound (see
++    * BindDepthStencilState). */
++   struct DepthStencilState *bound_dss;
+ };
+ 
+ 
+@@ -273,6 +278,7 @@ CastPipeBlendState(D3D10DDI_HBLENDSTATE hBlendState)
+ struct DepthStencilState
+ {
+    void *handle;
++   void *handle_no_zs;   /* the same with depth and stencil tests off */
+ };
+ 
+ 
