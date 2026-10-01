@@ -12,3 +12,5 @@ static inline int eventfd(unsigned int initval, int flags)
    errno = ENOSYS;
    return -1;
 }
+static inline int eventfd_read(int fd, eventfd_t *value) { (void)fd; (void)value; errno = ENOSYS; return -1; }
+static inline int eventfd_write(int fd, eventfd_t value) { (void)fd; (void)value; errno = ENOSYS; return -1; }
