@@ -266,13 +266,13 @@ jobs:
             $p = Start-Process -FilePath (Resolve-Path out\triangle.exe).Path -ArgumentList "`"$dll`"" -NoNewWindow -PassThru `
                    -RedirectStandardOutput "$tag.out" -RedirectStandardError "$tag.err"
             if (-not $p.WaitForExit(120000)) {
-              Write-Host "$tag: still running after 120 s, dumping threads"
+              Write-Host "${tag}: still running after 120 s, dumping threads"
               if ($cdb) { & $cdb -p $p.Id -y "$pwd\out" -c '.lines -e; ~*kn 40; q' 2>&1 | Out-File "$tag-hang.txt" }
               Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
               return 'hang'
             }
             $code = $p.ExitCode
-            Write-Host "$tag: exit code $code"
+            Write-Host "${tag}: exit code $code"
             if ($code -lt 0 -and $cdb) {
               & $cdb -g -G -y "$pwd\out" -c '.lines -e; kn 40; r; q' (Resolve-Path out\triangle.exe).Path $dll 2>&1 | Out-File "$tag-crash.txt"
             }
