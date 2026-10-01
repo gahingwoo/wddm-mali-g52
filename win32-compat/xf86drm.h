@@ -36,6 +36,9 @@ typedef struct _drmVersion {
    char *desc;
 } drmVersion, *drmVersionPtr;
 
+/* Not libdrm: opens \\.\MaliG52 and returns the fd Panfrost should use. */
+int malikm_open(void);
+
 int drmIoctl(int fd, unsigned long request, void *arg);
 drmVersionPtr drmGetVersion(int fd);
 void drmFreeVersion(drmVersionPtr v);

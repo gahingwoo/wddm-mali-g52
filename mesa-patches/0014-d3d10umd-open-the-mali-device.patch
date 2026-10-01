@@ -1,8 +1,8 @@
 diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
-index 40491c5..39a4bc5 100644
+index 40491c5..242d9b9 100644
 --- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
 +++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
-@@ -32,8 +32,49 @@
+@@ -32,8 +32,48 @@
  #include "llvmpipe/lp_public.h"
  #include "softpipe/sp_public.h"
  #ifdef GALLIUM_PANFROST
@@ -30,29 +30,28 @@ index 40491c5..39a4bc5 100644
 + * does. Taken once and kept for the life of the DLL. */
 +void glsl_type_singleton_init_or_ref(void);
 +
-+/* The Mali kernel driver (wddm-mali-g52) exposes \\.\MaliG52. Panfrost gets a
-+ * CRT fd for it; its libdrm calls reach the driver through that. */
++/* The Mali kernel driver (wddm-mali-g52) exposes \\.\MaliG52. Its libdrm shim
++ * opens it and gives Panfrost an fd; libdrm calls on that fd reach the
++ * driver. (Wrapping the handle with _open_osfhandle does not work: the UCRT
++ * refuses handles of FILE_TYPE_UNKNOWN, which the device is.) */
++int malikm_open(void);
++
 +static int
 +d3d10_open_mali(void)
 +{
-+   HANDLE h = CreateFileW(L"\\\\.\\MaliG52", GENERIC_READ | GENERIC_WRITE,
-+                          FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-+                          OPEN_EXISTING, 0, NULL);
-+   if (h == INVALID_HANDLE_VALUE) {
-+      DWORD err = GetLastError();
++   int fd = malikm_open();
++   if (fd < 0) {
 +      /* MALIKM_FAKE: the shim emulates the driver in this process (CI). */
 +      const char *fake = getenv("MALIKM_FAKE");
 +      if (fake && *fake && *fake != '0')
 +         return _open("NUL", _O_RDWR);
-+      fprintf(stderr, "d3d10umd: cannot open \\\\.\\MaliG52 (error %lu)\n", err);
-+      return -1;
 +   }
-+   return _open_osfhandle((intptr_t)h, 0);
++   return fd;
 +}
  #endif
  #include "sw/gdi/gdi_sw_winsys.h"
  
-@@ -59,6 +100,62 @@ d3d10_gdi_release_hdc(void *winsys_drawable_handle, HDC hDC) {
+@@ -59,6 +99,62 @@ d3d10_gdi_release_hdc(void *winsys_drawable_handle, HDC hDC) {
     ReleaseDC(hWnd, hDC);
  }
  
@@ -115,7 +114,7 @@ index 40491c5..39a4bc5 100644
  struct pipe_screen *
  d3d10_create_screen(void)
  {
-@@ -92,7 +189,25 @@ d3d10_create_screen(void)
+@@ -92,7 +188,25 @@ d3d10_create_screen(void)
        /* Arm Mali through Panfrost (wddm-mali-g52). The fd will name the Mali
         * kernel driver; until that exists Panfrost finds no device and
         * softpipe takes over. */

@@ -40,11 +40,62 @@ crt_errno(int e)
    }
 }
 
+/* The device handle behind Mesa's fd. The UCRT will not wrap a handle whose
+ * GetFileType is FILE_TYPE_UNKNOWN, which a KMDF device without a device type
+ * is, so malikm_open() hands Mesa a placeholder fd (NUL) and keeps the real
+ * handle here. Mesa _dup()s the fd it is given; a duplicate is not in the
+ * table, and falls back to the handle this process opened. */
+#define MAX_DEV_FDS 64
+static struct { int fd; HANDLE h; } dev_fds[MAX_DEV_FDS];
+static HANDLE dev_handle = INVALID_HANDLE_VALUE;
+static SRWLOCK dev_lock = SRWLOCK_INIT;
+
+static int trace_on(void);
+
+int
+malikm_open(void)
+{
+   HANDLE h = CreateFileW(MALIKM_USER_PATH, GENERIC_READ | GENERIC_WRITE,
+                          FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+   if (h == INVALID_HANDLE_VALUE) {
+      DWORD err = GetLastError();
+      fprintf(stderr, "malikm: cannot open \\\\.\\MaliG52 (error %lu)\n", (unsigned long)err);
+      errno = err == ERROR_FILE_NOT_FOUND ? ENOENT : ENODEV;
+      return -1;
+   }
+   int fd = _open("NUL", _O_RDWR | _O_NOINHERIT);
+   if (fd < 0) {
+      CloseHandle(h);
+      return -1;
+   }
+   AcquireSRWLockExclusive(&dev_lock);
+   for (int i = 0; i < MAX_DEV_FDS; i++) {
+      if (dev_fds[i].h == NULL) {
+         dev_fds[i].fd = fd;
+         dev_fds[i].h = h;
+         break;
+      }
+   }
+   if (dev_handle == INVALID_HANDLE_VALUE)
+      dev_handle = h;
+   ReleaseSRWLockExclusive(&dev_lock);
+   if (trace_on())
+      fprintf(stderr, "malikm: opened \\\\.\\MaliG52 as fd %d\n", fd);
+   return fd;
+}
+
 static HANDLE
 fd_handle(int fd)
 {
-   intptr_t h = _get_osfhandle(fd);
-   return h == -1 ? INVALID_HANDLE_VALUE : (HANDLE)h;
+   HANDLE h = INVALID_HANDLE_VALUE;
+   AcquireSRWLockShared(&dev_lock);
+   for (int i = 0; i < MAX_DEV_FDS && h == INVALID_HANDLE_VALUE; i++)
+      if (dev_fds[i].h != NULL && dev_fds[i].fd == fd)
+         h = dev_fds[i].h;
+   if (h == INVALID_HANDLE_VALUE)
+      h = dev_handle;
+   ReleaseSRWLockShared(&dev_lock);
+   return h;
 }
 
 /* Send Buf (a MALIKM_DRM_HEADER and what follows) and return the driver's
