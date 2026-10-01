@@ -91,3 +91,11 @@ jobs:
         with:
           name: m3test-arm64
           path: out/m3test.exe
+
+  malikm-host:
+    name: malikm on a simulated G52 (Linux, ASan/UBSan)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run
+        run: make -C tests/malikm-host run
