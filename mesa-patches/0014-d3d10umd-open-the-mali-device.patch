@@ -1,8 +1,8 @@
 diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
-index 40491c5..66a0202 100644
+index 40491c5..5285aec 100644
 --- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
 +++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
-@@ -32,8 +32,40 @@
+@@ -32,8 +32,45 @@
  #include "llvmpipe/lp_public.h"
  #include "softpipe/sp_public.h"
  #ifdef GALLIUM_PANFROST
@@ -22,6 +22,11 @@ index 40491c5..66a0202 100644
 +#include "panfrost/driinfo_panfrost.h"
 +};
 +static driOptionCache d3d10_pan_info, d3d10_pan_cache;
++
++/* Panfrost compiles through NIR and its glsl types. GL frontends set the
++ * type cache up before creating a screen; d3d10umd speaks TGSI and never
++ * does. Taken once and kept for the life of the DLL. */
++void glsl_type_singleton_init_or_ref(void);
 +
 +/* The Mali kernel driver (wddm-mali-g52) exposes \\.\MaliG52. Panfrost gets a
 + * CRT fd for it; its libdrm calls reach the driver through that. */
@@ -43,7 +48,7 @@ index 40491c5..66a0202 100644
  #endif
  #include "sw/gdi/gdi_sw_winsys.h"
  
-@@ -92,7 +124,18 @@ d3d10_create_screen(void)
+@@ -92,7 +129,20 @@ d3d10_create_screen(void)
        /* Arm Mali through Panfrost (wddm-mali-g52). The fd will name the Mali
         * kernel driver; until that exists Panfrost finds no device and
         * softpipe takes over. */
@@ -54,9 +59,11 @@ index 40491c5..66a0202 100644
 +            .options = &d3d10_pan_cache,
 +            .options_info = &d3d10_pan_info,
 +         };
-+         if (!d3d10_pan_info.info)
++         if (!d3d10_pan_info.info) {
++            glsl_type_singleton_init_or_ref();
 +            driParseOptionInfo(&d3d10_pan_info, d3d10_pan_driconf,
 +                               ARRAY_SIZE(d3d10_pan_driconf));
++         }
 +         screen = panfrost_drm_screen_create(fd, &config);
 +         _close(fd); /* the screen keeps its own duplicate */
 +      }
