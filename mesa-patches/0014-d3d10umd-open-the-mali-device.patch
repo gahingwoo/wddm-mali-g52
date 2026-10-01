@@ -1,8 +1,8 @@
 diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
-index 40491c5..2c56490 100644
+index 40491c5..39a4bc5 100644
 --- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
 +++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
-@@ -32,8 +32,47 @@
+@@ -32,8 +32,49 @@
  #include "llvmpipe/lp_public.h"
  #include "softpipe/sp_public.h"
  #ifdef GALLIUM_PANFROST
@@ -39,10 +39,12 @@ index 40491c5..2c56490 100644
 +                          FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
 +                          OPEN_EXISTING, 0, NULL);
 +   if (h == INVALID_HANDLE_VALUE) {
++      DWORD err = GetLastError();
 +      /* MALIKM_FAKE: the shim emulates the driver in this process (CI). */
 +      const char *fake = getenv("MALIKM_FAKE");
 +      if (fake && *fake && *fake != '0')
 +         return _open("NUL", _O_RDWR);
++      fprintf(stderr, "d3d10umd: cannot open \\\\.\\MaliG52 (error %lu)\n", err);
 +      return -1;
 +   }
 +   return _open_osfhandle((intptr_t)h, 0);
@@ -50,7 +52,7 @@ index 40491c5..2c56490 100644
  #endif
  #include "sw/gdi/gdi_sw_winsys.h"
  
-@@ -59,6 +98,62 @@ d3d10_gdi_release_hdc(void *winsys_drawable_handle, HDC hDC) {
+@@ -59,6 +100,62 @@ d3d10_gdi_release_hdc(void *winsys_drawable_handle, HDC hDC) {
     ReleaseDC(hWnd, hDC);
  }
  
@@ -113,7 +115,7 @@ index 40491c5..2c56490 100644
  struct pipe_screen *
  d3d10_create_screen(void)
  {
-@@ -92,7 +187,22 @@ d3d10_create_screen(void)
+@@ -92,7 +189,25 @@ d3d10_create_screen(void)
        /* Arm Mali through Panfrost (wddm-mali-g52). The fd will name the Mali
         * kernel driver; until that exists Panfrost finds no device and
         * softpipe takes over. */
@@ -130,6 +132,9 @@ index 40491c5..2c56490 100644
 +                               ARRAY_SIZE(d3d10_pan_driconf));
 +         }
 +         screen = panfrost_drm_screen_create(fd, &config);
++         if (screen == NULL)
++            fprintf(stderr, "d3d10umd: \\\\.\\MaliG52 opened, but Panfrost could not create a screen on it "
++                            "(MALIKM_TRACE=1 shows each driver call)\n");
 +         _close(fd); /* the screen keeps its own duplicate */
 +         if (screen)
 +            screen->flush_frontbuffer = d3d10_pan_flush_frontbuffer;

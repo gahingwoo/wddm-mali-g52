@@ -52,6 +52,19 @@ fd_handle(int fd)
 static int fake_on(void);
 static void fake_ioctl(DWORD code, void *buf, DWORD len);
 
+/* MALIKM_TRACE=1: log every call to the real driver, with the DRM number,
+ * the driver's result and any Win32 error. */
+static int
+trace_on(void)
+{
+   static int t = -1;
+   if (t < 0) {
+      const char *e = getenv("MALIKM_TRACE");
+      t = e && *e && *e != '0';
+   }
+   return t;
+}
+
 static int
 call(int fd, DWORD code, void *buf, DWORD len)
 {
@@ -68,14 +81,24 @@ call(int fd, DWORD code, void *buf, DWORD len)
       return 0;
    }
    if (h == INVALID_HANDLE_VALUE) {
+      if (trace_on())
+         fprintf(stderr, "malikm: fd %d has no handle\n", fd);
       errno = EBADF;
       return -1;
    }
    if (!DeviceIoControl(h, code, buf, len, buf, len, &got, NULL)) {
-      errno = GetLastError() == ERROR_INVALID_FUNCTION ? ENOTTY : EIO;
+      DWORD err = GetLastError();
+      if (trace_on())
+         fprintf(stderr, "malikm: ioctl 0x%lx nr 0x%x len %lu: DeviceIoControl failed, error %lu\n",
+                 (unsigned long)code, ((MALIKM_DRM_HEADER *)buf)->Nr, (unsigned long)len,
+                 (unsigned long)err);
+      errno = err == ERROR_INVALID_FUNCTION ? ENOTTY : EIO;
       return -1;
    }
    int r = ((MALIKM_DRM_HEADER *)buf)->Result;
+   if (trace_on())
+      fprintf(stderr, "malikm: ioctl 0x%lx nr 0x%x len %lu -> %d (got %lu)\n", (unsigned long)code,
+              ((MALIKM_DRM_HEADER *)buf)->Nr, (unsigned long)len, r, (unsigned long)got);
    if (r < 0) {
       errno = crt_errno(-r);
       return -1;
@@ -198,9 +221,13 @@ drmGetVersion(int fd)
    else if (h == INVALID_HANDLE_VALUE ||
             !DeviceIoControl(h, IOCTL_MALIKM_VERSION, &v, sizeof(v), &v, sizeof(v), &got, NULL) ||
             got < sizeof(v)) {
+      if (trace_on())
+         fprintf(stderr, "malikm: VERSION failed (fd %d, error %lu)\n", fd, (unsigned long)GetLastError());
       errno = ENODEV;
       return NULL;
    }
+   if (trace_on())
+      fprintf(stderr, "malikm: VERSION %.16s %d.%d\n", v.Name, v.Major, v.Minor);
    drmVersionPtr r = calloc(1, sizeof(*r));
    if (!r)
       return NULL;
@@ -402,8 +429,12 @@ mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off)
    } m = {{0}, {(uint64_t)(uint32_t)off, len, 0}};
    (void)addr; (void)prot; (void)flags;
 
-   if (call(fd, IOCTL_MALIKM_MAP, &m, sizeof(m)))
+   if (call(fd, IOCTL_MALIKM_MAP, &m, sizeof(m))) {
+      if (trace_on())
+         fprintf(stderr, "malikm: mmap fd %d offset 0x%llx len %zu failed\n", fd,
+                 (unsigned long long)(uint32_t)off, len);
       return MAP_FAILED;
+   }
    void *va = (void *)(uintptr_t)m.m.Address;
 
    AcquireSRWLockExclusive(&map_lock);
