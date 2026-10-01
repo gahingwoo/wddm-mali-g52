@@ -1,0 +1,12 @@
+diff --git a/meson.build b/meson.build
+index d6e3a8b..ff494f0 100644
+--- a/meson.build
++++ b/meson.build
+@@ -998,6 +998,7 @@ with_gfx_compute = [
+   with_clc,
+   with_gallium_va and with_video_encode,
+   with_gallium_mediafoundation and with_video_encode,
++  with_gallium_st_d3d10umd,  # emits TGSI through tgsi_ureg
+ ].contains(true)
+ if with_gfx_compute
+   pre_args += '-DHAVE_GFX_COMPUTE'
