@@ -277,7 +277,7 @@ NTSTATUS MdQueryDeviceDescriptor(IN_CONST_PVOID MiniportDeviceContext, IN_ULONG 
 
 /* ---- adapter caps ---- */
 
-NTSTATUS APIENTRY MdQueryAdapterInfo(IN_CONST_HANDLE hAdapter, IN_CONST_DXGKARG_QUERYADAPTERINFO *Info)
+NTSTATUS APIENTRY MdQueryAdapterInfo(IN_CONST_HANDLE hAdapter, const DXGKARG_QUERYADAPTERINFO *Info)
 {
     UNREFERENCED_PARAMETER(hAdapter);
     switch (Info->Type) {
@@ -302,14 +302,14 @@ NTSTATUS APIENTRY MdQueryAdapterInfo(IN_CONST_HANDLE hAdapter, IN_CONST_DXGKARG_
     }
 }
 
-NTSTATUS APIENTRY MdSetPointerPosition(IN_CONST_HANDLE hAdapter, IN_CONST_DXGKARG_SETPOINTERPOSITION *Arg)
+NTSTATUS APIENTRY MdSetPointerPosition(IN_CONST_HANDLE hAdapter, const DXGKARG_SETPOINTERPOSITION *Arg)
 {
     UNREFERENCED_PARAMETER(hAdapter);
     UNREFERENCED_PARAMETER(Arg);
     return STATUS_SUCCESS;
 }
 
-NTSTATUS APIENTRY MdSetPointerShape(IN_CONST_HANDLE hAdapter, IN_CONST_DXGKARG_SETPOINTERSHAPE *Arg)
+NTSTATUS APIENTRY MdSetPointerShape(IN_CONST_HANDLE hAdapter, const DXGKARG_SETPOINTERSHAPE *Arg)
 {
     UNREFERENCED_PARAMETER(hAdapter);
     UNREFERENCED_PARAMETER(Arg);
@@ -318,7 +318,7 @@ NTSTATUS APIENTRY MdSetPointerShape(IN_CONST_HANDLE hAdapter, IN_CONST_DXGKARG_S
 
 /* ---- VidPN: one source, one target, one mode, identity everything ---- */
 
-NTSTATUS APIENTRY MdIsSupportedVidPn(IN_CONST_HANDLE hAdapter, INOUT_PDXGKARG_ISSUPPORTEDVIDPN Arg)
+NTSTATUS APIENTRY MdIsSupportedVidPn(IN_CONST_HANDLE hAdapter, DXGKARG_ISSUPPORTEDVIDPN *Arg)
 {
     PMD_DEVICE dev = (PMD_DEVICE)hAdapter;
     const DXGK_VIDPN_INTERFACE *vidpn;
@@ -353,7 +353,7 @@ NTSTATUS APIENTRY MdIsSupportedVidPn(IN_CONST_HANDLE hAdapter, INOUT_PDXGKARG_IS
 }
 
 NTSTATUS APIENTRY MdRecommendFunctionalVidPn(IN_CONST_HANDLE hAdapter,
-                                             IN_CONST_DXGKARG_RECOMMENDFUNCTIONALVIDPN_CONST Arg)
+                                             const DXGKARG_RECOMMENDFUNCTIONALVIDPN *Arg)
 {
     UNREFERENCED_PARAMETER(hAdapter);
     UNREFERENCED_PARAMETER(Arg);
@@ -435,7 +435,7 @@ static NTSTATUS AddTargetMode(PMD_DEVICE Dev, const DXGK_VIDPN_INTERFACE *VidPn,
 }
 
 NTSTATUS APIENTRY MdEnumVidPnCofuncModality(IN_CONST_HANDLE hAdapter,
-                                            IN_CONST_DXGKARG_ENUMVIDPNCOFUNCMODALITY_CONST Arg)
+                                            const DXGKARG_ENUMVIDPNCOFUNCMODALITY *Arg)
 {
     PMD_DEVICE dev = (PMD_DEVICE)hAdapter;
     const DXGK_VIDPN_INTERFACE *vidpn;
@@ -486,7 +486,7 @@ NTSTATUS APIENTRY MdEnumVidPnCofuncModality(IN_CONST_HANDLE hAdapter,
 }
 
 NTSTATUS APIENTRY MdSetVidPnSourceVisibility(IN_CONST_HANDLE hAdapter,
-                                             IN_CONST_DXGKARG_SETVIDPNSOURCEVISIBILITY *Arg)
+                                             const DXGKARG_SETVIDPNSOURCEVISIBILITY *Arg)
 {
     PMD_DEVICE dev = (PMD_DEVICE)hAdapter;
     dev->SourceVisible = Arg->Visible;
@@ -496,7 +496,7 @@ NTSTATUS APIENTRY MdSetVidPnSourceVisibility(IN_CONST_HANDLE hAdapter,
     return STATUS_SUCCESS;
 }
 
-NTSTATUS APIENTRY MdCommitVidPn(IN_CONST_HANDLE hAdapter, IN_CONST_DXGKARG_COMMITVIDPN_CONST Arg)
+NTSTATUS APIENTRY MdCommitVidPn(IN_CONST_HANDLE hAdapter, const DXGKARG_COMMITVIDPN *Arg)
 {
     PMD_DEVICE dev = (PMD_DEVICE)hAdapter;
     const DXGK_VIDPN_INTERFACE *vidpn;
@@ -532,7 +532,7 @@ NTSTATUS APIENTRY MdCommitVidPn(IN_CONST_HANDLE hAdapter, IN_CONST_DXGKARG_COMMI
 }
 
 NTSTATUS APIENTRY MdUpdateActiveVidPnPresentPath(IN_CONST_HANDLE hAdapter,
-                                                 IN_CONST_DXGKARG_UPDATEACTIVEVIDPNPRESENTPATH_CONST Arg)
+                                                 const DXGKARG_UPDATEACTIVEVIDPNPRESENTPATH *Arg)
 {
     UNREFERENCED_PARAMETER(hAdapter);
     UNREFERENCED_PARAMETER(Arg);
@@ -540,7 +540,7 @@ NTSTATUS APIENTRY MdUpdateActiveVidPnPresentPath(IN_CONST_HANDLE hAdapter,
 }
 
 NTSTATUS APIENTRY MdRecommendMonitorModes(IN_CONST_HANDLE hAdapter,
-                                          IN_CONST_DXGKARG_RECOMMENDMONITORMODES_CONST Arg)
+                                          const DXGKARG_RECOMMENDMONITORMODES *Arg)
 {
     PMD_DEVICE dev = (PMD_DEVICE)hAdapter;
     D3DKMDT_MONITOR_SOURCE_MODE *mode;
@@ -564,7 +564,7 @@ NTSTATUS APIENTRY MdRecommendMonitorModes(IN_CONST_HANDLE hAdapter,
 }
 
 NTSTATUS APIENTRY MdQueryVidPnHWCapability(IN_CONST_HANDLE hAdapter,
-                                           INOUT_PDXGKARG_QUERYVIDPNHWCAPABILITY Arg)
+                                           DXGKARG_QUERYVIDPNHWCAPABILITY *Arg)
 {
     UNREFERENCED_PARAMETER(hAdapter);
     RtlZeroMemory(&Arg->VidPnHWCaps, sizeof(Arg->VidPnHWCaps));
@@ -585,7 +585,7 @@ static void CopyRect(PMD_DEVICE Dev, const UCHAR *Src, LONG SrcPitch, const RECT
                       Src + (SIZE_T)y * SrcPitch + (SIZE_T)l * 4, bytes);
 }
 
-NTSTATUS APIENTRY MdPresentDisplayOnly(IN_CONST_HANDLE hAdapter, IN_CONST_PDXGKARG_PRESENT_DISPLAYONLY Arg)
+NTSTATUS APIENTRY MdPresentDisplayOnly(IN_CONST_HANDLE hAdapter, const DXGKARG_PRESENT_DISPLAYONLY *Arg)
 {
     PMD_DEVICE dev = (PMD_DEVICE)hAdapter;
     PMDL mdl;
