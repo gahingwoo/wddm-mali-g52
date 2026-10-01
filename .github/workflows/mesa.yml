@@ -180,7 +180,7 @@ jobs:
           meson setup build mesa --backend=ninja `
             -Dbuildtype=release `
             -Dplatforms=windows `
-            -Dgallium-drivers=softpipe,panfrost `
+            '-Dgallium-drivers=softpipe,panfrost' `
             -Dgallium-d3d10umd=true `
             -Dmesa-clc=system `
             '-Dvulkan-drivers=' `
