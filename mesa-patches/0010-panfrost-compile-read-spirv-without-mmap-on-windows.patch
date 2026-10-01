@@ -1,0 +1,35 @@
+diff --git a/src/panfrost/clc/pan_compile.c b/src/panfrost/clc/pan_compile.c
+index 8528c94..c0d52e5 100644
+--- a/src/panfrost/clc/pan_compile.c
++++ b/src/panfrost/clc/pan_compile.c
+@@ -286,7 +286,12 @@ main(int argc, const char **argv)
+       goto err_out;
+    }
+ 
++#ifdef _WIN32
++   /* Binary mode, or the CRT rewrites line endings inside the SPIR-V. */
++   int fd = open(input_spirv_path, O_RDONLY | O_BINARY);
++#else
+    int fd = open(input_spirv_path, O_RDONLY);
++#endif
+    if (fd < 0) {
+       fprintf(stderr, "Failed to open %s\n", input_spirv_path);
+       goto input_spirv_open_failed;
+@@ -300,7 +305,17 @@ main(int argc, const char **argv)
+       goto input_spirv_open_failed;
+    }
+ 
++#ifdef _WIN32
++   /* No file mapping on Windows here: read the whole file instead. */
++   void *spirv_map = malloc(spirv_len);
++   if (spirv_map == NULL || lseek(fd, 0, SEEK_SET) != 0 ||
++       read(fd, spirv_map, (unsigned)spirv_len) != spirv_len) {
++      free(spirv_map);
++      spirv_map = MAP_FAILED;
++   }
++#else
+    const void *spirv_map = mmap(NULL, spirv_len, PROT_READ, MAP_PRIVATE, fd, 0);
++#endif
+    close(fd);
+ 
+    if (spirv_map == MAP_FAILED) {
