@@ -11,9 +11,15 @@ env:
   WDK_VERSION: '10.0.26100.0'
 
 jobs:
-  m1probe:
-    name: m1probe (ARM64, test-signed)
+  driver:
+    name: ${{ matrix.driver }} (ARM64, test-signed)
     runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        driver: [m1probe, malikm]
+    env:
+      DRV: ${{ matrix.driver }}
     steps:
       - uses: actions/checkout@v4
 
@@ -25,7 +31,7 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
-          msbuild drivers\m1probe\m1probe.vcxproj `
+          msbuild drivers\$env:DRV\$env:DRV.vcxproj `
             /p:Configuration=Release /p:Platform=ARM64 `
             /p:WindowsTargetPlatformVersion=$env:WDK_VERSION `
             /p:SignMode=Off /m /nologo /v:minimal
@@ -36,12 +42,12 @@ jobs:
         run: |
           # testsigning on the target accepts a signature that does not chain to
           # a trusted root; it does not accept no signature at all.
-          $out = 'pkg\m1probe'
+          $out = "pkg\$env:DRV"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
-          Get-ChildItem drivers\m1probe -Recurse -Include m1probe.sys,m1probe.inf |
+          Get-ChildItem drivers\$env:DRV -Recurse -Include "$env:DRV.sys","$env:DRV.inf" |
             Where-Object { $_.FullName -match '\\ARM64\\Release\\' } |
             Copy-Item -Destination $out -Force
-          if (-not (Test-Path "$out\m1probe.sys")) { throw 'no m1probe.sys came out of the build' }
+          if (-not (Test-Path "$out\$env:DRV.sys")) { throw "no $env:DRV.sys came out of the build" }
           $kits = 'C:\Program Files (x86)\Windows Kits\10'
           $st   = Join-Path $kits "bin\$env:WDK_VERSION\x86\signtool.exe"
           $i2c  = Join-Path $kits "bin\$env:WDK_VERSION\x86\inf2cat.exe"
@@ -51,13 +57,13 @@ jobs:
           Export-PfxCertificate -Cert $cert -FilePath C:\t.pfx -Password (ConvertTo-SecureString $pw -Force -AsPlainText) | Out-Null
           & $i2c /driver:"$((Resolve-Path $out).Path)" /os:10_RS3_ARM64
           if ($LASTEXITCODE) { throw "inf2cat failed: $LASTEXITCODE" }
-          & $st sign /fd sha256 /f C:\t.pfx /p $pw "$out\m1probe.sys" "$out\m1probe.cat"
+          & $st sign /fd sha256 /f C:\t.pfx /p $pw "$out\$env:DRV.sys" "$out\$env:DRV.cat"
           if ($LASTEXITCODE) { throw "signtool failed: $LASTEXITCODE" }
           Get-ChildItem $out | Format-Table Name, Length
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: m1probe-arm64
+          name: ${{ matrix.driver }}-arm64
           path: pkg/
           if-no-files-found: error

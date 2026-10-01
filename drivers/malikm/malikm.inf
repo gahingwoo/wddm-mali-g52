@@ -1,0 +1,60 @@
+;
+; malikm.inf - milestone M3: the Mali-G52 kernel driver Mesa's Panfrost
+; talks to through \\.\MaliG52. Binds ACPI\RKCP7402 (GPU0 in the
+; edk2-rk3576 CM5-IO DSDT), the same device m1probe binds: remove m1probe
+; first (pnputil /delete-driver <oemN.inf> /uninstall).
+;
+; SPDX-License-Identifier: GPL-2.0
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = malikm.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+malikm.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64.10.0...16299
+
+[Standard.NTARM64.10.0...16299]
+%MK.DeviceDesc% = MK_Inst,ACPI\RKCP7402
+
+[MK_Inst.NT]
+CopyFiles = MK_CopyFiles
+
+[MK_CopyFiles]
+malikm.sys
+
+[MK_Inst.NT.Services]
+AddService = malikm,0x00000002,MK_Service
+
+[MK_Service]
+DisplayName   = %MK.SvcDesc%
+ServiceType   = 1 ; SERVICE_KERNEL_DRIVER
+StartType     = 3 ; SERVICE_DEMAND_START
+ErrorControl  = 1 ; SERVICE_ERROR_NORMAL
+ServiceBinary = %13%\malikm.sys
+
+[MK_Inst.NT.Wdf]
+KmdfService = malikm, MK_wdfsect
+
+[MK_wdfsect]
+KmdfLibraryVersion = 1.33
+
+[Strings]
+ProviderName  = "wddm-mali-g52"
+DiskName      = "Mali-G52 kernel driver"
+MK.DeviceDesc = "Arm Mali-G52 (Panfrost uAPI)"
+MK.SvcDesc    = "Arm Mali-G52 kernel driver"
