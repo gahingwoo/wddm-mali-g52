@@ -18,10 +18,7 @@
 #pragma comment(lib, "d3dcompiler.lib")
 
 static const char kHlsl[] =
-    "float4 vs(uint id : SV_VertexID) : SV_Position {\n"
-    "    float2 p[3] = { float2(0.0, 0.8), float2(0.8, -0.8), float2(-0.8, -0.8) };\n"
-    "    return float4(p[id], 0.0, 1.0);\n"
-    "}\n"
+    "float4 vs(float2 p : POSITION) : SV_Position { return float4(p, 0.0, 1.0); }\n"
     "float4 ps() : SV_Target { return float4(1.0, 0.0, 0.0, 1.0); }\n";
 
 #define CHECK(hr, what)                                                       \
@@ -71,11 +68,34 @@ int main(int argc, char **argv)
     CHECK(dev->CreateVertexShader(vsb->GetBufferPointer(), vsb->GetBufferSize(), nullptr, &vs), "CreateVertexShader");
     CHECK(dev->CreatePixelShader(psb->GetBufferPointer(), psb->GetBufferSize(), nullptr, &ps), "CreatePixelShader");
 
+    // The common path: a vertex buffer and an input layout, culling off.
+    const float verts[] = { 0.0f, 0.8f, 0.8f, -0.8f, -0.8f, -0.8f };
+    D3D11_BUFFER_DESC bd = {};
+    bd.ByteWidth = sizeof(verts);
+    bd.Usage = D3D11_USAGE_DEFAULT;
+    bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA init = { verts, 0, 0 };
+    ID3D11Buffer *vb = nullptr;
+    CHECK(dev->CreateBuffer(&bd, &init, &vb), "CreateBuffer");
+    D3D11_INPUT_ELEMENT_DESC ied = { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 };
+    ID3D11InputLayout *il = nullptr;
+    CHECK(dev->CreateInputLayout(&ied, 1, vsb->GetBufferPointer(), vsb->GetBufferSize(), &il), "CreateInputLayout");
+    D3D11_RASTERIZER_DESC rd = {};
+    rd.FillMode = D3D11_FILL_SOLID;
+    rd.CullMode = D3D11_CULL_NONE;
+    rd.DepthClipEnable = TRUE;
+    ID3D11RasterizerState *rs = nullptr;
+    CHECK(dev->CreateRasterizerState(&rd, &rs), "CreateRasterizerState");
+
     const float blue[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
     ctx->ClearRenderTargetView(rtv, blue);
     ctx->OMSetRenderTargets(1, &rtv, nullptr);
     D3D11_VIEWPORT vp = { 0.0f, 0.0f, 64.0f, 64.0f, 0.0f, 1.0f };
     ctx->RSSetViewports(1, &vp);
+    ctx->RSSetState(rs);
+    UINT stride = 8, offset = 0;
+    ctx->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+    ctx->IASetInputLayout(il);
     ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     ctx->VSSetShader(vs, nullptr, 0);
     ctx->PSSetShader(ps, nullptr, 0);
