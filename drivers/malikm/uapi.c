@@ -548,7 +548,7 @@ mk_s32 MkMap(PDEVICE_CONTEXT Dev, PFILE_CONTEXT File, MALIKM_MAP *Map)
     PVOID va = NULL;
     mk_s32 r = 0;
 
-    if ((Map->Offset & 0xFFFFFFFF) != 0)
+    if ((Map->Offset & (PAGE_SIZE - 1)) != 0)
         return -MK_EINVAL;
     m = (MK_MAPPING *)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(*m), POOL_TAG_MAP);
     if (m == NULL)

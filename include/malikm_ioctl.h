@@ -90,9 +90,10 @@ typedef struct _MALIKM_VERSION {
     char   Name[16];    /* "panfrost" */
 } MALIKM_VERSION;
 
-/* MMAP_BO's fake offset: the BO handle in the high half. */
-#define MALIKM_MMAP_OFFSET(handle)      ((mk_u64)(handle) << 32)
-#define MALIKM_MMAP_HANDLE(offset)      ((mk_u32)((offset) >> 32))
+/* MMAP_BO's fake offset: the BO handle, in pages. Mesa carries it in an
+ * off_t, which is 32 bits on Windows. */
+#define MALIKM_MMAP_OFFSET(handle)      ((mk_u64)(handle) << 12)
+#define MALIKM_MMAP_HANDLE(offset)      ((mk_u32)((offset) >> 12))
 
 #define MALIKM_TIMEOUT_INFINITE         ((mk_s64)0x7FFFFFFFFFFFFFFFLL)
 

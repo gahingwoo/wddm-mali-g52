@@ -1,9 +1,10 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
  * The subset of libdrm Panfrost calls, for Windows. Prototypes match libdrm's
- * xf86drm.h. Every call fails with ENOSYS until M3, where they become
- * DeviceIoControl calls into the Mali KMDF driver with Linux Panfrost
- * semantics.
+ * xf86drm.h; the implementations (malikm_drm.c) turn them into DeviceIoControl
+ * calls on the Mali kernel driver (drivers/malikm), which keeps Linux
+ * Panfrost's semantics. This header stays free of windows.h on purpose: half
+ * of Panfrost includes it.
  */
 #pragma once
 #include <errno.h>
@@ -12,6 +13,10 @@
 
 /* libdrm's xf86drm.h brings in drm.h (and with it drm_mode.h); so does this. */
 #include "drm-uapi/drm.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #ifndef O_CLOEXEC
 #define O_CLOEXEC 0x80000
@@ -31,54 +36,29 @@ typedef struct _drmVersion {
    char *desc;
 } drmVersion, *drmVersionPtr;
 
-#define DRM_WIN32_NOSYS(ret) do { errno = ENOSYS; return (ret); } while (0)
+int drmIoctl(int fd, unsigned long request, void *arg);
+drmVersionPtr drmGetVersion(int fd);
+void drmFreeVersion(drmVersionPtr v);
 
-static inline int drmIoctl(int fd, unsigned long request, void *arg)
-{ (void)fd; (void)request; (void)arg; DRM_WIN32_NOSYS(-1); }
+int drmPrimeHandleToFD(int fd, uint32_t handle, uint32_t flags, int *prime_fd);
+int drmPrimeFDToHandle(int fd, int prime_fd, uint32_t *handle);
+int drmCloseBufferHandle(int fd, uint32_t handle);
 
-static inline drmVersionPtr drmGetVersion(int fd)
-{ (void)fd; DRM_WIN32_NOSYS((drmVersionPtr)0); }
+int drmSyncobjCreate(int fd, uint32_t flags, uint32_t *handle);
+int drmSyncobjDestroy(int fd, uint32_t handle);
+int drmSyncobjHandleToFD(int fd, uint32_t handle, int *obj_fd);
+int drmSyncobjFDToHandle(int fd, int obj_fd, uint32_t *handle);
+int drmSyncobjImportSyncFile(int fd, uint32_t handle, int sync_file_fd);
+int drmSyncobjExportSyncFile(int fd, uint32_t handle, int *sync_file_fd);
+int drmSyncobjWait(int fd, uint32_t *handles, unsigned num_handles,
+                   int64_t timeout_nsec, unsigned flags, uint32_t *first_signaled);
+int drmSyncobjReset(int fd, const uint32_t *handles, uint32_t handle_count);
+int drmSyncobjSignal(int fd, const uint32_t *handles, uint32_t handle_count);
+int drmSyncobjTimelineWait(int fd, uint32_t *handles, uint64_t *points, unsigned num_handles,
+                           int64_t timeout_nsec, unsigned flags, uint32_t *first_signaled);
+int drmSyncobjTransfer(int fd, uint32_t dst_handle, uint64_t dst_point,
+                       uint32_t src_handle, uint64_t src_point, uint32_t flags);
 
-static inline void drmFreeVersion(drmVersionPtr v) { (void)v; }
-
-static inline int drmPrimeHandleToFD(int fd, uint32_t handle, uint32_t flags, int *prime_fd)
-{ (void)fd; (void)handle; (void)flags; (void)prime_fd; DRM_WIN32_NOSYS(-ENOSYS); }
-
-static inline int drmPrimeFDToHandle(int fd, int prime_fd, uint32_t *handle)
-{ (void)fd; (void)prime_fd; (void)handle; DRM_WIN32_NOSYS(-ENOSYS); }
-
-static inline int drmCloseBufferHandle(int fd, uint32_t handle)
-{ (void)fd; (void)handle; DRM_WIN32_NOSYS(-ENOSYS); }
-
-static inline int drmSyncobjCreate(int fd, uint32_t flags, uint32_t *handle)
-{ (void)fd; (void)flags; (void)handle; DRM_WIN32_NOSYS(-ENOSYS); }
-
-static inline int drmSyncobjDestroy(int fd, uint32_t handle)
-{ (void)fd; (void)handle; DRM_WIN32_NOSYS(-ENOSYS); }
-
-static inline int drmSyncobjHandleToFD(int fd, uint32_t handle, int *obj_fd)
-{ (void)fd; (void)handle; (void)obj_fd; DRM_WIN32_NOSYS(-ENOSYS); }
-
-static inline int drmSyncobjFDToHandle(int fd, int obj_fd, uint32_t *handle)
-{ (void)fd; (void)obj_fd; (void)handle; DRM_WIN32_NOSYS(-ENOSYS); }
-
-static inline int drmSyncobjImportSyncFile(int fd, uint32_t handle, int sync_file_fd)
-{ (void)fd; (void)handle; (void)sync_file_fd; DRM_WIN32_NOSYS(-ENOSYS); }
-
-static inline int drmSyncobjExportSyncFile(int fd, uint32_t handle, int *sync_file_fd)
-{ (void)fd; (void)handle; (void)sync_file_fd; DRM_WIN32_NOSYS(-ENOSYS); }
-
-static inline int drmSyncobjWait(int fd, uint32_t *handles, unsigned num_handles,
-                                 int64_t timeout_nsec, unsigned flags, uint32_t *first_signaled)
-{ (void)fd; (void)handles; (void)num_handles; (void)timeout_nsec; (void)flags; (void)first_signaled; DRM_WIN32_NOSYS(-ENOSYS); }
-
-static inline int drmSyncobjReset(int fd, const uint32_t *handles, uint32_t handle_count)
-{ (void)fd; (void)handles; (void)handle_count; DRM_WIN32_NOSYS(-ENOSYS); }
-
-static inline int drmSyncobjTimelineWait(int fd, uint32_t *handles, uint64_t *points, unsigned num_handles,
-                                         int64_t timeout_nsec, unsigned flags, uint32_t *first_signaled)
-{ (void)fd; (void)handles; (void)points; (void)num_handles; (void)timeout_nsec; (void)flags; (void)first_signaled; DRM_WIN32_NOSYS(-ENOSYS); }
-
-static inline int drmSyncobjTransfer(int fd, uint32_t dst_handle, uint64_t dst_point,
-                                     uint32_t src_handle, uint64_t src_point, uint32_t flags)
-{ (void)fd; (void)dst_handle; (void)dst_point; (void)src_handle; (void)src_point; (void)flags; DRM_WIN32_NOSYS(-ENOSYS); }
+#ifdef __cplusplus
+}
+#endif
