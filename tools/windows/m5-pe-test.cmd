@@ -12,6 +12,9 @@ rem the end: PE run 3 was reset while the stick was being written, and FAT
 rem cross-linked the output file with woa-debug's (its text was replaced by
 rem a registry dump, and the .etl never appeared).
 set OUT=X:\m5-pe-out.txt
+rem A copy goes to the stick after each step too: PE run 7 bugchecked
+rem mid-test (WHEA_INTERNAL_ERROR) and the RAM disk took everything with it.
+set SAVE=copy /y X:\m5-pe-out.txt "%HERE%m5-pe-out.txt"
 set KEY=HKLM\SYSTEM\CurrentControlSet\Enum\ACPI
 echo m5-pe-test %date% %time% > "%OUT%"
 echo == what this WinPE has >> "%OUT%"
@@ -40,15 +43,18 @@ echo == etwrec start (dxgkrnl ETW) >> "%OUT%"
 "%HERE%etwrec.exe" start X:\dxgkrnl.etl >> "%OUT%" 2>&1
 echo exit %ERRORLEVEL% >> "%OUT%"
 
+%SAVE% >nul
 echo == drvload malidod >> "%OUT%"
 drvload "%HERE%malidod\malidod.inf" >> "%OUT%" 2>&1
 echo exit %ERRORLEVEL% >> "%OUT%"
 ping -n 6 127.0.0.1 >nul
+%SAVE% >nul
 echo == drvload maliwddm >> "%OUT%"
 drvload "%HERE%maliwddm\maliwddm.inf" >> "%OUT%" 2>&1
 echo exit %ERRORLEVEL% >> "%OUT%"
 ping -n 11 127.0.0.1 >nul
 
+%SAVE% >nul
 echo == etwrec stop >> "%OUT%"
 "%HERE%etwrec.exe" stop >> "%OUT%" 2>&1
 echo exit %ERRORLEVEL% >> "%OUT%"
@@ -59,6 +65,7 @@ pnputil /enum-devices /class Display >> "%OUT%" 2>&1
 pnputil /enum-devices /instanceid "ACPI\RKCP7403\0" >> "%OUT%" 2>&1
 pnputil /enum-devices /instanceid "ACPI\RKCP7402\0" >> "%OUT%" 2>&1
 
+%SAVE% >nul
 echo == m5test >> "%OUT%"
 "%HERE%m5test.exe" >> "%OUT%" 2>&1
 echo m5test exit code %ERRORLEVEL% >> "%OUT%"
