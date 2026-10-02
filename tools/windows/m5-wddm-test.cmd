@@ -4,6 +4,9 @@ rem whatever drives ACPI\RKCP7402) with maliwddm from this stick, restarts
 rem the device, runs m5test (one WRITE_VALUE job through D3DKMT) and saves
 rem the driver's trace. Output: m5-wddm-out.txt here.
 rem
+rem When an older maliwddm is already loaded, restart-device keeps the OLD
+rem image running: reboot afterwards and run m5-wddm-check.cmd.
+rem
 rem Run from an ADMINISTRATOR prompt, ideally over RDP: maliwddm has no
 rem user-mode driver yet, and what the desktop does without one is one of
 rem the things this run measures. If Windows comes up black and RDP does
@@ -39,4 +42,6 @@ powershell -NoProfile -Command "Get-CimInstance Win32_VideoController | Format-L
 type "%OUT%"
 echo.
 echo Results saved to %OUT%
+echo.
+echo If maliwddm was installed before, REBOOT now and run m5-wddm-check.cmd.
 pause

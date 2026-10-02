@@ -1,0 +1,767 @@
+m5-wddm-logs Thu 01/10/2026 14:10:31.46 
+
+LogName                               RecordCount
+-------                               -----------
+Microsoft-Windows-DxgKrnl-Operational           0
+Microsoft-Windows-DxgKrnl-Admin                 0
+
+
+
+==== System (display, PnP, kernel-pnp)
+
+
+TimeCreated      : 1/10/2026 2:02:21 pm
+ProviderName     : Service Control Manager
+Id               : 7045
+LevelDisplayName : Information
+Message          : A service was installed in the system.
+                   
+                   Service Name:  RK3576 Mali-G52 WDDM driver
+                   Service File Name:  \SystemRoot\System32\DriverStore\FileRepository\maliwddm.inf_arm64_227068b2c2959a0d\maliwddm.sys
+                   Service Type:  kernel mode driver
+                   Service Start Type:  demand start
+                   Service Account:  
+
+TimeCreated      : 1/10/2026 6:38:04 pm
+ProviderName     : Microsoft-Windows-UserPnp
+Id               : 20003
+LevelDisplayName : Information
+Message          : Driver Management has concluded the process to add Service WUDFWpdFs for Device Instance ID SWD\WPDBUSENUM\_??_SD#DISK&GENERIC&SS04G&8.0#4&1AABB7E0&0&6D172C4E&0#{53F56307-B6BF-11D0-94F2-00A0C91EFB8B} with the following status: 0.
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\xtac.exe with process id 4744 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\xtac.exe -p 384
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\xtac.exe with process id 4720 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\xtac.exe -p 3cc
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Program Files (x86)\Microsoft\EdgeUpdate\MicrosoftEdgeUpdate.exe with process id 4600 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: "C:\Program Files (x86)\Microsoft\EdgeUpdate\MicrosoftEdgeUpdate.exe" /regserver
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Program Files (x86)\Microsoft\EdgeUpdate\MicrosoftEdgeUpdate.exe with process id 4372 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: "C:\Program Files (x86)\Microsoft\EdgeUpdate\MicrosoftEdgeUpdate.exe" /c
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\drvinst.exe with process id 4332 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: DrvInst.exe "1" "20" "ACPI\RKCP6543\3c" "" "" "458da97e3" "0000000000000000" "8b9c"
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\drvinst.exe with process id 4308 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: DrvInst.exe "1" "20" "ROOT\KDNIC\0000" "" "" "4b683ea83" "0000000000000000" "8b9c"
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\drvinst.exe with process id 4300 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: DrvInst.exe "1" "20" "ACPI\RKCP0D40\3" "" "" "46e25f0db" "0000000000000000" "8b9c"
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 4152 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\System32\svchost.exe -k netsvcs -p -s BDESVC
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\AggregatorHost.exe with process id 4112 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: AggregatorHost.exe
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\wbem\WmiPrvSE.exe with process id 3992 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\wbem\wmiprvse.exe
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 3132 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k netsvcs -p -s LanmanServer
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 3024 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k appmodel -p -s StateRepository
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 3016 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k netsvcs -p -s WpnService
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 3008 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\System32\svchost.exe -k LocalServiceNoNetwork -p -s DPS
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 2988 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k netsvcs -p -s winmgmt
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\wbem\WmiPrvSE.exe with process id 2984 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\wbem\wmiprvse.exe
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 2976 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\System32\svchost.exe -k utcsvc -p
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 2896 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k netsvcs -p -s UserManager
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 2816 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\System32\svchost.exe -k NetworkService -p -s LanmanWorkstation
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 2756 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k LocalServiceNoNetworkFirewall -p
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 2716 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k LocalServiceNetworkRestricted -p -s WinHttpAutoProxySvc
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\spoolsv.exe with process id 2696 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\System32\spoolsv.exe
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 2548 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\System32\svchost.exe -k netsvcs -p -s ShellHWDetection
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 2476 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k LocalServiceNetworkRestricted -p -s Dhcp
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 2468 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k LocalServiceNetworkRestricted -p
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 2460 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\System32\svchost.exe -k LocalServiceNetworkRestricted -p
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 2452 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k NetworkService -p
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 2364 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\System32\svchost.exe -k LocalSystemNetworkRestricted -p -s TextInputManagementService
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 2356 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k LocalServiceNetworkRestricted -p -s TimeBrokerSvc
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 2328 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\System32\svchost.exe -k LocalServiceNetworkRestricted -p
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Program Files\Windows Defender\MsMpEng.exe with process id 2268 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: "C:\Program Files\Windows Defender\MsMpEng.exe"
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 2232 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k LocalService -p -s FontCache
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 2220 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\System32\svchost.exe -k LocalSystemNetworkRestricted -p -s AudioEndpointBuilder
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 2176 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k netsvcs -p -s Schedule
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 2168 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k netsvcs -p -s SENS
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\XtaCache.exe with process id 2044 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\XtaCache.exe
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 2036 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\System32\svchost.exe -k LocalServiceNetworkRestricted -p -s EventLog
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 1952 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k LocalSystemNetworkRestricted -s WPDBusEnum
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\servicing\TrustedInstaller.exe with process id 1940 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\servicing\TrustedInstaller.exe
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 1892 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k LocalService -p -s nsi
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 1864 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k LocalSystemNetworkRestricted -p -s hidserv
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 1788 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\System32\svchost.exe -k LocalSystemNetworkRestricted -p -s NcbService
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 1756 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k LocalServiceNetworkRestricted -p -s AppIDSvc
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 1728 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k netsvcs -p -s DsmSvc
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 1652 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k NetworkService -p
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 1588 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k LocalService -p -s EventSystem
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 1556 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k UserProfileService -p -s ProfSvc
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\oobe\Setup.exe with process id 1532 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\oobe\setup.exe
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 1520 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k LocalSystemNetworkRestricted -p -s SysMain
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\oobe\windeploy.exe with process id 1500 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: oobe\windeploy.exe
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 1400 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k LocalService -p -s DispBrokerDesktopSvc
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 1276 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k LocalServiceNoNetwork -p
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\dwm.exe with process id 1236 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: "dwm.exe"
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 1208 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\System32\svchost.exe -k netsvcs -p -s NetSetupSvc
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 1168 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k DcomLaunch -p -s DeviceInstall
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\sppsvc.exe with process id 1128 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\sppsvc.exe
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 1084 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k DcomLaunch -p -s LSM
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 1052 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k RPCSS -p
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\lsass.exe with process id 944 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\lsass.exe -setup
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\services.exe with process id 920 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\services.exe -setup
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 916 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k netsvcs -p -s gpsvc
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 908 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\System32\svchost.exe -k netsvcs -p -s Themes
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\winlogon.exe with process id 832 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: winlogon.exe
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\csrss.exe with process id 780 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: %SystemRoot%\system32\csrss.exe ObjectDirectory=\Windows SharedSection=1024,20480,768 Windows=On SubSystemType=Windows ServerDll=basesrv,1 ServerDll=winsrv:UserServerDllInitialization,3 ServerDll=sxssrv,4 ProfileControl=Off MaxRequestThreads=16
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\wininit.exe with process id 760 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: wininit.exe
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\csrss.exe with process id 688 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: %SystemRoot%\system32\csrss.exe ObjectDirectory=\Windows SharedSection=1024,20480,768 Windows=On SubSystemType=Windows ServerDll=basesrv,1 ServerDll=winsrv:UserServerDllInitialization,3 ServerDll=sxssrv,4 ProfileControl=Off MaxRequestThreads=16
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\fontdrvhost.exe with process id 664 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: "fontdrvhost.exe"
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\fontdrvhost.exe with process id 628 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: "fontdrvhost.exe"
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\smss.exe with process id 552 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: \SystemRoot\System32\smss.exe
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application \Device\HarddiskVolume7\Windows\System32\svchost.exe with process id 536 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: C:\Windows\system32\svchost.exe -k DcomLaunch -p
+                   List of affected devices:
+                   
+
+TimeCreated      : 1/10/2026 6:38:37 pm
+ProviderName     : Microsoft-Windows-Kernel-PnP
+Id               : 225
+LevelDisplayName : Warning
+Message          : The application System with process id 4 stopped the removal or ejection for the device ACPI\RKCP0D40\3.
+                   Process command line: 
+                   List of affected devices:
+                   STORAGE\Volume\{938e7b2b-bd62-11f1-ba5e-806e6f6e6963}#0000000004000000
+                   STORAGE\Volume\{938e7b2b-bd62-11f1-ba5e-806e6f6e6963}#0000000015400000
+                   
+
+
+
+
+==== device
+
+KeyName                                        Data
+-------                                        ----
+DEVPKEY_Device_ProblemCode                       43
+DEVPKEY_Device_ProblemStatus                      0
+DEVPKEY_Device_LastArrivalDate 1/10/2026 2:07:36 pm
+DEVPKEY_Device_DriverVersion             2.57.4.426
+DEVPKEY_Device_DriverInfPath               oem2.inf
+
+
+
+==== setupapi.dev.log, last 80 lines 
+     sto:                {DRIVERSTORE IMPORT END: exit(0x00000000)} 14:07:34.421
+     sto:           {Core Driver Package Import: exit(0x00000000)} 14:07:34.421
+     sto:      {Stage Driver Package: exit(0x00000000)} 14:07:34.421
+     dvs:      Driver Package:
+     dvs:           Outcome        - Imported
+     dvs:           Driver INF     - maliwddm.inf (oem2.inf)
+     dvs:           Class GUID     - {4d36e968-e325-11ce-bfc1-08002be10318}
+     dvs:           Driver Version - 10/02/2026,2.57.4.426
+     dvs: {Driver Setup Import Driver Package - exit (0x00000000)} 14:07:34.593
+     dvs: {Driver Setup Update Device: ACPI\RKCP7402\0} 14:07:34.608
+     utl:      {Select Drivers - ACPI\RKCP7402\0} 14:07:34.608
+     utl:           Driver Node:
+     utl:                Status         - Selected
+     utl:                Driver INF     - oem2.inf (C:\Windows\System32\DriverStore\FileRepository\maliwddm.inf_arm64_544b74e45bd74c62\maliwddm.inf)
+     utl:                Class GUID     - {4d36e968-e325-11ce-bfc1-08002be10318}
+     utl:                Driver Version - 10/02/2026,2.57.4.426
+     utl:                Configuration  - ACPI\RKCP7402
+     utl:                Driver Rank    - 80F90001
+     utl:                Signer Score   - Unsigned (80000000)
+     utl:           Driver Node:
+     utl:                Status         - Outranked | Installed
+     utl:                Driver INF     - oem0.inf (C:\Windows\System32\DriverStore\FileRepository\maliwddm.inf_arm64_227068b2c2959a0d\maliwddm.inf)
+     utl:                Class GUID     - {4d36e968-e325-11ce-bfc1-08002be10318}
+     utl:                Driver Version - 10/02/2026,2.50.16.60
+     utl:                Configuration  - ACPI\RKCP7402 [MW_Inst]
+     utl:                Driver Rank    - 80F90001
+     utl:                Signer Score   - Unsigned (80000000)
+     utl:      {Select Drivers - exit(0x00000000} 14:07:34.671
+     dvs:      Installing best driver (oem2.inf) on device 'ACPI\RKCP7402\0'.
+     ump:      {Plug and Play Service: Device Install for ACPI\RKCP7402\0}
+     dvi:           {Core Device Install} 14:07:34.749
+     dvi:                {Configure Device - ACPI\RKCP7402\0} 14:07:34.858
+     dvi:                     Device Status: 0x01802400 [0x2b - 0x00000000]
+     dvi:                     Config Flags: 0x00000000
+     dvi:                     Parent Device: ACPI_HAL\PNP0C08\0
+     sto:                     {Configure Driver Package: C:\Windows\System32\DriverStore\FileRepository\maliwddm.inf_arm64_544b74e45bd74c62\maliwddm.inf}
+     sto:                          Source Filter  = ACPI\RKCP7402
+     inf:                          Class GUID     = {4d36e968-e325-11ce-bfc1-08002be10318}
+     inf:                          Class Options  = Configurable
+     inf:                          {Configure Driver: Rockchip RK3576 Mali-G52 (WDDM)}
+     inf:                               Section Name = MW_Inst
+     inf:                               {Add Service: maliwddm}
+     inf:                                    Start Type    = 3
+     inf:                                    Service Type  = 1
+     inf:                                    Error Control = 0
+     inf:                                    Image Path    = \SystemRoot\System32\DriverStore\FileRepository\maliwddm.inf_arm64_544b74e45bd74c62\maliwddm.sys
+     inf:                                    Display Name  = RK3576 Mali-G52 WDDM driver
+     inf:                                    Group         = Video
+     inf:                                    Updated service 'maliwddm'.
+     inf:                                    Service image path changed. Restart required for any devices using this service.
+!    idb:                                    Last driver package 'maliwddm.inf_arm64_227068b2c2959a0d' using service 'maliwddm' needs reconfiguration.
+     inf:                               {Add Service: exit(0x00000000)}
+     inf:                               Hardware Id  = ACPI\RKCP7402
+     inf:                               {Configure Driver Configuration: MW_Inst}
+     inf:                                    Service Name  = maliwddm
+     inf:                                    Config Flags  = 0x00000000
+     inf:                               {Configure Driver Configuration: exit(0x00000000)}
+     inf:                          {Configure Driver: exit(0x00000000)}
+     flq:                          {FILE_QUEUE_COMMIT} 14:07:34.968
+     flq:                          {FILE_QUEUE_COMMIT - exit(0x00000000)} 14:07:34.968
+     dvi:                          Existing files modified, may need to restart related services.
+     sto:                     {Configure Driver Package: exit(0x00000bc3)}
+     dvi:                     Restart required for any devices using this driver.
+     dvi:                     Install Device: Configuring device. 14:07:34.983
+     dvi:                          Configuration: oem2.inf:ACPI\RKCP7402,*
+     dvi:                     Install Device: Configuring device completed. 14:07:34.983
+     dvi:                     Device Status: 0x01802400 [0x2b - 0x00000000]
+     dvi:                     {Restarting Devices} 14:07:34.999
+     dvi:                          Start: ACPI\RKCP7402\0
+     dvi:                     {Restarting Devices exit} 14:07:36.358
+     dvi:                {Configure Device - exit(0x00000000)} 14:07:36.374
+     dvi:           {Core Device Install - exit(0x00000000)} 14:07:36.389
+     ump:      {Plug and Play Service: Device Install exit(00000000)}
+     dvs:      {Install Related Drivers} 14:07:36.421
+     dvs:      {Install Related Drivers: exit(0x00000000)} 14:07:36.452
+     dvs: {Driver Setup Update Device - exit(0x00000000)} 14:07:36.452
+<<<  Section end 2026/10/01 14:07:36.468
+<<<  [Exit status: SUCCESS]
+
+……OœO( y)     
