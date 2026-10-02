@@ -29,6 +29,23 @@ void MwLog(MW_ADAPTER *A, PCWSTR Name, ULONG Value)
     ZwClose(key);
 }
 
+static void LogBuild(MW_ADAPTER *A)
+{
+    HANDLE key, sub;
+    UNICODE_STRING name = RTL_CONSTANT_STRING(L"Build"), subName = RTL_CONSTANT_STRING(L"maliwddm");
+    OBJECT_ATTRIBUTES oa;
+    static const WCHAR build[] = MW_W(__DATE__) L" " MW_W(__TIME__);
+
+    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(A->Pdo, PLUGPLAY_REGKEY_DEVICE, KEY_WRITE, &key)))
+        return;
+    InitializeObjectAttributes(&oa, &subName, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, key, NULL);
+    if (NT_SUCCESS(ZwCreateKey(&sub, KEY_WRITE, &oa, 0, NULL, REG_OPTION_NON_VOLATILE, NULL))) {
+        (void)ZwSetValueKey(sub, &name, 0, REG_SZ, (PVOID)build, sizeof(build));
+        ZwClose(sub);
+    }
+    ZwClose(key);
+}
+
 void MwLogHook(void *Owner, PCWSTR Name, ULONG Value)
 {
     MwLog((MW_ADAPTER *)Owner, Name, Value);
@@ -50,6 +67,10 @@ NTSTATUS MwRet(MW_ADAPTER *A, PCWSTR Name, NTSTATUS St)
         RtlInitEmptyUnicodeString(&us, seen, sizeof(seen));
         if (NT_SUCCESS(RtlUnicodeStringPrintf(&us, L"Seen_%ws", Name + 5)))
             MwLog(A, seen, (ULONG)St);
+        /* Which DDI dxgkrnl called first, second, ... */
+        RtlInitEmptyUnicodeString(&us, seen, sizeof(seen));
+        if (NT_SUCCESS(RtlUnicodeStringPrintf(&us, L"Order_%ws", Name + 5)))
+            MwLog(A, seen, ++A->CallOrder);
     }
     if (!NT_SUCCESS(St)) {
         MwLog(A, Name, (ULONG)St);
@@ -104,6 +125,7 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
     UNREFERENCED_PARAMETER(StartInfo);
 
     a->Dxgk = *Dxgk;
+    LogBuild(a);
     st = MwDisplayStart(a);
     if (!NT_SUCCESS(st))
         return MwRet(a, L"Fail_StartDisplay", st);
@@ -286,6 +308,9 @@ static NTSTATUS APIENTRY MwQueryAdapterInfo(IN_CONST_HANDLE hAdapter, const DXGK
     RtlInitEmptyUnicodeString(&us, name, sizeof(name));
     if (NT_SUCCESS(RtlUnicodeStringPrintf(&us, L"QAI_%u", (ULONG)Info->Type)))
         MwLog(a, name, (ULONG)st);
+    RtlInitEmptyUnicodeString(&us, name, sizeof(name));
+    if (NT_SUCCESS(RtlUnicodeStringPrintf(&us, L"QAI_%u_Size", (ULONG)Info->Type)))
+        MwLog(a, name, Info->OutputDataSize);
     return st;
 }
 
@@ -353,8 +378,6 @@ static NTSTATUS APIENTRY MwSetPointerShape(IN_CONST_HANDLE hAdapter, const DXGKA
 
 /* ---- the traced DDI table ---- */
 
-#define MW_W2(x) L##x
-#define MW_W(x) MW_W2(x)
 #define TRACE_ADAPTER(Name, Proto, Args)                                        \
     static NTSTATUS APIENTRY T_##Name Proto                                    \
     { return MwRet((MW_ADAPTER *)hAdapter, L"Fail_" MW_W(#Name), Mw##Name Args); }
@@ -383,6 +406,27 @@ TRACE_ADAPTER(QueryEngineStatus, (IN_CONST_HANDLE hAdapter, DXGKARG_QUERYENGINES
 TRACE_ADAPTER(ControlInterrupt, (IN_CONST_HANDLE hAdapter, IN_CONST_DXGK_INTERRUPT_TYPE t, IN_BOOLEAN e), (hAdapter, t, e))
 TRACE_ADAPTER(GetScanLine, (IN_CONST_HANDLE hAdapter, DXGKARG_GETSCANLINE *a), (hAdapter, a))
 
+#define TRACE_CONTEXT(Name, Proto, Args)                                        \
+    static NTSTATUS APIENTRY T_##Name Proto                                    \
+    { return MwRet((MW_ADAPTER *)Context, L"Fail_" MW_W(#Name), Mw##Name Args); }
+
+TRACE_CONTEXT(QueryChildRelations, (IN_CONST_PVOID Context, PDXGK_CHILD_DESCRIPTOR d, IN_ULONG n), (Context, d, n))
+TRACE_CONTEXT(QueryChildStatus, (IN_CONST_PVOID Context, INOUT_PDXGK_CHILD_STATUS c, IN_BOOLEAN b), (Context, c, b))
+TRACE_CONTEXT(QueryDeviceDescriptor, (IN_CONST_PVOID Context, IN_ULONG u, INOUT_PDXGK_DEVICE_DESCRIPTOR d), (Context, u, d))
+TRACE_CONTEXT(SetPowerState, (IN_CONST_PVOID Context, IN_ULONG u, IN_DEVICE_POWER_STATE p, IN_POWER_ACTION a), (Context, u, p, a))
+TRACE_CONTEXT(QueryInterface, (IN_CONST_PVOID Context, IN_PQUERY_INTERFACE q), (Context, q))
+TRACE_CONTEXT(DispatchIoRequest, (IN_CONST_PVOID Context, IN_ULONG s, IN_PVIDEO_REQUEST_PACKET v), (Context, s, v))
+TRACE_CONTEXT(StopDevice, (IN_CONST_PVOID Context), (Context))
+TRACE_ADAPTER(OpenAllocation, (IN_CONST_HANDLE hAdapter, const DXGKARG_OPENALLOCATION *a), (hAdapter, a))
+TRACE_ADAPTER(SetPointerPosition, (IN_CONST_HANDLE hAdapter, const DXGKARG_SETPOINTERPOSITION *a), (hAdapter, a))
+TRACE_ADAPTER(SetPointerShape, (IN_CONST_HANDLE hAdapter, const DXGKARG_SETPOINTERSHAPE *a), (hAdapter, a))
+TRACE_ADAPTER(Patch, (IN_CONST_HANDLE hAdapter, const DXGKARG_PATCH *a), (hAdapter, a))
+TRACE_ADAPTER(SubmitCommand, (IN_CONST_HANDLE hAdapter, const DXGKARG_SUBMITCOMMAND *a), (hAdapter, a))
+TRACE_ADAPTER(QueryCurrentFence, (IN_CONST_HANDLE hAdapter, DXGKARG_QUERYCURRENTFENCE *a), (hAdapter, a))
+TRACE_ADAPTER(CollectDbgInfo, (IN_CONST_HANDLE hAdapter, const DXGKARG_COLLECTDBGINFO *a), (hAdapter, a))
+TRACE_ADAPTER(CancelCommand, (IN_CONST_HANDLE hAdapter, const DXGKARG_CANCELCOMMAND *a), (hAdapter, a))
+TRACE_ADAPTER(PreemptCommand, (IN_CONST_HANDLE hAdapter, const DXGKARG_PREEMPTCOMMAND *a), (hAdapter, a))
+
 NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
     DRIVER_INITIALIZATION_DATA init = {0};
@@ -390,18 +434,18 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     init.Version = DXGKDDI_INTERFACE_VERSION_WDDM1_3;
     init.DxgkDdiAddDevice = MwAddDevice;
     init.DxgkDdiStartDevice = MwStartDevice;
-    init.DxgkDdiStopDevice = MwStopDevice;
+    init.DxgkDdiStopDevice = T_StopDevice;
     init.DxgkDdiRemoveDevice = MwRemoveDevice;
-    init.DxgkDdiDispatchIoRequest = MwDispatchIoRequest;
+    init.DxgkDdiDispatchIoRequest = T_DispatchIoRequest;
     init.DxgkDdiInterruptRoutine = MwInterruptRoutine;
     init.DxgkDdiDpcRoutine = MwDpcRoutine;
-    init.DxgkDdiQueryChildRelations = MwQueryChildRelations;
-    init.DxgkDdiQueryChildStatus = MwQueryChildStatus;
-    init.DxgkDdiQueryDeviceDescriptor = MwQueryDeviceDescriptor;
-    init.DxgkDdiSetPowerState = MwSetPowerState;
+    init.DxgkDdiQueryChildRelations = T_QueryChildRelations;
+    init.DxgkDdiQueryChildStatus = T_QueryChildStatus;
+    init.DxgkDdiQueryDeviceDescriptor = T_QueryDeviceDescriptor;
+    init.DxgkDdiSetPowerState = T_SetPowerState;
     init.DxgkDdiResetDevice = MwResetDevice;
     init.DxgkDdiUnload = MwUnload;
-    init.DxgkDdiQueryInterface = MwQueryInterface;
+    init.DxgkDdiQueryInterface = T_QueryInterface;
 
     init.DxgkDdiQueryAdapterInfo = T_QueryAdapterInfo;
     init.DxgkDdiEscape = T_Escape;
@@ -409,7 +453,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     init.DxgkDdiDestroyAllocation = T_DestroyAllocation;
     init.DxgkDdiDescribeAllocation = T_DescribeAllocation;
     init.DxgkDdiGetStandardAllocationDriverData = T_GetStandardAllocationDriverData;
-    init.DxgkDdiOpenAllocation = MwOpenAllocation;
+    init.DxgkDdiOpenAllocation = T_OpenAllocation;
     init.DxgkDdiCloseAllocation = MwCloseAllocation;
     init.DxgkDdiBuildPagingBuffer = T_BuildPagingBuffer;
 
@@ -419,22 +463,22 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     init.DxgkDdiDestroyContext = MwDestroyContext;
     init.DxgkDdiRender = MwRender;
     init.DxgkDdiPresent = MwPresent;
-    init.DxgkDdiPatch = MwPatch;
-    init.DxgkDdiSubmitCommand = MwSubmitCommand;
-    init.DxgkDdiPreemptCommand = MwPreemptCommand;
-    init.DxgkDdiQueryCurrentFence = MwQueryCurrentFence;
+    init.DxgkDdiPatch = T_Patch;
+    init.DxgkDdiSubmitCommand = T_SubmitCommand;
+    init.DxgkDdiPreemptCommand = T_PreemptCommand;
+    init.DxgkDdiQueryCurrentFence = T_QueryCurrentFence;
     init.DxgkDdiResetFromTimeout = T_ResetFromTimeout;
     init.DxgkDdiRestartFromTimeout = T_RestartFromTimeout;
-    init.DxgkDdiCollectDbgInfo = MwCollectDbgInfo;
+    init.DxgkDdiCollectDbgInfo = T_CollectDbgInfo;
     init.DxgkDdiGetNodeMetadata = MwGetNodeMetadata;
     init.DxgkDdiResetEngine = T_ResetEngine;
     init.DxgkDdiQueryEngineStatus = T_QueryEngineStatus;
-    init.DxgkDdiCancelCommand = MwCancelCommand;
+    init.DxgkDdiCancelCommand = T_CancelCommand;
     init.DxgkDdiControlInterrupt = T_ControlInterrupt;
     init.DxgkDdiGetScanLine = T_GetScanLine;
 
-    init.DxgkDdiSetPointerPosition = MwSetPointerPosition;
-    init.DxgkDdiSetPointerShape = MwSetPointerShape;
+    init.DxgkDdiSetPointerPosition = T_SetPointerPosition;
+    init.DxgkDdiSetPointerShape = T_SetPointerShape;
     init.DxgkDdiIsSupportedVidPn = T_IsSupportedVidPn;
     init.DxgkDdiRecommendFunctionalVidPn = T_RecommendFunctionalVidPn;
     init.DxgkDdiEnumVidPnCofuncModality = T_EnumVidPnCofuncModality;

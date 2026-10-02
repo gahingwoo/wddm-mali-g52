@@ -20,6 +20,8 @@
 #define MW_SEGMENT_ID           1           /* the aperture segment */
 #define MW_SEGMENT_SIZE         (1024ULL * 1024 * 1024)
 #define MW_QUEUE_DEPTH          16          /* submissions the KMD holds */
+#define MW_W2(x)                L##x
+#define MW_W(x)                 MW_W2(x)
 
 /* ---- objects ---- */
 
@@ -63,6 +65,7 @@ struct _MW_ADAPTER {
     PDEVICE_OBJECT Pdo;
     DXGKRNL_INTERFACE Dxgk;
     ULONG64 Seen;               /* DDIs already traced (see MwRet) */
+    ULONG CallOrder;
 
     /* Display: the firmware's framebuffer, as malidod. */
     DXGK_DISPLAY_INFORMATION Fb;
