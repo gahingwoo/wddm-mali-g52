@@ -308,6 +308,24 @@ static NTSTATUS APIENTRY MwQueryAdapterInfo(IN_CONST_HANDLE hAdapter, const DXGK
     case DXGKQAITYPE_QUERYSEGMENT3:
         st = MwQuerySegment(a, Info);
         break;
+    case DXGKQAITYPE_HISTORYBUFFERPRECISION:
+        /* WDDM 1.3 (Windows 8.1) asks this of every 1.3 driver. Answering
+         * STATUS_NOT_SUPPORTED was logged by dxgkrnl as "Driver returned an
+         * invalid NTSTATUS code" right before every render-only start
+         * failed with STATUS_GRAPHICS_INVALID_DRIVER_MODEL (WinPE runs 5-8).
+         * No history buffers are written; 64 bits is the honest width of
+         * anything that would be. */
+        if (Info->OutputDataSize < sizeof(DXGKARG_HISTORYBUFFERPRECISION)) {
+            st = STATUS_BUFFER_TOO_SMALL;
+        } else {
+            ((DXGKARG_HISTORYBUFFERPRECISION *)Info->pOutputData)->PrecisionBits = 64;
+            st = STATUS_SUCCESS;
+        }
+        break;
+    case 47: /* DXGKQAITYPE_64BITONLYCAPS: zero = not restricted to 64-bit */
+        RtlZeroMemory(Info->pOutputData, Info->OutputDataSize);
+        st = STATUS_SUCCESS;
+        break;
     case DXGKQAITYPE_DISPLAY_DRIVERCAPS_EXTENSION:
         RtlZeroMemory(Info->pOutputData, Info->OutputDataSize);
         st = STATUS_SUCCESS;
