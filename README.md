@@ -2,8 +2,9 @@
 
 A Windows (WDDM) driver for the Arm Mali-G52 GPU in the Rockchip RK3576.
 
-The Mali-G52 has run its first job under Windows (M1, 2026-10-01). Nothing
-is drawn on it yet. Windows on RK3576 boards
+The Mali-G52 draws under Windows: on 2026-10-02 Mesa's Panfrost, inside the
+D3D10 software-driver DLL and talking to our own kernel driver, rendered a
+D3D11 triangle on it, byte for byte what the CPU renderer draws (M4). Windows on RK3576 boards
 ([woa-rk3576](https://github.com/gahingwoo/woa-rk3576)) draws its desktop on the
 CPU today: there is no GPU driver, so DWM renders through WARP into the
 framebuffer the firmware leaves behind. No Windows driver for any Mali GPU
@@ -26,7 +27,7 @@ Milestones, the reasoning behind them, and the risks:
 | M1 | Mali runs a job under Windows (plain KMDF driver) | **done**: [result](docs/results/m1-windows-2026-10-01.txt) |
 | M2 | Mesa 26.2 (D3D10 frontend, softpipe, then Panfrost) built for Windows ARM64 in CI | **done**: builds, and falls back cleanly with no Mali device |
 | M3 | Panfrost drives the Mali on Windows through our own kernel interface; first clear | **done** 2026-10-02: Panfrost clears a render target on the Mali and reads it back ([result](docs/results/m3-mesa-windows-2026-10-02.txt); [driver alone](docs/results/m3-windows-2026-10-02.txt); [design](docs/M3.md)) |
-| M4 | First triangle | next: the clear is right, the triangle is missing, no GPU fault |
+| M4 | First triangle | **done** 2026-10-02: the D3D11 triangle rendered by the Mali, byte-identical to softpipe ([image](docs/results/m4/first-triangle-on-mali-windows.png), [log](docs/results/m4/m4-out.txt)) |
 | M5 | WDDM 2.0 driver and hardware UMD; DWM composites on the Mali | planned: [docs/M5-PLAN.md](docs/M5-PLAN.md) |
 
 M2 onwards: [docs/M2-PLAN.md](docs/M2-PLAN.md). Mesa's D3D10 frontend is a
