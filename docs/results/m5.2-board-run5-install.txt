@@ -1,0 +1,23 @@
+m5-wddm-test Thu 01/10/2026  9:41:54.16 
+== removing malidod from the driver store 
+== installing maliwddm 
+Microsoft PnP Utility
+
+Adding driver package:  maliwddm.inf
+Driver package added successfully. (Needed repairing)
+Published Name:         oem15.inf
+Driver package installed on device: ACPI\RKCP7402\0
+
+Total driver packages:  1
+Added driver packages:  1
+Microsoft PnP Utility
+
+Failed to enable device:  ACPI\RKCP7402\0
+Device is already enabled.
+
+This command is not supported on this OS product.
+Microsoft PnP Utility
+
+Restarting device:         ACPI\RKCP7402\0
+Device restarted successfully.
+
