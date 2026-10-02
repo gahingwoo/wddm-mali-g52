@@ -1,0 +1,149 @@
+m5-pe-test Fri 10/02/2026  8:43:40.84 
+== what this WinPE has 
+  have drivers\dxgkrnl.sys 
+  have drivers\dxgmms2.sys 
+  MISSING d3d10warp.dll 
+  MISSING d3d11.dll 
+  MISSING dxgi.dll 
+  have gdi32.dll 
+X:\windows\System32\DriverStore\FileRepository\basicdisplay.inf_arm64_469c1c1c4dcf9fad\BasicDisplay.sys
+X:\windows\System32\DriverStore\FileRepository\basicrender.inf_arm64_40008a5e63a0608e\BasicRender.sys
+The specified entry type is invalid.
+Run "bcdedit /?" for command line assistance.
+The parameter is incorrect.
+== devices before 
+Microsoft PnP Utility
+
+No devices were found on the system.
+Microsoft PnP Utility
+
+Instance ID:                ACPI\RKCP7403\0
+Device Description:         Unknown
+Class Name:                 Unknown
+Class GUID:                 Unknown
+Manufacturer Name:          Unknown
+Status:                     Problem
+Problem Code:               28 (0x1C) [CM_PROB_FAILED_INSTALL]
+Problem Status:             0xC0000490
+
+Microsoft PnP Utility
+
+Instance ID:                ACPI\RKCP7402\0
+Device Description:         Unknown
+Class Name:                 Unknown
+Class GUID:                 Unknown
+Manufacturer Name:          Unknown
+Status:                     Problem
+Problem Code:               28 (0x1C) [CM_PROB_FAILED_INSTALL]
+Problem Status:             0xC0000490
+
+        1 file(s) copied.
+== etwrec start (dxgkrnl ETW) 
+StartTrace: 0
+EnableTraceEx2(DxgKrnl): 0
+exit 0 
+== drvload malidod 
+DrvLoad: Successfully loaded E:\mali\malidod\malidod.inf.
+exit 0 
+== drvload maliwddm 
+DrvLoad: Successfully loaded E:\mali\maliwddm\maliwddm.inf.
+exit 0 
+== etwrec stop 
+ControlTrace(STOP): 0, events lost 0, buffers written 6
+exit 0 
+ Volume in drive X is Boot
+ Volume Serial Number is D60A-0DC2
+
+ Directory of X:\
+
+10/02/2026  08:43 AM         6,291,456 dxgkrnl.etl
+               1 File(s)      6,291,456 bytes
+               0 Dir(s)     522,129,408 bytes free
+== devices after 
+Microsoft PnP Utility
+
+Instance ID:                ACPI\RKCP7403\0
+Device Description:         Rockchip RK3576 Display (display-only)
+Class Name:                 Display
+Class GUID:                 {4d36e968-e325-11ce-bfc1-08002be10318}
+Manufacturer Name:          wddm-mali-g52
+Status:                     Started
+Driver Name:                oem7.inf
+
+Microsoft PnP Utility
+
+Instance ID:                ACPI\RKCP7403\0
+Device Description:         Rockchip RK3576 Display (display-only)
+Class Name:                 Display
+Class GUID:                 {4d36e968-e325-11ce-bfc1-08002be10318}
+Manufacturer Name:          wddm-mali-g52
+Status:                     Started
+Driver Name:                oem7.inf
+
+Microsoft PnP Utility
+
+Instance ID:                ACPI\RKCP7402\0
+Device Description:         Rockchip RK3576 Mali-G52 (WDDM)
+Class Name:                 System
+Class GUID:                 {4d36e97d-e325-11ce-bfc1-08002be10318}
+Manufacturer Name:          wddm-mali-g52
+Status:                     Problem
+Problem Code:               43 (0x2B) [CM_PROB_FAILED_POST_START]
+Driver Name:                oem8.inf
+
+== m5test 
+m5test exit code -1073741515 
+== maliwddm trace 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\maliwddm
+    Enter_QueryInterface    REG_DWORD    0x1
+    Seen_QueryInterface    REG_DWORD    0xc00000bb
+    Order_QueryInterface    REG_DWORD    0x2
+    Fail_QueryInterface    REG_DWORD    0xc00000bb
+    LastFailedDdi    REG_DWORD    0xc00000bb
+    Build    REG_DWORD    0x7a
+    RenderOnly    REG_DWORD    0x1
+    Step    REG_DWORD    0x6
+    GpuId    REG_DWORD    0x74021000
+    ShaderPresent    REG_DWORD    0x7
+    MmuFeatures    REG_DWORD    0x2823
+    GpuUp    REG_DWORD    0x1
+    Started    REG_DWORD    0x1
+    Enter_QueryAdapterInfo    REG_DWORD    0x3
+    QAI_1    REG_DWORD    0x0
+    QAI_1_Size    REG_DWORD    0x228
+    Seen_QueryAdapterInfo    REG_DWORD    0x0
+    Order_QueryAdapterInfo    REG_DWORD    0x4
+
+== malidod trace 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7403\0\Device Parameters
+    VideoID    REG_SZ    {29FDAC30-BE80-11F1-B817-8AF95D0A0D58}
+    FirmwareIdentified    REG_DWORD    0x1
+    AOCID    REG_SZ    {29FDAC31-BE80-11F1-B817-8AF95D0A0D58}
+    Seen_QueryInterface    REG_DWORD    0xc00000bb
+    Fail_QueryInterface    REG_DWORD    0xc00000bb
+    LastFailedDdi    REG_DWORD    0xc00000bb
+    AcquirePostDisplay    REG_DWORD    0x0
+    FbWidth    REG_DWORD    0x780
+    FbHeight    REG_DWORD    0x438
+    FbPitch    REG_DWORD    0x1e00
+    FbFormat    REG_DWORD    0x16
+    FbPhysLo    REG_DWORD    0xff7c0000
+    FbPhysHi    REG_DWORD    0x0
+    Started    REG_DWORD    0x1
+    Seen_QueryChildRelations    REG_DWORD    0x0
+    QAI_1    REG_DWORD    0x0
+    QAI_1_Size    REG_DWORD    0x220
+    Seen_QueryDeviceDescriptor    REG_DWORD    0xc01d0001
+    Fail_QueryDeviceDescriptor    REG_DWORD    0xc01d0001
+    MonitorAddMode    REG_DWORD    0x0
+    Seen_RecommendMonitorModes    REG_DWORD    0x0
+    Seen_EnumVidPnCofuncModality    REG_DWORD    0x0
+    CommitStatus    REG_DWORD    0x0
+    Seen_CommitVidPn    REG_DWORD    0x0
+    Seen_SetVidPnSourceVisibility    REG_DWORD    0x0
+    Presents    REG_DWORD    0x1
+    Seen_PresentDisplayOnly    REG_DWORD    0x0
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7403\0\Device Parameters\_DISPLAY_ACPI_INFO
