@@ -137,6 +137,13 @@ static void print_stats(D3DKMT_HANDLE adapter, const char *when)
            when, s.GpuUp, s.Renders, s.Presents, s.Submits, s.LastCompletedFence, s.LastSubmittedFence,
            s.Queued, s.Running, s.JobsDone, s.JobsFailed, s.JobsTimedOut, s.LastJsStatus,
            s.LastFaultStatus, (unsigned long long)s.LastFaultAddress, s.Irqs, s.Resets);
+    printf("  allocations %u (last at 0x%llx); aperture maps %u (fails %u, last 0x%llx x%u pages, 0x%08x), unmaps %u\n"
+           "  paging ops by type:", s.Allocations, (unsigned long long)s.LastAllocVa, s.Maps, s.MapFails,
+           (unsigned long long)s.LastMapVa, s.LastMapPages, s.LastMapStatus, s.Unmaps);
+    for (int i = 0; i < 16; i++)
+        if (s.PagingOps[i] != 0)
+            printf(" [%d]=%u", i, s.PagingOps[i]);
+    printf("\n");
 }
 
 int main(void)

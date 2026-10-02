@@ -81,4 +81,9 @@ typedef struct _MW_ESCAPE_STATS_DATA {
     mw_u32 LastJsStatus, LastFaultStatus;
     mw_u32 Irqs, Resets;
     mw_u64 LastFaultAddress;
+    /* BuildPagingBuffer: calls by DXGK_BUILDPAGINGBUFFER_OPERATION (0-15),
+     * and the last aperture map. */
+    mw_u32 PagingOps[16];
+    mw_u32 Maps, MapFails, Unmaps, LastMapPages, LastMapStatus, Allocations;
+    mw_u64 LastMapVa, LastAllocVa;
 } MW_ESCAPE_STATS_DATA;

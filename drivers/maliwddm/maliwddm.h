@@ -115,6 +115,10 @@ struct _MW_ADAPTER {
 
     /* Counters for the trace. */
     ULONG Renders, Presents, Submits;
+    ULONG PagingOps[16];
+    ULONG Maps, MapFails, Unmaps, LastMapPages, Allocations;
+    NTSTATUS LastMapStatus;
+    ULONG64 LastMapVa, LastAllocVa;
 };
 
 /* ---- trace: Seen_<ddi>, Fail_<ddi> in the device's registry key ---- */

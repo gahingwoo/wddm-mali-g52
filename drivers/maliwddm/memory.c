@@ -69,6 +69,8 @@ static NTSTATUS NewAllocation(MW_ADAPTER *A, const MW_ALLOCATION_INFO *In, DXGK_
         return STATUS_GRAPHICS_NO_VIDEO_MEMORY;
     }
 
+    A->Allocations++;
+    A->LastAllocVa = alloc->GpuVa;
     Out->hAllocation = alloc;
     Out->Size = alloc->Size;
     Out->Alignment = 0;
@@ -234,6 +236,8 @@ NTSTATUS APIENTRY MwBuildPagingBuffer(IN_CONST_HANDLE hAdapter, DXGKARG_BUILDPAG
     MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
     NTSTATUS st = STATUS_SUCCESS;
 
+    if ((ULONG)Arg->Operation < 16)
+        a->PagingOps[Arg->Operation]++;
     switch (Arg->Operation) {
     case DXGK_OPERATION_MAP_APERTURE_SEGMENT: {
         MW_ALLOCATION *alloc = (MW_ALLOCATION *)Arg->MapApertureSegment.hAllocation;
@@ -247,12 +251,19 @@ NTSTATUS APIENTRY MwBuildPagingBuffer(IN_CONST_HANDLE hAdapter, DXGKARG_BUILDPAG
         st = MkMmuMapPages(&a->Gpu, alloc->GpuVa, pfn, pages, (alloc->Flags & MW_ALLOC_NOEXEC) != 0);
         alloc->Mapped = NT_SUCCESS(st);
         ExReleaseFastMutex(&a->MmuLock);
+        a->Maps++;
+        if (!NT_SUCCESS(st))
+            a->MapFails++;
+        a->LastMapVa = alloc->GpuVa;
+        a->LastMapPages = pages;
+        a->LastMapStatus = st;
         return st;
     }
     case DXGK_OPERATION_UNMAP_APERTURE_SEGMENT: {
         MW_ALLOCATION *alloc = (MW_ALLOCATION *)Arg->UnmapApertureSegment.hAllocation;
         if (alloc == NULL || !a->GpuUp)
             return STATUS_SUCCESS;
+        a->Unmaps++;
         ExAcquireFastMutex(&a->MmuLock);
         if (alloc->Mapped)
             MkMmuUnmapPages(&a->Gpu, alloc->GpuVa, alloc->Pages);

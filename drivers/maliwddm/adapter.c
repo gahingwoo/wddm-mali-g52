@@ -379,6 +379,16 @@ static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D)
     D->Irqs = A->Gpu.Irqs;
     D->Resets = A->Gpu.Resets;
     D->LastFaultAddress = A->LastFaultAddress;
+    for (ULONG i = 0; i < 16; i++)
+        D->PagingOps[i] = A->PagingOps[i];
+    D->Maps = A->Maps;
+    D->MapFails = A->MapFails;
+    D->Unmaps = A->Unmaps;
+    D->LastMapPages = A->LastMapPages;
+    D->LastMapStatus = (mw_u32)A->LastMapStatus;
+    D->Allocations = A->Allocations;
+    D->LastMapVa = A->LastMapVa;
+    D->LastAllocVa = A->LastAllocVa;
 }
 
 static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE *Esc)
