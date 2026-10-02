@@ -1,0 +1,96 @@
+m5-wddm-test Thu 01/10/2026  9:41:20.69 
+== removing malidod from the driver store 
+== installing maliwddm 
+Microsoft PnP Utility
+
+Adding driver package:  maliwddm.inf
+Driver package added successfully.
+Published Name:         oem17.inf
+Driver package installed on device: ACPI\RKCP7402\0
+
+Total driver packages:  1
+Added driver packages:  1
+Microsoft PnP Utility
+
+Failed to enable device:  ACPI\RKCP7402\0
+Device is already enabled.
+
+This command is not supported on this OS product.
+Microsoft PnP Utility
+
+Restarting device:         ACPI\RKCP7402\0
+Device restarted successfully.
+
+== device 
+Microsoft PnP Utility
+
+Instance ID:                ACPI\RKCP7402\0
+Device Description:         Rockchip RK3576 Mali-G52 (WDDM)
+Class Name:                 Display
+Class GUID:                 {4d36e968-e325-11ce-bfc1-08002be10318}
+Manufacturer Name:          wddm-mali-g52
+Status:                     Problem
+Problem Code:               43 (0x2B) [CM_PROB_FAILED_POST_START]
+Driver Name:                oem17.inf
+
+== driver trace 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\maliwddm
+    Enter_QueryInterface    REG_DWORD    0x1
+    Seen_QueryInterface    REG_DWORD    0xc00000bb
+    Order_QueryInterface    REG_DWORD    0x2
+    Fail_QueryInterface    REG_DWORD    0xc00000bb
+    LastFailedDdi    REG_DWORD    0xc00000bb
+    Build    REG_DWORD    0x64
+    RenderOnly    REG_DWORD    0x1
+    Step    REG_DWORD    0x6
+    GpuId    REG_DWORD    0x74021000
+    ShaderPresent    REG_DWORD    0x7
+    MmuFeatures    REG_DWORD    0x2823
+    GpuUp    REG_DWORD    0x1
+    Started    REG_DWORD    0x1
+    Enter_QueryAdapterInfo    REG_DWORD    0x3
+    QAI_1    REG_DWORD    0x0
+    QAI_1_Size    REG_DWORD    0x228
+    Seen_QueryAdapterInfo    REG_DWORD    0x0
+    Order_QueryAdapterInfo    REG_DWORD    0x4
+    QAI_47    REG_DWORD    0xc00000bb
+    QAI_47_Size    REG_DWORD    0x4
+    Fail_QueryAdapterInfo    REG_DWORD    0xc00000bb
+    Enter_CreateDevice    REG_DWORD    0x5
+    Seen_CreateDevice    REG_DWORD    0x0
+    Order_CreateDevice    REG_DWORD    0x6
+    Enter_CreateContext    REG_DWORD    0x7
+    Seen_CreateContext    REG_DWORD    0x0
+    Order_CreateContext    REG_DWORD    0x8
+    QAI_5    REG_DWORD    0x0
+    QAI_5_Size    REG_DWORD    0x20
+    Enter_BuildPagingBuffer    REG_DWORD    0x9
+    Seen_BuildPagingBuffer    REG_DWORD    0x0
+    Order_BuildPagingBuffer    REG_DWORD    0xa
+    QAI_10    REG_DWORD    0xc00000bb
+    QAI_10_Size    REG_DWORD    0x4
+    Enter_DestroyContext    REG_DWORD    0xb
+    Seen_DestroyContext    REG_DWORD    0x0
+    Order_DestroyContext    REG_DWORD    0xc
+    Enter_DestroyDevice    REG_DWORD    0xd
+    Seen_DestroyDevice    REG_DWORD    0x0
+    Order_DestroyDevice    REG_DWORD    0xe
+
+== display adapters 
+
+
+Name                        : Microsoft Remote Display Adapter
+Status                      : OK
+DriverVersion               : 10.0.22621.5415
+CurrentHorizontalResolution : 2048
+CurrentVerticalResolution   : 1152
+
+Name                        : Rockchip RK3576 Mali-G52 (WDDM)
+Status                      : Error
+DriverVersion               : 4.12.15.864
+CurrentHorizontalResolution : 640
+CurrentVerticalResolution   : 480
+
+
+

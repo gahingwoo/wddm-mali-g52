@@ -1,0 +1,10 @@
+m5-pe-test Fri 10/02/2026  5:15:07.09 
+== what this WinPE has 
+  have drivers\dxgkrnl.sys 
+  have drivers\dxgmms2.sys 
+  MISSING drivers\BasicDisplay.sys 
+  MISSING drivers\BasicRender.sys 
+  MISSING d3d10warp.dll 
+  MISSING d3d11.dll 
+  MISSING dxgi.dll 
+  have gdi32.dll 

@@ -1,0 +1,129 @@
+m5-wddm-test Thu 01/10/2026  9:42:22.45 
+== removing malidod from the driver store 
+== installing maliwddm 
+Microsoft PnP Utility
+
+Adding driver package:  maliwddm.inf
+Driver package added successfully.
+Published Name:         oem16.inf
+Driver package installed on device: ACPI\RKCP7402\0
+
+Total driver packages:  1
+Added driver packages:  1
+Microsoft PnP Utility
+
+Failed to enable device:  ACPI\RKCP7402\0
+Device is already enabled.
+
+This command is not supported on this OS product.
+Microsoft PnP Utility
+
+Restarting device:         ACPI\RKCP7402\0
+Device restarted successfully.
+
+== device 
+Microsoft PnP Utility
+
+Instance ID:                ACPI\RKCP7402\0
+Device Description:         Rockchip RK3576 Mali-G52 (WDDM)
+Class Name:                 Display
+Class GUID:                 {4d36e968-e325-11ce-bfc1-08002be10318}
+Manufacturer Name:          wddm-mali-g52
+Status:                     Started
+Driver Name:                oem16.inf
+
+== driver trace 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\maliwddm
+    Enter_QueryInterface    REG_DWORD    0x1
+    Seen_QueryInterface    REG_DWORD    0xc00000bb
+    Order_QueryInterface    REG_DWORD    0x2
+    Fail_QueryInterface    REG_DWORD    0xc00000bb
+    LastFailedDdi    REG_DWORD    0xc000000d
+    Build    REG_DWORD    0x62
+    AcquirePostDisplay    REG_DWORD    0x0
+    FbWidth    REG_DWORD    0x780
+    FbHeight    REG_DWORD    0x438
+    Step    REG_DWORD    0x6
+    GpuId    REG_DWORD    0x74021000
+    ShaderPresent    REG_DWORD    0x7
+    MmuFeatures    REG_DWORD    0x2823
+    GpuUp    REG_DWORD    0x1
+    Started    REG_DWORD    0x1
+    Enter_QueryChildRelations    REG_DWORD    0x3
+    Seen_QueryChildRelations    REG_DWORD    0x0
+    Order_QueryChildRelations    REG_DWORD    0x4
+    QAI_1    REG_DWORD    0x0
+    QAI_1_Size    REG_DWORD    0x228
+    Seen_QueryAdapterInfo    REG_DWORD    0x0
+    Order_QueryAdapterInfo    REG_DWORD    0x5
+    QAI_47    REG_DWORD    0xc00000bb
+    QAI_47_Size    REG_DWORD    0x4
+    Fail_QueryAdapterInfo    REG_DWORD    0xc00000bb
+    Enter_CreateDevice    REG_DWORD    0x6
+    Seen_CreateDevice    REG_DWORD    0x0
+    Order_CreateDevice    REG_DWORD    0x7
+    Enter_CreateContext    REG_DWORD    0x8
+    Seen_CreateContext    REG_DWORD    0x0
+    Order_CreateContext    REG_DWORD    0x9
+    QAI_5    REG_DWORD    0x0
+    QAI_5_Size    REG_DWORD    0x20
+    Enter_BuildPagingBuffer    REG_DWORD    0xa
+    Seen_BuildPagingBuffer    REG_DWORD    0x0
+    Order_BuildPagingBuffer    REG_DWORD    0xb
+    QAI_10    REG_DWORD    0xc00000bb
+    QAI_10_Size    REG_DWORD    0x4
+    Enter_QueryDeviceDescriptor    REG_DWORD    0xc
+    Seen_QueryDeviceDescriptor    REG_DWORD    0xc01d0001
+    Order_QueryDeviceDescriptor    REG_DWORD    0xd
+    Fail_QueryDeviceDescriptor    REG_DWORD    0xc01d0001
+    Enter_RecommendMonitorModes    REG_DWORD    0xe
+    MonitorAddMode    REG_DWORD    0x0
+    Seen_RecommendMonitorModes    REG_DWORD    0x0
+    Order_RecommendMonitorModes    REG_DWORD    0xf
+    Enter_IsSupportedVidPn    REG_DWORD    0x10
+    Seen_EnumVidPnCofuncModality    REG_DWORD    0x0
+    Order_EnumVidPnCofuncModality    REG_DWORD    0x11
+    Enter_GetStandardAllocationDriverData    REG_DWORD    0x12
+    Seen_GetStandardAllocationDriverData    REG_DWORD    0x0
+    Order_GetStandardAllocationDriverData    REG_DWORD    0x13
+    Enter_CreateAllocation    REG_DWORD    0x14
+    Seen_CreateAllocation    REG_DWORD    0x0
+    Order_CreateAllocation    REG_DWORD    0x15
+    Enter_OpenAllocation    REG_DWORD    0x16
+    Seen_OpenAllocation    REG_DWORD    0x0
+    Order_OpenAllocation    REG_DWORD    0x17
+    Seen_CloseAllocation    REG_DWORD    0x0
+    Order_CloseAllocation    REG_DWORD    0x18
+    CommitStatus    REG_DWORD    0x401e0307
+    Enter_SetPointerPosition    REG_DWORD    0x19
+    Seen_SetPointerPosition    REG_DWORD    0x0
+    Order_SetPointerPosition    REG_DWORD    0x1a
+    Enter_SetVidPnSourceVisibility    REG_DWORD    0x1b
+    Seen_SetVidPnSourceVisibility    REG_DWORD    0x0
+    Order_SetVidPnSourceVisibility    REG_DWORD    0x1c
+    Enter_DestroyContext    REG_DWORD    0x1d
+    Seen_DestroyContext    REG_DWORD    0x0
+    Order_DestroyContext    REG_DWORD    0x1e
+    Enter_DestroyDevice    REG_DWORD    0x20
+    Seen_DestroyDevice    REG_DWORD    0x0
+    Order_DestroyDevice    REG_DWORD    0x21
+    QAI_0    REG_DWORD    0xc00000bb
+    QAI_0_Size    REG_DWORD    0x8
+    Enter_ControlInterrupt    REG_DWORD    0x1d
+    Seen_ControlInterrupt    REG_DWORD    0x0
+    Order_ControlInterrupt    REG_DWORD    0x1e
+    Enter_Escape    REG_DWORD    0x1f
+    Fail_Escape    REG_DWORD    0xc000000d
+
+== display adapters 
+
+
+Name                        : Rockchip RK3576 Mali-G52 (WDDM)
+Status                      : OK
+DriverVersion               : 3.58.22.12
+CurrentHorizontalResolution : 
+CurrentVerticalResolution   : 
+
+
+
