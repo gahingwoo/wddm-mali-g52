@@ -1,8 +1,7 @@
 @echo off
 rem m5-wddm-test: M5.2 steps (a)/(b) on the board. Replaces malidod (or
 rem whatever drives ACPI\RKCP7402) with maliwddm from this stick, restarts
-rem the device, runs m5test (one WRITE_VALUE job through D3DKMT) and saves
-rem the driver's trace. Output: m5-wddm-out.txt here.
+rem the device, and saves the driver's trace; m5test runs from m5-wddm-check.cmd. Output: m5-wddm-out.txt here.
 rem
 rem When an older maliwddm is already loaded, restart-device keeps the OLD
 rem image running: reboot afterwards and run m5-wddm-check.cmd.
@@ -31,9 +30,8 @@ timeout /t 10 /nobreak >nul
 echo == device >> "%OUT%"
 pnputil /enum-devices /instanceid "%DEV%" >> "%OUT%" 2>&1
 
-echo == m5test >> "%OUT%"
-"%HERE%m5test.exe" >> "%OUT%" 2>&1
-echo m5test exit code %ERRORLEVEL% >> "%OUT%"
+rem m5test runs from m5-wddm-check.cmd, after the reboot: a failure while
+rem the adapter comes up and a failure in m5test's own calls stay apart.
 
 echo == driver trace >> "%OUT%"
 reg query %KEY%\maliwddm >> "%OUT%" 2>&1

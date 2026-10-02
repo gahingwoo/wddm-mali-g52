@@ -65,6 +65,7 @@ struct _MW_ADAPTER {
     PDEVICE_OBJECT Pdo;
     DXGKRNL_INTERFACE Dxgk;
     ULONG64 Seen;               /* DDIs already traced (see MwRet) */
+    ULONG64 Entered;            /* DDIs whose first entry is traced */
     ULONG CallOrder;
 
     /* Display: the firmware's framebuffer, as malidod. */
@@ -105,6 +106,7 @@ struct _MW_ADAPTER {
 void MwLog(MW_ADAPTER *A, PCWSTR Name, ULONG Value);
 void MwLogHook(void *Owner, PCWSTR Name, ULONG Value);
 NTSTATUS MwRet(MW_ADAPTER *A, PCWSTR Name, NTSTATUS St);
+void MwEnter(MW_ADAPTER *A, PCWSTR Name);
 
 /* display.c: VidPN and the POST framebuffer */
 NTSTATUS MwDisplayStart(MW_ADAPTER *A);

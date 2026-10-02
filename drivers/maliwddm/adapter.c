@@ -24,6 +24,9 @@ void MwLog(MW_ADAPTER *A, PCWSTR Name, ULONG Value)
     if (NT_SUCCESS(ZwCreateKey(&sub, KEY_WRITE, &oa, 0, NULL, REG_OPTION_NON_VOLATILE, NULL))) {
         RtlInitUnicodeString(&name, Name);
         (void)ZwSetValueKey(sub, &name, 0, REG_DWORD, &Value, sizeof(Value));
+        /* To disk now: a bugcheck loses registry writes still in memory,
+         * and the last value before one is the one that matters. */
+        (void)ZwFlushKey(sub);
         ZwClose(sub);
     }
     ZwClose(key);
@@ -42,6 +45,22 @@ void MwLogHook(void *Owner, PCWSTR Name, ULONG Value)
 
 /* Seen_<ddi> on a DDI's first call, Fail_<ddi> on any failure; Name is
  * "Fail_<ddi>". Only at PASSIVE_LEVEL, where the registry can be written. */
+/* Enter_<ddi> = call order, written BEFORE a DDI's first call runs, so a
+ * DDI that never returns (a bugcheck inside it) is still on record. Name is
+ * "Enter_<ddi>". */
+void MwEnter(MW_ADAPTER *A, PCWSTR Name)
+{
+    if (A == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return;
+    ULONG h = 0;
+    for (PCWSTR c = Name; *c; c++)
+        h = h * 31 + *c;
+    if (A->Entered & (1ULL << (h % 64)))
+        return;
+    A->Entered |= 1ULL << (h % 64);
+    MwLog(A, Name, ++A->CallOrder);
+}
+
 NTSTATUS MwRet(MW_ADAPTER *A, PCWSTR Name, NTSTATUS St)
 {
     if (A == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL)
@@ -367,9 +386,22 @@ static NTSTATUS APIENTRY MwSetPointerShape(IN_CONST_HANDLE hAdapter, const DXGKA
 
 /* ---- the traced DDI table ---- */
 
-#define TRACE_ADAPTER(Name, Proto, Args)                                        \
+/* The wrappers find the adapter from the DDI's first parameter, whose type
+ * differs: an adapter, a device (OpenAllocation, CreateContext, ...), a
+ * context (Render, Present, ...) or the miniport context. Build 97 traced
+ * OpenAllocation as if its hDevice were the adapter: an out-of-bounds pool
+ * write and a device pointer passed to IoOpenDeviceRegistryKey as a PDO,
+ * from a system call -- SYSTEM_SERVICE_EXCEPTION. */
+#define TRACE_WITH(Name, Proto, Args, AdapterExpr)                             \
     static NTSTATUS APIENTRY T_##Name Proto                                    \
-    { return MwRet((MW_ADAPTER *)hAdapter, L"Fail_" MW_W(#Name), Mw##Name Args); }
+    {                                                                          \
+        MW_ADAPTER *a_ = (AdapterExpr);                                        \
+        MwEnter(a_, L"Enter_" MW_W(#Name));                                    \
+        return MwRet(a_, L"Fail_" MW_W(#Name), Mw##Name Args);                 \
+    }
+#define TRACE_ADAPTER(Name, Proto, Args) TRACE_WITH(Name, Proto, Args, (MW_ADAPTER *)hAdapter)
+#define TRACE_DEVICE(Name, Proto, Args) TRACE_WITH(Name, Proto, Args, ((MW_DEVICE *)hDevice)->Adapter)
+#define TRACE_CTX(Name, Proto, Args) TRACE_WITH(Name, Proto, Args, ((MW_CONTEXT *)hContext)->Device->Adapter)
 
 TRACE_ADAPTER(QueryAdapterInfo, (IN_CONST_HANDLE hAdapter, const DXGKARG_QUERYADAPTERINFO *a), (hAdapter, a))
 TRACE_ADAPTER(Escape, (IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE *a), (hAdapter, a))
@@ -395,9 +427,7 @@ TRACE_ADAPTER(QueryEngineStatus, (IN_CONST_HANDLE hAdapter, DXGKARG_QUERYENGINES
 TRACE_ADAPTER(ControlInterrupt, (IN_CONST_HANDLE hAdapter, IN_CONST_DXGK_INTERRUPT_TYPE t, IN_BOOLEAN e), (hAdapter, t, e))
 TRACE_ADAPTER(GetScanLine, (IN_CONST_HANDLE hAdapter, DXGKARG_GETSCANLINE *a), (hAdapter, a))
 
-#define TRACE_CONTEXT(Name, Proto, Args)                                        \
-    static NTSTATUS APIENTRY T_##Name Proto                                    \
-    { return MwRet((MW_ADAPTER *)Context, L"Fail_" MW_W(#Name), Mw##Name Args); }
+#define TRACE_CONTEXT(Name, Proto, Args) TRACE_WITH(Name, Proto, Args, (MW_ADAPTER *)Context)
 
 TRACE_CONTEXT(QueryChildRelations, (IN_CONST_PVOID Context, PDXGK_CHILD_DESCRIPTOR d, IN_ULONG n), (Context, d, n))
 TRACE_CONTEXT(QueryChildStatus, (IN_CONST_PVOID Context, INOUT_PDXGK_CHILD_STATUS c, IN_BOOLEAN b), (Context, c, b))
@@ -406,7 +436,13 @@ TRACE_CONTEXT(SetPowerState, (IN_CONST_PVOID Context, IN_ULONG u, IN_DEVICE_POWE
 TRACE_CONTEXT(QueryInterface, (IN_CONST_PVOID Context, IN_PQUERY_INTERFACE q), (Context, q))
 TRACE_CONTEXT(DispatchIoRequest, (IN_CONST_PVOID Context, IN_ULONG s, IN_PVIDEO_REQUEST_PACKET v), (Context, s, v))
 TRACE_CONTEXT(StopDevice, (IN_CONST_PVOID Context), (Context))
-TRACE_ADAPTER(OpenAllocation, (IN_CONST_HANDLE hAdapter, const DXGKARG_OPENALLOCATION *a), (hAdapter, a))
+TRACE_DEVICE(OpenAllocation, (IN_CONST_HANDLE hDevice, const DXGKARG_OPENALLOCATION *a), (hDevice, a))
+TRACE_DEVICE(CloseAllocation, (IN_CONST_HANDLE hDevice, const DXGKARG_CLOSEALLOCATION *a), (hDevice, a))
+TRACE_DEVICE(CreateContext, (IN_CONST_HANDLE hDevice, DXGKARG_CREATECONTEXT *a), (hDevice, a))
+TRACE_DEVICE(DestroyDevice, (IN_CONST_HANDLE hDevice), (hDevice))
+TRACE_CTX(DestroyContext, (IN_CONST_HANDLE hContext), (hContext))
+TRACE_CTX(Render, (IN_CONST_HANDLE hContext, DXGKARG_RENDER *a), (hContext, a))
+TRACE_CTX(Present, (IN_CONST_HANDLE hContext, DXGKARG_PRESENT *a), (hContext, a))
 TRACE_ADAPTER(SetPointerPosition, (IN_CONST_HANDLE hAdapter, const DXGKARG_SETPOINTERPOSITION *a), (hAdapter, a))
 TRACE_ADAPTER(SetPointerShape, (IN_CONST_HANDLE hAdapter, const DXGKARG_SETPOINTERSHAPE *a), (hAdapter, a))
 TRACE_ADAPTER(Patch, (IN_CONST_HANDLE hAdapter, const DXGKARG_PATCH *a), (hAdapter, a))
@@ -443,15 +479,15 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     init.DxgkDdiDescribeAllocation = T_DescribeAllocation;
     init.DxgkDdiGetStandardAllocationDriverData = T_GetStandardAllocationDriverData;
     init.DxgkDdiOpenAllocation = T_OpenAllocation;
-    init.DxgkDdiCloseAllocation = MwCloseAllocation;
+    init.DxgkDdiCloseAllocation = T_CloseAllocation;
     init.DxgkDdiBuildPagingBuffer = T_BuildPagingBuffer;
 
     init.DxgkDdiCreateDevice = T_CreateDevice;
-    init.DxgkDdiDestroyDevice = MwDestroyDevice;
-    init.DxgkDdiCreateContext = MwCreateContext;
-    init.DxgkDdiDestroyContext = MwDestroyContext;
-    init.DxgkDdiRender = MwRender;
-    init.DxgkDdiPresent = MwPresent;
+    init.DxgkDdiDestroyDevice = T_DestroyDevice;
+    init.DxgkDdiCreateContext = T_CreateContext;
+    init.DxgkDdiDestroyContext = T_DestroyContext;
+    init.DxgkDdiRender = T_Render;
+    init.DxgkDdiPresent = T_Present;
     init.DxgkDdiPatch = T_Patch;
     init.DxgkDdiSubmitCommand = T_SubmitCommand;
     init.DxgkDdiPreemptCommand = T_PreemptCommand;
