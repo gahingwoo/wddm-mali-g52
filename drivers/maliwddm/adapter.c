@@ -34,7 +34,7 @@ static void LogBuild(MW_ADAPTER *A)
     HANDLE key, sub;
     UNICODE_STRING name = RTL_CONSTANT_STRING(L"Build"), subName = RTL_CONSTANT_STRING(L"maliwddm");
     OBJECT_ATTRIBUTES oa;
-    static const WCHAR build[] = MW_W(__DATE__) L" " MW_W(__TIME__);
+    static const WCHAR build[] = L"" __DATE__ " " __TIME__;
 
     if (!NT_SUCCESS(IoOpenDeviceRegistryKey(A->Pdo, PLUGPLAY_REGKEY_DEVICE, KEY_WRITE, &key)))
         return;
