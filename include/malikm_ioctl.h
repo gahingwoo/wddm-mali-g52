@@ -111,6 +111,7 @@ typedef struct _MALIKM_SYNCOBJ_SEQ {
 #define MK_ENOENT       2
 #define MK_EINTR        4
 #define MK_EIO          5
+#define MK_E2BIG        7
 #define MK_ENOMEM       12
 #define MK_EFAULT       14
 #define MK_EBUSY        16

@@ -258,7 +258,7 @@ static NTSTATUS DriverCaps(const DXGKARG_QUERYADAPTERINFO *Info)
     RtlZeroMemory(caps, size);
     caps->WDDMVersion = DXGKDDI_WDDMv1_3;
     caps->HighestAcceptableAddress.QuadPart = (1LL << 40) - 1;   /* the Mali sees 40 bits */
-    caps->MaxAllocationListSlotId = 16;
+    caps->MaxAllocationListSlotId = 256;   /* Render patches every allocation, SlotId = index */
     caps->SchedulingCaps.MultiEngineAware = 1;
     /* Preemption is off system-wide (the INF sets EnablePreemption 0), as
      * viogpu3d does; DMA-buffer-boundary preemption comes later. */

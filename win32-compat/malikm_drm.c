@@ -13,6 +13,8 @@
  *  - A sync file is a sequence number kept here against a placeholder fd.
  */
 #include <windows.h>
+#include <winternl.h>
+#include <d3dkmthk.h>
 #include <io.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -25,6 +27,7 @@
 #include "drm-uapi/drm.h"
 #include "drm-uapi/panfrost_drm.h"
 #include "malikm_ioctl.h"
+#include "maliwddm_abi.h"
 #include "xf86drm.h"
 #include "sys/mman.h"
 
@@ -59,7 +62,15 @@ malikm_open(void)
                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
    if (h == INVALID_HANDLE_VALUE) {
       DWORD err = GetLastError();
-      fprintf(stderr, "malikm: cannot open \\\\.\\MaliG52 (error %lu)\n", (unsigned long)err);
+      /* No malikm: the Mali may be driven by maliwddm, the WDDM driver,
+       * reached through the D3DKMT system calls instead. */
+      if (wddm_init() == 0) {
+         if (trace_on())
+            fprintf(stderr, "malikm: no \\\\.\\MaliG52; using the maliwddm adapter\n");
+         return _open("NUL", _O_RDWR | _O_NOINHERIT);
+      }
+      fprintf(stderr, "malikm: cannot open \\\\.\\MaliG52 (error %lu), and no maliwddm adapter\n",
+              (unsigned long)err);
       errno = err == ERROR_FILE_NOT_FOUND ? ENOENT : ENODEV;
       return -1;
    }
@@ -102,6 +113,9 @@ fd_handle(int fd)
  * result, 0 or -1 with errno set. */
 static int fake_on(void);
 static void fake_ioctl(DWORD code, void *buf, DWORD len);
+static int wddm_on(void);
+static int wddm_init(void);
+static void wddm_ioctl(DWORD code, void *buf, DWORD len);
 
 /* MALIKM_TRACE=1: log every call to the real driver, with the DRM number,
  * the driver's result and any Win32 error. */
@@ -122,8 +136,11 @@ call(int fd, DWORD code, void *buf, DWORD len)
    HANDLE h = fd_handle(fd);
    DWORD got = 0;
 
-   if (fake_on()) {
-      fake_ioctl(code, buf, len);
+   if (fake_on() || wddm_on()) {
+      if (fake_on())
+         fake_ioctl(code, buf, len);
+      else
+         wddm_ioctl(code, buf, len);
       int r = ((MALIKM_DRM_HEADER *)buf)->Result;
       if (r < 0) {
          errno = crt_errno(-r);
@@ -269,6 +286,8 @@ drmGetVersion(int fd)
 
    if (fake_on())
       fake_ioctl(IOCTL_MALIKM_VERSION, &v, sizeof(v));
+   else if (wddm_on())
+      wddm_ioctl(IOCTL_MALIKM_VERSION, &v, sizeof(v));
    else if (h == INVALID_HANDLE_VALUE ||
             !DeviceIoControl(h, IOCTL_MALIKM_VERSION, &v, sizeof(v), &v, sizeof(v), &got, NULL) ||
             got < sizeof(v)) {
@@ -528,6 +547,376 @@ munmap(void *addr, size_t len)
       MALIKM_UNMAP u;
    } m = {{0}, {(uint64_t)(uintptr_t)addr}};
    return call(fd, IOCTL_MALIKM_UNMAP, &m, sizeof(m));
+}
+
+
+/* ---- maliwddm ----
+ * The Panfrost uAPI over the WDDM driver (drivers/maliwddm), through the
+ * D3DKMT system calls in win32u (WinPE's gdi32 forwards its D3DKMT exports
+ * to dxcore, which WinPE lacks). One D3DKMT device and context per process.
+ *
+ *   CREATE_BO      CreateAllocation (MW_ALLOCATION_INFO); its fixed GPU
+ *                  address from MW_ESCAPE_ALLOC_INFO
+ *   mmap           a Lock held until GEM_CLOSE
+ *   SUBMIT         one MW_CMD_JOB through Render, the BOs as the allocation
+ *                  list (the KMD patches each, which makes VidMm map them)
+ *   WAIT_BO, syncobj waits
+ *                  WaitForIdle: the KMD runs one queue in order, so
+ *                  everything submitted before the wait is done after it
+ *   GET_PARAM      MW_ESCAPE_GPU_INFO
+ */
+
+typedef NTSTATUS (APIENTRY *KMT_FN)(void *);
+static struct {
+   KMT_FN CreateDevice, DestroyDevice, CreateContext, CreateAllocation, DestroyAllocation,
+          Lock, Unlock, Render, Escape, EnumAdapters2, WaitForIdle;
+} kmt;
+
+struct wbo {
+   D3DKMT_HANDLE h;
+   uint64_t size, va;
+   void *cpu;
+};
+static struct wbo *wbo;
+static uint32_t wbo_cap;
+static D3DKMT_HANDLE wadapter, wdevice, wcontext;
+static void *wcmd;
+static UINT wcmd_size;
+static D3DDDI_ALLOCATIONLIST *walloc;
+static UINT walloc_size;
+static D3DDDI_PATCHLOCATIONLIST *wpatch;
+static UINT wpatch_size;
+static MW_ESCAPE_GPU_INFO_DATA wgpu;
+static uint64_t wseq;
+static int wddm = -1;
+static SRWLOCK wddm_lock = SRWLOCK_INIT;
+
+static KMT_FN
+kmt_resolve(const char *name)
+{
+   char nt[96];
+   HMODULE w = LoadLibraryA("win32u.dll"), g = LoadLibraryA("gdi32.dll");
+   FARPROC f = NULL;
+
+   snprintf(nt, sizeof(nt), "NtGdiDdDDI%s", name);
+   if (w)
+      f = GetProcAddress(w, nt);
+   if (!f && g) {
+      snprintf(nt, sizeof(nt), "D3DKMT%s", name);
+      f = GetProcAddress(g, nt);
+   }
+   return (KMT_FN)(void *)f;
+}
+
+static NTSTATUS
+kmt_escape(D3DKMT_HANDLE device, void *data, UINT size)
+{
+   D3DKMT_ESCAPE e = {0};
+   e.hAdapter = wadapter;
+   e.hDevice = device;
+   e.Type = D3DKMT_ESCAPE_DRIVERPRIVATE;
+   e.pPrivateDriverData = data;
+   e.PrivateDriverDataSize = size;
+   return kmt.Escape(&e);
+}
+
+static int
+wddm_on(void)
+{
+   return wddm > 0;
+}
+
+/* Find the adapter that answers MW_ESCAPE_GPU_INFO, open a device and a
+ * context on it. 0 on success. */
+static int
+wddm_init(void)
+{
+   if (wddm >= 0)
+      return wddm > 0 ? 0 : -1;
+   wddm = 0;
+   const char *off = getenv("MALIKM_WDDM");
+   if (off && *off == '0')
+      return -1;
+
+#define R(n) kmt.n = kmt_resolve(#n)
+   R(CreateDevice); R(DestroyDevice); R(CreateContext); R(CreateAllocation); R(DestroyAllocation);
+   R(Lock); R(Unlock); R(Render); R(Escape); R(EnumAdapters2); R(WaitForIdle);
+#undef R
+   if (!kmt.CreateDevice || !kmt.CreateContext || !kmt.CreateAllocation || !kmt.DestroyAllocation ||
+       !kmt.Lock || !kmt.Unlock || !kmt.Render || !kmt.Escape || !kmt.EnumAdapters2 || !kmt.WaitForIdle)
+      return -1;
+
+   D3DKMT_ADAPTERINFO info[16];
+   D3DKMT_ENUMADAPTERS2 en = {0};
+   en.NumAdapters = 16;
+   en.pAdapters = info;
+   if (kmt.EnumAdapters2(&en) < 0)
+      return -1;
+   for (ULONG i = 0; i < en.NumAdapters && !wadapter; i++) {
+      MW_ESCAPE_GPU_INFO_DATA g = {0};
+      g.Code = MW_ESCAPE_GPU_INFO;
+      wadapter = info[i].hAdapter;
+      if (kmt_escape(0, &g, sizeof(g)) >= 0 && g.Count != 0 && g.Valid != 0)
+         wgpu = g;
+      else
+         wadapter = 0;
+   }
+   if (!wadapter)
+      return -1;
+
+   D3DKMT_CREATEDEVICE dev = {0};
+   dev.hAdapter = wadapter;
+   if (kmt.CreateDevice(&dev) < 0)
+      return -1;
+   wdevice = dev.hDevice;
+   D3DKMT_CREATECONTEXT ctx = {0};
+   ctx.hDevice = wdevice;
+   ctx.NodeOrdinal = 0;
+   ctx.EngineAffinity = 1;
+   ctx.ClientHint = D3DKMT_CLIENTHINT_DX10;
+   if (kmt.CreateContext(&ctx) < 0)
+      return -1;
+   wcontext = ctx.hContext;
+   wcmd = ctx.pCommandBuffer;
+   wcmd_size = ctx.CommandBufferSize;
+   walloc = ctx.pAllocationList;
+   walloc_size = ctx.AllocationListSize;
+   wpatch = ctx.pPatchLocationList;
+   wpatch_size = ctx.PatchLocationListSize;
+   wddm = 1;
+   if (trace_on())
+      fprintf(stderr, "malikm-wddm: adapter 0x%x device 0x%x context 0x%x, %u allocation slots\n",
+              wadapter, wdevice, wcontext, walloc_size);
+   return 0;
+}
+
+static struct wbo *
+wddm_bo(uint32_t h)
+{
+   return h && h <= wbo_cap && wbo[h - 1].h ? &wbo[h - 1] : NULL;
+}
+
+static int
+wddm_idle(void)
+{
+   D3DKMT_WAITFORIDLE w = {0};
+   w.hDevice = wdevice;
+   return kmt.WaitForIdle(&w) >= 0 ? 0 : -MK_EIO;
+}
+
+static int
+wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
+{
+   switch (nr) {
+   case MALIKM_NR_PANFROST_GET_PARAM: {
+      struct drm_panfrost_get_param *a = (void *)b;
+      if (a->param >= MW_GPU_PARAMS || !(wgpu.Valid & (1ull << a->param)))
+         return -MK_EINVAL;
+      a->value = wgpu.Value[a->param];
+      return 0;
+   }
+   case MALIKM_NR_PANFROST_CREATE_BO: {
+      struct drm_panfrost_create_bo *a = (void *)b;
+      uint64_t sz = ((uint64_t)a->size + 4095) & ~4095ull;
+      if (a->flags & PANFROST_BO_HEAP)
+         sz = (sz + 0x1fffff) & ~0x1fffffull;
+      MW_ALLOCATION_INFO pi = {0};
+      pi.Version = MW_ABI_VERSION;
+      pi.Flags = (a->flags & PANFROST_BO_NOEXEC) ? MW_ALLOC_NOEXEC : 0;
+      pi.Size = sz;
+      D3DDDI_ALLOCATIONINFO ai = {0};
+      ai.pPrivateDriverData = &pi;
+      ai.PrivateDriverDataSize = sizeof(pi);
+      D3DKMT_CREATEALLOCATION ca = {0};
+      ca.hDevice = wdevice;
+      ca.NumAllocations = 1;
+      ca.pAllocationInfo = &ai;
+      if (kmt.CreateAllocation(&ca) < 0)
+         return -MK_ENOMEM;
+      MW_ESCAPE_ALLOC_INFO_DATA where = {0};
+      where.Code = MW_ESCAPE_ALLOC_INFO;
+      where.hAllocation = ai.hAllocation;
+      if (kmt_escape(wdevice, &where, sizeof(where)) < 0 || where.GpuVa == 0) {
+         D3DKMT_DESTROYALLOCATION da = {0};
+         da.hDevice = wdevice;
+         da.phAllocationList = &ai.hAllocation;
+         da.AllocationCount = 1;
+         kmt.DestroyAllocation(&da);
+         return -MK_ENOMEM;
+      }
+      uint32_t h = 0;
+      for (uint32_t i = 0; i < wbo_cap && !h; i++)
+         if (!wbo[i].h)
+            h = i + 1;
+      if (!h) {
+         uint32_t cap = wbo_cap ? wbo_cap * 2 : 256;
+         struct wbo *n = realloc(wbo, cap * sizeof(*n));
+         if (!n)
+            return -MK_ENOMEM;
+         memset(n + wbo_cap, 0, (cap - wbo_cap) * sizeof(*n));
+         wbo = n;
+         h = wbo_cap + 1;
+         wbo_cap = cap;
+      }
+      wbo[h - 1] = (struct wbo){ai.hAllocation, where.Size, where.GpuVa, NULL};
+      a->handle = h;
+      a->offset = where.GpuVa;
+      return 0;
+   }
+   case MALIKM_NR_PANFROST_MMAP_BO: {
+      struct drm_panfrost_mmap_bo *a = (void *)b;
+      if (!wddm_bo(a->handle))
+         return -MK_ENOENT;
+      a->offset = MALIKM_MMAP_OFFSET(a->handle);
+      return 0;
+   }
+   case MALIKM_NR_PANFROST_GET_BO_OFFSET: {
+      struct drm_panfrost_get_bo_offset *a = (void *)b;
+      struct wbo *bo = wddm_bo(a->handle);
+      if (!bo)
+         return -MK_ENOENT;
+      a->offset = bo->va;
+      return 0;
+   }
+   case MALIKM_NR_PANFROST_MADVISE:
+      ((struct drm_panfrost_madvise *)b)->retained = 1;
+      return 0;
+   case MALIKM_NR_PANFROST_WAIT_BO:
+      if (!wddm_bo(((struct drm_panfrost_wait_bo *)b)->handle))
+         return -MK_ENOENT;
+      return wddm_idle();
+   case MALIKM_NR_PANFROST_SUBMIT: {
+      struct drm_panfrost_submit *a = (void *)b;
+      const uint32_t *bos = (const uint32_t *)(b + a->bo_handles);
+      if (!a->jc)
+         return -MK_EINVAL;
+      if (a->bo_handle_count > walloc_size || sizeof(MW_COMMAND) > wcmd_size)
+         return -MK_E2BIG;
+      for (uint32_t i = 0; i < a->bo_handle_count; i++) {
+         struct wbo *bo = wddm_bo(bos[i]);
+         if (!bo)
+            return -MK_ENOENT;
+         memset(&walloc[i], 0, sizeof(walloc[i]));
+         walloc[i].hAllocation = bo->h;
+         walloc[i].WriteOperation = 1;
+      }
+      MW_COMMAND *c = wcmd;
+      c->Type = MW_CMD_JOB;
+      c->Slot = (a->requirements & PANFROST_JD_REQ_FS) ? 0 : 1;
+      c->Jc = a->jc;
+      D3DKMT_RENDER r = {0};
+      r.hContext = wcontext;
+      r.CommandLength = sizeof(*c);
+      r.AllocationCount = a->bo_handle_count;
+      r.PatchLocationCount = 0;
+      NTSTATUS st = kmt.Render(&r);
+      if (st < 0) {
+         if (trace_on())
+            fprintf(stderr, "malikm-wddm: Render failed 0x%08lx\n", (unsigned long)st);
+         return -MK_EIO;
+      }
+      wcmd = r.pNewCommandBuffer;
+      wcmd_size = r.NewCommandBufferSize;
+      walloc = r.pNewAllocationList;
+      walloc_size = r.NewAllocationListSize;
+      wpatch = r.pNewPatchLocationList;
+      wpatch_size = r.NewPatchLocationListSize;
+      wseq++;
+      return 0;
+   }
+   case MALIKM_NR_GEM_CLOSE: {
+      struct wbo *bo = wddm_bo(((struct drm_gem_close *)b)->handle);
+      if (!bo)
+         return -MK_EINVAL;
+      if (bo->cpu) {
+         D3DKMT_UNLOCK u = {0};
+         u.hDevice = wdevice;
+         u.NumAllocations = 1;
+         u.phAllocations = &bo->h;
+         kmt.Unlock(&u);
+      }
+      D3DKMT_DESTROYALLOCATION da = {0};
+      da.hDevice = wdevice;
+      da.phAllocationList = &bo->h;
+      da.AllocationCount = 1;
+      kmt.DestroyAllocation(&da);
+      memset(bo, 0, sizeof(*bo));
+      return 0;
+   }
+   case MALIKM_NR_SYNCOBJ_CREATE: {
+      static uint32_t next = 1;
+      ((struct drm_syncobj_create *)b)->handle = next++;
+      return 0;
+   }
+   case MALIKM_NR_SYNCOBJ_WAIT:
+      ((struct drm_syncobj_wait *)b)->first_signaled = 0;
+      return wddm_idle();
+   case MALIKM_NR_SYNCOBJ_DESTROY:
+   case MALIKM_NR_SYNCOBJ_RESET:
+   case MALIKM_NR_SYNCOBJ_SIGNAL:
+      return 0;
+   case MALIKM_NR_SYNCOBJ_EXPORT_SEQ:
+      ((MALIKM_SYNCOBJ_SEQ *)b)->Seq = wseq;
+      return 0;
+   case MALIKM_NR_SYNCOBJ_IMPORT_SEQ:
+      return 0;
+   default:
+      (void)size;
+      return -MK_ENOSYS;
+   }
+}
+
+static void
+wddm_ioctl(DWORD code, void *buf, DWORD len)
+{
+   MALIKM_DRM_HEADER *h = buf;
+   (void)len;
+
+   AcquireSRWLockExclusive(&wddm_lock);
+   switch (code) {
+   case IOCTL_MALIKM_VERSION: {
+      MALIKM_VERSION *v = buf;
+      memset(v, 0, sizeof(*v));
+      v->Major = MALIKM_DRM_MAJOR;
+      v->Minor = MALIKM_DRM_MINOR;
+      strcpy(v->Name, "panfrost");
+      break;
+   }
+   case IOCTL_MALIKM_MAP: {
+      /* A persistent mapping: Panfrost keeps BOs mapped for their lifetime.
+       * IgnoreSync: the GPU may still use the BO; ordering is Panfrost's. */
+      MALIKM_MAP *m = (MALIKM_MAP *)(h + 1);
+      struct wbo *bo = wddm_bo(MALIKM_MMAP_HANDLE(m->Offset));
+      h->Result = -MK_EINVAL;
+      if (bo && m->Size <= bo->size) {
+         if (!bo->cpu) {
+            D3DKMT_LOCK l = {0};
+            l.hDevice = wdevice;
+            l.hAllocation = bo->h;
+            l.Flags.IgnoreSync = 1;
+            if (kmt.Lock(&l) >= 0)
+               bo->cpu = l.pData;
+         }
+         if (bo->cpu) {
+            m->Address = (uint64_t)(uintptr_t)bo->cpu;
+            h->Result = 0;
+         }
+      }
+      break;
+   }
+   case IOCTL_MALIKM_UNMAP:
+      h->Result = 0;   /* the Lock stays until GEM_CLOSE */
+      break;
+   case IOCTL_MALIKM_DRM:
+      h->Result = wddm_drm(h->Nr, (uint8_t *)(h + 1), h->Size);
+      break;
+   default:
+      h->Result = -MK_ENOSYS;
+      break;
+   }
+   if (trace_on() && code == IOCTL_MALIKM_DRM)
+      fprintf(stderr, "malikm-wddm: nr 0x%x -> %d\n", h->Nr, h->Result);
+   ReleaseSRWLockExclusive(&wddm_lock);
 }
 
 /* ---- MALIKM_FAKE ----

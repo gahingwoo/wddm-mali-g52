@@ -16,7 +16,7 @@
 
 #define MW_DMA_MAGIC            0x4D57444Du /* 'MWDM' in the private data */
 #define MW_DMA_BUFFER_SIZE      (16 * 1024)
-#define MW_LIST_SIZE            64
+#define MW_LIST_SIZE            256     /* Panfrost submits reference many BOs */
 #define MW_JOB_TIMEOUT_MS       2000
 #define MW_POLL_MS              1
 
