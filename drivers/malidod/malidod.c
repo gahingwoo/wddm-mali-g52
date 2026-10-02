@@ -18,6 +18,7 @@
  */
 #include <ntddk.h>
 #include <dispmprt.h>
+#include <ntstrsafe.h>
 
 typedef struct _MD_DEVICE {
     PDEVICE_OBJECT Pdo;
@@ -28,6 +29,7 @@ typedef struct _MD_DEVICE {
     BOOLEAN SourceVisible;
     BOOLEAN PathActive;
     ULONG Presents;
+    ULONG64 Seen;                  /* DDIs already reported as called */
 } MD_DEVICE, *PMD_DEVICE;
 
 #define MD_TAG 'dDlM'
@@ -76,6 +78,32 @@ static void Log(PMD_DEVICE Dev, PCWSTR Name, ULONG Value)
         (void)ZwSetValueKey(key, &name, 0, REG_DWORD, &Value, sizeof(Value));
         ZwClose(key);
     }
+}
+
+/* Record a DDI that returned failure, under its own name, so a device that
+ * Windows stops (code 43) says which call it disliked. */
+static NTSTATUS Ret(PMD_DEVICE Dev, PCWSTR Name, NTSTATUS St)
+{
+    /* The first call of each DDI: Seen_<name> = its status, so the order of
+     * events up to a failure can be read back. Name is "Fail_<name>". */
+    if (Dev != NULL) {
+        ULONG h = 0;
+        for (PCWSTR c = Name; *c; c++)
+            h = h * 31 + *c;
+        if (!(Dev->Seen & (1ULL << (h % 64)))) {
+            WCHAR seen[64];
+            UNICODE_STRING us;
+            Dev->Seen |= 1ULL << (h % 64);
+            RtlInitEmptyUnicodeString(&us, seen, sizeof(seen));
+            if (NT_SUCCESS(RtlUnicodeStringPrintf(&us, L"Seen_%ws", Name + 5)))
+                Log(Dev, seen, (ULONG)St);
+        }
+    }
+    if (!NT_SUCCESS(St) && Dev != NULL) {
+        Log(Dev, Name, (ULONG)St);
+        Log(Dev, L"LastFailedDdi", (ULONG)St);
+    }
+    return St;
 }
 
 /* ---- the one mode: whatever the firmware set ---- */
@@ -193,7 +221,7 @@ NTSTATUS MdStopDeviceAndReleasePostDisplayOwnership(IN_CONST_PVOID MiniportDevic
     return STATUS_SUCCESS;
 }
 
-NTSTATUS MdDispatchIoRequest(IN_CONST_PVOID MiniportDeviceContext, IN_ULONG VidPnSourceId,
+static NTSTATUS MdDispatchIoRequestImpl(IN_CONST_PVOID MiniportDeviceContext, IN_ULONG VidPnSourceId,
                              IN_PVIDEO_REQUEST_PACKET VideoRequestPacket)
 {
     UNREFERENCED_PARAMETER(MiniportDeviceContext);
@@ -221,7 +249,7 @@ VOID MdUnload(VOID)
 {
 }
 
-NTSTATUS MdQueryInterface(IN_CONST_PVOID MiniportDeviceContext, IN_PQUERY_INTERFACE QueryInterface)
+static NTSTATUS MdQueryInterfaceImpl(IN_CONST_PVOID MiniportDeviceContext, IN_PQUERY_INTERFACE QueryInterface)
 {
     UNREFERENCED_PARAMETER(MiniportDeviceContext);
     UNREFERENCED_PARAMETER(QueryInterface);
@@ -230,7 +258,7 @@ NTSTATUS MdQueryInterface(IN_CONST_PVOID MiniportDeviceContext, IN_PQUERY_INTERF
 
 /* ---- the monitor: one HDMI output, always connected, no EDID read ---- */
 
-NTSTATUS MdQueryChildRelations(IN_CONST_PVOID MiniportDeviceContext,
+static NTSTATUS MdQueryChildRelationsImpl(IN_CONST_PVOID MiniportDeviceContext,
                                PDXGK_CHILD_DESCRIPTOR ChildRelations, ULONG ChildRelationsSize)
 {
     UNREFERENCED_PARAMETER(MiniportDeviceContext);
@@ -247,7 +275,7 @@ NTSTATUS MdQueryChildRelations(IN_CONST_PVOID MiniportDeviceContext,
     return STATUS_SUCCESS;
 }
 
-NTSTATUS MdQueryChildStatus(IN_CONST_PVOID MiniportDeviceContext, INOUT_PDXGK_CHILD_STATUS ChildStatus,
+static NTSTATUS MdQueryChildStatusImpl(IN_CONST_PVOID MiniportDeviceContext, INOUT_PDXGK_CHILD_STATUS ChildStatus,
                             IN_BOOLEAN NonDestructiveOnly)
 {
     UNREFERENCED_PARAMETER(MiniportDeviceContext);
@@ -266,7 +294,7 @@ NTSTATUS MdQueryChildStatus(IN_CONST_PVOID MiniportDeviceContext, INOUT_PDXGK_CH
 
 /* The firmware's EDID is not at hand here: Windows falls back to the modes
  * RecommendMonitorModes adds. */
-NTSTATUS MdQueryDeviceDescriptor(IN_CONST_PVOID MiniportDeviceContext, IN_ULONG ChildUid,
+static NTSTATUS MdQueryDeviceDescriptorImpl(IN_CONST_PVOID MiniportDeviceContext, IN_ULONG ChildUid,
                                  INOUT_PDXGK_DEVICE_DESCRIPTOR DeviceDescriptor)
 {
     UNREFERENCED_PARAMETER(MiniportDeviceContext);
@@ -277,17 +305,35 @@ NTSTATUS MdQueryDeviceDescriptor(IN_CONST_PVOID MiniportDeviceContext, IN_ULONG 
 
 /* ---- adapter caps ---- */
 
+static NTSTATUS QueryAdapterInfo(const DXGKARG_QUERYADAPTERINFO *Info);
+
 NTSTATUS APIENTRY MdQueryAdapterInfo(IN_CONST_HANDLE hAdapter, const DXGKARG_QUERYADAPTERINFO *Info)
 {
-    UNREFERENCED_PARAMETER(hAdapter);
+    PMD_DEVICE dev = (PMD_DEVICE)hAdapter;
+    NTSTATUS st = QueryAdapterInfo(Info);
+    WCHAR name[32];
+    UNICODE_STRING us;
+
+    /* Every type dxgkrnl asks about, and our answer: QAI_<type> = status. */
+    RtlInitEmptyUnicodeString(&us, name, sizeof(name));
+    if (NT_SUCCESS(RtlUnicodeStringPrintf(&us, L"QAI_%u", (ULONG)Info->Type)))
+        Log(dev, name, (ULONG)st);
+    return st;
+}
+
+static NTSTATUS QueryAdapterInfo(const DXGKARG_QUERYADAPTERINFO *Info)
+{
     switch (Info->Type) {
     case DXGKQAITYPE_DRIVERCAPS: {
         DXGK_DRIVERCAPS *caps = (DXGK_DRIVERCAPS *)Info->pOutputData;
         if (Info->OutputDataSize < sizeof(*caps))
             return STATUS_BUFFER_TOO_SMALL;
         RtlZeroMemory(caps, sizeof(*caps));
-        caps->WDDMVersion = DXGKDDI_WDDMv1_2;
+        /* WDDMVersion is reserved, and must be 0, for interface version
+         * WIN7 and later (DXGK_DRIVERCAPS). */
         caps->HighestAcceptableAddress.QuadPart = -1;
+        /* We do implement DxgkDdiStopDeviceAndReleasePostDisplayOwnership. */
+        caps->SupportNonVGA = TRUE;
         /* No hardware cursor: MaxPointerWidth/Height 0, the OS draws it. */
         return STATUS_SUCCESS;
     }
@@ -302,14 +348,14 @@ NTSTATUS APIENTRY MdQueryAdapterInfo(IN_CONST_HANDLE hAdapter, const DXGKARG_QUE
     }
 }
 
-NTSTATUS APIENTRY MdSetPointerPosition(IN_CONST_HANDLE hAdapter, const DXGKARG_SETPOINTERPOSITION *Arg)
+static NTSTATUS MdSetPointerPositionImpl(IN_CONST_HANDLE hAdapter, const DXGKARG_SETPOINTERPOSITION *Arg)
 {
     UNREFERENCED_PARAMETER(hAdapter);
     UNREFERENCED_PARAMETER(Arg);
     return STATUS_SUCCESS;
 }
 
-NTSTATUS APIENTRY MdSetPointerShape(IN_CONST_HANDLE hAdapter, const DXGKARG_SETPOINTERSHAPE *Arg)
+static NTSTATUS MdSetPointerShapeImpl(IN_CONST_HANDLE hAdapter, const DXGKARG_SETPOINTERSHAPE *Arg)
 {
     UNREFERENCED_PARAMETER(hAdapter);
     UNREFERENCED_PARAMETER(Arg);
@@ -318,7 +364,7 @@ NTSTATUS APIENTRY MdSetPointerShape(IN_CONST_HANDLE hAdapter, const DXGKARG_SETP
 
 /* ---- VidPN: one source, one target, one mode, identity everything ---- */
 
-NTSTATUS APIENTRY MdIsSupportedVidPn(IN_CONST_HANDLE hAdapter, DXGKARG_ISSUPPORTEDVIDPN *Arg)
+static NTSTATUS MdIsSupportedVidPnImpl(IN_CONST_HANDLE hAdapter, DXGKARG_ISSUPPORTEDVIDPN *Arg)
 {
     PMD_DEVICE dev = (PMD_DEVICE)hAdapter;
     const DXGK_VIDPN_INTERFACE *vidpn;
@@ -352,7 +398,7 @@ NTSTATUS APIENTRY MdIsSupportedVidPn(IN_CONST_HANDLE hAdapter, DXGKARG_ISSUPPORT
     return STATUS_SUCCESS;
 }
 
-NTSTATUS APIENTRY MdRecommendFunctionalVidPn(IN_CONST_HANDLE hAdapter,
+static NTSTATUS MdRecommendFunctionalVidPnImpl(IN_CONST_HANDLE hAdapter,
                                              const DXGKARG_RECOMMENDFUNCTIONALVIDPN *Arg)
 {
     UNREFERENCED_PARAMETER(hAdapter);
@@ -434,7 +480,7 @@ static NTSTATUS AddTargetMode(PMD_DEVICE Dev, const DXGK_VIDPN_INTERFACE *VidPn,
     return st;
 }
 
-NTSTATUS APIENTRY MdEnumVidPnCofuncModality(IN_CONST_HANDLE hAdapter,
+static NTSTATUS MdEnumVidPnCofuncModalityImpl(IN_CONST_HANDLE hAdapter,
                                             const DXGKARG_ENUMVIDPNCOFUNCMODALITY *Arg)
 {
     PMD_DEVICE dev = (PMD_DEVICE)hAdapter;
@@ -496,7 +542,7 @@ NTSTATUS APIENTRY MdEnumVidPnCofuncModality(IN_CONST_HANDLE hAdapter,
     return st == STATUS_GRAPHICS_NO_MORE_ELEMENTS_IN_DATASET ? STATUS_SUCCESS : st;
 }
 
-NTSTATUS APIENTRY MdSetVidPnSourceVisibility(IN_CONST_HANDLE hAdapter,
+static NTSTATUS MdSetVidPnSourceVisibilityImpl(IN_CONST_HANDLE hAdapter,
                                              const DXGKARG_SETVIDPNSOURCEVISIBILITY *Arg)
 {
     PMD_DEVICE dev = (PMD_DEVICE)hAdapter;
@@ -507,7 +553,7 @@ NTSTATUS APIENTRY MdSetVidPnSourceVisibility(IN_CONST_HANDLE hAdapter,
     return STATUS_SUCCESS;
 }
 
-NTSTATUS APIENTRY MdCommitVidPn(IN_CONST_HANDLE hAdapter, const DXGKARG_COMMITVIDPN *Arg)
+static NTSTATUS MdCommitVidPnImpl(IN_CONST_HANDLE hAdapter, const DXGKARG_COMMITVIDPN *Arg)
 {
     PMD_DEVICE dev = (PMD_DEVICE)hAdapter;
     const DXGK_VIDPN_INTERFACE *vidpn;
@@ -542,7 +588,7 @@ NTSTATUS APIENTRY MdCommitVidPn(IN_CONST_HANDLE hAdapter, const DXGKARG_COMMITVI
     return st;
 }
 
-NTSTATUS APIENTRY MdUpdateActiveVidPnPresentPath(IN_CONST_HANDLE hAdapter,
+static NTSTATUS MdUpdateActiveVidPnPresentPathImpl(IN_CONST_HANDLE hAdapter,
                                                  const DXGKARG_UPDATEACTIVEVIDPNPRESENTPATH *Arg)
 {
     UNREFERENCED_PARAMETER(hAdapter);
@@ -550,7 +596,7 @@ NTSTATUS APIENTRY MdUpdateActiveVidPnPresentPath(IN_CONST_HANDLE hAdapter,
     return STATUS_SUCCESS;
 }
 
-NTSTATUS APIENTRY MdRecommendMonitorModes(IN_CONST_HANDLE hAdapter,
+static NTSTATUS MdRecommendMonitorModesImpl(IN_CONST_HANDLE hAdapter,
                                           const DXGKARG_RECOMMENDMONITORMODES *Arg)
 {
     PMD_DEVICE dev = (PMD_DEVICE)hAdapter;
@@ -574,7 +620,7 @@ NTSTATUS APIENTRY MdRecommendMonitorModes(IN_CONST_HANDLE hAdapter,
     return STATUS_SUCCESS;
 }
 
-NTSTATUS APIENTRY MdQueryVidPnHWCapability(IN_CONST_HANDLE hAdapter,
+static NTSTATUS MdQueryVidPnHWCapabilityImpl(IN_CONST_HANDLE hAdapter,
                                            DXGKARG_QUERYVIDPNHWCAPABILITY *Arg)
 {
     UNREFERENCED_PARAMETER(hAdapter);
@@ -596,7 +642,7 @@ static void CopyRect(PMD_DEVICE Dev, const UCHAR *Src, LONG SrcPitch, const RECT
                       Src + (SIZE_T)y * SrcPitch + (SIZE_T)l * 4, bytes);
 }
 
-NTSTATUS APIENTRY MdPresentDisplayOnly(IN_CONST_HANDLE hAdapter, const DXGKARG_PRESENT_DISPLAYONLY *Arg)
+static NTSTATUS MdPresentDisplayOnlyImpl(IN_CONST_HANDLE hAdapter, const DXGKARG_PRESENT_DISPLAYONLY *Arg)
 {
     PMD_DEVICE dev = (PMD_DEVICE)hAdapter;
     PMDL mdl;
@@ -665,6 +711,88 @@ VOID MdSystemDisplayWrite(IN_CONST_PVOID MiniportDeviceContext, IN_CONST_PVOID S
         RtlCopyMemory(dev->FbVa + (SIZE_T)(PositionY + y) * dev->Fb.Pitch + (SIZE_T)PositionX * 4,
                       (const UCHAR *)Source + (SIZE_T)y * SourceStride, (SIZE_T)w * 4);
     }
+}
+
+/* ---- the DDIs as registered: log any failure under the DDI's name ---- */
+
+NTSTATUS MdDispatchIoRequest(IN_CONST_PVOID MiniportDeviceContext, IN_ULONG VidPnSourceId, IN_PVIDEO_REQUEST_PACKET VideoRequestPacket)
+{
+    return Ret((PMD_DEVICE)MiniportDeviceContext, L"Fail_DispatchIoRequest", MdDispatchIoRequestImpl(MiniportDeviceContext, VidPnSourceId, VideoRequestPacket));
+}
+
+NTSTATUS MdQueryChildRelations(IN_CONST_PVOID MiniportDeviceContext, PDXGK_CHILD_DESCRIPTOR ChildRelations, ULONG ChildRelationsSize)
+{
+    return Ret((PMD_DEVICE)MiniportDeviceContext, L"Fail_QueryChildRelations", MdQueryChildRelationsImpl(MiniportDeviceContext, ChildRelations, ChildRelationsSize));
+}
+
+NTSTATUS MdQueryChildStatus(IN_CONST_PVOID MiniportDeviceContext, INOUT_PDXGK_CHILD_STATUS ChildStatus, IN_BOOLEAN NonDestructiveOnly)
+{
+    return Ret((PMD_DEVICE)MiniportDeviceContext, L"Fail_QueryChildStatus", MdQueryChildStatusImpl(MiniportDeviceContext, ChildStatus, NonDestructiveOnly));
+}
+
+NTSTATUS MdQueryDeviceDescriptor(IN_CONST_PVOID MiniportDeviceContext, IN_ULONG ChildUid, INOUT_PDXGK_DEVICE_DESCRIPTOR DeviceDescriptor)
+{
+    return Ret((PMD_DEVICE)MiniportDeviceContext, L"Fail_QueryDeviceDescriptor", MdQueryDeviceDescriptorImpl(MiniportDeviceContext, ChildUid, DeviceDescriptor));
+}
+
+NTSTATUS MdQueryInterface(IN_CONST_PVOID MiniportDeviceContext, IN_PQUERY_INTERFACE QueryInterface)
+{
+    return Ret((PMD_DEVICE)MiniportDeviceContext, L"Fail_QueryInterface", MdQueryInterfaceImpl(MiniportDeviceContext, QueryInterface));
+}
+
+NTSTATUS APIENTRY MdSetPointerPosition(IN_CONST_HANDLE hAdapter, const DXGKARG_SETPOINTERPOSITION *Arg)
+{
+    return Ret((PMD_DEVICE)hAdapter, L"Fail_SetPointerPosition", MdSetPointerPositionImpl(hAdapter, Arg));
+}
+
+NTSTATUS APIENTRY MdSetPointerShape(IN_CONST_HANDLE hAdapter, const DXGKARG_SETPOINTERSHAPE *Arg)
+{
+    return Ret((PMD_DEVICE)hAdapter, L"Fail_SetPointerShape", MdSetPointerShapeImpl(hAdapter, Arg));
+}
+
+NTSTATUS APIENTRY MdIsSupportedVidPn(IN_CONST_HANDLE hAdapter, DXGKARG_ISSUPPORTEDVIDPN *Arg)
+{
+    return Ret((PMD_DEVICE)hAdapter, L"Fail_IsSupportedVidPn", MdIsSupportedVidPnImpl(hAdapter, Arg));
+}
+
+NTSTATUS APIENTRY MdRecommendFunctionalVidPn(IN_CONST_HANDLE hAdapter, const DXGKARG_RECOMMENDFUNCTIONALVIDPN *Arg)
+{
+    return Ret((PMD_DEVICE)hAdapter, L"Fail_RecommendFunctionalVidPn", MdRecommendFunctionalVidPnImpl(hAdapter, Arg));
+}
+
+NTSTATUS APIENTRY MdEnumVidPnCofuncModality(IN_CONST_HANDLE hAdapter, const DXGKARG_ENUMVIDPNCOFUNCMODALITY *Arg)
+{
+    return Ret((PMD_DEVICE)hAdapter, L"Fail_EnumVidPnCofuncModality", MdEnumVidPnCofuncModalityImpl(hAdapter, Arg));
+}
+
+NTSTATUS APIENTRY MdSetVidPnSourceVisibility(IN_CONST_HANDLE hAdapter, const DXGKARG_SETVIDPNSOURCEVISIBILITY *Arg)
+{
+    return Ret((PMD_DEVICE)hAdapter, L"Fail_SetVidPnSourceVisibility", MdSetVidPnSourceVisibilityImpl(hAdapter, Arg));
+}
+
+NTSTATUS APIENTRY MdCommitVidPn(IN_CONST_HANDLE hAdapter, const DXGKARG_COMMITVIDPN *Arg)
+{
+    return Ret((PMD_DEVICE)hAdapter, L"Fail_CommitVidPn", MdCommitVidPnImpl(hAdapter, Arg));
+}
+
+NTSTATUS APIENTRY MdUpdateActiveVidPnPresentPath(IN_CONST_HANDLE hAdapter, const DXGKARG_UPDATEACTIVEVIDPNPRESENTPATH *Arg)
+{
+    return Ret((PMD_DEVICE)hAdapter, L"Fail_UpdateActiveVidPnPresentPath", MdUpdateActiveVidPnPresentPathImpl(hAdapter, Arg));
+}
+
+NTSTATUS APIENTRY MdRecommendMonitorModes(IN_CONST_HANDLE hAdapter, const DXGKARG_RECOMMENDMONITORMODES *Arg)
+{
+    return Ret((PMD_DEVICE)hAdapter, L"Fail_RecommendMonitorModes", MdRecommendMonitorModesImpl(hAdapter, Arg));
+}
+
+NTSTATUS APIENTRY MdQueryVidPnHWCapability(IN_CONST_HANDLE hAdapter, DXGKARG_QUERYVIDPNHWCAPABILITY *Arg)
+{
+    return Ret((PMD_DEVICE)hAdapter, L"Fail_QueryVidPnHWCapability", MdQueryVidPnHWCapabilityImpl(hAdapter, Arg));
+}
+
+NTSTATUS APIENTRY MdPresentDisplayOnly(IN_CONST_HANDLE hAdapter, const DXGKARG_PRESENT_DISPLAYONLY *Arg)
+{
+    return Ret((PMD_DEVICE)hAdapter, L"Fail_PresentDisplayOnly", MdPresentDisplayOnlyImpl(hAdapter, Arg));
 }
 
 NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
