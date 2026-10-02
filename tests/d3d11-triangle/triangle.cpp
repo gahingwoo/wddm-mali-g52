@@ -11,12 +11,14 @@
 //
 #include <windows.h>
 #include <d3d11.h>
+#include <dxgi.h>
 #include <d3dcompiler.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "d3dcompiler.lib")
+#pragma comment(lib, "dxgi.lib")
 
 static const char kHlsl[] =
     "float4 vs(float2 p : POSITION) : SV_Position { return float4(p, 0.0, 1.0); }\n"
@@ -38,20 +40,48 @@ int main(int argc, char **argv)
     _set_error_mode(_OUT_TO_STDERR);
     _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+    /* triangle.exe <software DLL>: D3D_DRIVER_TYPE_SOFTWARE with that DLL
+     * (M4). triangle.exe hw: the adapter whose description names the Mali,
+     * as a hardware device: the D3D runtime loads the UMD maliwddm names
+     * (M5.2 step c). */
     const char *dll = argc > 1 ? argv[1] : "libgallium_d3d10.dll";
-    HMODULE sw = LoadLibraryA(dll);
-    if (!sw) {
-        printf("FAIL LoadLibrary(%s): %lu\n", dll, GetLastError());
-        return 1;
-    }
-
+    bool hw = _stricmp(dll, "hw") == 0;
     D3D_FEATURE_LEVEL fl = D3D_FEATURE_LEVEL_10_0, got;
     ID3D11Device *dev = nullptr;
     ID3D11DeviceContext *ctx = nullptr;
-    CHECK(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_SOFTWARE, sw, 0, &fl, 1,
-                            D3D11_SDK_VERSION, &dev, &got, &ctx),
-          "D3D11CreateDevice");
-    printf("device created, feature level 0x%x\n", got);
+    if (hw) {
+        IDXGIFactory1 *fac = nullptr;
+        IDXGIAdapter1 *pick = nullptr, *a = nullptr;
+        CHECK(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void **)&fac), "CreateDXGIFactory1");
+        for (UINT i = 0; fac->EnumAdapters1(i, &a) == S_OK; i++) {
+            DXGI_ADAPTER_DESC1 d;
+            a->GetDesc1(&d);
+            printf("adapter %u: %ls (vendor 0x%04x device 0x%04x, luid %08lx:%08lx, flags 0x%x)\n", i,
+                   d.Description, d.VendorId, d.DeviceId, d.AdapterLuid.HighPart, d.AdapterLuid.LowPart,
+                   d.Flags);
+            if (!pick && wcsstr(d.Description, L"Mali"))
+                pick = a;
+            else
+                a->Release();
+        }
+        if (!pick) {
+            printf("FAIL no adapter named Mali\n");
+            return 1;
+        }
+        CHECK(D3D11CreateDevice(pick, D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, &fl, 1,
+                                D3D11_SDK_VERSION, &dev, &got, &ctx),
+              "D3D11CreateDevice (hardware)");
+    } else {
+        HMODULE sw = LoadLibraryA(dll);
+        if (!sw) {
+            printf("FAIL LoadLibrary(%s): %lu\n", dll, GetLastError());
+            return 1;
+        }
+        CHECK(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_SOFTWARE, sw, 0, &fl, 1,
+                                D3D11_SDK_VERSION, &dev, &got, &ctx),
+              "D3D11CreateDevice");
+    }
+    printf("device created (%s), feature level 0x%x\n", hw ? "hardware" : "software", got);
 
     D3D11_TEXTURE2D_DESC td = {};
     td.Width = td.Height = 64;

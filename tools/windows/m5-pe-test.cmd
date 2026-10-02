@@ -28,22 +28,13 @@ pnputil /enum-devices /class Display >> "%OUT%" 2>&1
 pnputil /enum-devices /instanceid "ACPI\RKCP7403\0" >> "%OUT%" 2>&1
 pnputil /enum-devices /instanceid "ACPI\RKCP7402\0" >> "%OUT%" 2>&1
 
-rem This WinPE has no WARP; maliwddm names d3d10warp.dll as its UMD, and an
-rem adapter with no loadable UMD fails with code 43. The stick carries the
-rem DLL from the installed Windows (same build, 22621); X: is writable.
-if exist "%HERE%d3d10warp.dll" (
-  copy /y "%HERE%d3d10warp.dll" %SystemRoot%\System32\ >> "%OUT%" 2>&1
-) else (
-  echo   no d3d10warp.dll on the stick: maliwddm will likely fail with code 43 >> "%OUT%"
-)
+rem maliwddm names maliumd.dll (Mesa's d3d10umd with Panfrost) as its UMD,
+rem and an adapter with no loadable UMD fails with code 43, so it goes into
+rem System32 before the driver loads, with the D3D11 runtime, HLSL compiler
+rem and VC runtime WinPE lacks (mali\tri\sys, from the installed Windows).
+if exist "%HERE%tri\libgallium_d3d10.dll" copy /y "%HERE%tri\libgallium_d3d10.dll" %SystemRoot%\System32\maliumd.dll >> "%OUT%" 2>&1
+if exist "%HERE%tri\sys" copy /y "%HERE%tri\sys\*.dll" %SystemRoot%\System32\ >> "%OUT%" 2>&1
 
-rem dxgkrnl's own ETW events, around the drvloads. WPR fails to start in
-rem this WinPE (0x80070002), so etwrec (tools/windows/etwrec.c) runs it.
-echo == etwrec start (dxgkrnl ETW) >> "%OUT%"
-"%HERE%etwrec.exe" start X:\dxgkrnl.etl >> "%OUT%" 2>&1
-echo exit %ERRORLEVEL% >> "%OUT%"
-
-%SAVE% >nul
 rem malidod only with a render-only maliwddm: a full maliwddm owns the screen
 rem itself, and the two would compete for the POST framebuffer. The stick
 rem says which: mali\with-malidod present = load it.
@@ -77,7 +68,6 @@ rem (goto, not a block: %ERRORLEVEL% in a block is expanded too early.)
 if not exist "%HERE%tri\triangle.exe" goto :no_triangle
 %SAVE% >nul
 echo == triangle on the Mali through maliwddm >> "%OUT%"
-copy /y "%HERE%tri\sys\*.dll" %SystemRoot%\System32\ >nul
 pushd X:\
 set GALLIUM_DRIVER=panfrost
 set MALIKM_TRACE=1
@@ -86,6 +76,16 @@ echo triangle exit code %ERRORLEVEL% >> "%OUT%"
 set MALIKM_TRACE=
 set GALLIUM_DRIVER=
 if exist X:\triangle.ppm copy /y X:\triangle.ppm "%HERE%triangle-wddm.ppm" >nul
+if exist X:\triangle.ppm del X:\triangle.ppm
+%SAVE% >nul
+echo == triangle as a HARDWARE device: the runtime loads maliumd.dll >> "%OUT%"
+set GALLIUM_DRIVER=panfrost
+set MALIKM_TRACE=1
+"%HERE%tri\triangle.exe" hw >> "%OUT%" 2>&1
+echo triangle hw exit code %ERRORLEVEL% >> "%OUT%"
+set MALIKM_TRACE=
+set GALLIUM_DRIVER=
+if exist X:\triangle.ppm copy /y X:\triangle.ppm "%HERE%triangle-hw.ppm" >nul
 popd
 echo == the driver's counters after the triangle (m5test again) >> "%OUT%"
 "%HERE%m5test.exe" >> "%OUT%" 2>&1
