@@ -1,0 +1,60 @@
+m5-dod-update Thu 01/10/2026 11:50:49.38 
+== installing the new malidod 
+Microsoft PnP Utility
+
+Adding driver package:  malidod.inf
+Driver package added successfully.
+Published Name:         oem14.inf
+Driver package installed on device: ACPI\RKCP7402\0
+
+Total driver packages:  1
+Added driver packages:  1
+== restarting the device (the screen may flash) 
+Microsoft PnP Utility
+
+Restarting device:         ACPI\RKCP7402\0
+Device restarted successfully.
+
+== device 
+Microsoft PnP Utility
+
+Instance ID:                ACPI\RKCP7402\0
+Device Description:         Rockchip RK3576 Display (display-only)
+Class Name:                 Display
+Class GUID:                 {4d36e968-e325-11ce-bfc1-08002be10318}
+Manufacturer Name:          wddm-mali-g52
+Status:                     Started
+Driver Name:                oem14.inf
+
+== driver registry values 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters
+    JobsDone    REG_DWORD    0x410
+    Irqs    REG_DWORD    0x410
+    FirmwareIdentified    REG_DWORD    0x1
+    VideoID    REG_SZ    {14568A2A-BD0F-11F1-BA6E-F02869637E86}
+    AOCID    REG_SZ    {14568A2B-BD0F-11F1-BA6E-F02869637E86}
+    AcquirePostDisplay    REG_DWORD    0x0
+    FbWidth    REG_DWORD    0x780
+    FbHeight    REG_DWORD    0x438
+    FbPitch    REG_DWORD    0x1e00
+    FbFormat    REG_DWORD    0x16
+    FbPhysLo    REG_DWORD    0xff7c0000
+    FbPhysHi    REG_DWORD    0x0
+    Started    REG_DWORD    0x1
+    QAI_47    REG_DWORD    0xc00000bb
+    QAI_47_Size    REG_DWORD    0x4
+    Seen_QueryInterface    REG_DWORD    0xc00000bb
+    Fail_QueryInterface    REG_DWORD    0xc00000bb
+    LastFailedDdi    REG_DWORD    0xc01e030a
+    Seen_QueryChildRelations    REG_DWORD    0x0
+    QAI_1    REG_DWORD    0x0
+    QAI_1_Size    REG_DWORD    0x220
+    Seen_QueryDeviceDescriptor    REG_DWORD    0xc01d0001
+    Fail_QueryDeviceDescriptor    REG_DWORD    0xc01d0001
+    Seen_RecommendMonitorModes    REG_DWORD    0x0
+    Seen_EnumVidPnCofuncModality    REG_DWORD    0xc01e030a
+    Fail_EnumVidPnCofuncModality    REG_DWORD    0xc01e030a
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\Interrupt Management
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\_DISPLAY_ACPI_INFO

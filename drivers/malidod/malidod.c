@@ -487,6 +487,14 @@ static NTSTATUS AddTargetMode(PMD_DEVICE Dev, const DXGK_VIDPN_INTERFACE *VidPn,
     st = setIf->pfnCreateNewModeInfo(set, &mode);
     if (NT_SUCCESS(st)) {
         FillSignal(Dev, &mode->VideoSignalInfo);
+        /* A display-only driver neither knows nor sets the timing: leave the
+         * frequencies unspecified, as Basic Display does. Our made-up 60 Hz
+         * timing (no blanking) got STATUS_GRAPHICS_INVALID_FREQUENCY here. */
+        mode->VideoSignalInfo.VSyncFreq.Numerator = D3DKMDT_FREQUENCY_NOTSPECIFIED;
+        mode->VideoSignalInfo.VSyncFreq.Denominator = D3DKMDT_FREQUENCY_NOTSPECIFIED;
+        mode->VideoSignalInfo.HSyncFreq.Numerator = D3DKMDT_FREQUENCY_NOTSPECIFIED;
+        mode->VideoSignalInfo.HSyncFreq.Denominator = D3DKMDT_FREQUENCY_NOTSPECIFIED;
+        mode->VideoSignalInfo.PixelRate = D3DKMDT_FREQUENCY_NOTSPECIFIED;
         mode->Preference = D3DKMDT_MP_PREFERRED;
         st = setIf->pfnAddMode(set, mode);
         if (!NT_SUCCESS(st))
@@ -528,10 +536,16 @@ static NTSTATUS MdEnumVidPnCofuncModalityImpl(IN_CONST_HANDLE hAdapter,
                           Arg->EnumPivot.VidPnTargetId == path->VidPnTargetId;
         NTSTATUS r = STATUS_SUCCESS;
 
-        if (!srcPivot)
+        if (!srcPivot) {
             r = AddSourceMode(dev, vidpn, Arg->hConstrainingVidPn, path->VidPnSourceId);
-        if (NT_SUCCESS(r) && !tgtPivot)
+            if (!NT_SUCCESS(r))
+                Log(dev, L"Fail_AddSourceMode", (ULONG)r);
+        }
+        if (NT_SUCCESS(r) && !tgtPivot) {
             r = AddTargetMode(dev, vidpn, Arg->hConstrainingVidPn, path->VidPnTargetId);
+            if (!NT_SUCCESS(r))
+                Log(dev, L"Fail_AddTargetMode", (ULONG)r);
+        }
 
         /* Identity scaling and rotation, and nothing else. */
         if (NT_SUCCESS(r) && !xfPivot &&
@@ -634,6 +648,7 @@ static NTSTATUS MdRecommendMonitorModesImpl(IN_CONST_HANDLE hAdapter,
     mode->Origin = D3DKMDT_MCO_DRIVER;
     mode->Preference = D3DKMDT_MP_PREFERRED;
     st = Arg->pMonitorSourceModeSetInterface->pfnAddMode(Arg->hMonitorSourceModeSet, mode);
+    Log(dev, L"MonitorAddMode", (ULONG)st);
     if (!NT_SUCCESS(st) && st != STATUS_GRAPHICS_MODE_ALREADY_IN_MODESET)
         Arg->pMonitorSourceModeSetInterface->pfnReleaseModeInfo(Arg->hMonitorSourceModeSet, mode);
     return STATUS_SUCCESS;
