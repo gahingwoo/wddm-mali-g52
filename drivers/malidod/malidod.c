@@ -342,11 +342,21 @@ static NTSTATUS QueryAdapterInfo(const DXGKARG_QUERYADAPTERINFO *Info)
         if (!FITS(size, DXGK_DRIVERCAPS, HighestAcceptableAddress))
             return STATUS_BUFFER_TOO_SMALL;
         RtlZeroMemory(caps, size);
+        /* As Microsoft's Basic Display sample fills them. With WDDMVersion 0
+         * and no SupportSmoothRotation, dxgkrnl accepted the call and then
+         * stopped the device (code 43) without another DDI call; the
+         * DXGK_DRIVERCAPS note that WDDMVersion is reserved from WIN7 on does
+         * not hold for a display-only driver. */
+        caps->WDDMVersion = DXGKDDI_WDDMv1_2;
         caps->HighestAcceptableAddress.QuadPart = -1;
-        /* WDDMVersion is reserved, and stays 0, for interface version WIN7
-         * and later. No hardware cursor: MaxPointerWidth/Height stay 0. */
+        /* Must support DxgkDdiStopDeviceAndReleasePostDisplayOwnership. */
         if (FITS(size, DXGK_DRIVERCAPS, SupportNonVGA))
-            caps->SupportNonVGA = TRUE;   /* we do release POST ownership */
+            caps->SupportNonVGA = TRUE;
+        /* Must support updating path rotation in
+         * DxgkDdiUpdateActiveVidPnPresentPath. */
+        if (FITS(size, DXGK_DRIVERCAPS, SupportSmoothRotation))
+            caps->SupportSmoothRotation = TRUE;
+        /* No hardware cursor: MaxPointerWidth/Height stay 0. */
         return STATUS_SUCCESS;
     }
     case DXGKQAITYPE_DISPLAY_DRIVERCAPS_EXTENSION:
