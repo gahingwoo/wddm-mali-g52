@@ -134,9 +134,12 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
 
     a->Dxgk = *Dxgk;
     MwLog(a, L"Build", MW_BUILD);
+    MwLog(a, L"RenderOnly", MW_RENDER_ONLY);
+#if !MW_RENDER_ONLY
     st = MwDisplayStart(a);
     if (!NT_SUCCESS(st))
         return MwRet(a, L"Fail_StartDisplay", st);
+#endif
 
     /* The GPU is optional to starting: without it the adapter still
      * displays, and submissions complete without running. */
@@ -148,8 +151,10 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
     a->GpuUp = NT_SUCCESS(st);
     MwLog(a, L"GpuUp", NT_SUCCESS(st) ? 1 : (ULONG)st);
 
-    *Sources = 1;
-    *Children = 1;
+    /* Render-only: no sources and no children, and the firmware framebuffer
+     * stays with Basic Display, which keeps the desktop up. */
+    *Sources = MW_RENDER_ONLY ? 0 : 1;
+    *Children = MW_RENDER_ONLY ? 0 : 1;
     MwLog(a, L"Started", 1);
     return STATUS_SUCCESS;
 }
@@ -347,8 +352,13 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
     MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
     mw_u32 code;
 
-    if (Esc->PrivateDriverDataSize < sizeof(code))
+    if (Esc->PrivateDriverDataSize < sizeof(code)) {
+        /* Run 6: an escape we do not know (DWM's, by the timing) failed
+         * here and its device was destroyed next. Record what it was. */
+        MwLog(a, L"EscapeSmallSize", Esc->PrivateDriverDataSize);
+        MwLog(a, L"EscapeSmallFlags", Esc->Flags.Value);
         return STATUS_INVALID_PARAMETER;
+    }
     code = *(const mw_u32 *)Esc->pPrivateDriverData;
     switch (code) {
     case MW_ESCAPE_ALLOC_INFO:
@@ -366,6 +376,8 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         Stats(a, (MW_ESCAPE_STATS_DATA *)Esc->pPrivateDriverData);
         return STATUS_SUCCESS;
     default:
+        MwLog(a, L"EscapeUnknownCode", code);
+        MwLog(a, L"EscapeUnknownSize", Esc->PrivateDriverDataSize);
         return STATUS_NOT_SUPPORTED;
     }
 }

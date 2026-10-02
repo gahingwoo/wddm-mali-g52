@@ -102,6 +102,12 @@ NTSTATUS APIENTRY MwQueryChildRelations(IN_CONST_PVOID MiniportDeviceContext,
                                PDXGK_CHILD_DESCRIPTOR ChildRelations, ULONG ChildRelationsSize)
 {
     UNREFERENCED_PARAMETER(MiniportDeviceContext);
+#if MW_RENDER_ONLY
+    if (ChildRelationsSize < sizeof(DXGK_CHILD_DESCRIPTOR))
+        return STATUS_BUFFER_TOO_SMALL;
+    RtlZeroMemory(ChildRelations, sizeof(DXGK_CHILD_DESCRIPTOR)); /* the terminator alone */
+    return STATUS_SUCCESS;
+#else
     if (ChildRelationsSize < 2 * sizeof(DXGK_CHILD_DESCRIPTOR))
         return STATUS_BUFFER_TOO_SMALL;   /* one child plus the zeroed terminator */
     RtlZeroMemory(ChildRelations, sizeof(DXGK_CHILD_DESCRIPTOR));
@@ -113,6 +119,7 @@ NTSTATUS APIENTRY MwQueryChildRelations(IN_CONST_PVOID MiniportDeviceContext,
     ChildRelations[0].AcpiUid = 0;
     ChildRelations[0].ChildUid = 0;
     return STATUS_SUCCESS;
+#endif
 }
 
 NTSTATUS APIENTRY MwQueryChildStatus(IN_CONST_PVOID MiniportDeviceContext, INOUT_PDXGK_CHILD_STATUS ChildStatus,

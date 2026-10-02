@@ -20,6 +20,15 @@
 #define MW_SEGMENT_ID           1           /* the aperture segment */
 #define MW_SEGMENT_SIZE         (1024ULL * 1024 * 1024)
 #define MW_QUEUE_DEPTH          16          /* submissions the KMD holds */
+
+/* 1: a render-only adapter (no VidPN sources or children; Basic Display
+ * keeps the screen). Run 6 showed why: with WARP named as the UMD, DWM
+ * made a device on the full adapter, gave up after one escape, and never
+ * rendered or presented, so the screen and RDP stayed black. The display
+ * half comes back with our own UMD (steps d/e). */
+#ifndef MW_RENDER_ONLY
+#define MW_RENDER_ONLY          1
+#endif
 #define MW_W2(x)                L##x
 #define MW_W(x)                 MW_W2(x)
 
