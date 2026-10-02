@@ -44,6 +44,7 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <!-- _KERNEL_MODE is predefined by the WDK toolset; redefining it is C4117. -->
       <PreprocessorDefinitions>%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(GITHUB_RUN_NUMBER)'!=''">MW_BUILD=$(GITHUB_RUN_NUMBER);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)..\..\include;$(MSBuildThisFileDirectory)..\common;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>

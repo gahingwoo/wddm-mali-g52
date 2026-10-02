@@ -29,22 +29,11 @@ void MwLog(MW_ADAPTER *A, PCWSTR Name, ULONG Value)
     ZwClose(key);
 }
 
-static void LogBuild(MW_ADAPTER *A)
-{
-    HANDLE key, sub;
-    UNICODE_STRING name = RTL_CONSTANT_STRING(L"Build"), subName = RTL_CONSTANT_STRING(L"maliwddm");
-    OBJECT_ATTRIBUTES oa;
-    static const WCHAR build[] = L"" __DATE__ " " __TIME__;
-
-    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(A->Pdo, PLUGPLAY_REGKEY_DEVICE, KEY_WRITE, &key)))
-        return;
-    InitializeObjectAttributes(&oa, &subName, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, key, NULL);
-    if (NT_SUCCESS(ZwCreateKey(&sub, KEY_WRITE, &oa, 0, NULL, REG_OPTION_NON_VOLATILE, NULL))) {
-        (void)ZwSetValueKey(sub, &name, 0, REG_SZ, (PVOID)build, sizeof(build));
-        ZwClose(sub);
-    }
-    ZwClose(key);
-}
+/* The CI run that built this image (0 for a local build): WDK builds are
+ * deterministic, so __DATE__ and __TIME__ do not exist. */
+#ifndef MW_BUILD
+#define MW_BUILD 0
+#endif
 
 void MwLogHook(void *Owner, PCWSTR Name, ULONG Value)
 {
@@ -125,7 +114,7 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
     UNREFERENCED_PARAMETER(StartInfo);
 
     a->Dxgk = *Dxgk;
-    LogBuild(a);
+    MwLog(a, L"Build", MW_BUILD);
     st = MwDisplayStart(a);
     if (!NT_SUCCESS(st))
         return MwRet(a, L"Fail_StartDisplay", st);
