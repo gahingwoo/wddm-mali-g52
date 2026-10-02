@@ -378,6 +378,10 @@ TRACE_ADAPTER(QueryVidPnHWCapability, (IN_CONST_HANDLE hAdapter, DXGKARG_QUERYVI
 TRACE_ADAPTER(SetVidPnSourceAddress, (IN_CONST_HANDLE hAdapter, const DXGKARG_SETVIDPNSOURCEADDRESS *a), (hAdapter, a))
 TRACE_ADAPTER(ResetFromTimeout, (IN_CONST_HANDLE hAdapter), (hAdapter))
 TRACE_ADAPTER(RestartFromTimeout, (IN_CONST_HANDLE hAdapter), (hAdapter))
+TRACE_ADAPTER(ResetEngine, (IN_CONST_HANDLE hAdapter, DXGKARG_RESETENGINE *a), (hAdapter, a))
+TRACE_ADAPTER(QueryEngineStatus, (IN_CONST_HANDLE hAdapter, DXGKARG_QUERYENGINESTATUS *a), (hAdapter, a))
+TRACE_ADAPTER(ControlInterrupt, (IN_CONST_HANDLE hAdapter, IN_CONST_DXGK_INTERRUPT_TYPE t, IN_BOOLEAN e), (hAdapter, t, e))
+TRACE_ADAPTER(GetScanLine, (IN_CONST_HANDLE hAdapter, DXGKARG_GETSCANLINE *a), (hAdapter, a))
 
 NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
@@ -423,6 +427,11 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     init.DxgkDdiRestartFromTimeout = T_RestartFromTimeout;
     init.DxgkDdiCollectDbgInfo = MwCollectDbgInfo;
     init.DxgkDdiGetNodeMetadata = MwGetNodeMetadata;
+    init.DxgkDdiResetEngine = T_ResetEngine;
+    init.DxgkDdiQueryEngineStatus = T_QueryEngineStatus;
+    init.DxgkDdiCancelCommand = MwCancelCommand;
+    init.DxgkDdiControlInterrupt = T_ControlInterrupt;
+    init.DxgkDdiGetScanLine = T_GetScanLine;
 
     init.DxgkDdiSetPointerPosition = MwSetPointerPosition;
     init.DxgkDdiSetPointerShape = MwSetPointerShape;

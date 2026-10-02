@@ -1,0 +1,93 @@
+m5-wddm-test Thu 01/10/2026 14:02:01.62 
+== removing malidod from the driver store 
+Microsoft PnP Utility
+
+Driver package uninstalled.
+Driver package deleted successfully.
+Microsoft PnP Utility
+
+Driver package uninstalled.
+Driver package deleted successfully.
+Microsoft PnP Utility
+
+Driver package uninstalled.
+Driver package deleted successfully.
+Microsoft PnP Utility
+
+Driver package uninstalled.
+Driver package deleted successfully.
+Microsoft PnP Utility
+
+Driver package uninstalled.
+Driver package deleted successfully.
+== installing maliwddm 
+Microsoft PnP Utility
+
+Adding driver package:  maliwddm.inf
+Driver package added successfully.
+Published Name:         oem0.inf
+Driver package installed on device: ACPI\RKCP7402\0
+
+Total driver packages:  1
+Added driver packages:  1
+Microsoft PnP Utility
+
+Failed to enable device:  ACPI\RKCP7402\0
+Device is already enabled.
+
+This command is not supported on this OS product.
+Microsoft PnP Utility
+
+Restarting device:         ACPI\RKCP7402\0
+Device restarted successfully.
+
+== device 
+Microsoft PnP Utility
+
+Instance ID:                ACPI\RKCP7402\0
+Device Description:         Rockchip RK3576 Mali-G52 (WDDM)
+Class Name:                 Display
+Class GUID:                 {4d36e968-e325-11ce-bfc1-08002be10318}
+Manufacturer Name:          wddm-mali-g52
+Status:                     Problem
+Problem Code:               43 (0x2B) [CM_PROB_FAILED_POST_START]
+Driver Name:                oem0.inf
+
+== m5test 
+adapter 0 (luid 00000000:0326d94b): escape 0x00000000, 0 params, GPU_ID 0x0
+adapter 1 (luid 00000000:000096ce): escape 0xc00000bb, 0 params, GPU_ID 0x0
+adapter 2 (luid 00000000:00009695): escape 0xc000000d, 0 params, GPU_ID 0x0
+no maliwddm adapter
+m5test exit code 1 
+== driver trace 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\maliwddm
+    AcquirePostDisplay    REG_DWORD    0x0
+    FbWidth    REG_DWORD    0x780
+    FbHeight    REG_DWORD    0x438
+    Step    REG_DWORD    0x6
+    GpuId    REG_DWORD    0x74021000
+    ShaderPresent    REG_DWORD    0x7
+    MmuFeatures    REG_DWORD    0x2823
+    GpuUp    REG_DWORD    0x1
+    Started    REG_DWORD    0x1
+    QAI_1    REG_DWORD    0x0
+    Seen_QueryAdapterInfo    REG_DWORD    0x0
+
+== display adapters 
+
+
+Name                        : Microsoft Remote Display Adapter
+Status                      : OK
+DriverVersion               : 10.0.22621.5415
+CurrentHorizontalResolution : 2048
+CurrentVerticalResolution   : 1152
+
+Name                        : Rockchip RK3576 Mali-G52 (WDDM)
+Status                      : Error
+DriverVersion               : 2.50.16.60
+CurrentHorizontalResolution : 1920
+CurrentVerticalResolution   : 1080
+
+
+

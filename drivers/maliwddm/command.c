@@ -428,3 +428,47 @@ NTSTATUS APIENTRY MwGetNodeMetadata(IN_CONST_HANDLE hAdapter, UINT NodeOrdinal,
     (void)RtlStringCbCopyW(Arg->FriendlyName, sizeof(Arg->FriendlyName), L"Mali-G52 job manager");
     return STATUS_SUCCESS;
 }
+
+/* ---- what WDDM 1.2+ requires of a full driver ----
+ * dxgkrnl failed the adapter (code 43) right after DRIVERCAPS while these
+ * five were NULL; viogpu3d fills all of them. */
+
+NTSTATUS APIENTRY MwResetEngine(IN_CONST_HANDLE hAdapter, DXGKARG_RESETENGINE *Arg)
+{
+    MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
+    (void)Synchronize(a, SyncReset, a);
+    Arg->LastAbortedFenceId = a->LastCompletedFence;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS APIENTRY MwQueryEngineStatus(IN_CONST_HANDLE hAdapter, DXGKARG_QUERYENGINESTATUS *Arg)
+{
+    UNREFERENCED_PARAMETER(hAdapter);
+    Arg->EngineStatus.Responsive = 1;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS APIENTRY MwCancelCommand(IN_CONST_HANDLE hAdapter, const DXGKARG_CANCELCOMMAND *Arg)
+{
+    UNREFERENCED_PARAMETER(hAdapter);
+    UNREFERENCED_PARAMETER(Arg);
+    return STATUS_SUCCESS;
+}
+
+/* No vsync interrupt yet (the VOP2 is not ours to touch). */
+NTSTATUS APIENTRY MwControlInterrupt(IN_CONST_HANDLE hAdapter, IN_CONST_DXGK_INTERRUPT_TYPE Type,
+                                     IN_BOOLEAN Enable)
+{
+    UNREFERENCED_PARAMETER(hAdapter);
+    UNREFERENCED_PARAMETER(Type);
+    UNREFERENCED_PARAMETER(Enable);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS APIENTRY MwGetScanLine(IN_CONST_HANDLE hAdapter, DXGKARG_GETSCANLINE *Arg)
+{
+    UNREFERENCED_PARAMETER(hAdapter);
+    Arg->InVerticalBlank = FALSE;
+    Arg->ScanLine = 0;
+    return STATUS_SUCCESS;
+}
