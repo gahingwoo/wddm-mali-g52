@@ -453,12 +453,23 @@ NTSTATUS APIENTRY MdEnumVidPnCofuncModality(IN_CONST_HANDLE hAdapter,
 
     st = topoIf->pfnAcquireFirstPathInfo(topo, &path);
     while (st == STATUS_SUCCESS && path != NULL) {
-        NTSTATUS r = AddSourceMode(dev, vidpn, Arg->hConstrainingVidPn, path->VidPnSourceId);
-        if (NT_SUCCESS(r))
+        /* The pivot is what the OS is enumerating against: the driver must
+         * leave that mode set (or that path's transformation) alone. */
+        D3DKMDT_ENUMCOFUNCMODALITY_PIVOT_TYPE pt = Arg->EnumPivotType;
+        BOOLEAN srcPivot = pt == D3DKMDT_EPT_VIDPNSOURCE && Arg->EnumPivot.VidPnSourceId == path->VidPnSourceId;
+        BOOLEAN tgtPivot = pt == D3DKMDT_EPT_VIDPNTARGET && Arg->EnumPivot.VidPnTargetId == path->VidPnTargetId;
+        BOOLEAN xfPivot = (pt == D3DKMDT_EPT_SCALING || pt == D3DKMDT_EPT_ROTATION) &&
+                          Arg->EnumPivot.VidPnSourceId == path->VidPnSourceId &&
+                          Arg->EnumPivot.VidPnTargetId == path->VidPnTargetId;
+        NTSTATUS r = STATUS_SUCCESS;
+
+        if (!srcPivot)
+            r = AddSourceMode(dev, vidpn, Arg->hConstrainingVidPn, path->VidPnSourceId);
+        if (NT_SUCCESS(r) && !tgtPivot)
             r = AddTargetMode(dev, vidpn, Arg->hConstrainingVidPn, path->VidPnTargetId);
 
         /* Identity scaling and rotation, and nothing else. */
-        if (NT_SUCCESS(r) &&
+        if (NT_SUCCESS(r) && !xfPivot &&
             (path->ContentTransformation.Scaling == D3DKMDT_VPPS_UNPINNED ||
              path->ContentTransformation.Rotation == D3DKMDT_VPPR_UNPINNED)) {
             D3DKMDT_VIDPN_PRESENT_PATH upd = *path;
