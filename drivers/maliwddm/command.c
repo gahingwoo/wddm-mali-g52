@@ -71,15 +71,16 @@ static void MarkDmaBuffer(VOID **DmaBuffer)
     *DmaBuffer = (PUCHAR)*DmaBuffer + sizeof(ULONG);
 }
 
-/* Every allocation stays where VidMm put it as far as the GPU is concerned
- * (its GPU address is fixed), so patch entries only tell VidMm which
- * allocations the buffer references. */
-static void MirrorPatchList(const D3DDDI_PATCHLOCATIONLIST *In, UINT InSize,
-                            D3DDDI_PATCHLOCATIONLIST **Out, UINT *OutSize)
+/* One patch location per allocation the buffer references. Nothing in our
+ * DMA buffer needs patching (GPU addresses are fixed), but WDDM 1.x VidMm
+ * learns from the patch list what to make resident: with the UMD's empty
+ * list the job's allocation was never mapped into the aperture (WinPE runs
+ * 13-14: no MAP_APERTURE_SEGMENT for it, translation fault at its address). */
+static void PatchEveryAllocation(UINT Allocations, D3DDDI_PATCHLOCATIONLIST **Out, UINT OutSize)
 {
-    for (UINT i = 0; i < InSize && i < *OutSize; i++) {
+    for (UINT i = 0; i < Allocations && i < OutSize; i++) {
         RtlZeroMemory(*Out, sizeof(**Out));
-        (*Out)->AllocationIndex = In[i].AllocationIndex;
+        (*Out)->AllocationIndex = i;
         (*Out)->SlotId = i;
         (*Out)++;
     }
@@ -113,8 +114,7 @@ NTSTATUS APIENTRY MwRender(IN_CONST_HANDLE hContext, DXGKARG_RENDER *Arg)
     priv->Count = count;
     priv->Reserved = MW_DMA_MAGIC;
 
-    MirrorPatchList(Arg->pPatchLocationListIn, Arg->PatchLocationListInSize,
-                    &Arg->pPatchLocationListOut, &Arg->PatchLocationListOutSize);
+    PatchEveryAllocation(Arg->AllocationListSize, &Arg->pPatchLocationListOut, Arg->PatchLocationListOutSize);
     MarkDmaBuffer(&Arg->pDmaBuffer);
     ctx->Device->Adapter->Renders++;
     return STATUS_SUCCESS;
@@ -139,8 +139,16 @@ NTSTATUS APIENTRY MwPresent(IN_CONST_HANDLE hContext, DXGKARG_PRESENT *Arg)
 
 NTSTATUS APIENTRY MwPatch(IN_CONST_HANDLE hAdapter, const DXGKARG_PATCH *Arg)
 {
-    UNREFERENCED_PARAMETER(hAdapter);
-    UNREFERENCED_PARAMETER(Arg);
+    MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
+
+    /* Nothing to patch; record where VidMm put the first allocation. */
+    a->Patches++;
+    a->PatchAllocations = Arg->AllocationListSize;
+    a->PatchPatchLocations = Arg->PatchLocationListSubmissionLength;
+    if (Arg->AllocationListSize != 0 && Arg->pAllocationList != NULL) {
+        a->PatchSegment0 = Arg->pAllocationList[0].SegmentId;
+        a->PatchAddress0 = (ULONG64)Arg->pAllocationList[0].PhysicalAddress.QuadPart;
+    }
     return STATUS_SUCCESS;
 }
 

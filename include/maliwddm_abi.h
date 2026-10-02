@@ -86,4 +86,8 @@ typedef struct _MW_ESCAPE_STATS_DATA {
     mw_u32 PagingOps[16];
     mw_u32 Maps, MapFails, Unmaps, LastMapPages, LastMapStatus, Allocations;
     mw_u64 LastMapVa, LastAllocVa;
+    /* What VidMm handed DxgkDdiPatch: the allocation list of the last
+     * patched DMA buffer, first entry. */
+    mw_u32 Patches, PatchAllocations, PatchPatchLocations, PatchSegment0;
+    mw_u64 PatchAddress0;
 } MW_ESCAPE_STATS_DATA;

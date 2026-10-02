@@ -389,6 +389,11 @@ static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D)
     D->Allocations = A->Allocations;
     D->LastMapVa = A->LastMapVa;
     D->LastAllocVa = A->LastAllocVa;
+    D->Patches = A->Patches;
+    D->PatchAllocations = A->PatchAllocations;
+    D->PatchPatchLocations = A->PatchPatchLocations;
+    D->PatchSegment0 = A->PatchSegment0;
+    D->PatchAddress0 = A->PatchAddress0;
 }
 
 static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE *Esc)

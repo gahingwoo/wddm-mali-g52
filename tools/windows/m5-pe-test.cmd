@@ -61,12 +61,6 @@ drvload "%HERE%maliwddm\maliwddm.inf" >> "%OUT%" 2>&1
 echo exit %ERRORLEVEL% >> "%OUT%"
 ping -n 11 127.0.0.1 >nul
 
-%SAVE% >nul
-echo == etwrec stop >> "%OUT%"
-"%HERE%etwrec.exe" stop >> "%OUT%" 2>&1
-echo exit %ERRORLEVEL% >> "%OUT%"
-dir X:\dxgkrnl.etl >> "%OUT%" 2>&1
-
 echo == devices after >> "%OUT%"
 pnputil /enum-devices /class Display >> "%OUT%" 2>&1
 pnputil /enum-devices /instanceid "ACPI\RKCP7403\0" >> "%OUT%" 2>&1
@@ -76,6 +70,13 @@ pnputil /enum-devices /instanceid "ACPI\RKCP7402\0" >> "%OUT%" 2>&1
 echo == m5test >> "%OUT%"
 "%HERE%m5test.exe" >> "%OUT%" 2>&1
 echo m5test exit code %ERRORLEVEL% >> "%OUT%"
+rem ETW keeps recording through m5test: its render and paging matter most.
+%SAVE% >nul
+echo == etwrec stop >> "%OUT%"
+"%HERE%etwrec.exe" stop >> "%OUT%" 2>&1
+echo exit %ERRORLEVEL% >> "%OUT%"
+dir X:\dxgkrnl.etl >> "%OUT%" 2>&1
+
 
 echo == maliwddm trace >> "%OUT%"
 reg query "%KEY%\RKCP7402\0\Device Parameters\maliwddm" >> "%OUT%" 2>&1

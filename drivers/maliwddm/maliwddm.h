@@ -119,6 +119,8 @@ struct _MW_ADAPTER {
     ULONG Maps, MapFails, Unmaps, LastMapPages, Allocations;
     NTSTATUS LastMapStatus;
     ULONG64 LastMapVa, LastAllocVa;
+    ULONG Patches, PatchAllocations, PatchPatchLocations, PatchSegment0;
+    ULONG64 PatchAddress0;
 };
 
 /* ---- trace: Seen_<ddi>, Fail_<ddi> in the device's registry key ---- */

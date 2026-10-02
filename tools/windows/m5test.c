@@ -143,7 +143,9 @@ static void print_stats(D3DKMT_HANDLE adapter, const char *when)
     for (int i = 0; i < 16; i++)
         if (s.PagingOps[i] != 0)
             printf(" [%d]=%u", i, s.PagingOps[i]);
-    printf("\n");
+    printf("\n  patches %u: last with %u allocations, %u patch locations; allocation 0 in segment %u at 0x%llx\n",
+           s.Patches, s.PatchAllocations, s.PatchPatchLocations, s.PatchSegment0,
+           (unsigned long long)s.PatchAddress0);
 }
 
 int main(void)
