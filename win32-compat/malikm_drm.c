@@ -31,6 +31,11 @@
 #include "xf86drm.h"
 #include "sys/mman.h"
 
+/* The maliwddm backend, below. */
+static int wddm_on(void);
+static int wddm_init(void);
+static void wddm_ioctl(DWORD code, void *buf, DWORD len);
+
 /* Linux errno, as the driver reports it, to the CRT's. Most agree. */
 static int
 crt_errno(int e)
@@ -113,9 +118,6 @@ fd_handle(int fd)
  * result, 0 or -1 with errno set. */
 static int fake_on(void);
 static void fake_ioctl(DWORD code, void *buf, DWORD len);
-static int wddm_on(void);
-static int wddm_init(void);
-static void wddm_ioctl(DWORD code, void *buf, DWORD len);
 
 /* MALIKM_TRACE=1: log every call to the real driver, with the DRM number,
  * the driver's result and any Win32 error. */
