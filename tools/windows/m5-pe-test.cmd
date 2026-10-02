@@ -52,4 +52,4 @@ reg query "%KEY%\RKCP7403\0\Device Parameters" >> "%OUT%" 2>&1
 type "%OUT%"
 echo.
 echo Results saved to %OUT%
-pause
+if /i not "%~1"=="auto" pause
