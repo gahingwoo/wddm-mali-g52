@@ -18,6 +18,15 @@ pnputil /enum-devices /class Display >> "%OUT%" 2>&1
 pnputil /enum-devices /instanceid "ACPI\RKCP7403\0" >> "%OUT%" 2>&1
 pnputil /enum-devices /instanceid "ACPI\RKCP7402\0" >> "%OUT%" 2>&1
 
+rem This WinPE has no WARP; maliwddm names d3d10warp.dll as its UMD, and an
+rem adapter with no loadable UMD fails with code 43. The stick carries the
+rem DLL from the installed Windows (same build, 22621); X: is writable.
+if exist "%HERE%d3d10warp.dll" (
+  copy /y "%HERE%d3d10warp.dll" %SystemRoot%\System32\ >> "%OUT%" 2>&1
+) else (
+  echo   no d3d10warp.dll on the stick: maliwddm will likely fail with code 43 >> "%OUT%"
+)
+
 echo == drvload malidod >> "%OUT%"
 drvload "%HERE%malidod\malidod.inf" >> "%OUT%" 2>&1
 echo exit %ERRORLEVEL% >> "%OUT%"
