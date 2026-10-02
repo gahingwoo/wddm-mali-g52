@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- dxgkrnl's own ETW events (Microsoft-Windows-DxgKrnl), everything, to a
+     file: m5-pe-test records them around drvload, because an adapter that
+     fails with code 43 says nothing else about why. -->
+<WindowsPerformanceRecorder Version="1.0" Author="wddm-mali-g52">
+  <Profiles>
+    <EventCollector Id="EC_Mali" Name="wddm-mali-g52">
+      <BufferSize Value="1024"/>
+      <Buffers Value="64"/>
+    </EventCollector>
+    <EventProvider Id="EP_DxgKrnl" Name="802EC45A-1E99-4B83-9920-87C98277BA9D" Level="5">
+      <Keywords><Keyword Value="0xFFFFFFFFFFFFFFFF"/></Keywords>
+    </EventProvider>
+    <Profile Id="Mali.Verbose.File" Name="Mali" Description="dxgkrnl, all keywords"
+             LoggingMode="File" DetailLevel="Verbose">
+      <Collectors>
+        <EventCollectorId Value="EC_Mali">
+          <EventProviders><EventProviderId Value="EP_DxgKrnl"/></EventProviders>
+        </EventCollectorId>
+      </Collectors>
+    </Profile>
+  </Profiles>
+</WindowsPerformanceRecorder>
