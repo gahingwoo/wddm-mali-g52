@@ -145,11 +145,18 @@ NTSTATUS MdStartDevice(IN_CONST_PVOID MiniportDeviceContext, IN_PDXGK_START_INFO
     Log(dev, L"FbPhysLo", (ULONG)dev->Fb.PhysicAddress.QuadPart);
     Log(dev, L"FbPhysHi", (ULONG)(dev->Fb.PhysicAddress.QuadPart >> 32));
 
+    /* The framebuffer is DRAM the firmware set aside, not device registers:
+     * map it through dxgkrnl, as Basic Display does, rather than as I/O
+     * space, so its cache attributes are dxgkrnl's to reconcile. */
     dev->FbSize = (SIZE_T)dev->Fb.Pitch * dev->Fb.Height;
     pa = dev->Fb.PhysicAddress;
-    dev->FbVa = (PUCHAR)MmMapIoSpaceEx(pa, dev->FbSize, PAGE_READWRITE | PAGE_WRITECOMBINE);
-    if (dev->FbVa == NULL)
+    st = dev->Dxgk.DxgkCbMapMemory(dev->Dxgk.DeviceHandle, pa, (ULONG)dev->FbSize, FALSE, FALSE,
+                                   MmWriteCombined, (PVOID *)&dev->FbVa);
+    Log(dev, L"MapFb", (ULONG)st);
+    if (!NT_SUCCESS(st) || dev->FbVa == NULL) {
+        dev->FbVa = NULL;
         return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
     dev->SourceVisible = TRUE;
     dev->PathActive = TRUE;
@@ -162,7 +169,7 @@ NTSTATUS MdStartDevice(IN_CONST_PVOID MiniportDeviceContext, IN_PDXGK_START_INFO
 static void UnmapFb(PMD_DEVICE Dev)
 {
     if (Dev->FbVa != NULL) {
-        MmUnmapIoSpace(Dev->FbVa, Dev->FbSize);
+        (void)Dev->Dxgk.DxgkCbUnmapMemory(Dev->Dxgk.DeviceHandle, Dev->FbVa);
         Dev->FbVa = NULL;
     }
 }
