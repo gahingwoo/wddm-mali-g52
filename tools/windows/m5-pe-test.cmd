@@ -11,8 +11,11 @@ set OUT=%HERE%m5-pe-out.txt
 set KEY=HKLM\SYSTEM\CurrentControlSet\Enum\ACPI
 echo m5-pe-test %date% %time% > "%OUT%"
 echo == what this WinPE has >> "%OUT%"
-for %%f in (drivers\dxgkrnl.sys drivers\dxgmms2.sys drivers\BasicDisplay.sys drivers\BasicRender.sys d3d10warp.dll d3d11.dll dxgi.dll gdi32.dll) do if exist %SystemRoot%\System32\%%f (echo   have %%f >> "%OUT%") else (echo   MISSING %%f >> "%OUT%")
-bcdedit /enum {current} 2>nul | findstr /i "testsigning" >> "%OUT%"
+rem WinPE has no findstr, timeout or choice: a pipe into a missing command
+rem ended the whole batch chain on the first run. Waits use ping.
+for %%f in (drivers\dxgkrnl.sys drivers\dxgmms2.sys d3d10warp.dll d3d11.dll dxgi.dll gdi32.dll) do if exist %SystemRoot%\System32\%%f (echo   have %%f >> "%OUT%") else (echo   MISSING %%f >> "%OUT%")
+dir /b /s %SystemRoot%\System32\DriverStore\FileRepository\BasicDisplay.sys %SystemRoot%\System32\DriverStore\FileRepository\BasicRender.sys >> "%OUT%" 2>&1
+bcdedit /enum {current} >> "%OUT%" 2>&1
 echo == devices before >> "%OUT%"
 pnputil /enum-devices /class Display >> "%OUT%" 2>&1
 pnputil /enum-devices /instanceid "ACPI\RKCP7403\0" >> "%OUT%" 2>&1
@@ -30,11 +33,11 @@ if exist "%HERE%d3d10warp.dll" (
 echo == drvload malidod >> "%OUT%"
 drvload "%HERE%malidod\malidod.inf" >> "%OUT%" 2>&1
 echo exit %ERRORLEVEL% >> "%OUT%"
-timeout /t 5 /nobreak >nul
+ping -n 6 127.0.0.1 >nul
 echo == drvload maliwddm >> "%OUT%"
 drvload "%HERE%maliwddm\maliwddm.inf" >> "%OUT%" 2>&1
 echo exit %ERRORLEVEL% >> "%OUT%"
-timeout /t 10 /nobreak >nul
+ping -n 11 127.0.0.1 >nul
 
 echo == devices after >> "%OUT%"
 pnputil /enum-devices /class Display >> "%OUT%" 2>&1
