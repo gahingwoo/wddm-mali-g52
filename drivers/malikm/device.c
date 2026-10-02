@@ -23,7 +23,7 @@ BOOLEAN MkEvtIsr(WDFINTERRUPT Interrupt, ULONG MessageID)
 {
     UNREFERENCED_PARAMETER(MessageID);
     PDEVICE_CONTEXT dev = GetDeviceContext(WdfInterruptGetDevice(Interrupt));
-    if (!MkIsr(dev))
+    if (!MkIsr(&dev->Gpu))
         return FALSE;
     WdfInterruptQueueDpcForIsr(Interrupt);
     return TRUE;
@@ -42,9 +42,9 @@ NTSTATUS MkEvtPrepareHardware(WDFDEVICE Device, WDFCMRESLIST Raw, WDFCMRESLIST T
 
     for (ULONG i = 0; i < WdfCmResourceListGetCount(Translated); i++) {
         PCM_PARTIAL_RESOURCE_DESCRIPTOR d = WdfCmResourceListGetDescriptor(Translated, i);
-        if (d->Type == CmResourceTypeMemory && dev->Gpu == NULL) {
-            dev->GpuLength = d->u.Memory.Length;
-            dev->Gpu = (volatile ULONG *)MmMapIoSpaceEx(d->u.Memory.Start, d->u.Memory.Length,
+        if (d->Type == CmResourceTypeMemory && dev->Gpu.Regs == NULL) {
+            dev->Gpu.RegsLength = d->u.Memory.Length;
+            dev->Gpu.Regs = (volatile ULONG *)MmMapIoSpaceEx(d->u.Memory.Start, d->u.Memory.Length,
                                                         PAGE_READWRITE | PAGE_NOCACHE);
         } else if (d->Type == CmResourceTypeInterrupt && dev->InterruptCount < 3) {
             WDF_INTERRUPT_CONFIG cfg;
@@ -58,10 +58,10 @@ NTSTATUS MkEvtPrepareHardware(WDFDEVICE Device, WDFCMRESLIST Raw, WDFCMRESLIST T
             dev->InterruptCount++;
         }
     }
-    if (dev->Gpu == NULL)
+    if (dev->Gpu.Regs == NULL)
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     MkLog(dev, L"Interrupts", dev->InterruptCount);
-    return MkMmuInit(dev);
+    return MkMmuInit(&dev->Gpu);
 }
 
 NTSTATUS MkEvtReleaseHardware(WDFDEVICE Device, WDFCMRESLIST Translated)
@@ -73,10 +73,10 @@ NTSTATUS MkEvtReleaseHardware(WDFDEVICE Device, WDFCMRESLIST Translated)
     ExAcquireFastMutex(&dev->Lock);
     MkReapZombies(dev);
     ExReleaseFastMutex(&dev->Lock);
-    MkMmuFree(dev);
-    if (dev->Gpu != NULL) {
-        MmUnmapIoSpace((PVOID)dev->Gpu, dev->GpuLength);
-        dev->Gpu = NULL;
+    MkMmuFree(&dev->Gpu);
+    if (dev->Gpu.Regs != NULL) {
+        MmUnmapIoSpace((PVOID)dev->Gpu.Regs, dev->Gpu.RegsLength);
+        dev->Gpu.Regs = NULL;
     }
     return STATUS_SUCCESS;
 }
@@ -89,7 +89,7 @@ NTSTATUS MkEvtD0Entry(WDFDEVICE Device, WDF_POWER_DEVICE_STATE PreviousState)
     NTSTATUS st;
     UNREFERENCED_PARAMETER(PreviousState);
 
-    st = MkGpuInit(dev);
+    st = MkGpuInit(&dev->Gpu);
     if (!NT_SUCCESS(st)) {
         MkLog(dev, L"InitStatus", (ULONG)st);
         return st;
@@ -103,7 +103,7 @@ NTSTATUS MkEvtD0Exit(WDFDEVICE Device, WDF_POWER_DEVICE_STATE TargetState)
     UNREFERENCED_PARAMETER(TargetState);
 
     MkWorkerStop(dev);
-    MkGpuStop(dev);
+    MkGpuStop(&dev->Gpu);
     return STATUS_SUCCESS;
 }
 
@@ -240,6 +240,8 @@ NTSTATUS MkEvtDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT DeviceInit)
 
     PDEVICE_CONTEXT dev = GetDeviceContext(device);
     dev->Device = device;
+    dev->Gpu.Log = MkLogHook;
+    dev->Gpu.LogOwner = dev;
     ExInitializeFastMutex(&dev->Lock);
     KeInitializeSpinLock(&dev->QueueLock);
     InitializeListHead(&dev->Queue);

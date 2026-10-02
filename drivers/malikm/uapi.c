@@ -223,7 +223,7 @@ static mk_s32 Submit(PDEVICE_CONTEXT Dev, PFILE_CONTEXT F, MK_SUBMIT *A, SIZE_T 
     ins = (mk_u32 *)(base + A->in_syncs);
     bos = (mk_u32 *)(base + A->bo_handles);
 
-    if (!Dev->Ready || Dev->StopWorker)
+    if (!Dev->Gpu.Ready || Dev->StopWorker)
         return -MK_ENODEV;
     /* The job descriptors were written by this thread, on this CPU, through
      * write-combined mappings; the worker that starts the job may run on
@@ -410,7 +410,7 @@ static mk_s32 SyncSeq(PDEVICE_CONTEXT Dev, PFILE_CONTEXT F, MALIKM_SYNCOBJ_SEQ *
 
 static mk_s32 GetParam(PDEVICE_CONTEXT Dev, MK_GET_PARAM *A)
 {
-    GPU_FEATURES *f = &Dev->F;
+    GPU_FEATURES *f = &Dev->Gpu.F;
     mk_u32 p = A->param;
 
     if (A->pad != 0)

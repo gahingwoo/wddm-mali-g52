@@ -4,8 +4,10 @@ CFLAGS += -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-init
           -D_KERNEL_MODE -Imock -I../../include -pthread
 DRV = ../../drivers/malikm
 
-malikm-host: test.c sim.c mock.c $(DRV)/gpu.c $(DRV)/uapi.c $(DRV)/malikm.h mock/ntddk.h sim.h
-	$(CC) $(CFLAGS) -o $@ test.c sim.c mock.c $(DRV)/gpu.c $(DRV)/uapi.c
+COMMON = ../../drivers/common
+
+malikm-host: test.c sim.c mock.c $(DRV)/gpu.c $(DRV)/uapi.c $(DRV)/malikm.h $(COMMON)/maligpu.c $(COMMON)/maligpu.h mock/ntddk.h sim.h
+	$(CC) $(CFLAGS) -o $@ test.c sim.c mock.c $(DRV)/gpu.c $(DRV)/uapi.c $(COMMON)/maligpu.c
 
 run: malikm-host
 	./malikm-host

@@ -118,8 +118,8 @@ int main(void)
 
     /* What EvtDeviceAdd and PrepareHardware set up. */
     sim_reset();
-    dev.Gpu = sim_regs;
-    dev.GpuLength = sizeof(sim_regs);
+    dev.Gpu.Regs = sim_regs;
+    dev.Gpu.RegsLength = sizeof(sim_regs);
     ExInitializeFastMutex(&dev.Lock);
     KeInitializeSpinLock(&dev.QueueLock);
     InitializeListHead(&dev.Queue);
@@ -128,9 +128,9 @@ int main(void)
     KeInitializeEvent(&dev.JobIrqEvent, SynchronizationEvent, FALSE);
     KeInitializeEvent(&dev.ProgressEvent, NotificationEvent, FALSE);
     InitializeListHead(&file.Mappings);
-    CHECK(MkMmuInit(&dev) == STATUS_SUCCESS, "MmuInit");
-    CHECK(MkGpuInit(&dev) == STATUS_SUCCESS, "GpuInit");
-    CHECK(dev.Ready, "not ready");
+    CHECK(MkMmuInit(&dev.Gpu) == STATUS_SUCCESS, "MmuInit");
+    CHECK(MkGpuInit(&dev.Gpu) == STATUS_SUCCESS, "GpuInit");
+    CHECK(dev.Gpu.Ready, "not ready");
     CHECK(MkWorkerStart(&dev) == STATUS_SUCCESS, "WorkerStart");
     CHECK(sim.as_updates == 1, "AS0 programmed %u times", sim.as_updates);
 
@@ -227,8 +227,8 @@ int main(void)
         write_job(cpu, 0xF0000000ull, 7);       /* nothing mapped there */
         CHECK(submit(va, &bo, 1, sf, 0) == 0, "faulting submit");
         CHECK(sync_wait(sf, 5 * SEC, 1) == 0, "faulting job completes");
-        CHECK(dev.JobsTimedOut == 1 && dev.Resets == 1, "timed out %u resets %u",
-              dev.JobsTimedOut, dev.Resets);
+        CHECK(dev.JobsTimedOut == 1 && dev.Gpu.Resets == 1, "timed out %u resets %u",
+              dev.JobsTimedOut, dev.Gpu.Resets);
         CHECK(sim.faults >= 1, "no MMU fault seen");
         write_job(cpu, va + 0x100, 0xAB);
         CHECK(submit(va, &bo, 1, sf, 0) == 0 && sync_wait(sf, SEC, 1) == 0 && cpu[0x40] == 0xAB,
@@ -271,8 +271,8 @@ int main(void)
     MkFileCleanup(&dev, &file);
     MkWorkerStop(&dev);
     CHECK(IsListEmpty(&dev.Zombies), "zombies left after cleanup and idle");
-    MkGpuStop(&dev);
-    MkMmuFree(&dev);
+    MkGpuStop(&dev.Gpu);
+    MkMmuFree(&dev.Gpu);
 
     CHECK(sim.bad_config == 0, "bad JS config/affinity %u", sim.bad_config);
     CHECK(sim.flush_without_lock == 0, "FLUSH_PT without LOCK %u", sim.flush_without_lock);

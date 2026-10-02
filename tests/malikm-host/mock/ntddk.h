@@ -91,6 +91,7 @@ static inline PLIST_ENTRY RemoveHeadList(PLIST_ENTRY h)
 #define InterlockedExchange(p, v) __atomic_exchange_n((p), (v), __ATOMIC_SEQ_CST)
 #define InterlockedExchange64(p, v) __atomic_exchange_n((p), (v), __ATOMIC_SEQ_CST)
 #define InterlockedOr(p, v) __atomic_fetch_or((p), (v), __ATOMIC_SEQ_CST)
+#define InterlockedAnd(p, v) __atomic_fetch_and((p), (v), __ATOMIC_SEQ_CST)
 #define InterlockedIncrement64(p) __atomic_add_fetch((p), 1, __ATOMIC_SEQ_CST)
 static inline BOOLEAN _BitScanReverse64(ULONG *idx, ULONG64 x)
 { if (!x) return 0; *idx = 63 - (ULONG)__builtin_clzll(x); return 1; }

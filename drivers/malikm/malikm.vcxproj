@@ -59,6 +59,7 @@
     <ClCompile Include="device.c" />
     <ClCompile Include="gpu.c" />
     <ClCompile Include="uapi.c" />
+    <ClCompile Include="..\common\maligpu.c" />
   </ItemGroup>
 
   <ItemGroup>
