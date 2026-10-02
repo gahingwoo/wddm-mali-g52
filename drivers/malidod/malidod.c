@@ -693,8 +693,12 @@ static NTSTATUS MdPresentDisplayOnlyImpl(IN_CONST_HANDLE hAdapter, const DXGKARG
     mdl = IoAllocateMdl(Arg->pSource, (ULONG)size, FALSE, FALSE, NULL);
     if (mdl == NULL)
         return STATUS_NO_MEMORY;
+    /* DWM presents from user mode; CDD (WinPE has no DWM) from kernel
+     * session space. Probing CDD's buffer as UserMode always raised, and
+     * every present failed with STATUS_INVALID_PARAMETER (PE run 6). */
     __try {
-        MmProbeAndLockPages(mdl, UserMode, IoReadAccess);
+        MmProbeAndLockPages(mdl, (ULONG_PTR)Arg->pSource >= (ULONG_PTR)MM_USER_PROBE_ADDRESS ? KernelMode : UserMode,
+                            IoReadAccess);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         IoFreeMdl(mdl);
         return STATUS_INVALID_PARAMETER;
