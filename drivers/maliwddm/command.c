@@ -291,10 +291,20 @@ static VOID PollDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
     UNREFERENCED_PARAMETER(Arg1);
     UNREFERENCED_PARAMETER(Arg2);
 
-    if (Synchronize(a, SyncPoll, a))
-        MwArmPoll(a);
-    else
+    if (a->Stopping) {
         InterlockedExchange(&a->PollArmed, 0);
+        return;
+    }
+    if (Synchronize(a, SyncPoll, a)) {
+        MwArmPoll(a);
+        return;
+    }
+    /* Idle. A submission that raced with this saw PollArmed set and did
+     * not arm the timer, so look once more after letting go. */
+    InterlockedExchange(&a->PollArmed, 0);
+    KeMemoryBarrier();
+    if (a->QCount != 0 && InterlockedExchange(&a->PollArmed, 1) == 0)
+        MwArmPoll(a);
 }
 
 void MwArmPoll(MW_ADAPTER *A)
@@ -306,12 +316,15 @@ void MwArmPoll(MW_ADAPTER *A)
 
 void MwCommandInit(MW_ADAPTER *A)
 {
+    A->Stopping = FALSE;
     KeInitializeTimer(&A->PollTimer);
     KeInitializeDpc(&A->PollDpc, PollDpc, A);
 }
 
 void MwCommandStop(MW_ADAPTER *A)
 {
+    A->Stopping = TRUE;
+    KeMemoryBarrier();
     KeCancelTimer(&A->PollTimer);
     KeFlushQueuedDpcs();
     InterlockedExchange(&A->PollArmed, 0);
@@ -338,7 +351,8 @@ NTSTATUS APIENTRY MwSubmitCommand(IN_CONST_HANDLE hAdapter, const DXGKARG_SUBMIT
     sync.New = &sub;
     sync.Status = STATUS_UNSUCCESSFUL;
     (void)Synchronize(a, SyncSubmit, &sync);
-    if (NT_SUCCESS(sync.Status) && sub.Count != 0 && InterlockedExchange(&a->PollArmed, 1) == 0)
+    if (NT_SUCCESS(sync.Status) && sub.Count != 0 && !a->Stopping &&
+        InterlockedExchange(&a->PollArmed, 1) == 0)
         MwArmPoll(a);
     a->Submits++;
     return sync.Status;

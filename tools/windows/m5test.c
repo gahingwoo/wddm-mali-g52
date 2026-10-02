@@ -21,9 +21,14 @@
 #define TARGET_OFFSET   1024
 #define MAGIC           0xC0FFEE52u
 
+static D3DKMT_HANDLE g_adapter;
+static void print_stats(D3DKMT_HANDLE adapter, const char *when);
+
 static int fail(const char *what, NTSTATUS st)
 {
     printf("FAIL: %s: 0x%08lx\n", what, (unsigned long)st);
+    if (g_adapter != 0)
+        print_stats(g_adapter, "at the failure");
     return 2;
 }
 
@@ -72,6 +77,22 @@ static D3DKMT_HANDLE find_adapter(void)
     return 0;
 }
 
+static void print_stats(D3DKMT_HANDLE adapter, const char *when)
+{
+    MW_ESCAPE_STATS_DATA s = {0};
+    s.Code = MW_ESCAPE_STATS;
+    NTSTATUS st = escape(adapter, 0, &s, sizeof(s));
+    if (st < 0) {
+        printf("stats %s: escape 0x%08lx\n", when, (unsigned long)st);
+        return;
+    }
+    printf("stats %s: gpu %u renders %u presents %u submits %u fence %u/%u queued %u running %u\n"
+           "  jobs done %u failed %u timedout %u js 0x%x fault 0x%x @0x%llx irqs %u resets %u\n",
+           when, s.GpuUp, s.Renders, s.Presents, s.Submits, s.LastCompletedFence, s.LastSubmittedFence,
+           s.Queued, s.Running, s.JobsDone, s.JobsFailed, s.JobsTimedOut, s.LastJsStatus,
+           s.LastFaultStatus, (unsigned long long)s.LastFaultAddress, s.Irqs, s.Resets);
+}
+
 int main(void)
 {
     D3DKMT_HANDLE adapter = find_adapter();
@@ -92,6 +113,8 @@ int main(void)
         return 1;
     }
 
+    g_adapter = adapter;
+    print_stats(adapter, "at start");
     dev.hAdapter = adapter;
     if ((st = D3DKMTCreateDevice(&dev)) < 0)
         return fail("CreateDevice", st);
@@ -161,6 +184,7 @@ int main(void)
     UINT32 got = cpu[TARGET_OFFSET / 4];
     UINT32 status = cpu[0];
     (void)D3DKMTUnlock(&unlock);
+    print_stats(adapter, "after the job");
     printf("after %llu ms: target 0x%08x (want 0x%08x), job header status word 0x%08x\n",
            GetTickCount64() - t0, got, MAGIC, status);
 

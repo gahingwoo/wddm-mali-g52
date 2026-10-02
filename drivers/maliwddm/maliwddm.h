@@ -77,7 +77,8 @@ struct _MW_ADAPTER {
 
     /* Submissions, shared with the ISR (DxgkCbSynchronizeExecution). */
     MW_SUBMISSION Queue[MW_QUEUE_DEPTH];
-    ULONG QHead, QCount;        /* ring; QHead is the one running */
+    ULONG QHead;                /* ring; QHead is the one running */
+    volatile ULONG QCount;
     BOOLEAN Running;            /* a job chain of Queue[QHead] is on the GPU */
     BOOLEAN NeedDpc;            /* a fence completed: queue the DPC */
     ULONG RunningSlot;
@@ -91,6 +92,7 @@ struct _MW_ADAPTER {
     KTIMER PollTimer;
     KDPC PollDpc;
     volatile LONG PollArmed;
+    volatile BOOLEAN Stopping;
 
     /* Counters for the trace. */
     ULONG Renders, Presents, Submits;

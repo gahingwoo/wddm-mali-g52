@@ -9,17 +9,24 @@
 
 void MwLog(MW_ADAPTER *A, PCWSTR Name, ULONG Value)
 {
-    HANDLE key;
-    UNICODE_STRING name;
+    HANDLE key, sub;
+    UNICODE_STRING name, subName = RTL_CONSTANT_STRING(L"maliwddm");
+    OBJECT_ATTRIBUTES oa;
 
     DbgPrintEx(DPFLTR_IHVVIDEO_ID, DPFLTR_ERROR_LEVEL, "maliwddm: %ws = 0x%08x\n", Name, Value);
     if (A == NULL || A->Pdo == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL)
         return;
-    if (NT_SUCCESS(IoOpenDeviceRegistryKey(A->Pdo, PLUGPLAY_REGKEY_DEVICE, KEY_WRITE, &key))) {
+    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(A->Pdo, PLUGPLAY_REGKEY_DEVICE, KEY_WRITE, &key)))
+        return;
+    /* A subkey of Device Parameters of its own, so a test run can delete
+     * the previous run's trace (and malidod's) in one step. */
+    InitializeObjectAttributes(&oa, &subName, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, key, NULL);
+    if (NT_SUCCESS(ZwCreateKey(&sub, KEY_WRITE, &oa, 0, NULL, REG_OPTION_NON_VOLATILE, NULL))) {
         RtlInitUnicodeString(&name, Name);
-        (void)ZwSetValueKey(key, &name, 0, REG_DWORD, &Value, sizeof(Value));
-        ZwClose(key);
+        (void)ZwSetValueKey(sub, &name, 0, REG_DWORD, &Value, sizeof(Value));
+        ZwClose(sub);
     }
+    ZwClose(key);
 }
 
 void MwLogHook(void *Owner, PCWSTR Name, ULONG Value)
@@ -282,6 +289,26 @@ static NTSTATUS APIENTRY MwQueryAdapterInfo(IN_CONST_HANDLE hAdapter, const DXGK
     return st;
 }
 
+static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D)
+{
+    D->GpuUp = A->GpuUp;
+    D->Renders = A->Renders;
+    D->Presents = A->Presents;
+    D->Submits = A->Submits;
+    D->LastSubmittedFence = A->LastSubmittedFence;
+    D->LastCompletedFence = A->LastCompletedFence;
+    D->Queued = A->QCount;
+    D->Running = A->Running;
+    D->JobsDone = A->JobsDone;
+    D->JobsFailed = A->JobsFailed;
+    D->JobsTimedOut = A->JobsTimedOut;
+    D->LastJsStatus = A->LastJsStatus;
+    D->LastFaultStatus = A->LastFaultStatus;
+    D->Irqs = A->Gpu.Irqs;
+    D->Resets = A->Gpu.Resets;
+    D->LastFaultAddress = A->LastFaultAddress;
+}
+
 static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE *Esc)
 {
     MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
@@ -299,6 +326,11 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_GPU_INFO_DATA))
             return STATUS_INVALID_PARAMETER;
         GpuInfo(a, (MW_ESCAPE_GPU_INFO_DATA *)Esc->pPrivateDriverData);
+        return STATUS_SUCCESS;
+    case MW_ESCAPE_STATS:
+        if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_STATS_DATA))
+            return STATUS_INVALID_PARAMETER;
+        Stats(a, (MW_ESCAPE_STATS_DATA *)Esc->pPrivateDriverData);
         return STATUS_SUCCESS;
     default:
         return STATUS_NOT_SUPPORTED;

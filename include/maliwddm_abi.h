@@ -52,6 +52,7 @@ typedef struct _MW_COMMAND {
 /* Escapes (D3DKMTEscape, private driver data starts with the code). */
 #define MW_ESCAPE_ALLOC_INFO    1
 #define MW_ESCAPE_GPU_INFO      2
+#define MW_ESCAPE_STATS         3
 
 typedef struct _MW_ESCAPE_ALLOC_INFO_DATA {
     mw_u32 Code;                        /* MW_ESCAPE_ALLOC_INFO */
@@ -68,3 +69,16 @@ typedef struct _MW_ESCAPE_GPU_INFO_DATA {
     mw_u64 Value[MW_GPU_PARAMS];        /* out; index = DRM_PANFROST_PARAM_* */
     mw_u64 Valid;                       /* out: bit n = Value[n] is meaningful */
 } MW_ESCAPE_GPU_INFO_DATA;
+
+/* The KMD's counters, for tests and bring-up. */
+typedef struct _MW_ESCAPE_STATS_DATA {
+    mw_u32 Code;                        /* MW_ESCAPE_STATS */
+    mw_u32 GpuUp;
+    mw_u32 Renders, Presents, Submits;
+    mw_u32 LastSubmittedFence, LastCompletedFence;
+    mw_u32 Queued, Running;
+    mw_u32 JobsDone, JobsFailed, JobsTimedOut;
+    mw_u32 LastJsStatus, LastFaultStatus;
+    mw_u32 Irqs, Resets;
+    mw_u64 LastFaultAddress;
+} MW_ESCAPE_STATS_DATA;

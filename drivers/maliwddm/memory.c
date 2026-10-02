@@ -31,8 +31,10 @@ NTSTATUS MwQuerySegment(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info)
     /* The Mali is not coherent with the CPU caches, so VidMm maps CPU views
      * of these allocations uncached, as malikm's write-combined BOs. */
     d->Flags.CacheCoherent = FALSE;
-    out->PagingBufferSegmentId = 0;         /* system memory */
-    out->PagingBufferSize = 4 * PAGE_SIZE;
+    /* As viogpu3d. Paging buffers stay empty: map and unmap are done on
+     * the CPU while the paging buffer is built. */
+    out->PagingBufferSegmentId = MW_SEGMENT_ID;
+    out->PagingBufferSize = 10 * PAGE_SIZE;
     out->PagingBufferPrivateDataSize = 0;
     return STATUS_SUCCESS;
 }
