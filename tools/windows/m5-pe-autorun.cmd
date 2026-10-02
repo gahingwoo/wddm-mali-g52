@@ -6,4 +6,9 @@ echo.
 echo ===== wddm-mali-g52: running mali\m5-pe-test.cmd =====
 call "%~dp0m5-pe-test.cmd" auto
 echo ===== m5-pe-test done: output in %~dp0m5-pe-out.txt =====
-echo.
+rem Shut down cleanly so the stick is flushed: the board turning itself
+rem off means the results are on the stick. (woa-debug's collection is
+rem skipped in this mode.)
+echo Shutting down in 5 s...
+ping -n 6 127.0.0.1 >nul
+wpeutil shutdown

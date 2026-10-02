@@ -7,7 +7,11 @@ rem state and both drivers' traces. Needs firmware with DSP0 and testsigning
 rem on in this stick's BCD. Output: m5-pe-out.txt here.
 setlocal
 set HERE=%~dp0
-set OUT=%HERE%m5-pe-out.txt
+rem Everything is written to the RAM disk first and copied to the stick at
+rem the end: PE run 3 was reset while the stick was being written, and FAT
+rem cross-linked the output file with woa-debug's (its text was replaced by
+rem a registry dump, and the .etl never appeared).
+set OUT=X:\m5-pe-out.txt
 set KEY=HKLM\SYSTEM\CurrentControlSet\Enum\ACPI
 echo m5-pe-test %date% %time% > "%OUT%"
 echo == what this WinPE has >> "%OUT%"
@@ -47,7 +51,6 @@ echo == wpr stop >> "%OUT%"
 wpr -stop X:\dxgkrnl.etl >> "%OUT%" 2>&1
 echo exit %ERRORLEVEL% >> "%OUT%"
 dir X:\dxgkrnl.etl >> "%OUT%" 2>&1
-copy /y X:\dxgkrnl.etl "%HERE%dxgkrnl.etl" >> "%OUT%" 2>&1
 
 echo == devices after >> "%OUT%"
 pnputil /enum-devices /class Display >> "%OUT%" 2>&1
@@ -62,7 +65,9 @@ echo == maliwddm trace >> "%OUT%"
 reg query "%KEY%\RKCP7402\0\Device Parameters\maliwddm" >> "%OUT%" 2>&1
 echo == malidod trace >> "%OUT%"
 reg query "%KEY%\RKCP7403\0\Device Parameters" >> "%OUT%" 2>&1
+copy /y X:\m5-pe-out.txt "%HERE%m5-pe-out.txt" >nul
+if exist X:\dxgkrnl.etl copy /y X:\dxgkrnl.etl "%HERE%dxgkrnl.etl" >nul
 type "%OUT%"
 echo.
-echo Results saved to %OUT%
+echo Results saved to %HERE%m5-pe-out.txt
 if /i not "%~1"=="auto" pause
