@@ -70,6 +70,26 @@ pnputil /enum-devices /instanceid "ACPI\RKCP7402\0" >> "%OUT%" 2>&1
 echo == m5test >> "%OUT%"
 "%HERE%m5test.exe" >> "%OUT%" 2>&1
 echo m5test exit code %ERRORLEVEL% >> "%OUT%"
+rem Step (c), first half: M4's triangle through Panfrost and the shim's
+rem maliwddm backend. WinPE has no D3D11 runtime, HLSL compiler or VC
+rem runtime; mali\tri\sys carries them from the installed Windows.
+rem (goto, not a block: %ERRORLEVEL% in a block is expanded too early.)
+if not exist "%HERE%tri\triangle.exe" goto :no_triangle
+%SAVE% >nul
+echo == triangle on the Mali through maliwddm >> "%OUT%"
+copy /y "%HERE%tri\sys\*.dll" %SystemRoot%\System32\ >nul
+pushd X:\
+set GALLIUM_DRIVER=panfrost
+set MALIKM_TRACE=1
+"%HERE%tri\triangle.exe" "%HERE%tri\libgallium_d3d10.dll" >> "%OUT%" 2>&1
+echo triangle exit code %ERRORLEVEL% >> "%OUT%"
+set MALIKM_TRACE=
+set GALLIUM_DRIVER=
+if exist X:\triangle.ppm copy /y X:\triangle.ppm "%HERE%triangle-wddm.ppm" >nul
+popd
+echo == the driver's counters after the triangle (m5test again) >> "%OUT%"
+"%HERE%m5test.exe" >> "%OUT%" 2>&1
+:no_triangle
 rem ETW keeps recording through m5test: its render and paging matter most.
 %SAVE% >nul
 echo == etwrec stop >> "%OUT%"
