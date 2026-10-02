@@ -8,7 +8,13 @@
  *
  * Exit: 0 the GPU wrote the value; 1 no maliwddm adapter; 2 a step failed.
  *
- * Build: cl /W4 /I include tools\windows\m5test.c gdi32.lib
+ * The thunks are resolved at run time from win32u (NtGdiDdDDI*, the system
+ * calls themselves), falling back to gdi32 (D3DKMT*): WinPE's gdi32 forwards
+ * every D3DKMT export to ext-ms-win-dx-d3dkmt-dxcore, and WinPE has no
+ * dxcore, so a static gdi32 import never even loaded there
+ * (STATUS_DLL_NOT_FOUND in every PE run).
+ *
+ * Build: cl /W4 /I include tools\windows\m5test.c
  */
 #include <windows.h>
 #include <winternl.h>
@@ -16,6 +22,46 @@
 #include <stdio.h>
 #include <string.h>
 #include "maliwddm_abi.h"
+
+typedef NTSTATUS (APIENTRY *KMT_FN)(void *);
+static KMT_FN pCreateDevice, pDestroyDevice, pCreateContext, pDestroyContext, pCreateAllocation,
+              pDestroyAllocation, pLock, pUnlock, pRender, pEscape, pEnumAdapters2;
+
+static KMT_FN resolve(const char *name)
+{
+    char nt[96];
+    HMODULE w = LoadLibraryA("win32u.dll");
+    HMODULE g = LoadLibraryA("gdi32.dll");
+    FARPROC f = NULL;
+
+    sprintf_s(nt, sizeof(nt), "NtGdiDdDDI%s", name);
+    if (w != NULL)
+        f = GetProcAddress(w, nt);
+    if (f == NULL && g != NULL) {
+        sprintf_s(nt, sizeof(nt), "D3DKMT%s", name);
+        f = GetProcAddress(g, nt);
+    }
+    if (f == NULL)
+        printf("cannot resolve %s\n", name);
+    return (KMT_FN)(void *)f;
+}
+
+static int resolve_all(void)
+{
+    pCreateDevice = resolve("CreateDevice");
+    pDestroyDevice = resolve("DestroyDevice");
+    pCreateContext = resolve("CreateContext");
+    pDestroyContext = resolve("DestroyContext");
+    pCreateAllocation = resolve("CreateAllocation");
+    pDestroyAllocation = resolve("DestroyAllocation");
+    pLock = resolve("Lock");
+    pUnlock = resolve("Unlock");
+    pRender = resolve("Render");
+    pEscape = resolve("Escape");
+    pEnumAdapters2 = resolve("EnumAdapters2");
+    return pCreateDevice && pDestroyDevice && pCreateContext && pDestroyContext && pCreateAllocation &&
+           pDestroyAllocation && pLock && pUnlock && pRender && pEscape && pEnumAdapters2;
+}
 
 #define JOB_BYTES       4096
 #define TARGET_OFFSET   1024
@@ -51,7 +97,7 @@ static NTSTATUS escape(D3DKMT_HANDLE adapter, D3DKMT_HANDLE device, void *data, 
     e.Type = D3DKMT_ESCAPE_DRIVERPRIVATE;
     e.pPrivateDriverData = data;
     e.PrivateDriverDataSize = size;
-    return D3DKMTEscape(&e);
+    return pEscape(&e);
 }
 
 /* The adapter that answers our GPU-info escape with a G52's GPU_ID. */
@@ -62,7 +108,7 @@ static D3DKMT_HANDLE find_adapter(void)
 
     en.NumAdapters = 16;
     en.pAdapters = info;
-    if (D3DKMTEnumAdapters2(&en) < 0)
+    if (pEnumAdapters2(&en) < 0)
         return 0;
     for (ULONG i = 0; i < en.NumAdapters; i++) {
         MW_ESCAPE_GPU_INFO_DATA g = {0};
@@ -95,7 +141,7 @@ static void print_stats(D3DKMT_HANDLE adapter, const char *when)
 
 int main(void)
 {
-    D3DKMT_HANDLE adapter = find_adapter();
+    D3DKMT_HANDLE adapter;
     D3DKMT_CREATEDEVICE dev = {0};
     D3DKMT_CREATECONTEXT ctx = {0};
     D3DKMT_CREATEALLOCATION ca = {0};
@@ -108,6 +154,9 @@ int main(void)
     NTSTATUS st;
 
     setvbuf(stdout, NULL, _IONBF, 0);
+    if (!resolve_all())
+        return 3;
+    adapter = find_adapter();
     if (adapter == 0) {
         printf("no maliwddm adapter\n");
         return 1;
@@ -116,13 +165,13 @@ int main(void)
     g_adapter = adapter;
     print_stats(adapter, "at start");
     dev.hAdapter = adapter;
-    if ((st = D3DKMTCreateDevice(&dev)) < 0)
+    if ((st = pCreateDevice(&dev)) < 0)
         return fail("CreateDevice", st);
     ctx.hDevice = dev.hDevice;
     ctx.NodeOrdinal = 0;
     ctx.EngineAffinity = 1;
     ctx.ClientHint = D3DKMT_CLIENTHINT_DX10;
-    if ((st = D3DKMTCreateContext(&ctx)) < 0)
+    if ((st = pCreateContext(&ctx)) < 0)
         return fail("CreateContext", st);
     printf("device 0x%x context 0x%x, command buffer %u bytes, %u allocation slots\n",
            dev.hDevice, ctx.hContext, ctx.CommandBufferSize, ctx.AllocationListSize);
@@ -135,7 +184,7 @@ int main(void)
     ca.hDevice = dev.hDevice;
     ca.NumAllocations = 1;
     ca.pAllocationInfo = &ai;
-    if ((st = D3DKMTCreateAllocation(&ca)) < 0)
+    if ((st = pCreateAllocation(&ca)) < 0)
         return fail("CreateAllocation", st);
 
     where.Code = MW_ESCAPE_ALLOC_INFO;
@@ -149,7 +198,7 @@ int main(void)
 
     lock.hDevice = dev.hDevice;
     lock.hAllocation = ai.hAllocation;
-    if ((st = D3DKMTLock(&lock)) < 0)
+    if ((st = pLock(&lock)) < 0)
         return fail("Lock", st);
     volatile UINT32 *cpu = (volatile UINT32 *)lock.pData;
     memset((void *)cpu, 0, JOB_BYTES);
@@ -157,7 +206,7 @@ int main(void)
     unlock.hDevice = dev.hDevice;
     unlock.NumAllocations = 1;
     unlock.phAllocations = &ai.hAllocation;
-    if ((st = D3DKMTUnlock(&unlock)) < 0)
+    if ((st = pUnlock(&unlock)) < 0)
         return fail("Unlock", st);
 
     /* One command, one allocation it writes. */
@@ -172,18 +221,18 @@ int main(void)
     render.CommandLength = sizeof(*cmd);
     render.AllocationCount = 1;
     render.PatchLocationCount = 0;
-    if ((st = D3DKMTRender(&render)) < 0)
+    if ((st = pRender(&render)) < 0)
         return fail("Render", st);
     printf("rendered\n");
 
     /* Locking waits for the GPU to finish with the allocation. */
     ULONGLONG t0 = GetTickCount64();
-    if ((st = D3DKMTLock(&lock)) < 0)
+    if ((st = pLock(&lock)) < 0)
         return fail("Lock after render", st);
     cpu = (volatile UINT32 *)lock.pData;
     UINT32 got = cpu[TARGET_OFFSET / 4];
     UINT32 status = cpu[0];
-    (void)D3DKMTUnlock(&unlock);
+    (void)pUnlock(&unlock);
     print_stats(adapter, "after the job");
     printf("after %llu ms: target 0x%08x (want 0x%08x), job header status word 0x%08x\n",
            GetTickCount64() - t0, got, MAGIC, status);
@@ -195,11 +244,11 @@ int main(void)
         da.hDevice = dev.hDevice;
         da.phAllocationList = &ai.hAllocation;
         da.AllocationCount = 1;
-        (void)D3DKMTDestroyAllocation(&da);
+        (void)pDestroyAllocation(&da);
         dc.hContext = ctx.hContext;
-        (void)D3DKMTDestroyContext(&dc);
+        (void)pDestroyContext(&dc);
         dd.hDevice = dev.hDevice;
-        (void)D3DKMTDestroyDevice(&dd);
+        (void)pDestroyDevice(&dd);
     }
 
     if (got != MAGIC) {
