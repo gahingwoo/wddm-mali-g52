@@ -25,18 +25,26 @@ static void FillSourceMode(MW_ADAPTER *Dev, D3DKMDT_VIDPN_SOURCE_MODE *M)
     M->Format.Graphics.PixelValueAccessMode = D3DKMDT_PVAM_DIRECT;
 }
 
-/* The firmware does not tell us the refresh rate; it sets 60 Hz modes. */
+/* A real 60 Hz timing. The firmware sets 1920x1080 with the CEA-861
+ * timing (VIC 16: 2200x1125 total, 148.5 MHz); +280/+45 blanking gives
+ * exactly that, and something plausible for other sizes. A full WDDM
+ * driver may not leave the frequencies unspecified the way a display-only
+ * one does: board run 4 got STATUS_GRAPHICS_INVALID_FREQUENCY from
+ * pfnAddMode for the target mode, and Windows stopped at boot. */
 static void FillSignal(MW_ADAPTER *Dev, D3DKMDT_VIDEO_SIGNAL_INFO *S)
 {
+    UINT totalW = Dev->Fb.Width + 280, totalH = Dev->Fb.Height + 45;
+
     S->VideoStandard = D3DKMDT_VSS_OTHER;
-    S->TotalSize.cx = Dev->Fb.Width;
-    S->TotalSize.cy = Dev->Fb.Height;
-    S->ActiveSize = S->TotalSize;
-    S->VSyncFreq.Numerator = 60;
-    S->VSyncFreq.Denominator = 1;
-    S->HSyncFreq.Numerator = 60 * Dev->Fb.Height;
-    S->HSyncFreq.Denominator = 1;
-    S->PixelRate = (SIZE_T)Dev->Fb.Width * Dev->Fb.Height * 60;
+    S->TotalSize.cx = totalW;
+    S->TotalSize.cy = totalH;
+    S->ActiveSize.cx = Dev->Fb.Width;
+    S->ActiveSize.cy = Dev->Fb.Height;
+    S->PixelRate = (SIZE_T)totalW * totalH * 60;
+    S->HSyncFreq.Numerator = (UINT)S->PixelRate;
+    S->HSyncFreq.Denominator = totalW;
+    S->VSyncFreq.Numerator = (UINT)S->PixelRate;
+    S->VSyncFreq.Denominator = totalW * totalH;
     S->ScanLineOrdering = D3DDDI_VSSLO_PROGRESSIVE;
 }
 
@@ -241,15 +249,8 @@ static NTSTATUS AddTargetMode(MW_ADAPTER *Dev, const DXGK_VIDPN_INTERFACE *VidPn
         return st;
     st = setIf->pfnCreateNewModeInfo(set, &mode);
     if (NT_SUCCESS(st)) {
+        /* The same timing the monitor mode carries. */
         FillSignal(Dev, &mode->VideoSignalInfo);
-        /* A display-only driver neither knows nor sets the timing: leave the
-         * frequencies unspecified, as Basic Display does. Our made-up 60 Hz
-         * timing (no blanking) got STATUS_GRAPHICS_INVALID_FREQUENCY here. */
-        mode->VideoSignalInfo.VSyncFreq.Numerator = D3DKMDT_FREQUENCY_NOTSPECIFIED;
-        mode->VideoSignalInfo.VSyncFreq.Denominator = D3DKMDT_FREQUENCY_NOTSPECIFIED;
-        mode->VideoSignalInfo.HSyncFreq.Numerator = D3DKMDT_FREQUENCY_NOTSPECIFIED;
-        mode->VideoSignalInfo.HSyncFreq.Denominator = D3DKMDT_FREQUENCY_NOTSPECIFIED;
-        mode->VideoSignalInfo.PixelRate = D3DKMDT_FREQUENCY_NOTSPECIFIED;
         mode->Preference = D3DKMDT_MP_PREFERRED;
         st = setIf->pfnAddMode(set, mode);
         if (!NT_SUCCESS(st))
