@@ -1,0 +1,65 @@
+;
+; maliwddm.inf - milestone M5.2: the full WDDM 1.3 driver for the RK3576's
+; Mali-G52 and its display (docs/M5.2-PLAN.md). Binds ACPI\RKCP7402 (GPU0 in
+; the edk2-rk3576 CM5-IO DSDT), the device m1probe, malikm and malidod bind:
+; only one of them can be installed at a time.
+;
+; Step (a)/(b): no user-mode driver yet, so no UserModeDriverName. Preemption
+; is turned off system-wide, as virtio-win's viogpu3d does: the driver never
+; preempts a DMA buffer.
+;
+; SPDX-License-Identifier: GPL-2.0
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = Display
+ClassGuid   = {4D36E968-E325-11CE-BFC1-08002BE10318}
+Provider    = %ProviderName%
+DriverVer   = ; set by stampinf during build
+CatalogFile = maliwddm.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+maliwddm.sys = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64.10.0...16299
+
+[Standard.NTARM64.10.0...16299]
+%MW.DeviceDesc% = MW_Inst,ACPI\RKCP7402
+
+[MW_Inst]
+FeatureScore = F9
+CopyFiles = MW_CopyFiles
+AddReg = MW_Settings
+
+[MW_CopyFiles]
+maliwddm.sys
+
+[MW_Settings]
+HKLM,"SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Scheduler",EnablePreemption,%REG_DWORD%,0
+
+[MW_Inst.Services]
+AddService = maliwddm,0x00000002,MW_Service
+
+[MW_Service]
+DisplayName    = %MW.SvcDesc%
+ServiceType    = 1 ; SERVICE_KERNEL_DRIVER
+StartType      = 3 ; SERVICE_DEMAND_START
+ErrorControl   = 0 ; SERVICE_ERROR_IGNORE
+ServiceBinary  = %13%\maliwddm.sys
+LoadOrderGroup = Video
+
+[Strings]
+ProviderName  = "wddm-mali-g52"
+DiskName      = "RK3576 Mali-G52 WDDM driver"
+MW.DeviceDesc = "Rockchip RK3576 Mali-G52 (WDDM)"
+MW.SvcDesc    = "RK3576 Mali-G52 WDDM driver"
+REG_DWORD     = 0x00010001

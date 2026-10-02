@@ -1,0 +1,411 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * maliwddm: driver entry, PnP and power, adapter capabilities, interrupts,
+ * escapes, and the registry trace that found every M5.1 bug.
+ */
+#include "maliwddm.h"
+
+/* ---- trace ---- */
+
+void MwLog(MW_ADAPTER *A, PCWSTR Name, ULONG Value)
+{
+    HANDLE key;
+    UNICODE_STRING name;
+
+    DbgPrintEx(DPFLTR_IHVVIDEO_ID, DPFLTR_ERROR_LEVEL, "maliwddm: %ws = 0x%08x\n", Name, Value);
+    if (A == NULL || A->Pdo == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return;
+    if (NT_SUCCESS(IoOpenDeviceRegistryKey(A->Pdo, PLUGPLAY_REGKEY_DEVICE, KEY_WRITE, &key))) {
+        RtlInitUnicodeString(&name, Name);
+        (void)ZwSetValueKey(key, &name, 0, REG_DWORD, &Value, sizeof(Value));
+        ZwClose(key);
+    }
+}
+
+void MwLogHook(void *Owner, PCWSTR Name, ULONG Value)
+{
+    MwLog((MW_ADAPTER *)Owner, Name, Value);
+}
+
+/* Seen_<ddi> on a DDI's first call, Fail_<ddi> on any failure; Name is
+ * "Fail_<ddi>". Only at PASSIVE_LEVEL, where the registry can be written. */
+NTSTATUS MwRet(MW_ADAPTER *A, PCWSTR Name, NTSTATUS St)
+{
+    if (A == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return St;
+    ULONG h = 0;
+    for (PCWSTR c = Name; *c; c++)
+        h = h * 31 + *c;
+    if (!(A->Seen & (1ULL << (h % 64)))) {
+        WCHAR seen[64];
+        UNICODE_STRING us;
+        A->Seen |= 1ULL << (h % 64);
+        RtlInitEmptyUnicodeString(&us, seen, sizeof(seen));
+        if (NT_SUCCESS(RtlUnicodeStringPrintf(&us, L"Seen_%ws", Name + 5)))
+            MwLog(A, seen, (ULONG)St);
+    }
+    if (!NT_SUCCESS(St)) {
+        MwLog(A, Name, (ULONG)St);
+        MwLog(A, L"LastFailedDdi", (ULONG)St);
+    }
+    return St;
+}
+
+/* ---- PnP ---- */
+
+static NTSTATUS APIENTRY MwAddDevice(IN_CONST_PDEVICE_OBJECT Pdo, OUT_PPVOID Context)
+{
+    MW_ADAPTER *a = (MW_ADAPTER *)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(MW_ADAPTER), MW_TAG);
+    if (a == NULL)
+        return STATUS_NO_MEMORY;
+    a->Pdo = (PDEVICE_OBJECT)Pdo;
+    ExInitializeFastMutex(&a->MmuLock);
+    a->Gpu.Log = MwLogHook;
+    a->Gpu.LogOwner = a;
+    MwCommandInit(a);
+    *Context = a;
+    return STATUS_SUCCESS;
+}
+
+/* The first memory resource is the GPU's register block. */
+static NTSTATUS MapGpu(MW_ADAPTER *A)
+{
+    DXGK_DEVICE_INFO info;
+    NTSTATUS st = A->Dxgk.DxgkCbGetDeviceInformation(A->Dxgk.DeviceHandle, &info);
+    if (!NT_SUCCESS(st))
+        return st;
+    PCM_RESOURCE_LIST list = info.TranslatedResourceList;
+    for (ULONG l = 0; list && l < list->Count; l++) {
+        PCM_PARTIAL_RESOURCE_LIST p = &list->List[l].PartialResourceList;
+        for (ULONG i = 0; i < p->Count; i++) {
+            PCM_PARTIAL_RESOURCE_DESCRIPTOR d = &p->PartialDescriptors[i];
+            if (d->Type == CmResourceTypeMemory && A->Gpu.Regs == NULL) {
+                A->Gpu.RegsLength = d->u.Memory.Length;
+                A->Gpu.Regs = (volatile ULONG *)MmMapIoSpaceEx(d->u.Memory.Start, d->u.Memory.Length,
+                                                               PAGE_READWRITE | PAGE_NOCACHE);
+            }
+        }
+    }
+    return A->Gpu.Regs ? STATUS_SUCCESS : STATUS_DEVICE_CONFIGURATION_ERROR;
+}
+
+static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_INFO StartInfo,
+                                       IN_PDXGKRNL_INTERFACE Dxgk, OUT_PULONG Sources, OUT_PULONG Children)
+{
+    MW_ADAPTER *a = (MW_ADAPTER *)Context;
+    NTSTATUS st;
+    UNREFERENCED_PARAMETER(StartInfo);
+
+    a->Dxgk = *Dxgk;
+    st = MwDisplayStart(a);
+    if (!NT_SUCCESS(st))
+        return MwRet(a, L"Fail_StartDisplay", st);
+
+    /* The GPU is optional to starting: without it the adapter still
+     * displays, and submissions complete without running. */
+    st = MapGpu(a);
+    if (NT_SUCCESS(st))
+        st = MkMmuInit(&a->Gpu);
+    if (NT_SUCCESS(st))
+        st = MkGpuInit(&a->Gpu);
+    a->GpuUp = NT_SUCCESS(st);
+    MwLog(a, L"GpuUp", NT_SUCCESS(st) ? 1 : (ULONG)st);
+
+    *Sources = 1;
+    *Children = 1;
+    MwLog(a, L"Started", 1);
+    return STATUS_SUCCESS;
+}
+
+static void StopGpu(MW_ADAPTER *A)
+{
+    MkGpuStop(&A->Gpu);
+    MkMmuFree(&A->Gpu);
+    if (A->Gpu.Regs != NULL) {
+        MmUnmapIoSpace((PVOID)A->Gpu.Regs, A->Gpu.RegsLength);
+        A->Gpu.Regs = NULL;
+    }
+    A->GpuUp = FALSE;
+}
+
+static NTSTATUS APIENTRY MwStopDevice(IN_CONST_PVOID Context)
+{
+    MW_ADAPTER *a = (MW_ADAPTER *)Context;
+    MwCommandStop(a);
+    MwLog(a, L"Renders", a->Renders);
+    MwLog(a, L"Submits", a->Submits);
+    MwLog(a, L"JobsDone", a->JobsDone);
+    MwLog(a, L"JobsFailed", a->JobsFailed);
+    StopGpu(a);
+    MwDisplayStop(a);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS APIENTRY MwRemoveDevice(IN_CONST_PVOID Context)
+{
+    ExFreePoolWithTag(Context, MW_TAG);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS APIENTRY MwDispatchIoRequest(IN_CONST_PVOID Context, IN_ULONG Source,
+                                             IN_PVIDEO_REQUEST_PACKET Vrp)
+{
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(Source);
+    UNREFERENCED_PARAMETER(Vrp);
+    return STATUS_NOT_SUPPORTED;
+}
+
+static NTSTATUS APIENTRY MwSetPowerState(IN_CONST_PVOID Context, IN_ULONG Uid,
+                                         IN_DEVICE_POWER_STATE State, IN_POWER_ACTION Action)
+{
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(Uid);
+    UNREFERENCED_PARAMETER(State);
+    UNREFERENCED_PARAMETER(Action);
+    return STATUS_SUCCESS;
+}
+
+static VOID APIENTRY MwResetDevice(IN_CONST_PVOID Context)
+{
+    UNREFERENCED_PARAMETER(Context);
+}
+
+static VOID APIENTRY MwUnload(VOID)
+{
+}
+
+static NTSTATUS APIENTRY MwQueryInterface(IN_CONST_PVOID Context, IN_PQUERY_INTERFACE Qi)
+{
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(Qi);
+    return STATUS_NOT_SUPPORTED;
+}
+
+/* ---- interrupts ---- */
+
+static BOOLEAN APIENTRY MwInterruptRoutine(IN_CONST_PVOID Context, IN_ULONG MessageNumber)
+{
+    MW_ADAPTER *a = (MW_ADAPTER *)Context;
+    UNREFERENCED_PARAMETER(MessageNumber);
+    if (!a->GpuUp || !MkIsr(&a->Gpu))
+        return FALSE;
+    (void)MwJobInterrupt(a);
+    return TRUE;
+}
+
+static VOID APIENTRY MwDpcRoutine(IN_CONST_PVOID Context)
+{
+    MW_ADAPTER *a = (MW_ADAPTER *)Context;
+    a->Dxgk.DxgkCbNotifyDpc(a->Dxgk.DeviceHandle);
+}
+
+/* ---- adapter information ---- */
+
+/* A field of a structure dxgkrnl sized for our interface version: write it
+ * only if it lies inside the buffer (M5.1: the WDK's sizeof is larger). */
+#define FITS(Size, Type, Field) (FIELD_OFFSET(Type, Field) + RTL_FIELD_SIZE(Type, Field) <= (Size))
+
+static NTSTATUS DriverCaps(const DXGKARG_QUERYADAPTERINFO *Info)
+{
+    DXGK_DRIVERCAPS *caps = (DXGK_DRIVERCAPS *)Info->pOutputData;
+    UINT size = Info->OutputDataSize;
+
+    if (!FITS(size, DXGK_DRIVERCAPS, WDDMVersion))
+        return STATUS_BUFFER_TOO_SMALL;
+    RtlZeroMemory(caps, size);
+    caps->WDDMVersion = DXGKDDI_WDDMv1_3;
+    caps->HighestAcceptableAddress.QuadPart = (1LL << 40) - 1;   /* the Mali sees 40 bits */
+    caps->MaxAllocationListSlotId = 16;
+    caps->SchedulingCaps.MultiEngineAware = 1;
+    /* Preemption is off system-wide (the INF sets EnablePreemption 0), as
+     * viogpu3d does; DMA-buffer-boundary preemption comes later. */
+    caps->SchedulingCaps.PreemptionAware = 1;
+    caps->GpuEngineTopology.NbAsymetricProcessingNodes = 1;
+    if (FITS(size, DXGK_DRIVERCAPS, SupportNonVGA))
+        caps->SupportNonVGA = TRUE;
+    if (FITS(size, DXGK_DRIVERCAPS, SupportSmoothRotation))
+        caps->SupportSmoothRotation = TRUE;
+    return STATUS_SUCCESS;
+}
+
+static void GpuInfo(MW_ADAPTER *A, MW_ESCAPE_GPU_INFO_DATA *D)
+{
+    const GPU_FEATURES *f = &A->Gpu.F;
+    mw_u64 v[MW_GPU_PARAMS] = {0};
+
+    /* Indices are DRM_PANFROST_PARAM_*, as malikm's GET_PARAM. */
+    v[0] = f->Id; v[1] = f->Revision; v[2] = f->ShaderPresent; v[3] = f->TilerPresent;
+    v[4] = f->L2Present; v[5] = f->StackPresent; v[6] = f->AsPresent; v[7] = f->JsPresent;
+    v[8] = f->L2Features; v[9] = f->CoreFeatures; v[10] = f->TilerFeatures; v[11] = f->MemFeatures;
+    v[12] = f->MmuFeatures; v[13] = f->ThreadFeatures; v[14] = f->MaxThreads;
+    v[15] = f->MaxWorkgroupSize; v[16] = f->MaxBarrierSize; v[17] = f->CoherencyFeatures;
+    for (ULONG i = 0; i < 4; i++)
+        v[18 + i] = f->TextureFeatures[i];
+    for (ULONG i = 0; i < 16; i++)
+        v[22 + i] = f->JsFeatures[i];
+    v[38] = f->NrCoreGroups; v[39] = f->ThreadTlsAlloc; v[40] = f->AfbcFeatures;
+    v[44] = 31;                                  /* SELECTED_COHERENCY: none */
+    RtlCopyMemory(D->Value, v, sizeof(v));
+    D->Count = MW_GPU_PARAMS;
+    D->Valid = (1ULL << 41) - 1;                 /* 0..40 */
+    D->Valid |= 1ULL << 44;
+    if (!A->GpuUp)
+        D->Valid = 0;
+}
+
+static NTSTATUS APIENTRY MwQueryAdapterInfo(IN_CONST_HANDLE hAdapter, const DXGKARG_QUERYADAPTERINFO *Info)
+{
+    MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
+    NTSTATUS st;
+
+    switch (Info->Type) {
+    case DXGKQAITYPE_DRIVERCAPS:
+        st = DriverCaps(Info);
+        break;
+    case DXGKQAITYPE_QUERYSEGMENT3:
+        st = MwQuerySegment(a, Info);
+        break;
+    case DXGKQAITYPE_DISPLAY_DRIVERCAPS_EXTENSION:
+        RtlZeroMemory(Info->pOutputData, Info->OutputDataSize);
+        st = STATUS_SUCCESS;
+        break;
+    default:
+        st = STATUS_NOT_SUPPORTED;
+        break;
+    }
+    WCHAR name[32];
+    UNICODE_STRING us;
+    RtlInitEmptyUnicodeString(&us, name, sizeof(name));
+    if (NT_SUCCESS(RtlUnicodeStringPrintf(&us, L"QAI_%u", (ULONG)Info->Type)))
+        MwLog(a, name, (ULONG)st);
+    return st;
+}
+
+static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE *Esc)
+{
+    MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
+    mw_u32 code;
+
+    if (Esc->PrivateDriverDataSize < sizeof(code))
+        return STATUS_INVALID_PARAMETER;
+    code = *(const mw_u32 *)Esc->pPrivateDriverData;
+    switch (code) {
+    case MW_ESCAPE_ALLOC_INFO:
+        if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_ALLOC_INFO_DATA))
+            return STATUS_INVALID_PARAMETER;
+        return MwEscapeAllocInfo(a, Esc, (MW_ESCAPE_ALLOC_INFO_DATA *)Esc->pPrivateDriverData);
+    case MW_ESCAPE_GPU_INFO:
+        if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_GPU_INFO_DATA))
+            return STATUS_INVALID_PARAMETER;
+        GpuInfo(a, (MW_ESCAPE_GPU_INFO_DATA *)Esc->pPrivateDriverData);
+        return STATUS_SUCCESS;
+    default:
+        return STATUS_NOT_SUPPORTED;
+    }
+}
+
+static NTSTATUS APIENTRY MwSetPointerPosition(IN_CONST_HANDLE hAdapter, const DXGKARG_SETPOINTERPOSITION *Arg)
+{
+    UNREFERENCED_PARAMETER(hAdapter);
+    UNREFERENCED_PARAMETER(Arg);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS APIENTRY MwSetPointerShape(IN_CONST_HANDLE hAdapter, const DXGKARG_SETPOINTERSHAPE *Arg)
+{
+    UNREFERENCED_PARAMETER(hAdapter);
+    UNREFERENCED_PARAMETER(Arg);
+    return STATUS_NOT_SUPPORTED;
+}
+
+/* ---- the traced DDI table ---- */
+
+#define MW_W2(x) L##x
+#define MW_W(x) MW_W2(x)
+#define TRACE_ADAPTER(Name, Proto, Args)                                        \
+    static NTSTATUS APIENTRY T_##Name Proto                                    \
+    { return MwRet((MW_ADAPTER *)hAdapter, L"Fail_" MW_W(#Name), Mw##Name Args); }
+
+TRACE_ADAPTER(QueryAdapterInfo, (IN_CONST_HANDLE hAdapter, const DXGKARG_QUERYADAPTERINFO *a), (hAdapter, a))
+TRACE_ADAPTER(Escape, (IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE *a), (hAdapter, a))
+TRACE_ADAPTER(CreateAllocation, (IN_CONST_HANDLE hAdapter, DXGKARG_CREATEALLOCATION *a), (hAdapter, a))
+TRACE_ADAPTER(DestroyAllocation, (IN_CONST_HANDLE hAdapter, const DXGKARG_DESTROYALLOCATION *a), (hAdapter, a))
+TRACE_ADAPTER(DescribeAllocation, (IN_CONST_HANDLE hAdapter, DXGKARG_DESCRIBEALLOCATION *a), (hAdapter, a))
+TRACE_ADAPTER(GetStandardAllocationDriverData, (IN_CONST_HANDLE hAdapter, DXGKARG_GETSTANDARDALLOCATIONDRIVERDATA *a), (hAdapter, a))
+TRACE_ADAPTER(BuildPagingBuffer, (IN_CONST_HANDLE hAdapter, DXGKARG_BUILDPAGINGBUFFER *a), (hAdapter, a))
+TRACE_ADAPTER(CreateDevice, (IN_CONST_HANDLE hAdapter, DXGKARG_CREATEDEVICE *a), (hAdapter, a))
+TRACE_ADAPTER(IsSupportedVidPn, (IN_CONST_HANDLE hAdapter, DXGKARG_ISSUPPORTEDVIDPN *a), (hAdapter, a))
+TRACE_ADAPTER(RecommendFunctionalVidPn, (IN_CONST_HANDLE hAdapter, const DXGKARG_RECOMMENDFUNCTIONALVIDPN *a), (hAdapter, a))
+TRACE_ADAPTER(EnumVidPnCofuncModality, (IN_CONST_HANDLE hAdapter, const DXGKARG_ENUMVIDPNCOFUNCMODALITY *a), (hAdapter, a))
+TRACE_ADAPTER(SetVidPnSourceVisibility, (IN_CONST_HANDLE hAdapter, const DXGKARG_SETVIDPNSOURCEVISIBILITY *a), (hAdapter, a))
+TRACE_ADAPTER(CommitVidPn, (IN_CONST_HANDLE hAdapter, const DXGKARG_COMMITVIDPN *a), (hAdapter, a))
+TRACE_ADAPTER(UpdateActiveVidPnPresentPath, (IN_CONST_HANDLE hAdapter, const DXGKARG_UPDATEACTIVEVIDPNPRESENTPATH *a), (hAdapter, a))
+TRACE_ADAPTER(RecommendMonitorModes, (IN_CONST_HANDLE hAdapter, const DXGKARG_RECOMMENDMONITORMODES *a), (hAdapter, a))
+TRACE_ADAPTER(QueryVidPnHWCapability, (IN_CONST_HANDLE hAdapter, DXGKARG_QUERYVIDPNHWCAPABILITY *a), (hAdapter, a))
+TRACE_ADAPTER(SetVidPnSourceAddress, (IN_CONST_HANDLE hAdapter, const DXGKARG_SETVIDPNSOURCEADDRESS *a), (hAdapter, a))
+TRACE_ADAPTER(ResetFromTimeout, (IN_CONST_HANDLE hAdapter), (hAdapter))
+TRACE_ADAPTER(RestartFromTimeout, (IN_CONST_HANDLE hAdapter), (hAdapter))
+
+NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
+{
+    DRIVER_INITIALIZATION_DATA init = {0};
+
+    init.Version = DXGKDDI_INTERFACE_VERSION_WDDM1_3;
+    init.DxgkDdiAddDevice = MwAddDevice;
+    init.DxgkDdiStartDevice = MwStartDevice;
+    init.DxgkDdiStopDevice = MwStopDevice;
+    init.DxgkDdiRemoveDevice = MwRemoveDevice;
+    init.DxgkDdiDispatchIoRequest = MwDispatchIoRequest;
+    init.DxgkDdiInterruptRoutine = MwInterruptRoutine;
+    init.DxgkDdiDpcRoutine = MwDpcRoutine;
+    init.DxgkDdiQueryChildRelations = MwQueryChildRelations;
+    init.DxgkDdiQueryChildStatus = MwQueryChildStatus;
+    init.DxgkDdiQueryDeviceDescriptor = MwQueryDeviceDescriptor;
+    init.DxgkDdiSetPowerState = MwSetPowerState;
+    init.DxgkDdiResetDevice = MwResetDevice;
+    init.DxgkDdiUnload = MwUnload;
+    init.DxgkDdiQueryInterface = MwQueryInterface;
+
+    init.DxgkDdiQueryAdapterInfo = T_QueryAdapterInfo;
+    init.DxgkDdiEscape = T_Escape;
+    init.DxgkDdiCreateAllocation = T_CreateAllocation;
+    init.DxgkDdiDestroyAllocation = T_DestroyAllocation;
+    init.DxgkDdiDescribeAllocation = T_DescribeAllocation;
+    init.DxgkDdiGetStandardAllocationDriverData = T_GetStandardAllocationDriverData;
+    init.DxgkDdiOpenAllocation = MwOpenAllocation;
+    init.DxgkDdiCloseAllocation = MwCloseAllocation;
+    init.DxgkDdiBuildPagingBuffer = T_BuildPagingBuffer;
+
+    init.DxgkDdiCreateDevice = T_CreateDevice;
+    init.DxgkDdiDestroyDevice = MwDestroyDevice;
+    init.DxgkDdiCreateContext = MwCreateContext;
+    init.DxgkDdiDestroyContext = MwDestroyContext;
+    init.DxgkDdiRender = MwRender;
+    init.DxgkDdiPresent = MwPresent;
+    init.DxgkDdiPatch = MwPatch;
+    init.DxgkDdiSubmitCommand = MwSubmitCommand;
+    init.DxgkDdiPreemptCommand = MwPreemptCommand;
+    init.DxgkDdiQueryCurrentFence = MwQueryCurrentFence;
+    init.DxgkDdiResetFromTimeout = T_ResetFromTimeout;
+    init.DxgkDdiRestartFromTimeout = T_RestartFromTimeout;
+    init.DxgkDdiCollectDbgInfo = MwCollectDbgInfo;
+    init.DxgkDdiGetNodeMetadata = MwGetNodeMetadata;
+
+    init.DxgkDdiSetPointerPosition = MwSetPointerPosition;
+    init.DxgkDdiSetPointerShape = MwSetPointerShape;
+    init.DxgkDdiIsSupportedVidPn = T_IsSupportedVidPn;
+    init.DxgkDdiRecommendFunctionalVidPn = T_RecommendFunctionalVidPn;
+    init.DxgkDdiEnumVidPnCofuncModality = T_EnumVidPnCofuncModality;
+    init.DxgkDdiSetVidPnSourceVisibility = T_SetVidPnSourceVisibility;
+    init.DxgkDdiCommitVidPn = T_CommitVidPn;
+    init.DxgkDdiUpdateActiveVidPnPresentPath = T_UpdateActiveVidPnPresentPath;
+    init.DxgkDdiSetVidPnSourceAddress = T_SetVidPnSourceAddress;
+    init.DxgkDdiRecommendMonitorModes = T_RecommendMonitorModes;
+    init.DxgkDdiQueryVidPnHWCapability = T_QueryVidPnHWCapability;
+    init.DxgkDdiStopDeviceAndReleasePostDisplayOwnership = MwStopDeviceAndReleasePostDisplayOwnership;
+    init.DxgkDdiSystemDisplayEnable = MwSystemDisplayEnable;
+    init.DxgkDdiSystemDisplayWrite = MwSystemDisplayWrite;
+
+    return DxgkInitialize(DriverObject, RegistryPath, &init);
+}
