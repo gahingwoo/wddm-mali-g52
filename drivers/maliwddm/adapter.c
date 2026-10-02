@@ -264,6 +264,20 @@ static NTSTATUS DriverCaps(const DXGKARG_QUERYADAPTERINFO *Info)
      * viogpu3d does; DMA-buffer-boundary preemption comes later. */
     caps->SchedulingCaps.PreemptionAware = 1;
     caps->GpuEngineTopology.NbAsymetricProcessingNodes = 1;
+    /* The four caps WDDM 1.2's table marks mandatory for a render-only
+     * driver. Without them, every render-only start failed with
+     * STATUS_GRAPHICS_INVALID_DRIVER_MODEL right after dxgkrnl read these
+     * caps (WinPE runs 5-9, ETW events 24/110/250 then the failure); a full
+     * driver without them was accepted. */
+    caps->PresentationCaps.SupportKernelModeCommandBuffer = 1; /* see MwRenderKm */
+    caps->FlipCaps.FlipOnVSyncMmIo = 1;                         /* no display: unused */
+    if (FITS(size, DXGK_DRIVERCAPS, PreemptionCaps)) {
+        /* Honest: a DMA buffer always runs to its end. */
+        caps->PreemptionCaps.GraphicsPreemptionGranularity = D3DKMDT_GRAPHICS_PREEMPTION_DMA_BUFFER_BOUNDARY;
+        caps->PreemptionCaps.ComputePreemptionGranularity = D3DKMDT_COMPUTE_PREEMPTION_DMA_BUFFER_BOUNDARY;
+    }
+    if (FITS(size, DXGK_DRIVERCAPS, SupportPerEngineTDR))
+        caps->SupportPerEngineTDR = TRUE;                       /* ResetEngine, QueryEngineStatus */
     if (FITS(size, DXGK_DRIVERCAPS, SupportNonVGA))
         caps->SupportNonVGA = TRUE;
     if (FITS(size, DXGK_DRIVERCAPS, SupportSmoothRotation))
@@ -517,6 +531,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     init.DxgkDdiCreateContext = T_CreateContext;
     init.DxgkDdiDestroyContext = T_DestroyContext;
     init.DxgkDdiRender = T_Render;
+    init.DxgkDdiRenderKm = MwRenderKm;
     init.DxgkDdiPresent = T_Present;
     init.DxgkDdiPatch = T_Patch;
     init.DxgkDdiSubmitCommand = T_SubmitCommand;

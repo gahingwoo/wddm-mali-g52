@@ -472,3 +472,14 @@ NTSTATUS APIENTRY MwGetScanLine(IN_CONST_HANDLE hAdapter, DXGKARG_GETSCANLINE *A
     Arg->ScanLine = 0;
     return STATUS_SUCCESS;
 }
+
+/* GDI hardware acceleration (SupportKernelModeCommandBuffer). A render-only
+ * adapter is never GDI's, so this is not expected to be called; it says so
+ * instead of building a DMA buffer it cannot. */
+NTSTATUS APIENTRY MwRenderKm(IN_CONST_HANDLE hContext, DXGKARG_RENDER *Arg)
+{
+    MW_CONTEXT *ctx = (MW_CONTEXT *)hContext;
+    UNREFERENCED_PARAMETER(Arg);
+    MwLog(ctx->Device->Adapter, L"RenderKmCalled", 1);
+    return STATUS_NOT_SUPPORTED;
+}
