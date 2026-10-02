@@ -17,6 +17,8 @@ echo == m5test >> "%OUT%"
 echo m5test exit code %ERRORLEVEL% >> "%OUT%"
 echo == driver trace >> "%OUT%"
 reg query %KEY%\maliwddm >> "%OUT%" 2>&1
+echo == UMD names: ours and Basic Render's >> "%OUT%"
+powershell -NoProfile -Command "Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}' -ErrorAction SilentlyContinue | ForEach-Object { $p = Get-ItemProperty $_.PSPath; if ($p.UserModeDriverName -or $p.DriverDesc) { '{0}: {1} | UMD: {2}' -f $_.PSChildName, $p.DriverDesc, ($p.UserModeDriverName -join ',') } }" >> "%OUT%" 2>&1
 echo == display adapters >> "%OUT%"
 powershell -NoProfile -Command "Get-CimInstance Win32_VideoController | Format-List Name,Status,DriverVersion,CurrentHorizontalResolution,CurrentVerticalResolution" >> "%OUT%" 2>&1
 type "%OUT%"

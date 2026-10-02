@@ -4,9 +4,11 @@
 ; the edk2-rk3576 CM5-IO DSDT), the device m1probe, malikm and malidod bind:
 ; only one of them can be installed at a time.
 ;
-; Step (a)/(b): no user-mode driver yet, so no UserModeDriverName. Preemption
-; is turned off system-wide, as virtio-win's viogpu3d does: the driver never
-; preempts a DMA buffer.
+; Step (a)/(b): our user-mode driver does not exist yet, so the adapter names
+; WARP (d3d10warp.dll, the UMD Microsoft Basic Render uses) as its UMD. A
+; full WDDM adapter with no loadable UMD fails with code 43 (board runs 1-3,
+; and viogpu3d's PR 943 thread). Preemption is turned off system-wide, as
+; viogpu3d does: the driver never preempts a DMA buffer.
 ;
 ; SPDX-License-Identifier: GPL-2.0
 ;
@@ -44,6 +46,7 @@ AddReg = MW_Settings
 maliwddm.sys
 
 [MW_Settings]
+HKR,,UserModeDriverName,%REG_MULTI_SZ%,d3d10warp.dll,d3d10warp.dll,d3d10warp.dll,d3d10warp.dll
 HKLM,"SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Scheduler",EnablePreemption,%REG_DWORD%,0
 
 [MW_Inst.Services]
@@ -63,3 +66,4 @@ DiskName      = "RK3576 Mali-G52 WDDM driver"
 MW.DeviceDesc = "Rockchip RK3576 Mali-G52 (WDDM)"
 MW.SvcDesc    = "RK3576 Mali-G52 WDDM driver"
 REG_DWORD     = 0x00010001
+REG_MULTI_SZ  = 0x00010000
