@@ -1,7 +1,9 @@
 ;
 ; malidod.inf - milestone M5.1: display-only driver (KMDOD) for the RK3576.
-; Binds ACPI\RKCP7402 (GPU0 in the edk2-rk3576 CM5-IO DSDT), the same device
-; m1probe and malikm bind: only one of them can be installed at a time.
+; Binds ACPI\RKCP7403 (DSP0 in the edk2-rk3576 CM5-IO DSDT, branch
+; cm5io-mali-m1), the display device apart from the GPU, so that it pairs
+; with maliwddm, the render-only driver on GPU0 (ACPI\RKCP7402). Firmware
+; without DSP0 has no device for it.
 ;
 ; SPDX-License-Identifier: GPL-2.0
 ;
@@ -28,7 +30,7 @@ malidod.sys = 1
 %ProviderName% = Standard,NTARM64.10.0...16299
 
 [Standard.NTARM64.10.0...16299]
-%MD.DeviceDesc% = MD_Inst,ACPI\RKCP7402
+%MD.DeviceDesc% = MD_Inst,ACPI\RKCP7403
 
 [MD_Inst]
 FeatureScore = F9

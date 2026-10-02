@@ -10,13 +10,16 @@ set OUT=%HERE%m5-wddm-check.txt
 set DEV=ACPI\RKCP7402\0
 set KEY="HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters"
 echo m5-wddm-check %date% %time% > "%OUT%"
-echo == device >> "%OUT%"
+echo == devices >> "%OUT%"
 pnputil /enum-devices /instanceid "%DEV%" >> "%OUT%" 2>&1
+pnputil /enum-devices /instanceid "ACPI\RKCP7403\0" >> "%OUT%" 2>&1
 echo == m5test >> "%OUT%"
 "%HERE%m5test.exe" >> "%OUT%" 2>&1
 echo m5test exit code %ERRORLEVEL% >> "%OUT%"
 echo == driver trace >> "%OUT%"
 reg query %KEY%\maliwddm >> "%OUT%" 2>&1
+echo == malidod trace >> "%OUT%"
+reg query "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7403\0\Device Parameters" >> "%OUT%" 2>&1
 echo == UMD names: ours and Basic Render's >> "%OUT%"
 powershell -NoProfile -Command "Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}' -ErrorAction SilentlyContinue | ForEach-Object { $p = Get-ItemProperty $_.PSPath; if ($p.UserModeDriverName -or $p.DriverDesc) { '{0}: {1} | UMD: {2}' -f $_.PSChildName, $p.DriverDesc, ($p.UserModeDriverName -join ',') } }" >> "%OUT%" 2>&1
 echo == display adapters >> "%OUT%"
