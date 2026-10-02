@@ -34,8 +34,10 @@ if exist "%HERE%d3d10warp.dll" (
   echo   no d3d10warp.dll on the stick: maliwddm will likely fail with code 43 >> "%OUT%"
 )
 
-echo == wpr start (dxgkrnl ETW) >> "%OUT%"
-wpr -start "%HERE%dxgkrnl.wprp!Mali" -filemode >> "%OUT%" 2>&1
+rem dxgkrnl's own ETW events, around the drvloads. WPR fails to start in
+rem this WinPE (0x80070002), so etwrec (tools/windows/etwrec.c) runs it.
+echo == etwrec start (dxgkrnl ETW) >> "%OUT%"
+"%HERE%etwrec.exe" start X:\dxgkrnl.etl >> "%OUT%" 2>&1
 echo exit %ERRORLEVEL% >> "%OUT%"
 
 echo == drvload malidod >> "%OUT%"
@@ -47,8 +49,8 @@ drvload "%HERE%maliwddm\maliwddm.inf" >> "%OUT%" 2>&1
 echo exit %ERRORLEVEL% >> "%OUT%"
 ping -n 11 127.0.0.1 >nul
 
-echo == wpr stop >> "%OUT%"
-wpr -stop X:\dxgkrnl.etl >> "%OUT%" 2>&1
+echo == etwrec stop >> "%OUT%"
+"%HERE%etwrec.exe" stop >> "%OUT%" 2>&1
 echo exit %ERRORLEVEL% >> "%OUT%"
 dir X:\dxgkrnl.etl >> "%OUT%" 2>&1
 

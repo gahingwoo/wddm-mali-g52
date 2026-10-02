@@ -98,6 +98,14 @@ jobs:
           if ($LASTEXITCODE) { throw 'm5test build failed' }
           .\out\m5test.exe
           if ($LASTEXITCODE -ne 1) { throw "m5test: unexpected exit code $LASTEXITCODE" }
+          # etwrec: start/stop a DxgKrnl ETW session (WinPE has no working wpr).
+          cl /nologo /W4 /WX /O2 tools\windows\etwrec.c advapi32.lib /Fe:out\etwrec.exe
+          if ($LASTEXITCODE) { throw 'etwrec build failed' }
+          .\out\etwrec.exe start "$env:RUNNER_TEMP\t.etl"
+          if ($LASTEXITCODE) { throw "etwrec start: $LASTEXITCODE" }
+          .\out\etwrec.exe stop
+          if ($LASTEXITCODE) { throw "etwrec stop: $LASTEXITCODE" }
+          Get-Item "$env:RUNNER_TEMP\t.etl" | Format-Table Name, Length
           # How the UCRT treats a handle of FILE_TYPE_UNKNOWN (what \\.\MaliG52 is).
           cl /nologo /O2 /MD tests\osfhandle\osfhandle.c /Fe:osfhandle.exe
           .\osfhandle.exe
@@ -108,6 +116,7 @@ jobs:
           path: |
             out/m3test.exe
             out/m5test.exe
+            out/etwrec.exe
 
   malikm-host:
     name: malikm on a simulated G52 (Linux, ASan/UBSan)
