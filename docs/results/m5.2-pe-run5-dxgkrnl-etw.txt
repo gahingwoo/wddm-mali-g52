@@ -1,0 +1,76 @@
+2758232722 131 0 {'DeviceObject': '0xffffe60d6273b030', 'Status': '0xc0000034'}
+2758232897 131 0 {'DeviceObject': '0xffffe60d6273b030', 'Status': '0xc0000034'}
+2758277634 161 0 {'MiniportContext': '0xffffe60d620dc7e0', 'InterfaceType': '4faa6425dbdd9544b4976ad4a84163d7', 'Status': '0xc00000bb'}
+2758278075 494 0 {'AgentID': 'NULL', 'EventType': '0x20005', 'PartitionId': '0xffffffff', 'EventDescription': 'Adapter AddDevice has completed with status %1', 'EventData1': '0x0', 'EventData2': '0x0', 'EventData3': '0x0', 'EventData4': '0x0', 'EventData5': '0x0'}
+2758285992 127 0 {'DeviceObject': '0xffffe60d6273b030', 'Status': '0xc00000bb'}
+2758292439 127 0 {'DeviceObject': '0xffffe60d6273b030', 'Status': '0xc00000bb'}
+2758325066 139 0 {'MiniportContext': '0xffffe60d620dc7e0', 'NumVidPnSources': '0x0', 'ChildCount': '0x0', 'Status': '0xc0000001'}
+2758325241 494 0 {'AgentID': 'NULL', 'EventType': '0x20004', 'PartitionId': '0xffffffff', 'EventDescription': 'Adapter StartDevice has completed with status %1', 'EventData1': '0xffffffffc0000001', 'EventData2': '0x0', 'EventData3': '0x0', 'EventData4': '0x0', 'EventData5': '0x0'}
+2758349888 494 0 {'AgentID': 'NULL', 'EventType': '0x40000', 'PartitionId': '0xffffffff', 'EventDescription': 'WdDbgReportCreate failed', 'EventData1': '0x2ab6', 'EventData2': '0x0', 'EventData3': '0x0', 'EventData4': '0x0', 'EventData5': '0x0'}
+2894388623 131 0 {'DeviceObject': '0xffffe60d627b6030', 'Status': '0xc0000034'}
+2894388833 131 0 {'DeviceObject': '0xffffe60d627b6030', 'Status': '0xc0000034'}
+2894425485 161 0 {'MiniportContext': '0xffffe60d627af000', 'InterfaceType': '4faa6425dbdd9544b4976ad4a84163d7', 'Status': '0xc00000bb'}
+2894427571 161 0 {'MiniportContext': '0xffffe60d627af000', 'InterfaceType': 'b12c3a698d8cb64a95554b85ef2c7c6b', 'Status': '0xc00000bb'}
+2894429580 161 0 {'MiniportContext': '0xffffe60d627af000', 'InterfaceType': '2687097fbb2ef34fa27f1046b95dc517', 'Status': '0xc00000bb'}
+2894431624 161 0 {'MiniportContext': '0xffffe60d627af000', 'InterfaceType': 'a4ee29e9f1b97b40aab9ab08bb44fbf4', 'Status': '0xc00000bb'}
+2894433612 161 0 {'MiniportContext': '0xffffe60d627af000', 'InterfaceType': 'de7246bf4e6be44ba32568a91ea49c09', 'Status': '0xc00000bb'}
+2894433927 494 0 {'AgentID': 'NULL', 'EventType': '0x20005', 'PartitionId': '0xffffffff', 'EventDescription': 'Adapter AddDevice has completed with status %1', 'EventData1': '0x0', 'EventData2': '0x0', 'EventData3': '0x0', 'EventData4': '0x0', 'EventData5': '0x0'}
+2894440591 127 0 {'DeviceObject': '0xffffe60d627b6030', 'Status': '0xc00000bb'}
+2895170747 362 0 {'Timeout': '0xffffffffca5b1700', 'WakeReason': '0x0'}
+2895650611 494 0 {'AgentID': 'NULL', 'EventType': '0x40000', 'PartitionId': '0xffffffff', 'EventDescription': 'Failed (0x%I64x) to get display config buffer sizes when looking for internal target/priority. Trying with %d', 'EventData1': '0xffffffffc00000bb', 'EventData2': '0x2', 'EventData3': '0x0', 'EventData4': '0x0', 'EventData5': '0x0'}
+2895652683 494 0 {'AgentID': 'NULL', 'EventType': '0x40000', 'PartitionId': '0xffffffff', 'EventDescription': "Can't reference adapter by luid (0x%I64x::0x%I64x).", 'EventData1': '0xfffffffffffff80e', 'EventData2': '0xd4941540', 'EventData3': '0x0', 'EventData4': '0x0', 'EventData5': '0x0'}
+2895662567 362 0 {'Timeout': '0xffffffffd7223158', 'WakeReason': '0x0'}
+2895665829 362 0 {'Timeout': '0xffffffffd72493b2', 'WakeReason': '0x0'}
+2895672220 362 0 {'Timeout': '0xffffffffd72493b2', 'WakeReason': '0x0'}
+2895672297 292 0 {'hAdapter': '0xffffe60d61acc000', 'hSyncObject': '0xffffe60d61bb0aa0', 'Reason': '0x1', 'Flags': '0x0', 'SharedHandle': '0x0', 'InitialValue': '0xffffec77'}
+2895672395 292 0 {'hAdapter': '0xffffe60d61acc000', 'hSyncObject': '0xffffe60d61bb0e60', 'Reason': '0x1', 'Flags': '0x0', 'SharedHandle': '0x0', 'InitialValue': '0xffffec77'}
+2895726176 127 0 {'DeviceObject': '0xffffe60d619746b0', 'Status': '0xc00000bb'}
+2895726302 127 0 {'DeviceObject': '0xffffe60d619746b0', 'Status': '0xc00000bb'}
+2895768795 127 0 {'DeviceObject': '0xffffe60d627b6030', 'Status': '0xc00000bb'}
+2895798479 494 0 {'AgentID': 'NULL', 'EventType': '0x40000', 'PartitionId': '0xffffffff', 'EventDescription': 'Unable to invalidate path-persistence invariance. (NtStatus = 0x%I64x, i_AdapterLuid = 0x%I64x%08I64x, i_IncomingTargetId = 0x%I64x, i_MonitorEvent = 0x%I64x)', 'EventData1': '0xffffffffc01e0002', 'EventData2': '0x0', 'EventData3': '0xbd6f', 'EventData4': '0x0', 'EventData5': '0x0'}
+2895798920 494 0 {'AgentID': 'NULL', 'EventType': '0x40000', 'PartitionId': '0xffffffff', 'EventDescription': 'Unable to get copy of most recent topology. (NtStatus = 0x%I64x, i_AdapterLuid = 0x%I64x%08I64x, i_IncomingTargetId = 0x%I64x, i_MonitorEvent = 0x%I64x)', 'EventData1': '0xffffffffc0000001', 'EventData2': '0x0', 'EventData3': '0xbd6f', 'EventData4': '0x0', 'EventData5': '0x0'}
+2895832779 494 0 {'AgentID': 'NULL', 'EventType': '0x40000', 'PartitionId': '0xffffffff', 'EventDescription': 'Unable to get copy of most recent topology. (NtStatus = 0x%I64x, i_AdapterLuid = 0x%I64x%08I64x, i_TargetId = 0x%I64x, i_MonitorEvent = 0x%I64x)', 'EventData1': '0xffffffffc0000001', 'EventData2': '0x0', 'EventData3': '0xbd6f', 'EventData4': '0x0', 'EventData5': '0x0'}
+2896190871 113 0 {'hContext': '0xffffe60d620fa4d0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2896190899 113 0 {'hContext': '0xffffe60d620fa4d0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2896191018 113 0 {'hContext': '0xffffe60d620fa4d0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2896204164 113 0 {'hContext': '0xffffe60d620fa4d0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2896206299 113 0 {'hContext': '0xffffe60d620fa4d0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2896206320 113 0 {'hContext': '0xffffe60d620fa4d0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2896206418 113 0 {'hContext': '0xffffe60d620fa4d0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2896210478 113 0 {'hContext': '0xffffe60d620fa4d0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2896211451 92 0 {'hAdapter': '0xffffe60d61bab000', 'hSyncObject': '0xffffe60d623c9890', 'Reason': '0x0', 'Flags': '0x1', 'SharedHandle': '0x0', 'InitialValue': '0x0'}
+2896220173 494 0 {'AgentID': 'NULL', 'EventType': '0x40000', 'PartitionId': '0xffffffff', 'EventDescription': 'Driver returned an invalid NTSTATUS code: 0x%I64x', 'EventData1': '0xffffffffc00000bb', 'EventData2': '0x0', 'EventData3': '0x0', 'EventData4': '0x0', 'EventData5': '0x0'}
+2896227607 24 0 {'pDeviceObject': '0xffffe60d627b6030', 'pDxgAdapter': '0xffffe60d61bab000', 'NbVidPnSources': '0x0', 'HighestAcceptableAddress': '0xffffffffff', 'MaxSlotId': '0x10', 'ApertureSegmentCommitLimit': '0x0', 'MaxPointerWidth': '0x0', 'MaxPointerHeight': '0x0', 'InterruptMessageNumber': '0x0', 'NumberOfSwizzlingRanges': '0x0', 'MaxOverlays': '0x0', 'MaxQueuedFlipOnVSync': '0x0', 'PointerCaps': '0x0', 'GammaRampCaps': '0x0', 'PresentationCaps': '0x0', 'AlignmentShift': 0, 'MaxTextureWidthShift': 0, 'MaxTextureHeightShift': 0, 'Reserved': 0, 'FlipCaps': '0x0', 'SchedulingCaps': '0x5', 'ReservedMemoryManagementCaps': '0x0', 'PagingNode': '0x0', 'NbAsymetricProcessingNodes': '0x1', 'ReservedTopology': '0x0', 'NumPowerComponents': '0x0', 'AdapterType': '0x9', 'pMiniportContext': '0xffffe60d627af000', 'VirtualGpuLuid': '0x0'}
+2896232444 494 0 {'AgentID': '{0739334D-BE63-11F1-9313-8860FCF8339F}', 'EventType': '0x20004', 'PartitionId': '0xffffffff', 'EventDescription': 'Adapter StartDevice has completed with status %1', 'EventData1': '0xffffffffc01e0004', 'EventData2': '0x0', 'EventData3': '0x0', 'EventData4': '0x0', 'EventData5': '0x0'}
+2896236224 360 0 {'pDxgAdapter': '0xffffe60d61bab000', 'FlushSchedulerReason': '0x5', 'VidPnSourceId': '0xffffffff'}
+2896236805 94 0 {'hAdapter': '0xffffe60d61bab000', 'hSyncObject': '0xffffe60d623c9890', 'Reason': '0x1', 'Flags': '0x1', 'SharedHandle': '0x40000082', 'InitialValue': '0x0'}
+2896236931 360 0 {'pDxgAdapter': '0xffffe60d61bab000', 'FlushSchedulerReason': '0x5', 'VidPnSourceId': '0xffffffff'}
+2896237526 113 0 {'hContext': '0xffffe60d620fa4d0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2896237610 113 0 {'hContext': '0xffffe60d620fa4d0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2896238359 113 0 {'hContext': '0xffffe60d620fa4d0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2896241152 113 0 {'hContext': '0xffffe60d620fa4d0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2896241551 360 0 {'pDxgAdapter': '0xffffe60d61bab000', 'FlushSchedulerReason': '0x5', 'VidPnSourceId': '0xffffffff'}
+2896243728 127 0 {'DeviceObject': '0xffffe60d627b6030', 'Status': '0xc00000bb'}
+2896243917 113 0 {'hContext': '0xffffe60d620fa4d0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2896243938 113 0 {'hContext': '0xffffe60d620fa4d0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2896244029 113 0 {'hContext': '0xffffe60d620fa4d0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2896244827 113 0 {'hContext': '0xffffe60d620fa4d0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2896249832 113 0 {'hContext': '0xffffe60d620fa4d0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2896249853 113 0 {'hContext': '0xffffe60d620fa4d0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2896249944 113 0 {'hContext': '0xffffe60d620fa4d0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2896250504 113 0 {'hContext': '0xffffe60d620fa4d0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2896286414 25 0 {'pDeviceObject': '0xffffe60d627b6030', 'pDxgAdapter': '0xffffe60d61bab000', 'NbVidPnSources': '0x0', 'HighestAcceptableAddress': '0xffffffffff', 'MaxSlotId': '0x10', 'ApertureSegmentCommitLimit': '0x0', 'MaxPointerWidth': '0x0', 'MaxPointerHeight': '0x0', 'InterruptMessageNumber': '0x0', 'NumberOfSwizzlingRanges': '0x0', 'MaxOverlays': '0x0', 'MaxQueuedFlipOnVSync': '0x0', 'PointerCaps': '0x0', 'GammaRampCaps': '0x0', 'PresentationCaps': '0x0', 'AlignmentShift': 0, 'MaxTextureWidthShift': 0, 'MaxTextureHeightShift': 0, 'Reserved': 0, 'FlipCaps': '0x0', 'SchedulingCaps': '0x5', 'ReservedMemoryManagementCaps': '0x0', 'PagingNode': '0x0', 'NbAsymetricProcessingNodes': '0x1', 'ReservedTopology': '0x0', 'NumPowerComponents': '0x0', 'AdapterType': '0x0', 'pMiniportContext': '0x0', 'VirtualGpuLuid': '0x0'}
+2896311040 494 0 {'AgentID': 'NULL', 'EventType': '0x40000', 'PartitionId': '0xffffffff', 'EventDescription': 'The selected adapter is display only adapter', 'EventData1': '0x520', 'EventData2': '0x0', 'EventData3': '0x0', 'EventData4': '0x0', 'EventData5': '0x0'}
+2896311222 494 0 {'AgentID': 'NULL', 'EventType': '0x20006', 'PartitionId': '0xffffffff', 'EventDescription': 'Adapter StopDevice has completed with status %1', 'EventData1': '0x0', 'EventData2': '0x0', 'EventData3': '0x0', 'EventData4': '0x0', 'EventData5': '0x0'}
+2896332278 133 0 {'DeviceObject': '0xffffe60d61ac9b50', 'Status': '0xc00000bb'}
+2896332425 133 0 {'DeviceObject': '0xffffe60d61ac9b50', 'Status': '0xc00000bb'}
+2896402838 290 0 {'hAdapter': '0xffffe60d61acc000', 'hSyncObject': '0xffffe60d623ca790', 'Reason': '0x0', 'Flags': '0x0', 'SharedHandle': '0x0', 'InitialValue': '0xffffec77'}
+2896403034 290 0 {'hAdapter': '0xffffe60d61acc000', 'hSyncObject': '0xffffe60d623ca650', 'Reason': '0x0', 'Flags': '0x0', 'SharedHandle': '0x0', 'InitialValue': '0xffffec77'}
+2896414640 362 0 {'Timeout': '0xffffffffd72493b2', 'WakeReason': '0x0'}
+2896415109 71 0 {'hAllocationHandle': '0xffffe60d624e7310', 'Reason': '0x0', 'Write': '0x1'}
+2896416474 347 0 {'Status': '0x0', 'PageInPass': '0x0', 'OverBudget': '0x0', 'PriorityBandRestriction': '0x2', 'PageInPreferredOnly': '0x1', 'Recoverable': '0x0', 'FailedVidMmAlloc': '0x0'}
+2896420009 362 0 {'Timeout': '0xffffffffd7295866', 'WakeReason': '0x0'}
+2896420373 71 0 {'hAllocationHandle': '0xffffe60d624e7510', 'Reason': '0x0', 'Write': '0x1'}
+2896421500 347 0 {'Status': '0x0', 'PageInPass': '0x0', 'OverBudget': '0x0', 'PriorityBandRestriction': '0x2', 'PageInPreferredOnly': '0x1', 'Recoverable': '0x0', 'FailedVidMmAlloc': '0x0'}
+2896621070 494 0 {'AgentID': 'NULL', 'EventType': '0x40000', 'PartitionId': '0xffffffff', 'EventDescription': 'MonitorGetMonitorDeviceInterfaceName failed for adapter: 0x%I64x, target: 0x%I64x, with status: 0x%I64x', 'EventData1': '0xffffe60d61a72000', 'EventData2': '0x0', 'EventData3': '0xffffffffc00000c0', 'EventData4': '0x0', 'EventData5': '0x0'}
+2896626943 133 0 {'DeviceObject': '0xffffe60d61ac9b50', 'Status': '0xc01e0305'}

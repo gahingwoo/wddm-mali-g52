@@ -51,7 +51,7 @@ def interesting(names, vals):
 from etl.etl import IEtlFileObserver
 
 def guid_of(h):
-    g = h.provider_id
+    g = h.provider_id.inner if hasattr(h.provider_id, "inner") else h.provider_id
     d4 = bytes(g.data4)
     return "%08x-%04x-%04x-%s-%s" % (g.data1, g.data2, g.data3, d4[:2].hex(), d4[2:].hex())
 
