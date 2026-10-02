@@ -1,0 +1,32 @@
+2910315926 20 0 {'hContext': '0xffffb10f6dfdbae0', 'Status': '0x5', 'Line': '0x2e76'}
+2910316003 113 0 {'hContext': '0xffffb10f6dfdbae0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2910316031 113 0 {'hContext': '0xffffb10f6dfdbae0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2910316080 179 0 {'hContext': '0xffffb10f6dfdbae0', 'PacketType': '0x2', 'SubmitSequence': '0x2'}
+2910316115 20 0 {'hContext': '0xffffb10f6dfdbae0', 'Status': '0x1', 'Line': '0x38d7'}
+2910316164 113 0 {'hContext': '0xffffb10f6dfdbae0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2910316185 179 0 {'hContext': '0xffffb10f6dfdbae0', 'PacketType': '0x2', 'SubmitSequence': '0x2'}
+2910316255 281 0 {'pDmaBuffer': '0x0'}
+2910316409 67 0 {'SegmentId': '0x1', 'hAllocationGlobalHandle': '0xffffcd010452fda0', 'MinAddress': '0x0', 'MaxAddress': '0x0', 'NoEvict': '0x0', 'TrimmingPriorityLimit': '0x0', 'Restriction': '0x4', 'ProcessCommittedState': '0x3'}
+2910316640 274 0 {'DxgAdapter': '0xffffb10f6df94000', 'SegmentId': '0x1', 'TotalBytesResident': '0x14000'}
+2910316682 68 0 {'Status': '0x0'}
+2910317053 105 0 {'Function': '0x1f40'}
+2910321736 106 0 {'Function': '0x1f40'}
+2910322163 105 0 {'Function': '0x1398'}
+2910322499 106 0 {'Function': '0x1398'}
+2910322562 58 0 {'pDxgAdapter': '0xffffb10f6df94000', 'hDmaBuffer': '0x0', 'ContinueNextBuffer': '0x0', 'hAllocationGlobalHandle': '0xffffcd010452fda0', 'SegmentId': '0x1', 'OffsetInPages': '0x3ffec', 'NumberOfPages': '0xa', 'Flags': '0x0', 'EvictionResource': '0x0'}
+2910322618 51 0 {'hDevice': '0x0', 'hAllocationGlobalHandle': '0xffffcd010452fda0', 'size': '0xa000', 'bTemporary': '0x0'}
+2910322730 282 0 {'pDmaBuffer': '0x0'}
+2910322870 20 0 {'hContext': '0xffffb10f6dfdbae0', 'Status': '0x0', 'Line': '0x2679'}
+2910322933 113 0 {'hContext': '0xffffb10f6dfdbae0', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+2910323031 180 1 {'hContext': '0xffffb10f6dfdbae0', 'PacketType': '0x2', 'SubmitSequence': '0x2', 'bPreempted': '0x0', 'bTimeouted': '0x0', 'pQueuePacket': '0x0'}
+2910323437 33 3 {'hProcessId': '0x4', 'hDevice': '0x0', 'pDxgAdapter': '0xffffb10f6df94000', 'Flags': '0x10000048', 'allocSize': '0xa000', 'ulAlignment': '0x0', 'dwReadSegment': '0x1', 'dwWriteSegment': '0x1', 'PreferredSegment': '0x0', 'HintedBank': '0x0', 'dwEvictionSegment': '0x0', 'Priority': '0xa0000000', 'hVidMmGlobalAlloc': '0xffffcd010452fda0', 'hDxgGlobalAlloc': '0x0', 'hDxgSharedResource': '0x0', 'UsageVersion': '0x0', 'UsageFlags': '0x0', 'Format': '0x0', 'SwizzledFormat': '0x0', 'ByteOffset': '0x0', 'Width': '0x0', 'Height': '0x0', 'Pitch': '0x0', 'Depth': '0x0', 'SlicePitch': '0x0', 'BackingStoreWasPinned': '0x0', 'pSectionObject': '0xffffcd01042f1a40', 'PhysicalAdapterIndex': 0, 'PageTableOrDirectory': '0x0'}
+2910323801 76 0 {'hContext': '0x0', 'pDxgAdapter': '0xffffb10f6df94000', 'pDmaBuffer': '0xffffb10f6dca8560', 'DmaSize': '0xa000', 'AllocationListSize': '0x0', 'PatchLocationListSize': '0x0', 'hAllocationGlobalHandle': '0xffffcd010452fda0'}
+2910324438 92 0 {'hAdapter': '0xffffb10f6df94000', 'hSyncObject': '0xffffb10f6df5c030', 'Reason': '0x0', 'Flags': '0x1', 'SharedHandle': '0x0', 'InitialValue': '0x0'}
+2910325019 105 0 {'Function': '0x1388'}
+2910333118 106 0 {'Function': '0x1388'}
+2910333496 459 1 {'AdapterHandle': '0xffffb10f6df94000', 'SupportRuntimePowerManagement': '0x0'}
+2910341728 24 0 {'pDeviceObject': '0xffffb10f6df92030', 'pDxgAdapter': '0xffffb10f6df94000', 'NbVidPnSources': '0x0', 'HighestAcceptableAddress': '0xffffffffff', 'MaxSlotId': '0x10', 'ApertureSegmentCommitLimit': '0x0', 'MaxPointerWidth': '0x0', 'MaxPointerHeight': '0x0', 'InterruptMessageNumber': '0x0', 'NumberOfSwizzlingRanges': '0x0', 'MaxOverlays': '0x0', 'MaxQueuedFlipOnVSync': '0x0', 'PointerCaps': '0x0', 'GammaRampCaps': '0x0', 'PresentationCaps': '0x0', 'AlignmentShift': 0, 'MaxTextureWidthShift': 0, 'MaxTextureHeightShift': 0, 'Reserved': 0, 'FlipCaps': '0x0', 'SchedulingCaps': '0x5', 'ReservedMemoryManagementCaps': '0x0', 'PagingNode': '0x0', 'NbAsymetricProcessingNodes': '0x1', 'ReservedTopology': '0x0', 'NumPowerComponents': '0x0', 'AdapterType': '0x9', 'pMiniportContext': '0xffffb10f6df8b000', 'VirtualGpuLuid': '0x0'}
+2910343387 110 1 {'pDxgAdapter': '0xffffb10f6df94000', 'ConfigSpaceSize': '0x0', 'ConfigSpace': 0, 'ChainUid': '0x0', 'NumberOfLinksInChain': '0x0', 'LeadLink': '0x2000000', 'BusType': '0x52000000', 'VendorID': '0x3750434b', 'DeviceID': '0x323034', 'SubVendorID': '0x0', 'SubSystemID': '0x0', 'RevisionID': '0xc8000000', 'AdapterLuid': '4f020000000000'}
+2910343499 250 0 {'pDxgAdapter': '0xffffb10f6df94000', 'NodeOrdinal': '0x0', 'EngineType': '0x1', 'FriendlyName': 'Mali-G52 job manager'}
+2910347433 494 0 {'AgentID': '{2BC94C9D-BE80-11F1-9577-C60FC4B31CDD}', 'EventType': '0x20004', 'PartitionId': '0xffffffff', 'EventDescription': 'Adapter StartDevice has completed with status %1', 'EventData1': '0xffffffffc01e0004', 'EventData2': '0x0', 'EventData3': '0x0', 'EventData4': '0x0', 'EventData5': '0x0'}
+2910349085 126 0 {'DeviceObject': '0xffffb10f6df92030', 'StackLocationSize': 72, 'StackLocation': '1b1400000000000000000000000000000000000000000000000000000000000000000000000000003020f96d0fb1ffff00000000000000000000000000000000000000000000000000000000', 'Status': ''}
