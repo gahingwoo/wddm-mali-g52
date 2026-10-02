@@ -543,6 +543,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     init.DxgkDdiGetNodeMetadata = MwGetNodeMetadata;
     init.DxgkDdiResetEngine = T_ResetEngine;
     init.DxgkDdiQueryEngineStatus = T_QueryEngineStatus;
+    init.DxgkDdiQueryDependentEngineGroup = MwQueryDependentEngineGroup;
     init.DxgkDdiCancelCommand = T_CancelCommand;
     init.DxgkDdiControlInterrupt = T_ControlInterrupt;
     init.DxgkDdiGetScanLine = T_GetScanLine;

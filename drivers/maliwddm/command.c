@@ -483,3 +483,16 @@ NTSTATUS APIENTRY MwRenderKm(IN_CONST_HANDLE hContext, DXGKARG_RENDER *Arg)
     MwLog(ctx->Device->Adapter, L"RenderKmCalled", 1);
     return STATUS_NOT_SUPPORTED;
 }
+
+/* The third DDI SupportPerEngineTDR requires (with ResetEngine and
+ * QueryEngineStatus): dxgkrnl said so in WinPE run 10 ("Driver reports
+ * SupportPerEngineTDR cap but does not fill in all of the required DDIs")
+ * and failed the start with STATUS_INVALID_PARAMETER. One engine, so
+ * nothing depends on it. */
+NTSTATUS APIENTRY MwQueryDependentEngineGroup(IN_CONST_HANDLE hAdapter,
+                                              DXGKARG_QUERYDEPENDENTENGINEGROUP *Arg)
+{
+    UNREFERENCED_PARAMETER(hAdapter);
+    Arg->DependentNodeOrdinalMask = 0;
+    return STATUS_SUCCESS;
+}
