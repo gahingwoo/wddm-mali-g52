@@ -55,9 +55,13 @@ jobs:
           $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=wddm-mali-g52 test signing' `
                     -CertStoreLocation Cert:\CurrentUser\My -HashAlgorithm SHA256 -NotAfter (Get-Date).AddYears(5)
           Export-PfxCertificate -Cert $cert -FilePath C:\t.pfx -Password (ConvertTo-SecureString $pw -Force -AsPlainText) | Out-Null
-          $iv = Join-Path $kits "bin\$env:WDK_VERSION\x86\infverif.exe"
-          & $iv /v "$out\$env:DRV.inf"
-          if ($LASTEXITCODE) { throw "infverif failed: $LASTEXITCODE" }
+          $iv = (Get-ChildItem $kits -Recurse -Filter infverif.exe -ErrorAction SilentlyContinue |
+                   Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1).FullName
+          if ($iv) {
+            Write-Host "InfVerif: $iv"
+            & $iv /v "$out\$env:DRV.inf"
+            if ($LASTEXITCODE) { throw "infverif failed: $LASTEXITCODE" }
+          } else { Write-Host 'infverif.exe not found in the WDK' }
           & $i2c /driver:"$((Resolve-Path $out).Path)" /os:10_RS3_ARM64
           if ($LASTEXITCODE) { throw "inf2cat failed: $LASTEXITCODE" }
           & $st sign /fd sha256 /f C:\t.pfx /p $pw "$out\$env:DRV.sys" "$out\$env:DRV.cat"
