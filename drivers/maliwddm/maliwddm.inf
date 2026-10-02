@@ -15,13 +15,8 @@
 
 [Version]
 Signature   = "$WINDOWS NT$"
-; System, not Display: maliwddm is render-only, and Microsoft's render-only
-; driver (Basic Render) is System class. As a Display-class device GPU0 was
-; reported a POST device (adapter type 0x9) and refused with
-; STATUS_GRAPHICS_INVALID_DRIVER_MODEL even with malidod holding the POST
-; framebuffer on DSP0 (WinPE run 6).
-Class       = System
-ClassGuid   = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Class       = Display
+ClassGuid   = {4D36E968-E325-11CE-BFC1-08002BE10318}
 Provider    = %ProviderName%
 DriverVer   = ; set by stampinf during build
 CatalogFile = maliwddm.cat

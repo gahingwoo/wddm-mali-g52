@@ -269,6 +269,7 @@ static NTSTATUS DriverCaps(const DXGKARG_QUERYADAPTERINFO *Info)
      * STATUS_GRAPHICS_INVALID_DRIVER_MODEL right after dxgkrnl read these
      * caps (WinPE runs 5-9, ETW events 24/110/250 then the failure); a full
      * driver without them was accepted. */
+#if MW_RENDER_ONLY
     caps->PresentationCaps.SupportKernelModeCommandBuffer = 1; /* see MwRenderKm */
     caps->FlipCaps.FlipOnVSyncMmIo = 1;                         /* no display: unused */
     if (FITS(size, DXGK_DRIVERCAPS, PreemptionCaps)) {
@@ -277,7 +278,8 @@ static NTSTATUS DriverCaps(const DXGKARG_QUERYADAPTERINFO *Info)
         caps->PreemptionCaps.ComputePreemptionGranularity = D3DKMDT_COMPUTE_PREEMPTION_DMA_BUFFER_BOUNDARY;
     }
     if (FITS(size, DXGK_DRIVERCAPS, SupportPerEngineTDR))
-        caps->SupportPerEngineTDR = TRUE;                       /* ResetEngine, QueryEngineStatus */
+        caps->SupportPerEngineTDR = TRUE;   /* ResetEngine, QueryEngineStatus, QueryDependentEngineGroup */
+#endif
     if (FITS(size, DXGK_DRIVERCAPS, SupportNonVGA))
         caps->SupportNonVGA = TRUE;
     if (FITS(size, DXGK_DRIVERCAPS, SupportSmoothRotation))

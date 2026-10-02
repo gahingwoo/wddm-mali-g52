@@ -44,9 +44,16 @@ echo == etwrec start (dxgkrnl ETW) >> "%OUT%"
 echo exit %ERRORLEVEL% >> "%OUT%"
 
 %SAVE% >nul
-echo == drvload malidod >> "%OUT%"
-drvload "%HERE%malidod\malidod.inf" >> "%OUT%" 2>&1
-echo exit %ERRORLEVEL% >> "%OUT%"
+rem malidod only with a render-only maliwddm: a full maliwddm owns the screen
+rem itself, and the two would compete for the POST framebuffer. The stick
+rem says which: mali\with-malidod present = load it.
+if exist "%HERE%with-malidod" (
+  echo == drvload malidod >> "%OUT%"
+  drvload "%HERE%malidod\malidod.inf" >> "%OUT%" 2>&1
+  echo exit %ERRORLEVEL% >> "%OUT%"
+) else (
+  echo == malidod not loaded: maliwddm is a full adapter >> "%OUT%"
+)
 ping -n 6 127.0.0.1 >nul
 %SAVE% >nul
 echo == drvload maliwddm >> "%OUT%"
