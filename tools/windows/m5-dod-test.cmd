@@ -36,3 +36,4 @@ echo.
 echo Move a window around for a few seconds, then run:
 echo   reg query %KEY%
 echo Presents should have grown. Results saved to %OUT%
+pause

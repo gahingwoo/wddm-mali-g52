@@ -30,3 +30,4 @@ reg query %KEY% >> "%OUT%" 2>&1
 type "%OUT%"
 echo.
 echo Results saved to %OUT%
+pause

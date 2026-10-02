@@ -24,3 +24,4 @@ reg query %KEY% >> "%OUT%" 2>&1
 type "%OUT%"
 echo.
 echo Result 0x1 = the GPU ran the job. Results saved to %OUT%
+pause

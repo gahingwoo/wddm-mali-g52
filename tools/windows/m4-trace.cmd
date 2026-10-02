@@ -30,3 +30,4 @@ dir "%HERE%trace" >> "%OUT%"
 cd /d "%HERE%"
 type "%OUT%"
 echo Results saved to %OUT% and %HERE%trace\
+pause

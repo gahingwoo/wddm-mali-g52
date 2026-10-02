@@ -11,3 +11,4 @@ reg load HKLM\OFFSYS %WIN%\Windows\System32\config\SYSTEM || exit /b 1
 for %%c in (ControlSet001 ControlSet002) do reg add HKLM\OFFSYS\%%c\Services\malidod /v Start /t REG_DWORD /d 4 /f
 reg unload HKLM\OFFSYS
 echo malidod disabled. Reboot into Windows; it will use Basic Display.
+pause
