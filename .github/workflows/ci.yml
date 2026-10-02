@@ -93,6 +93,11 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $false
           .\out\m3test.exe
           if ($LASTEXITCODE -ne 1) { throw "unexpected exit code $LASTEXITCODE" }
+          # The D3DKMT test: no maliwddm adapter here, so it must exit 1.
+          cl /nologo /W4 /WX /O2 /I include tools\windows\m5test.c gdi32.lib /Fe:out\m5test.exe
+          if ($LASTEXITCODE) { throw 'm5test build failed' }
+          .\out\m5test.exe
+          if ($LASTEXITCODE -ne 1) { throw "m5test: unexpected exit code $LASTEXITCODE" }
           # How the UCRT treats a handle of FILE_TYPE_UNKNOWN (what \\.\MaliG52 is).
           cl /nologo /O2 /MD tests\osfhandle\osfhandle.c /Fe:osfhandle.exe
           .\osfhandle.exe
@@ -100,7 +105,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: m3test-arm64
-          path: out/m3test.exe
+          path: |
+            out/m3test.exe
+            out/m5test.exe
 
   malikm-host:
     name: malikm on a simulated G52 (Linux, ASan/UBSan)

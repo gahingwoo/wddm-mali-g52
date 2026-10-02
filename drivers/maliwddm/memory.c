@@ -82,8 +82,6 @@ static NTSTATUS NewAllocation(MW_ADAPTER *A, const MW_ALLOCATION_INFO *In, DXGK_
     Out->AllocationPriority = D3DDDI_ALLOCATIONPRIORITY_NORMAL;
     Out->Flags.Value = 0;
     Out->Flags.CpuVisible = TRUE;
-    if (In->Flags & MW_ALLOC_PRIMARY)
-        Out->Flags.Primary = TRUE;
     return STATUS_SUCCESS;
 }
 
