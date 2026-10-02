@@ -318,31 +318,40 @@ NTSTATUS APIENTRY MdQueryAdapterInfo(IN_CONST_HANDLE hAdapter, const DXGKARG_QUE
     RtlInitEmptyUnicodeString(&us, name, sizeof(name));
     if (NT_SUCCESS(RtlUnicodeStringPrintf(&us, L"QAI_%u", (ULONG)Info->Type)))
         Log(dev, name, (ULONG)st);
+    if (NT_SUCCESS(RtlUnicodeStringPrintf(&us, L"QAI_%u_Size", (ULONG)Info->Type)))
+        Log(dev, name, Info->OutputDataSize);
     return st;
 }
 
+/* A field of a structure dxgkrnl sized for our interface version: write it
+ * only if it lies wholly inside the buffer we were given. */
+#define FITS(Size, Type, Field) \
+    (FIELD_OFFSET(Type, Field) + RTL_FIELD_SIZE(Type, Field) <= (Size))
+
 static NTSTATUS QueryAdapterInfo(const DXGKARG_QUERYADAPTERINFO *Info)
 {
+    /* dxgkrnl passes the size of each structure as it was for the interface
+     * version we declared (WIN8). Today's WDK headers make these structures
+     * larger, so comparing against sizeof() rejects a buffer that is right
+     * (it did: STATUS_BUFFER_TOO_SMALL for DRIVERCAPS, then code 43). Fill
+     * what fits instead. */
     switch (Info->Type) {
     case DXGKQAITYPE_DRIVERCAPS: {
         DXGK_DRIVERCAPS *caps = (DXGK_DRIVERCAPS *)Info->pOutputData;
-        if (Info->OutputDataSize < sizeof(*caps))
+        UINT size = Info->OutputDataSize;
+        if (!FITS(size, DXGK_DRIVERCAPS, HighestAcceptableAddress))
             return STATUS_BUFFER_TOO_SMALL;
-        RtlZeroMemory(caps, sizeof(*caps));
-        /* WDDMVersion is reserved, and must be 0, for interface version
-         * WIN7 and later (DXGK_DRIVERCAPS). */
+        RtlZeroMemory(caps, size);
         caps->HighestAcceptableAddress.QuadPart = -1;
-        /* We do implement DxgkDdiStopDeviceAndReleasePostDisplayOwnership. */
-        caps->SupportNonVGA = TRUE;
-        /* No hardware cursor: MaxPointerWidth/Height 0, the OS draws it. */
+        /* WDDMVersion is reserved, and stays 0, for interface version WIN7
+         * and later. No hardware cursor: MaxPointerWidth/Height stay 0. */
+        if (FITS(size, DXGK_DRIVERCAPS, SupportNonVGA))
+            caps->SupportNonVGA = TRUE;   /* we do release POST ownership */
         return STATUS_SUCCESS;
     }
-    case DXGKQAITYPE_DISPLAY_DRIVERCAPS_EXTENSION: {
-        if (Info->OutputDataSize < sizeof(DXGK_DISPLAY_DRIVERCAPS_EXTENSION))
-            return STATUS_BUFFER_TOO_SMALL;
-        RtlZeroMemory(Info->pOutputData, sizeof(DXGK_DISPLAY_DRIVERCAPS_EXTENSION));
+    case DXGKQAITYPE_DISPLAY_DRIVERCAPS_EXTENSION:
+        RtlZeroMemory(Info->pOutputData, Info->OutputDataSize);
         return STATUS_SUCCESS;
-    }
     default:
         return STATUS_NOT_SUPPORTED;
     }
