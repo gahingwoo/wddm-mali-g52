@@ -15,8 +15,8 @@
 #include <windows.h>
 #include <winternl.h>
 #include <d3dkmthk.h>
+#include <d3d9types.h>   /* d3dumddi.h uses the D3D9 types */
 #include <d3dumddi.h>
-#include <dxgiddi.h>
 #include <io.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -603,7 +603,7 @@ static struct {
    int on;
    HANDLE adapter, device, context;
    D3DDDI_DEVICECALLBACKS cb;
-   const DXGI_DDI_BASE_CALLBACKS *dxgi;
+   const void *dxgi;           /* DXGI_DDI_BASE_CALLBACKS, for Present */
    HANDLE last_event;          /* signalled when the last submission is done */
 } ddi;
 
