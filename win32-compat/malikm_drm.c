@@ -611,7 +611,22 @@ static struct {
    void *present_cpu;
    unsigned present_w, present_h;
    HANDLE last_event;          /* signalled when the last submission is done */
+   /* The newest submission has no event (the signal callback failed), so
+    * last_event is older than it and waiting on it alone would return
+    * early. wddm_idle() polls the KMD's fences instead while this is set. */
+   int last_unsignalled;
 } ddi;
+
+/* Allocations whose BO is closed but which a job submitted earlier may
+ * still use. Linux's panfrost keeps a BO alive until its jobs are done,
+ * and Mesa's BO cache relies on that: it closes buffers without waiting.
+ * Destroying the allocation at GEM_CLOSE let VidMm unmap pages under a
+ * running job (PE runs 18 on: two job faults per present.exe, a read
+ * translation fault, 0x4002c3, every time at the same VA). They are
+ * destroyed after the next wait for idle instead. */
+static D3DKMT_HANDLE *wdead;
+static uint32_t wdead_n, wdead_cap;
+#define WDEAD_FLUSH 64
 
 static KMT_FN
 kmt_resolve(const char *name)
@@ -823,10 +838,15 @@ w_render(UINT commandLength, UINT allocations)
             if (ddi.last_event)
                CloseHandle(ddi.last_event);
             ddi.last_event = ev;
-         } else {
-            CloseHandle(ev);
+            ddi.last_unsignalled = 0;
+            return 0;
          }
+         CloseHandle(ev);
       }
+      if (!ddi.last_unsignalled || trace_on())
+         fprintf(stderr, "malikm-wddm: no completion event for this submission;"
+                 " waits poll the KMD until it catches up\n");
+      ddi.last_unsignalled = 1;
       return 0;
    }
    D3DKMT_RENDER r = {0};
@@ -845,18 +865,52 @@ w_render(UINT commandLength, UINT allocations)
    return 0;
 }
 
+/* Everything the KMD was given has completed: its fences agree and nothing
+ * is queued or running. For when there is no event to wait on. */
+static int
+wddm_poll_idle(void)
+{
+   for (int ms = 0; ms < 10000; ms++) {
+      MW_ESCAPE_STATS_DATA st = {0};
+      st.Code = MW_ESCAPE_STATS;
+      if (w_escape(&st, sizeof(st)) < 0)
+         return -MK_EIO;
+      if (st.LastCompletedFence == st.LastSubmittedFence && !st.Queued && !st.Running)
+         return 0;
+      Sleep(1);
+   }
+   return -MK_ETIMEDOUT;
+}
+
+static void
+wdead_flush(void)
+{
+   for (uint32_t i = 0; i < wdead_n; i++)
+      w_destroy(wdead[i]);
+   if (wdead_n && trace_on())
+      fprintf(stderr, "malikm-wddm: destroyed %u closed allocations after idle\n", wdead_n);
+   wdead_n = 0;
+}
+
 /* Everything submitted so far is done (one in-order queue in the KMD). */
 static int
 wddm_idle(void)
 {
+   int ret = 0;
+
    if (ddi.on) {
       if (ddi.last_event && WaitForSingleObject(ddi.last_event, 10000) != WAIT_OBJECT_0)
-         return -MK_ETIMEDOUT;
-      return 0;
+         ret = -MK_ETIMEDOUT;
+      else if (ddi.last_unsignalled)
+         ret = wddm_poll_idle();
+   } else {
+      D3DKMT_WAITFORIDLE w = {0};
+      w.hDevice = wdevice;
+      ret = kmt.WaitForIdle(&w) >= 0 ? 0 : -MK_EIO;
    }
-   D3DKMT_WAITFORIDLE w = {0};
-   w.hDevice = wdevice;
-   return kmt.WaitForIdle(&w) >= 0 ? 0 : -MK_EIO;
+   if (ret == 0)
+      wdead_flush();
+   return ret;
 }
 
 /* Present for d3d10umd on the hardware runtime: Bgrx is the frame, linear
@@ -1075,8 +1129,23 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
          return -MK_EINVAL;
       if (bo->cpu)
          w_unlock(bo->h);
-      w_destroy(bo->h);
+      /* Not destroyed yet: see wdead. The handle number is free at once. */
+      if (wdead_n == wdead_cap) {
+         uint32_t cap = wdead_cap ? wdead_cap * 2 : WDEAD_FLUSH;
+         D3DKMT_HANDLE *n = realloc(wdead, cap * sizeof(*n));
+         if (!n) {
+            wddm_idle();
+            w_destroy(bo->h);
+            memset(bo, 0, sizeof(*bo));
+            return 0;
+         }
+         wdead = n;
+         wdead_cap = cap;
+      }
+      wdead[wdead_n++] = bo->h;
       memset(bo, 0, sizeof(*bo));
+      if (wdead_n >= WDEAD_FLUSH)
+         wddm_idle();
       return 0;
    }
    case MALIKM_NR_SYNCOBJ_CREATE: {
