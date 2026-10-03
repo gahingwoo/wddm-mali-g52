@@ -8,10 +8,12 @@
  */
 #include <windows.h>
 #include <d3d11.h>
+#include <dxgi.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "user32.lib")
 
 #define CHECK(hr, what)                                                       \
@@ -28,11 +30,34 @@ int main(int argc, char **argv)
     _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
 
+    /* present.exe <software DLL> | present.exe hw (the DXGI adapter named
+     * Mali, a hardware device: the runtime loads maliwddm's UMD). */
     const char *dll = argc > 1 ? argv[1] : "libgallium_d3d10.dll";
-    HMODULE sw = LoadLibraryA(dll);
-    if (!sw) {
-        printf("FAIL LoadLibrary(%s): %lu\n", dll, GetLastError());
-        return 1;
+    bool hw = _stricmp(dll, "hw") == 0;
+    HMODULE sw = NULL;
+    IDXGIAdapter1 *pick = NULL;
+    if (hw) {
+        IDXGIFactory1 *fac = NULL;
+        IDXGIAdapter1 *a = NULL;
+        CHECK(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void **)&fac), "CreateDXGIFactory1");
+        for (UINT i = 0; fac->EnumAdapters1(i, &a) == S_OK; i++) {
+            DXGI_ADAPTER_DESC1 d;
+            a->GetDesc1(&d);
+            if (!pick && wcsstr(d.Description, L"Mali"))
+                pick = a;
+            else
+                a->Release();
+        }
+        if (!pick) {
+            printf("FAIL no adapter named Mali\n");
+            return 1;
+        }
+    } else {
+        sw = LoadLibraryA(dll);
+        if (!sw) {
+            printf("FAIL LoadLibrary(%s): %lu\n", dll, GetLastError());
+            return 1;
+        }
     }
 
     WNDCLASSA wc = {};
@@ -63,10 +88,11 @@ int main(int argc, char **argv)
     ID3D11Device *dev = NULL;
     ID3D11DeviceContext *ctx = NULL;
     IDXGISwapChain *swap = NULL;
-    HRESULT hr = D3D11CreateDeviceAndSwapChain(NULL, D3D_DRIVER_TYPE_SOFTWARE, sw, 0, &want, 1,
-                                               D3D11_SDK_VERSION, &sd, &swap, &dev, &got, &ctx);
+    HRESULT hr = D3D11CreateDeviceAndSwapChain(pick, hw ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_SOFTWARE,
+                                               sw, 0, &want, 1, D3D11_SDK_VERSION, &sd, &swap, &dev,
+                                               &got, &ctx);
     CHECK(hr, "D3D11CreateDeviceAndSwapChain");
-    printf("swap chain created, feature level 0x%x\n", got);
+    printf("swap chain created (%s), feature level 0x%x\n", hw ? "hardware" : "software", got);
 
     ID3D11Texture2D *back = NULL;
     CHECK(swap->GetBuffer(0, __uuidof(ID3D11Texture2D), (void **)&back), "GetBuffer");

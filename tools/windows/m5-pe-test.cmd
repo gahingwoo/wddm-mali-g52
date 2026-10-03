@@ -86,6 +86,16 @@ echo triangle hw exit code %ERRORLEVEL% >> "%OUT%"
 set MALIKM_TRACE=
 set GALLIUM_DRIVER=
 if exist X:\triangle.ppm copy /y X:\triangle.ppm "%HERE%triangle-hw.ppm" >nul
+%SAVE% >nul
+if not exist "%HERE%tri\present.exe" goto :no_present
+echo == present.exe as a hardware device (DXGI present through maliwddm) >> "%OUT%"
+set GALLIUM_DRIVER=panfrost
+set MALIKM_TRACE=1
+"%HERE%tri\present.exe" hw >> "%OUT%" 2>&1
+echo present hw exit code %ERRORLEVEL% >> "%OUT%"
+set MALIKM_TRACE=
+set GALLIUM_DRIVER=
+:no_present
 popd
 echo == the driver's counters after the triangle (m5test again) >> "%OUT%"
 "%HERE%m5test.exe" >> "%OUT%" 2>&1
