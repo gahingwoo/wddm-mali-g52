@@ -1,0 +1,28 @@
+diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+index 8a2c66e..bbd677f 100644
+--- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
++++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+@@ -107,6 +107,8 @@ d3d10_gdi_release_hdc(void *winsys_drawable_handle, HDC hDC) {
+  * Panfrost's tiled or AFBC layout, and draw it into the window with GDI as
+  * the software winsys does. One copy per frame: enough until a WDDM driver
+  * owns the display. */
++int malikm_present_d3dddi(const void *bgrx, unsigned w, unsigned h, void *dxgi_context);
++
+ static void
+ d3d10_pan_flush_frontbuffer(struct pipe_screen *screen, struct pipe_context *pipe,
+                             struct pipe_resource *res, unsigned level, unsigned layer,
+@@ -141,6 +143,14 @@ d3d10_pan_flush_frontbuffer(struct pipe_screen *screen, struct pipe_context *pip
+    if (!bits)
+       return;
+ 
++   /* On the hardware runtime (maliwddm), present through DXGI: the frame
++    * goes into a surface of the runtime's device and the kernel driver
++    * blts it to the screen. Otherwise (the software runtime) GDI below. */
++   if (malikm_present_d3dddi(bits, w, h, context_private) == 0) {
++      free(bits);
++      return;
++   }
++
+    BITMAPINFO bmi = {0};
+    bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
+    bmi.bmiHeader.biWidth = (LONG)w;

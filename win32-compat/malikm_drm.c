@@ -17,6 +17,7 @@
 #include <d3dkmthk.h>
 #include <d3d9types.h>   /* d3dumddi.h uses the D3D9 types */
 #include <d3dumddi.h>
+#include <dxgiddi.h>
 #include <io.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -603,7 +604,12 @@ static struct {
    int on;
    HANDLE adapter, device, context;
    D3DDDI_DEVICECALLBACKS cb;
-   const void *dxgi;           /* DXGI_DDI_BASE_CALLBACKS, for Present */
+   const DXGI_DDI_BASE_CALLBACKS *dxgi;
+   /* The surface DXGI presents from: X8R8G8B8, linear, its size told to the
+    * KMD at creation, kept locked. */
+   D3DKMT_HANDLE present;
+   void *present_cpu;
+   unsigned present_w, present_h;
    HANDLE last_event;          /* signalled when the last submission is done */
 } ddi;
 
@@ -851,6 +857,60 @@ wddm_idle(void)
    D3DKMT_WAITFORIDLE w = {0};
    w.hDevice = wdevice;
    return kmt.WaitForIdle(&w) >= 0 ? 0 : -MK_EIO;
+}
+
+/* Present for d3d10umd on the hardware runtime: Bgrx is the frame, linear
+ * and top-down; it is copied into a surface of the runtime device and
+ * handed to DXGI, which has maliwddm blt it (on the CPU, for now) to the
+ * screen. 0 if presented; -1 if not bound to the runtime (the caller falls
+ * back to GDI). */
+int
+malikm_present_d3dddi(const void *bgrx, unsigned w, unsigned h, void *dxgi_context)
+{
+   int ret = -1;
+
+   AcquireSRWLockExclusive(&wddm_lock);
+   if (!ddi.on || !ddi.dxgi || !ddi.dxgi->pfnPresentCb)
+      goto out;
+   if (ddi.present && (ddi.present_w != w || ddi.present_h != h)) {
+      w_unlock(ddi.present);
+      w_destroy(ddi.present);
+      ddi.present = 0;
+      ddi.present_cpu = NULL;
+   }
+   if (!ddi.present) {
+      MW_ALLOCATION_INFO pi = {0};
+      D3DDDI_ALLOCATIONINFO ai = {0};
+      pi.Version = MW_ABI_VERSION;
+      pi.Flags = MW_ALLOC_NOEXEC;
+      pi.Width = w;
+      pi.Height = h;
+      pi.Pitch = w * 4;
+      pi.Format = D3DDDIFMT_X8R8G8B8;
+      pi.Size = (uint64_t)w * h * 4;
+      ai.pPrivateDriverData = &pi;
+      ai.PrivateDriverDataSize = sizeof(pi);
+      if (w_create(&ai) < 0)
+         goto out;
+      ddi.present = ai.hAllocation;
+      ddi.present_cpu = w_lock(ddi.present);
+      ddi.present_w = w;
+      ddi.present_h = h;
+      if (!ddi.present_cpu)
+         goto out;
+   }
+   memcpy(ddi.present_cpu, bgrx, (size_t)w * h * 4);
+
+   DXGIDDICB_PRESENT p = {0};
+   p.hSrcAllocation = ddi.present;
+   p.pDXGIContext = dxgi_context;
+   p.hContext = ddi.context;
+   ret = ddi.dxgi->pfnPresentCb(ddi.device, &p) >= 0 ? 0 : -1;
+   if (trace_on() && ret)
+      fprintf(stderr, "malikm: pfnPresentCb failed\n");
+out:
+   ReleaseSRWLockExclusive(&wddm_lock);
+   return ret;
 }
 
 /* The runtime's device and callbacks, from d3d10umd's CreateDevice. 0 if
