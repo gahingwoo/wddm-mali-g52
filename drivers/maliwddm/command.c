@@ -140,10 +140,10 @@ NTSTATUS APIENTRY MwPresent(IN_CONST_HANDLE hContext, DXGKARG_PRESENT *Arg)
         MW_PRESENT_OP *op = &priv->Present;
         op->Kind = Arg->Flags.ColorFill ? MW_PRESENT_FILL : MW_PRESENT_BLT;
         op->Color = Arg->Color;
-        if (Arg->AllocationListSize > DXGK_PRESENT_SOURCE_INDEX)
-            op->Src = (MW_ALLOCATION *)Arg->pAllocationList[DXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation;
-        if (Arg->AllocationListSize > DXGK_PRESENT_DESTINATION_INDEX)
-            op->Dst = (MW_ALLOCATION *)Arg->pAllocationList[DXGK_PRESENT_DESTINATION_INDEX].hDeviceSpecificAllocation;
+        /* A present's allocation list has fixed slots; an unused one has
+         * no allocation. */
+        op->Src = (MW_ALLOCATION *)Arg->pAllocationList[DXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation;
+        op->Dst = (MW_ALLOCATION *)Arg->pAllocationList[DXGK_PRESENT_DESTINATION_INDEX].hDeviceSpecificAllocation;
         op->SrcRect = Arg->SrcRect;
         op->DstRect = Arg->DstRect;
         op->NumRects = Arg->SubRectCnt <= MW_MAX_RECTS ? Arg->SubRectCnt : 0;
@@ -151,7 +151,9 @@ NTSTATUS APIENTRY MwPresent(IN_CONST_HANDLE hContext, DXGKARG_PRESENT *Arg)
             op->Rects[i] = Arg->pDstSubRects[i];
         /* Both allocations must be resident (and their pages known). */
         for (UINT i = DXGK_PRESENT_SOURCE_INDEX;
-             i <= DXGK_PRESENT_DESTINATION_INDEX && i < Arg->AllocationListSize && Arg->PatchLocationListOutSize > 0; i++) {
+             i <= DXGK_PRESENT_DESTINATION_INDEX && Arg->PatchLocationListOutSize > 0; i++) {
+            if (Arg->pAllocationList[i].hDeviceSpecificAllocation == NULL)
+                continue;
             RtlZeroMemory(Arg->pPatchLocationListOut, sizeof(*Arg->pPatchLocationListOut));
             Arg->pPatchLocationListOut->AllocationIndex = i;
             Arg->pPatchLocationListOut->SlotId = i;
