@@ -1,0 +1,535 @@
+m5-pe-test Sat 10/03/2026  8:36:45.89 
+== what this WinPE has 
+  have drivers\dxgkrnl.sys 
+  have drivers\dxgmms2.sys 
+  MISSING d3d10warp.dll 
+  MISSING d3d11.dll 
+  MISSING dxgi.dll 
+  have gdi32.dll 
+X:\windows\System32\DriverStore\FileRepository\basicdisplay.inf_arm64_469c1c1c4dcf9fad\BasicDisplay.sys
+X:\windows\System32\DriverStore\FileRepository\basicrender.inf_arm64_40008a5e63a0608e\BasicRender.sys
+The specified entry type is invalid.
+Run "bcdedit /?" for command line assistance.
+The parameter is incorrect.
+== devices before 
+Microsoft PnP Utility
+
+No devices were found on the system.
+Microsoft PnP Utility
+
+Instance ID:                ACPI\RKCP7403\0
+Device Description:         Unknown
+Class Name:                 Unknown
+Class GUID:                 Unknown
+Manufacturer Name:          Unknown
+Status:                     Problem
+Problem Code:               28 (0x1C) [CM_PROB_FAILED_INSTALL]
+Problem Status:             0xC0000490
+
+Microsoft PnP Utility
+
+Instance ID:                ACPI\RKCP7402\0
+Device Description:         Unknown
+Class Name:                 Unknown
+Class GUID:                 Unknown
+Manufacturer Name:          Unknown
+Status:                     Problem
+Problem Code:               28 (0x1C) [CM_PROB_FAILED_INSTALL]
+Problem Status:             0xC0000490
+
+        1 file(s) copied.
+E:\mali\tri\sys\d3d11.dll
+E:\mali\tri\sys\dxgi.dll
+E:\mali\tri\sys\D3DCompiler_47.dll
+E:\mali\tri\sys\DXCore.dll
+E:\mali\tri\sys\vcruntime140.dll
+E:\mali\tri\sys\vcruntime140_1.dll
+        6 file(s) copied.
+== malidod not loaded: maliwddm is a full adapter 
+== drvload maliwddm 
+DrvLoad: Successfully loaded E:\mali\maliwddm\maliwddm.inf.
+exit 0 
+== devices after 
+Microsoft PnP Utility
+
+Instance ID:                ACPI\RKCP7402\0
+Device Description:         Rockchip RK3576 Mali-G52 (WDDM)
+Class Name:                 Display
+Class GUID:                 {4d36e968-e325-11ce-bfc1-08002be10318}
+Manufacturer Name:          wddm-mali-g52
+Status:                     Started
+Driver Name:                oem7.inf
+
+Microsoft PnP Utility
+
+Instance ID:                ACPI\RKCP7403\0
+Device Description:         Unknown
+Class Name:                 Unknown
+Class GUID:                 Unknown
+Manufacturer Name:          Unknown
+Status:                     Problem
+Problem Code:               28 (0x1C) [CM_PROB_FAILED_INSTALL]
+Problem Status:             0xC0000490
+
+Microsoft PnP Utility
+
+Instance ID:                ACPI\RKCP7402\0
+Device Description:         Rockchip RK3576 Mali-G52 (WDDM)
+Class Name:                 Display
+Class GUID:                 {4d36e968-e325-11ce-bfc1-08002be10318}
+Manufacturer Name:          wddm-mali-g52
+Status:                     Started
+Driver Name:                oem7.inf
+
+== m5test 
+adapter 0 (luid 00000000:000231c7): escape 0x00000000, 45 params, GPU_ID 0x7402
+stats at start: gpu 1 renders 0 presents 0 submits 0 fence 0/0 queued 0 running 0
+  jobs done 0 failed 0 timedout 0 js 0x0 fault 0x0 @0x0 irqs 0 resets 0
+  allocations 14 (last at 0x2000000); aperture maps 0 (fails 0, last 0x0 x0 pages, 0x00000000), unmaps 0
+  paging ops by type: [5]=2
+  patches 0: last with 0 allocations, 0 patch locations; allocation 0 in segment 0 at 0x0
+  presents: 0 blts, 0 fills, 0 skipped
+device 0x40000080 context 0x400000c0, command buffer 16384 bytes, 256 allocation slots
+allocation 0x40000100 at GPU 0x2000000, 4096 bytes
+rendered
+stats after the job: gpu 1 renders 1 presents 0 submits 1 fence 1/1 queued 0 running 0
+  jobs done 1 failed 0 timedout 0 js 0x0 fault 0x0 @0x0 irqs 1 resets 0
+  allocations 15 (last at 0x2000000); aperture maps 1 (fails 0, last 0x2000000 x1 pages, 0x00000000), unmaps 0
+  paging ops by type: [5]=3
+  patches 1: last with 1 allocations, 1 patch locations; allocation 0 in segment 1 at 0x2000000
+  presents: 0 blts, 0 fills, 0 skipped
+after 47 ms: target 0xc0ffee52 (want 0xc0ffee52), job header status word 0x00000001
+PASS: the Mali ran a job submitted through WDDM
+m5test exit code 0 
+== triangle on the Mali through maliwddm 
+malikm: bind to the runtime device 00000176684376C8: no (not maliwddm, or software runtime)
+malikm-wddm: adapter 0x40000080 device 0x40000100 context 0x40000140, 256 allocation slots
+malikm: no \\.\MaliG52; using the maliwddm adapter
+malikm: VERSION panfrost 1.1
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> -22
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0xbf -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0xbf -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x48 -> 0
+device created (software), feature level 0xa000
+  ................................
+  ................................
+  ................#...............
+  ...............###..............
+  ..............#####.............
+  .............#######............
+  ............#########...........
+  ...........###########..........
+  ..........#############.........
+  .........###############........
+  ........#################.......
+  .......###################......
+  ......#####################.....
+  .....#######################....
+  ....#########################...
+  ................................
+  colour 0xffff0000: 2744 pixels
+  colour 0xff0000ff: 1352 pixels
+centre=0xff0000ff (want 0xff0000ff) corner=0xffff0000 (want 0xffff0000) -> PASS
+triangle exit code 0 
+== triangle as a HARDWARE device: the runtime loads maliumd.dll 
+malikm: bind to the runtime device 0000024C38E38318: yes, through its callbacks
+malikm: no \\.\MaliG52; using the maliwddm adapter
+malikm: VERSION panfrost 1.1
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> -22
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0xbf -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0xbf -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x48 -> 0
+adapter 0: Rockchip RK3576 Mali-G52 (WDDM) (vendor 0x50434b52 device 0x32303437, luid 00000000:000231c7, flags 0x0)
+adapter 1: Microsoft Basic Render Driver (vendor 0x1414 device 0x008c, luid 00000000:0000ba34, flags 0x2)
+device created (hardware), feature level 0xa000
+  ................................
+  ................................
+  ................#...............
+  ...............###..............
+  ..............#####.............
+  .............#######............
+  ............#########...........
+  ...........###########..........
+  ..........#############.........
+  .........###############........
+  ........#################.......
+  .......###################......
+  ......#####################.....
+  .....#######################....
+  ....#########################...
+  ................................
+  colour 0xffff0000: 2744 pixels
+  colour 0xff0000ff: 1352 pixels
+centre=0xff0000ff (want 0xff0000ff) corner=0xffff0000 (want 0xffff0000) -> PASS
+triangle hw exit code 0 
+== present.exe as a hardware device (DXGI present through maliwddm) 
+malikm: bind to the runtime device 000002530A64B328: yes, through its callbacks
+malikm: no \\.\MaliG52; using the maliwddm adapter
+malikm: VERSION panfrost 1.1
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> 0
+malikm-wddm: nr 0x44 -> -22
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0xbf -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0xbf -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x42 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x40 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x41 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x43 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0xc0 -> 0
+malikm-wddm: nr 0xc0 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x48 -> 0
+malikm-wddm: nr 0x9 -> 0
+malikm-wddm: nr 0x9 -> 0
+malikm-wddm: nr 0x9 -> 0
+malikm-wddm: nr 0x9 -> 0
+malikm-wddm: nr 0x9 -> 0
+malikm-wddm: nr 0x9 -> 0
+malikm-wddm: nr 0x9 -> 0
+malikm-wddm: nr 0x9 -> 0
+malikm-wddm: nr 0x9 -> 0
+malikm-wddm: nr 0x9 -> 0
+malikm-wddm: nr 0x9 -> 0
+swap chain created (hardware), feature level 0xa000
+presented 3 frames
+PASS
+present hw exit code 0 
+== the driver's counters after the triangle (m5test again) 
+adapter 0 (luid 00000000:000231c7): escape 0x00000000, 45 params, GPU_ID 0x7402
+stats at start: gpu 1 renders 23 presents 0 submits 23 fence 23/23 queued 0 running 0
+  jobs done 21 failed 2 timedout 0 js 0x8 fault 0x4002c3 @0xa131000 irqs 23 resets 2
+  allocations 57 (last at 0xa131000); aperture maps 35 (fails 0, last 0xa000000 x1 pages, 0x00000000), unmaps 35
+  paging ops by type: [5]=37 [6]=35
+  patches 11: last with 8 allocations, 8 patch locations; allocation 0 in segment 1 at 0x2000000
+  presents: 0 blts, 0 fills, 0 skipped
+device 0x40000080 context 0x400000c0, command buffer 16384 bytes, 256 allocation slots
+allocation 0x40000100 at GPU 0x2000000, 4096 bytes
+rendered
+stats after the job: gpu 1 renders 24 presents 0 submits 24 fence 24/24 queued 0 running 0
+  jobs done 22 failed 2 timedout 0 js 0x8 fault 0x4002c3 @0xa131000 irqs 24 resets 2
+  allocations 58 (last at 0x2000000); aperture maps 36 (fails 0, last 0x2000000 x1 pages, 0x00000000), unmaps 35
+  paging ops by type: [5]=38 [6]=35
+  patches 12: last with 1 allocations, 1 patch locations; allocation 0 in segment 1 at 0x2000000
+  presents: 0 blts, 0 fills, 0 skipped
+after 63 ms: target 0xc0ffee52 (want 0xc0ffee52), job header status word 0x00000001
+PASS: the Mali ran a job submitted through WDDM
+== etwrec stop 
+ControlTrace(STOP): 4201, events lost 0, buffers written 0
+exit 2 
+ Volume in drive X is Boot
+ Volume Serial Number is D60A-0DC2
+
+ Directory of X:\
+
+File Not Found
+== maliwddm trace 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\maliwddm
+    Enter_QueryInterface    REG_DWORD    0x1
+    Seen_QueryInterface    REG_DWORD    0xc00000bb
+    Order_QueryInterface    REG_DWORD    0x2
+    Fail_QueryInterface    REG_DWORD    0xc00000bb
+    LastFailedDdi    REG_DWORD    0xc00000bb
+    Build    REG_DWORD    0x94
+    RenderOnly    REG_DWORD    0x0
+    AcquirePostDisplay    REG_DWORD    0x0
+    FbWidth    REG_DWORD    0x780
+    FbHeight    REG_DWORD    0x438
+    Step    REG_DWORD    0x6
+    GpuId    REG_DWORD    0x74021000
+    ShaderPresent    REG_DWORD    0x7
+    MmuFeatures    REG_DWORD    0x2823
+    GpuUp    REG_DWORD    0x1
+    Started    REG_DWORD    0x1
+    Enter_QueryChildRelations    REG_DWORD    0x3
+    Seen_QueryChildRelations    REG_DWORD    0x0
+    Order_QueryChildRelations    REG_DWORD    0x4
+    QAI_1    REG_DWORD    0x0
+    QAI_1_Size    REG_DWORD    0x228
+    Seen_QueryAdapterInfo    REG_DWORD    0x0
+    Order_QueryAdapterInfo    REG_DWORD    0x5
+    Enter_CreateDevice    REG_DWORD    0x6
+    Seen_CreateDevice    REG_DWORD    0x0
+    Order_CreateDevice    REG_DWORD    0x7
+    Enter_CreateContext    REG_DWORD    0x8
+    Seen_CreateContext    REG_DWORD    0x0
+    Order_CreateContext    REG_DWORD    0x9
+    QAI_5    REG_DWORD    0x0
+    QAI_5_Size    REG_DWORD    0x20
+    Enter_BuildPagingBuffer    REG_DWORD    0xa
+    Seen_BuildPagingBuffer    REG_DWORD    0x0
+    Order_BuildPagingBuffer    REG_DWORD    0xb
+    QAI_10    REG_DWORD    0x0
+    QAI_10_Size    REG_DWORD    0x4
+    Enter_QueryDeviceDescriptor    REG_DWORD    0xc
+    Seen_QueryDeviceDescriptor    REG_DWORD    0xc01d0001
+    Order_QueryDeviceDescriptor    REG_DWORD    0xd
+    Fail_QueryDeviceDescriptor    REG_DWORD    0xc01d0001
+    Enter_RecommendMonitorModes    REG_DWORD    0xe
+    MonitorAddMode    REG_DWORD    0x0
+    Seen_RecommendMonitorModes    REG_DWORD    0x0
+    Order_RecommendMonitorModes    REG_DWORD    0xf
+    Enter_IsSupportedVidPn    REG_DWORD    0x10
+    Seen_EnumVidPnCofuncModality    REG_DWORD    0x0
+    Order_EnumVidPnCofuncModality    REG_DWORD    0x11
+    Enter_GetStandardAllocationDriverData    REG_DWORD    0x12
+    Seen_GetStandardAllocationDriverData    REG_DWORD    0x0
+    Order_GetStandardAllocationDriverData    REG_DWORD    0x13
+    Enter_CreateAllocation    REG_DWORD    0x14
+    Seen_CreateAllocation    REG_DWORD    0x0
+    Order_CreateAllocation    REG_DWORD    0x15
+    Enter_OpenAllocation    REG_DWORD    0x16
+    Seen_OpenAllocation    REG_DWORD    0x0
+    Order_OpenAllocation    REG_DWORD    0x17
+    Seen_CloseAllocation    REG_DWORD    0x0
+    Order_CloseAllocation    REG_DWORD    0x18
+    CommitStatus    REG_DWORD    0x401e0307
+    Enter_SetPointerPosition    REG_DWORD    0x19
+    Seen_SetPointerPosition    REG_DWORD    0x0
+    Order_SetPointerPosition    REG_DWORD    0x1a
+    Enter_SetVidPnSourceVisibility    REG_DWORD    0x1b
+    Seen_SetVidPnSourceVisibility    REG_DWORD    0x0
+    Order_SetVidPnSourceVisibility    REG_DWORD    0x1c
+    Enter_Escape    REG_DWORD    0x1d
+    Enter_Render    REG_DWORD    0x1e
+    Seen_Patch    REG_DWORD    0x0
+    Order_Patch    REG_DWORD    0x1f
+    Enter_DestroyContext    REG_DWORD    0x20
+    Seen_DestroyContext    REG_DWORD    0x0
+    Order_DestroyContext    REG_DWORD    0x21
+    Enter_DestroyDevice    REG_DWORD    0x22
+    Seen_DestroyDevice    REG_DWORD    0x0
+    Order_DestroyDevice    REG_DWORD    0x23
+    Enter_ControlInterrupt    REG_DWORD    0x24
+    Seen_ControlInterrupt    REG_DWORD    0x0
+    Order_ControlInterrupt    REG_DWORD    0x25
+    Enter_DescribeAllocation    REG_DWORD    0x26
+    Seen_DescribeAllocation    REG_DWORD    0x0
+    Order_DescribeAllocation    REG_DWORD    0x27
+
+== malidod trace 
+ERROR: The system was unable to find the specified registry key or value.
