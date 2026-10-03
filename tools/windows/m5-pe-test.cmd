@@ -28,6 +28,21 @@ pnputil /enum-devices /class Display >> "%OUT%" 2>&1
 pnputil /enum-devices /instanceid "ACPI\RKCP7403\0" >> "%OUT%" 2>&1
 pnputil /enum-devices /instanceid "ACPI\RKCP7402\0" >> "%OUT%" 2>&1
 
+rem XHC0 (USB-C, ACPI\PNP0D10\0) is disabled before anything else when
+rem mali\no-xhc0 is on the stick. Every run so far ended in WHEA_INTERNAL_ERROR
+rem (0x122: 9, 0x11 = a synchronous external abort): usbxhci read a port-2
+rem PORTSC (+0x430) while UsbHub3 suspended a root port. XHC0's port 2 is
+rem the SS port whose USBDP PHY the firmware never brings up; this run
+rem tells it apart from XHC1's. The stick and keyboard are on XHC1.
+if exist "%HERE%no-xhc0" (
+  echo == disable XHC0 ^(USB-C^) >> "%OUT%"
+  pnputil /disable-device "ACPI\PNP0D10\0" >> "%OUT%" 2>&1
+  pnputil /enum-devices /instanceid "ACPI\PNP0D10\0" >> "%OUT%" 2>&1
+  pnputil /enum-devices /instanceid "ACPI\PNP0D10\1" >> "%OUT%" 2>&1
+)
+ping -n 3 127.0.0.1 >nul
+%SAVE% >nul
+
 rem maliwddm names maliumd.dll (Mesa's d3d10umd with Panfrost) as its UMD,
 rem and an adapter with no loadable UMD fails with code 43, so it goes into
 rem System32 before the driver loads, with the D3D11 runtime, HLSL compiler
