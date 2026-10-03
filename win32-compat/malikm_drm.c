@@ -15,6 +15,8 @@
 #include <windows.h>
 #include <winternl.h>
 #include <d3dkmthk.h>
+#include <d3dumddi.h>
+#include <dxgiddi.h>
 #include <io.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -593,6 +595,18 @@ static uint64_t wseq;
 static int wddm = -1;
 static SRWLOCK wddm_lock = SRWLOCK_INIT;
 
+/* Inside a hardware UMD (maliumd.dll, d3d10umd), the runtime's device and
+ * its kernel callbacks replace the D3DKMT calls: the buffers then are the
+ * runtime device's allocations, which Present needs. malikm_bind_d3dddi()
+ * switches over before the device's screen is created. */
+static struct {
+   int on;
+   HANDLE adapter, device, context;
+   D3DDDI_DEVICECALLBACKS cb;
+   const DXGI_DDI_BASE_CALLBACKS *dxgi;
+   HANDLE last_event;          /* signalled when the last submission is done */
+} ddi;
+
 static KMT_FN
 kmt_resolve(const char *name)
 {
@@ -692,18 +706,206 @@ wddm_init(void)
    return 0;
 }
 
+/* ---- the kernel calls, by D3DKMT or by the runtime's callbacks ---- */
+
+static NTSTATUS
+w_escape(void *data, UINT size)
+{
+   if (ddi.on) {
+      D3DDDICB_ESCAPE e = {0};
+      e.hDevice = ddi.device;
+      e.pPrivateDriverData = data;
+      e.PrivateDriverDataSize = size;
+      return ddi.cb.pfnEscapeCb(ddi.adapter, &e) >= 0 ? 0 : (NTSTATUS)0xC0000001;
+   }
+   return kmt_escape(wdevice, data, size);
+}
+
+static NTSTATUS
+w_create(D3DDDI_ALLOCATIONINFO *ai)
+{
+   if (ddi.on) {
+      D3DDDICB_ALLOCATE a = {0};
+      a.NumAllocations = 1;
+      a.pAllocationInfo = ai;
+      return ddi.cb.pfnAllocateCb(ddi.device, &a) >= 0 ? 0 : (NTSTATUS)0xC0000017;
+   }
+   D3DKMT_CREATEALLOCATION ca = {0};
+   ca.hDevice = wdevice;
+   ca.NumAllocations = 1;
+   ca.pAllocationInfo = ai;
+   return kmt.CreateAllocation(&ca);
+}
+
+static void
+w_destroy(D3DKMT_HANDLE h)
+{
+   if (ddi.on) {
+      D3DDDICB_DEALLOCATE d = {0};
+      d.NumAllocations = 1;
+      d.HandleList = &h;
+      ddi.cb.pfnDeallocateCb(ddi.device, &d);
+      return;
+   }
+   D3DKMT_DESTROYALLOCATION da = {0};
+   da.hDevice = wdevice;
+   da.phAllocationList = &h;
+   da.AllocationCount = 1;
+   kmt.DestroyAllocation(&da);
+}
+
+static void *
+w_lock(D3DKMT_HANDLE h)
+{
+   if (ddi.on) {
+      D3DDDICB_LOCK l = {0};
+      l.hAllocation = h;
+      l.Flags.IgnoreSync = 1;
+      return ddi.cb.pfnLockCb(ddi.device, &l) >= 0 ? l.pData : NULL;
+   }
+   D3DKMT_LOCK l = {0};
+   l.hDevice = wdevice;
+   l.hAllocation = h;
+   l.Flags.IgnoreSync = 1;
+   return kmt.Lock(&l) >= 0 ? l.pData : NULL;
+}
+
+static void
+w_unlock(D3DKMT_HANDLE h)
+{
+   if (ddi.on) {
+      D3DDDICB_UNLOCK u = {0};
+      u.NumAllocations = 1;
+      u.phAllocations = &h;
+      ddi.cb.pfnUnlockCb(ddi.device, &u);
+      return;
+   }
+   D3DKMT_UNLOCK u = {0};
+   u.hDevice = wdevice;
+   u.NumAllocations = 1;
+   u.phAllocations = &h;
+   kmt.Unlock(&u);
+}
+
+/* Render what is in the command buffer and allocation list; on return the
+ * buffers are the new ones the runtime handed back. */
+static NTSTATUS
+w_render(UINT commandLength, UINT allocations)
+{
+   if (ddi.on) {
+      D3DDDICB_RENDER r = {0};
+      r.hContext = ddi.context;
+      r.CommandLength = commandLength;
+      r.NumAllocations = allocations;
+      if (ddi.cb.pfnRenderCb(ddi.device, &r) < 0)
+         return (NTSTATUS)0xC0000001;
+      wcmd = r.pNewCommandBuffer;
+      wcmd_size = r.NewCommandBufferSize;
+      walloc = r.pNewAllocationList;
+      walloc_size = r.NewAllocationListSize;
+      wpatch = r.pNewPatchLocationList;
+      wpatch_size = r.NewPatchLocationListSize;
+
+      /* A CPU event the scheduler sets when the context gets here. */
+      HANDLE ev = CreateEventW(NULL, TRUE, FALSE, NULL);
+      if (ev) {
+         D3DDDICB_SIGNALSYNCHRONIZATIONOBJECT2 sig = {0};
+         sig.hContext = ddi.context;
+         sig.Flags.EnqueueCpuEvent = 1;
+         sig.CpuEventHandle = ev;
+         if (ddi.cb.pfnSignalSynchronizationObject2Cb(ddi.device, &sig) >= 0) {
+            if (ddi.last_event)
+               CloseHandle(ddi.last_event);
+            ddi.last_event = ev;
+         } else {
+            CloseHandle(ev);
+         }
+      }
+      return 0;
+   }
+   D3DKMT_RENDER r = {0};
+   r.hContext = wcontext;
+   r.CommandLength = commandLength;
+   r.AllocationCount = allocations;
+   NTSTATUS st = kmt.Render(&r);
+   if (st < 0)
+      return st;
+   wcmd = r.pNewCommandBuffer;
+   wcmd_size = r.NewCommandBufferSize;
+   walloc = r.pNewAllocationList;
+   walloc_size = r.NewAllocationListSize;
+   wpatch = r.pNewPatchLocationList;
+   wpatch_size = r.NewPatchLocationListSize;
+   return 0;
+}
+
+/* Everything submitted so far is done (one in-order queue in the KMD). */
+static int
+wddm_idle(void)
+{
+   if (ddi.on) {
+      if (ddi.last_event && WaitForSingleObject(ddi.last_event, 10000) != WAIT_OBJECT_0)
+         return -MK_ETIMEDOUT;
+      return 0;
+   }
+   D3DKMT_WAITFORIDLE w = {0};
+   w.hDevice = wdevice;
+   return kmt.WaitForIdle(&w) >= 0 ? 0 : -MK_EIO;
+}
+
+/* The runtime's device and callbacks, from d3d10umd's CreateDevice. 0 if
+ * this is maliwddm's adapter and Panfrost now goes through the callbacks. */
+int
+malikm_bind_d3dddi(HANDLE hRTAdapter, HANDLE hRTDevice, const void *pKTCallbacks,
+                   const void *pDXGIBaseCallbacks)
+{
+   const D3DDDI_DEVICECALLBACKS *cb = pKTCallbacks;
+   MW_ESCAPE_GPU_INFO_DATA g = {0};
+   int ret = -1;
+
+   if (!cb || !cb->pfnEscapeCb || !cb->pfnAllocateCb || !cb->pfnRenderCb || !cb->pfnCreateContextCb)
+      return -1;
+   AcquireSRWLockExclusive(&wddm_lock);
+   /* Ask the adapter through the callbacks: a software runtime routes them
+    * to d3d10umd's own D3DKMT stubs, which fail. */
+   D3DDDICB_ESCAPE e = {0};
+   e.hDevice = hRTDevice;
+   e.pPrivateDriverData = &g;
+   e.PrivateDriverDataSize = sizeof(g);
+   g.Code = MW_ESCAPE_GPU_INFO;
+   if (cb->pfnEscapeCb(hRTAdapter, &e) >= 0 && g.Count != 0 && g.Valid != 0) {
+      D3DDDICB_CREATECONTEXT c = {0};
+      c.NodeOrdinal = 0;
+      c.EngineAffinity = 1;
+      if (cb->pfnCreateContextCb(hRTDevice, &c) >= 0) {
+         ddi.on = 1;
+         ddi.adapter = hRTAdapter;
+         ddi.device = hRTDevice;
+         ddi.context = c.hContext;
+         ddi.cb = *cb;
+         ddi.dxgi = pDXGIBaseCallbacks;
+         wcmd = c.pCommandBuffer;
+         wcmd_size = c.CommandBufferSize;
+         walloc = c.pAllocationList;
+         walloc_size = c.AllocationListSize;
+         wpatch = c.pPatchLocationList;
+         wpatch_size = c.PatchLocationListSize;
+         wgpu = g;
+         wddm = 1;
+         ret = 0;
+      }
+   }
+   ReleaseSRWLockExclusive(&wddm_lock);
+   if (trace_on())
+      fprintf(stderr, "malikm: bind to the runtime device %p: %s\n", hRTDevice,
+              ret == 0 ? "yes, through its callbacks" : "no (not maliwddm, or software runtime)");
+   return ret;
+}
+
 static struct wbo *
 wddm_bo(uint32_t h)
 {
    return h && h <= wbo_cap && wbo[h - 1].h ? &wbo[h - 1] : NULL;
-}
-
-static int
-wddm_idle(void)
-{
-   D3DKMT_WAITFORIDLE w = {0};
-   w.hDevice = wdevice;
-   return kmt.WaitForIdle(&w) >= 0 ? 0 : -MK_EIO;
 }
 
 static int
@@ -729,21 +931,13 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       D3DDDI_ALLOCATIONINFO ai = {0};
       ai.pPrivateDriverData = &pi;
       ai.PrivateDriverDataSize = sizeof(pi);
-      D3DKMT_CREATEALLOCATION ca = {0};
-      ca.hDevice = wdevice;
-      ca.NumAllocations = 1;
-      ca.pAllocationInfo = &ai;
-      if (kmt.CreateAllocation(&ca) < 0)
+      if (w_create(&ai) < 0)
          return -MK_ENOMEM;
       MW_ESCAPE_ALLOC_INFO_DATA where = {0};
       where.Code = MW_ESCAPE_ALLOC_INFO;
       where.hAllocation = ai.hAllocation;
-      if (kmt_escape(wdevice, &where, sizeof(where)) < 0 || where.GpuVa == 0) {
-         D3DKMT_DESTROYALLOCATION da = {0};
-         da.hDevice = wdevice;
-         da.phAllocationList = &ai.hAllocation;
-         da.AllocationCount = 1;
-         kmt.DestroyAllocation(&da);
+      if (w_escape(&where, sizeof(where)) < 0 || where.GpuVa == 0) {
+         w_destroy(ai.hAllocation);
          return -MK_ENOMEM;
       }
       uint32_t h = 0;
@@ -806,23 +1000,12 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       c->Type = MW_CMD_JOB;
       c->Slot = (a->requirements & PANFROST_JD_REQ_FS) ? 0 : 1;
       c->Jc = a->jc;
-      D3DKMT_RENDER r = {0};
-      r.hContext = wcontext;
-      r.CommandLength = sizeof(*c);
-      r.AllocationCount = a->bo_handle_count;
-      r.PatchLocationCount = 0;
-      NTSTATUS st = kmt.Render(&r);
+      NTSTATUS st = w_render(sizeof(*c), a->bo_handle_count);
       if (st < 0) {
          if (trace_on())
             fprintf(stderr, "malikm-wddm: Render failed 0x%08lx\n", (unsigned long)st);
          return -MK_EIO;
       }
-      wcmd = r.pNewCommandBuffer;
-      wcmd_size = r.NewCommandBufferSize;
-      walloc = r.pNewAllocationList;
-      walloc_size = r.NewAllocationListSize;
-      wpatch = r.pNewPatchLocationList;
-      wpatch_size = r.NewPatchLocationListSize;
       wseq++;
       return 0;
    }
@@ -830,18 +1013,9 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       struct wbo *bo = wddm_bo(((struct drm_gem_close *)b)->handle);
       if (!bo)
          return -MK_EINVAL;
-      if (bo->cpu) {
-         D3DKMT_UNLOCK u = {0};
-         u.hDevice = wdevice;
-         u.NumAllocations = 1;
-         u.phAllocations = &bo->h;
-         kmt.Unlock(&u);
-      }
-      D3DKMT_DESTROYALLOCATION da = {0};
-      da.hDevice = wdevice;
-      da.phAllocationList = &bo->h;
-      da.AllocationCount = 1;
-      kmt.DestroyAllocation(&da);
+      if (bo->cpu)
+         w_unlock(bo->h);
+      w_destroy(bo->h);
       memset(bo, 0, sizeof(*bo));
       return 0;
    }
@@ -891,14 +1065,8 @@ wddm_ioctl(DWORD code, void *buf, DWORD len)
       struct wbo *bo = wddm_bo(MALIKM_MMAP_HANDLE(m->Offset));
       h->Result = -MK_EINVAL;
       if (bo && m->Size <= bo->size) {
-         if (!bo->cpu) {
-            D3DKMT_LOCK l = {0};
-            l.hDevice = wdevice;
-            l.hAllocation = bo->h;
-            l.Flags.IgnoreSync = 1;
-            if (kmt.Lock(&l) >= 0)
-               bo->cpu = l.pData;
-         }
+         if (!bo->cpu)
+            bo->cpu = w_lock(bo->h);
          if (bo->cpu) {
             m->Address = (uint64_t)(uintptr_t)bo->cpu;
             h->Result = 0;

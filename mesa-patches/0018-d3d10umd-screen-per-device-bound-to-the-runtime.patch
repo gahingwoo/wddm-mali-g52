@@ -1,0 +1,137 @@
+diff --git a/src/gallium/frontends/d3d10umd/Adapter.cpp b/src/gallium/frontends/d3d10umd/Adapter.cpp
+index 63104c0..3259249 100644
+--- a/src/gallium/frontends/d3d10umd/Adapter.cpp
++++ b/src/gallium/frontends/d3d10umd/Adapter.cpp
+@@ -78,13 +78,7 @@ OpenAdapterCommon(__inout D3D10DDIARG_OPENADAPTER *pOpenData)   // IN
+       return E_OUTOFMEMORY;
+    }
+ 
+-   pAdaptor->screen = d3d10_create_screen();
+-   if (!pAdaptor->screen) {
+-      free(pAdaptor);
+-      --numAdapters;
+-      return E_OUTOFMEMORY;
+-   }
+-
++   pAdaptor->hRTAdapter = pOpenData->hRTAdapter.handle;
+    pOpenData->hAdapter.pDrvPrivate = pAdaptor;
+ 
+    pOpenData->pAdapterFuncs->pfnCalcPrivateDeviceSize = CalcPrivateDeviceSize;
+@@ -259,8 +253,6 @@ CloseAdapter(D3D10DDI_HADAPTER hAdapter)  // IN
+    LOG_ENTRYPOINT();
+ 
+    Adapter *pAdapter = CastAdapter(hAdapter);
+-   struct pipe_screen *screen = pAdapter->screen;
+-   screen->destroy(screen);
+    free(pAdapter);
+ 
+    --numAdapters;
+diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
+index 80e8a4e..11b0907 100644
+--- a/src/gallium/frontends/d3d10umd/Device.cpp
++++ b/src/gallium/frontends/d3d10umd/Device.cpp
+@@ -48,6 +48,14 @@
+ #include "util/u_framebuffer.h"
+ 
+ 
++EXTERN_C struct pipe_screen *
++d3d10_create_screen(void);
++/* pKTCallbacks: D3DDDI_DEVICECALLBACKS; pDXGIBaseCallbacks:
++ * DXGI_DDI_BASE_CALLBACKS (void here: the target is C). */
++EXTERN_C bool
++d3d10_bind_runtime(HANDLE hRTAdapter, HANDLE hRTDevice, const void *pKTCallbacks,
++                   const void *pDXGIBaseCallbacks);
++
+ static void APIENTRY DestroyDevice(D3D10DDI_HDEVICE hDevice);
+ static void APIENTRY RelocateDeviceFuncs(D3D10DDI_HDEVICE hDevice,
+                                 __in struct D3D10DDI_DEVICEFUNCS *pDeviceFunctions);
+@@ -130,8 +138,16 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+    Device *pDevice = CastDevice(pCreateData->hDrvDevice);
+    memset(pDevice, 0, sizeof *pDevice);
+ 
+-   struct pipe_screen *screen = pAdapter->screen;
++   /* A hardware driver's kernel driver is reached through this device's
++    * callbacks (the target decides whether the runtime is a hardware one);
++    * then the screen, whose buffers become this device's allocations. */
++   d3d10_bind_runtime(pAdapter->hRTAdapter, (HANDLE)pCreateData->hRTDevice.handle,
++                      pCreateData->pKTCallbacks, pCreateData->DXGIBaseDDI.pDXGIBaseCallbacks);
++   struct pipe_screen *screen = d3d10_create_screen();
++   if (!screen)
++      return E_OUTOFMEMORY;
+    struct pipe_context *pipe = screen->context_create(screen, NULL, 0);
++   pDevice->screen = screen;
+    pDevice->pipe = pipe;
+    pDevice->cso = cso_create_context(pipe, CSO_NO_VBUF);
+ 
+@@ -362,6 +378,7 @@ DestroyDevice(D3D10DDI_HDEVICE hDevice)   // IN
+                            PIPE_MAX_SHADER_SAMPLER_VIEWS, 0, sampler_views);
+ 
+    pipe->destroy(pipe);
++   pDevice->screen->destroy(pDevice->screen);
+ }
+ 
+ 
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index fcdad23..633dc2d 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -42,7 +42,11 @@
+ 
+ struct Adapter
+ {
+-   struct pipe_screen *screen;
++   /* The runtime's adapter, for d3d10_bind_runtime(). The screen is the
++    * device's: created in CreateDevice, once the runtime has handed over the
++    * device's kernel callbacks, so that a hardware driver's buffers are the
++    * runtime device's allocations. */
++   HANDLE hRTAdapter;
+ };
+ 
+ 
+@@ -66,6 +70,7 @@ struct ElementLayout;
+ 
+ struct Device
+ {
++   struct pipe_screen *screen;
+    struct pipe_context *pipe;
+ 
+    struct cso_context *cso;
+diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+index 242d9b9..8a2c66e 100644
+--- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
++++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+@@ -27,6 +27,7 @@
+  **************************************************************************/
+ 
+ 
++#include <stdbool.h>
+ #include "util/u_debug.h"
+ #include "target-helpers/inline_debug_helper.h"
+ #include "llvmpipe/lp_public.h"
+@@ -155,6 +156,26 @@ d3d10_pan_flush_frontbuffer(struct pipe_screen *screen, struct pipe_context *pip
+ }
+ #endif
+ 
++/* Called by CreateDevice before the device's screen is created. Panfrost on
++ * a hardware runtime (maliwddm's adapter) reaches the kernel driver through
++ * this device's callbacks from now on; anything else is unaffected. */
++#ifdef GALLIUM_PANFROST
++int malikm_bind_d3dddi(HANDLE hRTAdapter, HANDLE hRTDevice, const void *pKTCallbacks,
++                       const void *pDXGIBaseCallbacks);
++#endif
++
++bool
++d3d10_bind_runtime(HANDLE hRTAdapter, HANDLE hRTDevice, const void *pKTCallbacks,
++                   const void *pDXGIBaseCallbacks)
++{
++#ifdef GALLIUM_PANFROST
++   return malikm_bind_d3dddi(hRTAdapter, hRTDevice, pKTCallbacks, pDXGIBaseCallbacks) == 0;
++#else
++   (void)hRTAdapter; (void)hRTDevice; (void)pKTCallbacks; (void)pDXGIBaseCallbacks;
++   return false;
++#endif
++}
++
+ struct pipe_screen *
+ d3d10_create_screen(void)
+ {
