@@ -250,6 +250,8 @@ NTSTATUS APIENTRY MwBuildPagingBuffer(IN_CONST_HANDLE hAdapter, DXGKARG_BUILDPAG
         ExAcquireFastMutex(&a->MmuLock);
         st = MkMmuMapPages(&a->Gpu, alloc->GpuVa, pfn, pages, (alloc->Flags & MW_ALLOC_NOEXEC) != 0);
         alloc->Mapped = NT_SUCCESS(st);
+        alloc->Mdl = Arg->MapApertureSegment.pMdl;
+        alloc->MdlPage = (ULONG)Arg->MapApertureSegment.MdlOffset;
         ExReleaseFastMutex(&a->MmuLock);
         a->Maps++;
         if (!NT_SUCCESS(st))
@@ -268,6 +270,7 @@ NTSTATUS APIENTRY MwBuildPagingBuffer(IN_CONST_HANDLE hAdapter, DXGKARG_BUILDPAG
         if (alloc->Mapped)
             MkMmuUnmapPages(&a->Gpu, alloc->GpuVa, alloc->Pages);
         alloc->Mapped = FALSE;
+        alloc->Mdl = NULL;
         ExReleaseFastMutex(&a->MmuLock);
         return STATUS_SUCCESS;
     }

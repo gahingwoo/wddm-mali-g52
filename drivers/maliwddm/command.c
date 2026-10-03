@@ -120,21 +120,131 @@ NTSTATUS APIENTRY MwRender(IN_CONST_HANDLE hContext, DXGKARG_RENDER *Arg)
     return STATUS_SUCCESS;
 }
 
-/* Presents (GDI blts and flips of runtime surfaces) do nothing on the GPU
- * yet: step (d) of the plan. They complete like an empty render. */
+/* Presents are done by the CPU at submission (MwSubmitCommand): a blt from
+ * the source allocation's pages, or a colour fill, into the primary (the
+ * POST framebuffer) or the destination allocation's pages. Render records
+ * what to do in the DMA buffer's private data and patches both allocations
+ * so that VidMm makes them resident, which is when their pages are known.
+ * Flips are not handled yet. */
 NTSTATUS APIENTRY MwPresent(IN_CONST_HANDLE hContext, DXGKARG_PRESENT *Arg)
 {
     MW_CONTEXT *ctx = (MW_CONTEXT *)hContext;
+    MW_ADAPTER *a = ctx->Device->Adapter;
     MW_DMA_PRIVATE *priv = (MW_DMA_PRIVATE *)Arg->pDmaBufferPrivateData;
 
-    if (priv != NULL && Arg->DmaBufferPrivateDataSize >= sizeof(*priv)) {
-        priv->Count = 0;
-        priv->Reserved = MW_DMA_MAGIC;
+    if (priv == NULL || Arg->DmaBufferPrivateDataSize < sizeof(*priv))
+        return STATUS_INVALID_PARAMETER;
+    RtlZeroMemory(priv, sizeof(*priv));
+    priv->Reserved = MW_DMA_MAGIC;
+    if (Arg->Flags.Blt || Arg->Flags.ColorFill) {
+        MW_PRESENT_OP *op = &priv->Present;
+        op->Kind = Arg->Flags.ColorFill ? MW_PRESENT_FILL : MW_PRESENT_BLT;
+        op->Color = Arg->Color;
+        if (Arg->AllocationListSize > DXGK_PRESENT_SOURCE_INDEX)
+            op->Src = (MW_ALLOCATION *)Arg->pAllocationList[DXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation;
+        if (Arg->AllocationListSize > DXGK_PRESENT_DESTINATION_INDEX)
+            op->Dst = (MW_ALLOCATION *)Arg->pAllocationList[DXGK_PRESENT_DESTINATION_INDEX].hDeviceSpecificAllocation;
+        op->SrcRect = Arg->SrcRect;
+        op->DstRect = Arg->DstRect;
+        op->NumRects = Arg->SubRectCnt <= MW_MAX_RECTS ? Arg->SubRectCnt : 0;
+        for (ULONG i = 0; i < op->NumRects; i++)
+            op->Rects[i] = Arg->pDstSubRects[i];
+        /* Both allocations must be resident (and their pages known). */
+        for (UINT i = DXGK_PRESENT_SOURCE_INDEX;
+             i <= DXGK_PRESENT_DESTINATION_INDEX && i < Arg->AllocationListSize && Arg->PatchLocationListOutSize > 0; i++) {
+            RtlZeroMemory(Arg->pPatchLocationListOut, sizeof(*Arg->pPatchLocationListOut));
+            Arg->pPatchLocationListOut->AllocationIndex = i;
+            Arg->pPatchLocationListOut->SlotId = i;
+            Arg->pPatchLocationListOut++;
+            Arg->PatchLocationListOutSize--;
+        }
     }
     if (Arg->pDmaBuffer != NULL && Arg->DmaSize >= sizeof(ULONG))
         MarkDmaBuffer(&Arg->pDmaBuffer);
-    ctx->Device->Adapter->Presents++;
+    a->Presents++;
     return STATUS_SUCCESS;
+}
+
+/* The CPU view of a resident allocation, or NULL. */
+static PUCHAR AllocationVa(MW_ALLOCATION *Alloc)
+{
+    PUCHAR va;
+    if (Alloc == NULL || Alloc->Mdl == NULL)
+        return NULL;
+    va = (PUCHAR)MmGetSystemAddressForMdlSafe(Alloc->Mdl, NormalPagePriority | MdlMappingNoExecute);
+    return va != NULL ? va + (SIZE_T)Alloc->MdlPage * PAGE_SIZE : NULL;
+}
+
+static void ClipRect(RECT *R, LONG W, LONG H)
+{
+    if (R->left < 0) R->left = 0;
+    if (R->top < 0) R->top = 0;
+    if (R->right > W) R->right = W;
+    if (R->bottom > H) R->bottom = H;
+}
+
+/* Carry out a present on the CPU. 32-bit pixels only. */
+static void DoPresent(MW_ADAPTER *A, const MW_PRESENT_OP *Op)
+{
+    PUCHAR dst, src = NULL;
+    LONG dstW, dstH, dstPitch, srcPitch = 0, srcW = 0, srcH = 0;
+    ULONG n = Op->NumRects ? Op->NumRects : 1;
+
+    if (Op->Dst != NULL && (Op->Dst->Flags & MW_ALLOC_PRIMARY) && A->FbVa != NULL) {
+        dst = A->FbVa;
+        dstW = (LONG)A->Fb.Width;
+        dstH = (LONG)A->Fb.Height;
+        dstPitch = (LONG)A->Fb.Pitch;
+    } else {
+        dst = AllocationVa(Op->Dst);
+        if (dst == NULL) {
+            A->PresentSkips++;
+            return;
+        }
+        dstW = (LONG)Op->Dst->Width;
+        dstH = (LONG)Op->Dst->Height;
+        dstPitch = (LONG)(Op->Dst->Pitch ? Op->Dst->Pitch : Op->Dst->Width * 4);
+    }
+    if (Op->Kind == MW_PRESENT_BLT) {
+        src = AllocationVa(Op->Src);
+        if (src == NULL) {
+            A->PresentSkips++;
+            return;
+        }
+        srcW = (LONG)Op->Src->Width;
+        srcH = (LONG)Op->Src->Height;
+        srcPitch = (LONG)(Op->Src->Pitch ? Op->Src->Pitch : Op->Src->Width * 4);
+    }
+
+    for (ULONG i = 0; i < n; i++) {
+        RECT r = Op->NumRects ? Op->Rects[i] : Op->DstRect;
+        LONG dx = Op->SrcRect.left - Op->DstRect.left, dy = Op->SrcRect.top - Op->DstRect.top;
+
+        ClipRect(&r, dstW, dstH);
+        if (Op->Kind == MW_PRESENT_BLT) {
+            /* Keep the source side inside the source too. */
+            if (r.left + dx < 0) r.left = -dx;
+            if (r.top + dy < 0) r.top = -dy;
+            if (r.right + dx > srcW) r.right = srcW - dx;
+            if (r.bottom + dy > srcH) r.bottom = srcH - dy;
+        }
+        if (r.right <= r.left || r.bottom <= r.top)
+            continue;
+        for (LONG y = r.top; y < r.bottom; y++) {
+            ULONG *d = (ULONG *)(dst + (SIZE_T)y * dstPitch) + r.left;
+            if (Op->Kind == MW_PRESENT_BLT) {
+                const ULONG *s = (const ULONG *)(src + (SIZE_T)(y + dy) * srcPitch) + r.left + dx;
+                RtlCopyMemory(d, s, (SIZE_T)(r.right - r.left) * 4);
+            } else {
+                for (LONG x = 0; x < r.right - r.left; x++)
+                    d[x] = Op->Color;
+            }
+        }
+    }
+    if (Op->Kind == MW_PRESENT_BLT)
+        A->PresentBlts++;
+    else
+        A->PresentFills++;
 }
 
 NTSTATUS APIENTRY MwPatch(IN_CONST_HANDLE hAdapter, const DXGKARG_PATCH *Arg)
@@ -347,6 +457,11 @@ NTSTATUS APIENTRY MwSubmitCommand(IN_CONST_HANDLE hAdapter, const DXGKARG_SUBMIT
 
     RtlZeroMemory(&sub, sizeof(sub));
     sub.FenceId = Arg->SubmissionFenceId;
+    /* A present: done here, on the CPU; the submission then carries no
+     * job and completes at once. */
+    if (!Arg->Flags.Paging && priv != NULL && Arg->DmaBufferPrivateDataSize >= sizeof(*priv) &&
+        priv->Reserved == MW_DMA_MAGIC && priv->Present.Kind != MW_PRESENT_NONE)
+        DoPresent(a, &priv->Present);
     /* Paging buffers (empty: map/unmap happen on the CPU), presents and
      * anything without our private data carry no jobs. */
     if (!Arg->Flags.Paging && priv != NULL && Arg->DmaBufferPrivateDataSize >= sizeof(*priv) &&

@@ -146,6 +146,7 @@ static void print_stats(D3DKMT_HANDLE adapter, const char *when)
     printf("\n  patches %u: last with %u allocations, %u patch locations; allocation 0 in segment %u at 0x%llx\n",
            s.Patches, s.PatchAllocations, s.PatchPatchLocations, s.PatchSegment0,
            (unsigned long long)s.PatchAddress0);
+    printf("  presents: %u blts, %u fills, %u skipped\n", s.PresentBlts, s.PresentFills, s.PresentSkips);
 }
 
 int main(void)

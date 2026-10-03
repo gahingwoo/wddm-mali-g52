@@ -90,4 +90,6 @@ typedef struct _MW_ESCAPE_STATS_DATA {
      * patched DMA buffer, first entry. */
     mw_u32 Patches, PatchAllocations, PatchPatchLocations, PatchSegment0;
     mw_u64 PatchAddress0;
+    /* Presents carried out on the CPU, and skipped (no pages known). */
+    mw_u32 PresentBlts, PresentFills, PresentSkips, Reserved0;
 } MW_ESCAPE_STATS_DATA;

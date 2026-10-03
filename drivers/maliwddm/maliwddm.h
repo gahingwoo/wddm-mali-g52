@@ -49,6 +49,10 @@ typedef struct _MW_ALLOCATION {
     /* Standard allocations (primary, shadow, staging) the runtime creates. */
     UINT Width, Height, Pitch;
     D3DDDIFORMAT Format;
+    /* While mapped: the backing pages VidMm handed MAP_APERTURE_SEGMENT,
+     * which is how a present reaches the pixels on the CPU. */
+    PMDL Mdl;
+    ULONG MdlPage;
 } MW_ALLOCATION;
 
 typedef struct _MW_ADAPTER MW_ADAPTER;
@@ -63,10 +67,27 @@ typedef struct _MW_CONTEXT {
 
 /* What a DMA buffer carries, kept in its private data by Render and found
  * there again by SubmitCommand. */
+/* A present the CPU carries out at submission (step d): a blt or a colour
+ * fill into the primary (the POST framebuffer) or another allocation. */
+#define MW_PRESENT_NONE         0
+#define MW_PRESENT_BLT          1
+#define MW_PRESENT_FILL         2
+#define MW_MAX_RECTS            16
+
+typedef struct _MW_PRESENT_OP {
+    ULONG Kind;
+    ULONG Color;
+    MW_ALLOCATION *Src, *Dst;
+    RECT SrcRect, DstRect;
+    ULONG NumRects;             /* 0: DstRect alone */
+    RECT Rects[MW_MAX_RECTS];   /* destination sub-rectangles */
+} MW_PRESENT_OP;
+
 typedef struct _MW_DMA_PRIVATE {
     ULONG Count;
     ULONG Reserved;
     MW_COMMAND Commands[MW_MAX_COMMANDS];
+    MW_PRESENT_OP Present;
 } MW_DMA_PRIVATE;
 
 /* A submission the hardware works through, one job chain at a time. */
@@ -120,6 +141,7 @@ struct _MW_ADAPTER {
     NTSTATUS LastMapStatus;
     ULONG64 LastMapVa, LastAllocVa;
     ULONG Patches, PatchAllocations, PatchPatchLocations, PatchSegment0;
+    ULONG PresentBlts, PresentFills, PresentSkips;
     ULONG64 PatchAddress0;
 };
 
