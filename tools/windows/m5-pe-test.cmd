@@ -123,6 +123,13 @@ echo exit %ERRORLEVEL% >> "%OUT%"
 dir X:\dxgkrnl.etl >> "%OUT%" 2>&1
 
 
+rem What is on USB, for the USB-C (XHC0) checks: a dock's hub reads
+rem "Generic SuperSpeed USB Hub" when the USB3 lanes trained, only
+rem "Generic USB Hub" when that plug orientation fell back to USB2.
+echo == USB devices >> "%OUT%"
+pnputil /enum-devices /connected /class USB >> "%OUT%" 2>&1
+pnputil /enum-devices /connected /class DiskDrive >> "%OUT%" 2>&1
+
 echo == maliwddm trace >> "%OUT%"
 reg query "%KEY%\RKCP7402\0\Device Parameters\maliwddm" >> "%OUT%" 2>&1
 echo == malidod trace >> "%OUT%"
