@@ -1,0 +1,39 @@
+From: gahingwoo <gahing@gahingwoo.com>
+Subject: [PATCH] d3d10umd: default to Panfrost when built with it
+
+The wddm-mali-g52 build of this target is maliumd.dll, the UMD that
+maliwddm names. Windows loads a UMD into every process that touches
+D3D (explorer, the shell hosts, Direct2D users, DWM), and none of them
+set GALLIUM_DRIVER. They got the default, softpipe, on a Mali adapter,
+and softpipe's TGSI interpreter hit an assertion on a Direct2D shader
+("mach->pc < (int) mach->NumInstructions" in tgsi_exec_machine_run).
+explorer.exe, StartMenuExperienceHost, SearchHost and
+ShellExperienceHost then aborted in a loop, about every 12 s
+(c0000409/7 in ucrtbase, WER dumps of 2026-10-17).
+
+Make Panfrost the default in a build that has it. GALLIUM_DRIVER still
+overrides it, and if Panfrost cannot create a screen the existing
+softpipe fallback is unchanged.
+
+Signed-off-by: gahingwoo <gahing@gahingwoo.com>
+---
+ src/gallium/targets/d3d10umd/d3d10_gdi.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+index bbd677f..73dfc2f 100644
+--- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
++++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+@@ -203,6 +203,12 @@ d3d10_create_screen(void)
+ #else
+    default_driver = "softpipe";
+ #endif
++#ifdef GALLIUM_PANFROST
++   /* As maliumd.dll this UMD is loaded into processes that never set
++    * GALLIUM_DRIVER (explorer, DWM, every Direct2D user); on a Mali adapter
++    * they must get the Mali. */
++   default_driver = "panfrost";
++#endif
+ 
+    driver = debug_get_option("GALLIUM_DRIVER", default_driver);
+ 
