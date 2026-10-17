@@ -28,6 +28,13 @@ NTSTATUS MwQuerySegment(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info)
     d->Size = MW_SEGMENT_SIZE;
     d->CommitLimit = MW_SEGMENT_SIZE;
     d->Flags.Aperture = TRUE;
+    /* DXGK_SEGMENTFLAGS: CpuVisible "has no meaning for an aperture segment",
+     * except for a primary whose UMD has not set UseAlternateVA, which is
+     * ours. Without it dxgkrnl refuses the shared primary ("All segment
+     * specified in supported write segment set for a shared primary must
+     * be CPU visible", installed Windows 2026-10-17), even with
+     * SectionBackedPrimary set. */
+    d->Flags.CpuVisible = TRUE;
     /* The Mali is not coherent with the CPU caches, so VidMm maps CPU views
      * of these allocations uncached, as malikm's write-combined BOs. */
     d->Flags.CacheCoherent = FALSE;
