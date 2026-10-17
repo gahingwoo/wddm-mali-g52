@@ -47,10 +47,26 @@ rem blind if the screen goes; the board can be powered off after ~1 min.
 echo == etwrec start >> "%OUT%"
 "%HERE%etwrec.exe" start "%HERE%dxgkrnl-install.etl" >> "%OUT%" 2>&1
 
+rem A rescue from Linux renames the driver store copy to maliwddm.sys.disabled
+rem (no registry edit). pnputil then sees the same package as installed and
+rem does not copy it again, so put the file back first.
+for /d %%d in ("%SystemRoot%\System32\DriverStore\FileRepository\maliwddm.inf_arm64_*") do (
+  if exist "%%d\maliwddm.sys.disabled" (
+    echo == restoring %%d\maliwddm.sys >> "%OUT%"
+    takeown /f "%%d" >> "%OUT%" 2>&1
+    takeown /f "%%d\maliwddm.sys.disabled" >> "%OUT%" 2>&1
+    icacls "%%d" /grant Administrators:F >> "%OUT%" 2>&1
+    icacls "%%d\maliwddm.sys.disabled" /grant Administrators:F >> "%OUT%" 2>&1
+    ren "%%d\maliwddm.sys.disabled" maliwddm.sys >> "%OUT%" 2>&1
+  )
+)
+
 echo == installing maliwddm >> "%OUT%"
 reg delete %KEY%\maliwddm /f >nul 2>&1
 pnputil /add-driver "%HERE%maliwddm\maliwddm.inf" /install >> "%OUT%" 2>&1
 echo exit %ERRORLEVEL% >> "%OUT%"
+rem Already installed (a re-run): start it again so this run is recorded.
+pnputil /restart-device "%DEV%" >> "%OUT%" 2>&1
 ping -n 31 127.0.0.1 >nul
 
 echo == etwrec stop >> "%OUT%"
