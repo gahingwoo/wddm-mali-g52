@@ -39,11 +39,23 @@ dir %SystemRoot%\System32\maliumd.dll %SystemRoot%\System32\vcruntime140*.dll >>
 echo == device before >> "%OUT%"
 pnputil /enum-devices /instanceid "%DEV%" >> "%OUT%" 2>&1
 
+rem dxgkrnl's own account of the VidPN negotiation goes to an .etl on this
+rem stick: on 2026-10-17 the first install left the screen black with the
+rem commit unpinned and no SetVidPnSourceAddress, and maliwddm's registry
+rem trace cannot say why Windows did not pin a mode. Everything below runs
+rem blind if the screen goes; the board can be powered off after ~1 min.
+echo == etwrec start >> "%OUT%"
+"%HERE%etwrec.exe" start "%HERE%dxgkrnl-install.etl" >> "%OUT%" 2>&1
+
 echo == installing maliwddm >> "%OUT%"
 reg delete %KEY%\maliwddm /f >nul 2>&1
 pnputil /add-driver "%HERE%maliwddm\maliwddm.inf" /install >> "%OUT%" 2>&1
 echo exit %ERRORLEVEL% >> "%OUT%"
-ping -n 11 127.0.0.1 >nul
+ping -n 31 127.0.0.1 >nul
+
+echo == etwrec stop >> "%OUT%"
+"%HERE%etwrec.exe" stop >> "%OUT%" 2>&1
+dir "%HERE%dxgkrnl-install.etl" >> "%OUT%" 2>&1
 
 echo == device after >> "%OUT%"
 pnputil /enum-devices /instanceid "%DEV%" >> "%OUT%" 2>&1
@@ -52,5 +64,6 @@ reg query %KEY%\maliwddm /v Build >> "%OUT%" 2>&1
 type "%OUT%"
 echo.
 echo Saved to %OUT%
-echo Now REBOOT, then run m5-win-check.cmd from an administrator prompt.
+echo The .etl is on the stick. If the screen is black, wait a minute and power off.
+echo Otherwise REBOOT, then run m5-win-check.cmd from an administrator prompt.
 pause
