@@ -910,6 +910,19 @@ wddm_idle(void)
    }
    if (ret == 0)
       wdead_flush();
+   if (ret == 0 && trace_on()) {
+      /* A job that failed since the last wait, with the BO trace above it
+       * that says which buffer its fault address belongs to. */
+      static uint32_t failed_seen;
+      MW_ESCAPE_STATS_DATA st = {0};
+      st.Code = MW_ESCAPE_STATS;
+      if (w_escape(&st, sizeof(st)) >= 0 && st.JobsFailed != failed_seen) {
+         fprintf(stderr, "malikm-wddm: %u job(s) failed by now: js 0x%x fault 0x%x @0x%llx\n",
+                 st.JobsFailed, st.LastJsStatus, st.LastFaultStatus,
+                 (unsigned long long)st.LastFaultAddress);
+         failed_seen = st.JobsFailed;
+      }
+   }
    return ret;
 }
 
@@ -1071,6 +1084,13 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       wbo[h - 1] = (struct wbo){ai.hAllocation, where.Size, where.GpuVa, NULL};
       a->handle = h;
       a->offset = where.GpuVa;
+      /* Where every BO lives, so a GPU fault address can be traced back to
+       * the buffer it fell in (the 0x4002c3 faults at a fixed VA). */
+      if (trace_on())
+         fprintf(stderr, "malikm-wddm: bo %u va 0x%llx-0x%llx flags 0x%x%s\n", h,
+                 (unsigned long long)where.GpuVa,
+                 (unsigned long long)(where.GpuVa + where.Size),
+                 (unsigned)a->flags, (a->flags & PANFROST_BO_HEAP) ? " HEAP" : "");
       return 0;
    }
    case MALIKM_NR_PANFROST_MMAP_BO: {
@@ -1127,6 +1147,9 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       struct wbo *bo = wddm_bo(((struct drm_gem_close *)b)->handle);
       if (!bo)
          return -MK_EINVAL;
+      if (trace_on())
+         fprintf(stderr, "malikm-wddm: close bo %u va 0x%llx\n",
+                 ((struct drm_gem_close *)b)->handle, (unsigned long long)bo->va);
       if (bo->cpu)
          w_unlock(bo->h);
       /* Not destroyed yet: see wdead. The handle number is free at once. */
