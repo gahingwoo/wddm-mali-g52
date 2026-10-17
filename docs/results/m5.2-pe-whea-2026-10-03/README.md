@@ -51,13 +51,20 @@ lanes are muxed to USB:
 edk2-rk3576 `1fc5c03` reads the plug orientation from the board's FUSB302
 and maps the lanes to match. It is untested.
 
-## Separate finding: the two job faults per present.exe
+## Separate finding: the two job faults per present.exe (fixed 2026-10-17)
 
 Every present.exe run also showed two failed jobs: read translation faults
-(`0x4002c3`), always at the same VA. The shim's `GEM_CLOSE` destroyed the
-WDDM allocation immediately, while panfrost/Mesa expect the kernel to keep
-a BO alive until its jobs are done. Fixed in `win32-compat/malikm_drm.c`
-(deferred destroy) and not yet re-run.
+(`0x4002c3`), always at `0xa131000`.
+
+- **First guess, wrong.** Deferring the destroy at `GEM_CLOSE` changed
+  nothing, and no deferred destroy ever ran before the faults.
+- **What the BO trace showed.** `0xa131000` is the first byte of a 64 KiB
+  BO. Linux's panfrost maps every BO into the GPU VM when it is created, so
+  Mesa's jobs touch BOs they do not list. VidMm only pages in, and maliwddm
+  only maps, what is in a DMA buffer's allocation list.
+- **Fix.** Each submit now also lists every other live BO ("8 named, 2-6
+  more listed for residency"). The run after it, `c5ff979-residency-fix-0failed.txt`,
+  shows jobs done 24, failed 0, resets 0 (before: 22 done, 2 failed, 2 resets).
 
 ## Files
 
