@@ -581,6 +581,7 @@ struct wbo {
    D3DKMT_HANDLE h;
    uint64_t size, va;
    void *cpu;
+   uint64_t listed;     /* submit that last put it in the allocation list */
 };
 static struct wbo *wbo;
 static uint32_t wbo_cap;
@@ -1122,19 +1123,46 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
          return -MK_EINVAL;
       if (a->bo_handle_count > walloc_size || sizeof(MW_COMMAND) > wcmd_size)
          return -MK_E2BIG;
+      static uint64_t mark;
+      uint32_t n = 0;
+      mark++;
       for (uint32_t i = 0; i < a->bo_handle_count; i++) {
          struct wbo *bo = wddm_bo(bos[i]);
          if (!bo)
             return -MK_ENOENT;
-         memset(&walloc[i], 0, sizeof(walloc[i]));
-         walloc[i].hAllocation = bo->h;
-         walloc[i].WriteOperation = 1;
+         if (bo->listed == mark)
+            continue;
+         bo->listed = mark;
+         memset(&walloc[n], 0, sizeof(walloc[n]));
+         walloc[n].hAllocation = bo->h;
+         walloc[n].WriteOperation = 1;
+         n++;
       }
+      /* Every other live BO too. Linux's panfrost maps a BO into the GPU
+       * VM when it is created, so a job may touch BOs it does not name,
+       * and Mesa relies on that. VidMm only pages in (and maliwddm only
+       * maps) what is in the allocation list, so such a job faulted: PE,
+       * 2026-10-17, two read translation faults (0x4002c3) at 0xa131000,
+       * the first byte of a 64 KiB BO, in every present.exe run. */
+      uint32_t named = n;
+      for (uint32_t i = 0; i < wbo_cap && n < walloc_size; i++) {
+         struct wbo *bo = &wbo[i];
+         if (!bo->h || bo->listed == mark)
+            continue;
+         bo->listed = mark;
+         memset(&walloc[n], 0, sizeof(walloc[n]));
+         walloc[n].hAllocation = bo->h;
+         walloc[n].WriteOperation = 1;
+         n++;
+      }
+      if (trace_on() && n != named)
+         fprintf(stderr, "malikm-wddm: submit names %u BOs, %u more listed for residency\n",
+                 named, n - named);
       MW_COMMAND *c = wcmd;
       c->Type = MW_CMD_JOB;
       c->Slot = (a->requirements & PANFROST_JD_REQ_FS) ? 0 : 1;
       c->Jc = a->jc;
-      NTSTATUS st = w_render(sizeof(*c), a->bo_handle_count);
+      NTSTATUS st = w_render(sizeof(*c), n);
       if (st < 0) {
          if (trace_on())
             fprintf(stderr, "malikm-wddm: Render failed 0x%08lx\n", (unsigned long)st);
