@@ -147,6 +147,8 @@ static void print_stats(D3DKMT_HANDLE adapter, const char *when)
            s.Patches, s.PatchAllocations, s.PatchPatchLocations, s.PatchSegment0,
            (unsigned long long)s.PatchAddress0);
     printf("  presents: %u blts, %u fills, %u skipped\n", s.PresentBlts, s.PresentFills, s.PresentSkips);
+    printf("  display: %u vsyncs, %u flips, %u copied to the framebuffer, %u not\n",
+           s.Vsyncs, s.Flips, s.FlipCopies, s.FlipCopySkips);
 }
 
 int main(void)

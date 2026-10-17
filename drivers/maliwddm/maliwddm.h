@@ -134,6 +134,19 @@ struct _MW_ADAPTER {
     volatile LONG PollArmed;
     volatile BOOLEAN Stopping;
 
+    /* VSync, emulated (command.c): the scanout is the firmware framebuffer,
+     * which raises no interrupt, but DWM paces every frame on CRTC_VSYNC
+     * and its flips complete only on one. ScanAlloc is the primary
+     * SetVidPnSourceAddress last made current; ShownAlloc the one whose
+     * pixels were last copied to the framebuffer. */
+    KTIMER VsyncTimer;
+    KDPC VsyncDpc;
+    volatile LONG VsyncOn;
+    PHYSICAL_ADDRESS ScanAddr;
+    struct _MW_ALLOCATION *volatile ScanAlloc;
+    struct _MW_ALLOCATION *ShownAlloc;
+    ULONG Vsyncs, Flips, FlipCopies, FlipCopySkips;
+
     /* Counters for the trace. */
     ULONG Renders, Presents, Submits;
     ULONG PagingOps[16];

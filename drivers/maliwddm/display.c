@@ -465,10 +465,16 @@ VOID APIENTRY MwSystemDisplayWrite(IN_CONST_PVOID MiniportDeviceContext, IN_CONS
 }
 
 
+/* Called at interrupt level for a flip: only record it. The next emulated
+ * vsync copies the pixels and reports the flip done (command.c). */
 NTSTATUS APIENTRY MwSetVidPnSourceAddress(IN_CONST_HANDLE hAdapter, const DXGKARG_SETVIDPNSOURCEADDRESS *Arg)
 {
-    UNREFERENCED_PARAMETER(hAdapter);
-    UNREFERENCED_PARAMETER(Arg);
-    /* Step d: the primary's pixels go to the framebuffer here. */
+    MW_ADAPTER *dev = (MW_ADAPTER *)hAdapter;
+
+    if (Arg->VidPnSourceId != 0)
+        return STATUS_INVALID_PARAMETER;
+    dev->ScanAddr = Arg->PrimaryAddress;
+    dev->ScanAlloc = (MW_ALLOCATION *)Arg->hAllocation;
+    dev->Flips++;
     return STATUS_SUCCESS;
 }

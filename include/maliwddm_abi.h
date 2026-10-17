@@ -92,4 +92,7 @@ typedef struct _MW_ESCAPE_STATS_DATA {
     mw_u64 PatchAddress0;
     /* Presents carried out on the CPU, and skipped (no pages known). */
     mw_u32 PresentBlts, PresentFills, PresentSkips, Reserved0;
+    /* Emulated vsyncs, flips (SetVidPnSourceAddress), and flips whose
+     * primary was copied to the framebuffer or could not be. */
+    mw_u32 Vsyncs, Flips, FlipCopies, FlipCopySkips;
 } MW_ESCAPE_STATS_DATA;

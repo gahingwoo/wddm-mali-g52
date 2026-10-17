@@ -178,6 +178,10 @@ static NTSTATUS APIENTRY MwStopDevice(IN_CONST_PVOID Context)
     MwLog(a, L"Submits", a->Submits);
     MwLog(a, L"JobsDone", a->JobsDone);
     MwLog(a, L"JobsFailed", a->JobsFailed);
+    MwLog(a, L"Vsyncs", a->Vsyncs);
+    MwLog(a, L"Flips", a->Flips);
+    MwLog(a, L"FlipCopies", a->FlipCopies);
+    MwLog(a, L"FlipCopySkips", a->FlipCopySkips);
     StopGpu(a);
     MwDisplayStop(a);
     return STATUS_SUCCESS;
@@ -270,7 +274,9 @@ static NTSTATUS DriverCaps(const DXGKARG_QUERYADAPTERINFO *Info)
      * caps (WinPE runs 5-9, ETW events 24/110/250 then the failure); a full
      * driver without them was accepted. */
 #if MW_RENDER_ONLY
+#if MW_RENDER_ONLY
     caps->PresentationCaps.SupportKernelModeCommandBuffer = 1; /* see MwRenderKm */
+#endif
     /* The shared primary lives in our only segment, an aperture, and the
      * UMD does not set UseAlternateVA; dxgkrnl then insists that "all
      * segments in the supported write segment set for a shared primary be
@@ -369,7 +375,7 @@ static NTSTATUS APIENTRY MwQueryAdapterInfo(IN_CONST_HANDLE hAdapter, const DXGK
     return st;
 }
 
-static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D)
+static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D, UINT Size)
 {
     D->GpuUp = A->GpuUp;
     D->Renders = A->Renders;
@@ -405,6 +411,13 @@ static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D)
     D->PresentBlts = A->PresentBlts;
     D->PresentFills = A->PresentFills;
     D->PresentSkips = A->PresentSkips;
+    /* Callers built before these existed pass the shorter structure. */
+    if (Size >= RTL_SIZEOF_THROUGH_FIELD(MW_ESCAPE_STATS_DATA, FlipCopySkips)) {
+        D->Vsyncs = A->Vsyncs;
+        D->Flips = A->Flips;
+        D->FlipCopies = A->FlipCopies;
+        D->FlipCopySkips = A->FlipCopySkips;
+    }
 }
 
 static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE *Esc)
@@ -431,9 +444,9 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         GpuInfo(a, (MW_ESCAPE_GPU_INFO_DATA *)Esc->pPrivateDriverData);
         return STATUS_SUCCESS;
     case MW_ESCAPE_STATS:
-        if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_STATS_DATA))
+        if (Esc->PrivateDriverDataSize < FIELD_OFFSET(MW_ESCAPE_STATS_DATA, Vsyncs))
             return STATUS_INVALID_PARAMETER;
-        Stats(a, (MW_ESCAPE_STATS_DATA *)Esc->pPrivateDriverData);
+        Stats(a, (MW_ESCAPE_STATS_DATA *)Esc->pPrivateDriverData, Esc->PrivateDriverDataSize);
         return STATUS_SUCCESS;
     default:
         MwLog(a, L"EscapeUnknownCode", code);

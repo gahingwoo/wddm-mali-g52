@@ -434,11 +434,73 @@ void MwArmPoll(MW_ADAPTER *A)
     KeSetTimer(&A->PollTimer, due, &A->PollDpc);
 }
 
+/* ---- VSync, emulated ---- */
+
+static BOOLEAN SyncVsync(PVOID Context)
+{
+    MW_ADAPTER *a = (MW_ADAPTER *)Context;
+    DXGKARGCB_NOTIFY_INTERRUPT_DATA n = {0};
+
+    n.InterruptType = DXGK_INTERRUPT_CRTC_VSYNC;
+    n.CrtcVsync.VidPnTargetId = 0;
+    n.CrtcVsync.PhysicalAddress = a->ScanAddr;   /* the flip this vsync completes */
+    a->Dxgk.DxgkCbNotifyInterrupt(a->Dxgk.DeviceHandle, &n);
+    return TRUE;
+}
+
+/* The primary just made current, to the framebuffer: there is no scanout
+ * engine pointed at our allocations, so a flip is a CPU copy. Only when the
+ * primary changes, not on every vsync. */
+static void ShowPrimary(MW_ADAPTER *A, MW_ALLOCATION *P)
+{
+    PUCHAR src;
+    ULONG w, h, pitch;
+
+    if (A->FbVa == NULL || P->Mdl == NULL) {
+        A->FlipCopySkips++;
+        return;
+    }
+    src = (PUCHAR)MmGetSystemAddressForMdlSafe(P->Mdl, NormalPagePriority | MdlMappingNoExecute);
+    if (src == NULL) {
+        A->FlipCopySkips++;
+        return;
+    }
+    src += (SIZE_T)P->MdlPage << PAGE_SHIFT;
+    w = min(P->Width ? P->Width : A->Fb.Width, A->Fb.Width);
+    h = min(P->Height ? P->Height : A->Fb.Height, A->Fb.Height);
+    pitch = P->Pitch ? P->Pitch : w * 4;
+    for (ULONG y = 0; y < h; y++)
+        RtlCopyMemory(A->FbVa + (SIZE_T)y * A->Fb.Pitch, src + (SIZE_T)y * pitch, (SIZE_T)w * 4);
+    A->FlipCopies++;
+}
+
+static VOID VsyncDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
+{
+    MW_ADAPTER *a = (MW_ADAPTER *)Context;
+    MW_ALLOCATION *p;
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(Arg1);
+    UNREFERENCED_PARAMETER(Arg2);
+
+    if (a->Stopping || !a->VsyncOn)
+        return;
+    p = a->ScanAlloc;
+    if (p != NULL && p != a->ShownAlloc && a->SourceVisible) {
+        ShowPrimary(a, p);
+        a->ShownAlloc = p;
+    }
+    a->Vsyncs++;
+    if (Synchronize(a, SyncVsync, a))
+        a->Dxgk.DxgkCbQueueDpc(a->Dxgk.DeviceHandle);
+}
+
 void MwCommandInit(MW_ADAPTER *A)
 {
     A->Stopping = FALSE;
     KeInitializeTimer(&A->PollTimer);
     KeInitializeDpc(&A->PollDpc, PollDpc, A);
+    KeInitializeTimer(&A->VsyncTimer);
+    KeInitializeDpc(&A->VsyncDpc, VsyncDpc, A);
 }
 
 void MwCommandStop(MW_ADAPTER *A)
@@ -446,6 +508,8 @@ void MwCommandStop(MW_ADAPTER *A)
     A->Stopping = TRUE;
     KeMemoryBarrier();
     KeCancelTimer(&A->PollTimer);
+    InterlockedExchange(&A->VsyncOn, 0);
+    KeCancelTimer(&A->VsyncTimer);
     KeFlushQueuedDpcs();
     InterlockedExchange(&A->PollArmed, 0);
 }
@@ -581,12 +645,27 @@ NTSTATUS APIENTRY MwCancelCommand(IN_CONST_HANDLE hAdapter, const DXGKARG_CANCEL
 }
 
 /* No vsync interrupt yet (the VOP2 is not ours to touch). */
+/* Only VSync is controllable here. Before this, nothing ever raised one,
+ * and on installed Windows (2026-10-17) the desktop hung right after the
+ * commit: ControlInterrupt was called, then no SetVidPnSourceAddress or
+ * Present ever came, while dxgkrnl's flip queue kept growing. */
 NTSTATUS APIENTRY MwControlInterrupt(IN_CONST_HANDLE hAdapter, IN_CONST_DXGK_INTERRUPT_TYPE Type,
                                      IN_BOOLEAN Enable)
 {
-    UNREFERENCED_PARAMETER(hAdapter);
-    UNREFERENCED_PARAMETER(Type);
-    UNREFERENCED_PARAMETER(Enable);
+    MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
+
+    if (Type != DXGK_INTERRUPT_CRTC_VSYNC)
+        return STATUS_SUCCESS;
+    if (Enable) {
+        if (InterlockedExchange(&a->VsyncOn, 1) == 0) {
+            LARGE_INTEGER due;
+            due.QuadPart = -166667;           /* 16.7 ms, relative */
+            KeSetTimerEx(&a->VsyncTimer, due, 16, &a->VsyncDpc);
+        }
+    } else if (InterlockedExchange(&a->VsyncOn, 0) != 0) {
+        KeCancelTimer(&a->VsyncTimer);
+    }
+    MwLog(a, L"VsyncOn", (ULONG)a->VsyncOn);
     return STATUS_SUCCESS;
 }
 
