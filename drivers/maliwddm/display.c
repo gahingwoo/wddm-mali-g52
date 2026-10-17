@@ -377,7 +377,13 @@ NTSTATUS APIENTRY MwCommitVidPn(IN_CONST_HANDLE hAdapter, const DXGKARG_COMMITVI
         st = ours ? STATUS_SUCCESS : STATUS_GRAPHICS_INVALID_VIDPN;
         dev->PathActive = ours;
     } else if (NT_SUCCESS(st)) {
+        /* Nothing pinned: the source is being turned off. AcquirePinnedModeInfo
+         * says so with an informational status (0x401E0307), which is not
+         * ours to return: dxgkrnl logged "Driver returned an invalid NTSTATUS
+         * code: 0x401e0307" for every such commit. */
         dev->PathActive = FALSE;
+        MwLog(dev, L"CommitUnpinned", (ULONG)st);
+        st = STATUS_SUCCESS;
     }
     vidpn->pfnReleaseSourceModeSet(Arg->hFunctionalVidPn, set);
     MwLog(dev, L"CommitStatus", (ULONG)st);

@@ -271,6 +271,14 @@ static NTSTATUS DriverCaps(const DXGKARG_QUERYADAPTERINFO *Info)
      * driver without them was accepted. */
 #if MW_RENDER_ONLY
     caps->PresentationCaps.SupportKernelModeCommandBuffer = 1; /* see MwRenderKm */
+    /* The shared primary lives in our only segment, an aperture, and the
+     * UMD does not set UseAlternateVA; dxgkrnl then insists that "all
+     * segments in the supported write segment set for a shared primary be
+     * CPU visible" (an aperture segment never is) and the primary is never
+     * created: installed Windows, 2026-10-17, black screen, no
+     * SetVidPnSourceAddress. DXGK_SEGMENTFLAGS' remarks give the way out:
+     * a section-backed primary. */
+    caps->MemoryManagementCaps.SectionBackedPrimary = 1;
     caps->FlipCaps.FlipOnVSyncMmIo = 1;                         /* no display: unused */
     if (FITS(size, DXGK_DRIVERCAPS, PreemptionCaps)) {
         /* Honest: a DMA buffer always runs to its end. */
