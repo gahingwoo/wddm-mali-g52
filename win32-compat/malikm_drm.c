@@ -63,6 +63,9 @@ static SRWLOCK dev_lock = SRWLOCK_INIT;
 
 static int trace_on(void);
 
+/* d3d10umd's log (Debug.cpp): the debugger and, when on, the file log. */
+void DebugPrintf(const char *format, ...);
+
 int
 malikm_open(void)
 {
@@ -73,10 +76,18 @@ malikm_open(void)
       /* No malikm: the Mali may be driven by maliwddm, the WDDM driver,
        * reached through the D3DKMT system calls instead. */
       if (wddm_init() == 0) {
+         int nul = _open("NUL", _O_RDWR | _O_NOINHERIT);
          if (trace_on())
             fprintf(stderr, "malikm: no \\\\.\\MaliG52; using the maliwddm adapter\n");
-         return _open("NUL", _O_RDWR | _O_NOINHERIT);
+         /* The fd is a placeholder for Mesa to hold and duplicate. A
+          * process that may not open NUL would lose the Mali here. */
+         if (nul < 0)
+            DebugPrintf("malikm_open: maliwddm is bound, but NUL does not open (errno %d,"
+                        " error %lu)\n", errno, (unsigned long)GetLastError());
+         return nul;
       }
+      DebugPrintf("malikm_open: no \\\\.\\MaliG52 (error %lu) and no maliwddm adapter (on %d)\n",
+                  (unsigned long)err, wddm_on());
       fprintf(stderr, "malikm: cannot open \\\\.\\MaliG52 (error %lu), and no maliwddm adapter\n",
               (unsigned long)err);
       errno = err == ERROR_FILE_NOT_FOUND ? ENOENT : ENODEV;
@@ -952,9 +963,6 @@ wddm_idle(void)
    return ret;
 }
 
-/* d3d10umd's log (Debug.cpp): the debugger and, when on, the file log. */
-void DebugPrintf(const char *format, ...);
-
 /*
  * Primaries: the surfaces of a swap chain that the runtime presents itself.
  *
@@ -1197,8 +1205,10 @@ malikm_bind_d3dddi(HANDLE hRTAdapter, HANDLE hRTDevice, const void *pKTCallbacks
    MW_ESCAPE_GPU_INFO_DATA g = {0};
    int ret = -1;
 
-   if (!cb || !cb->pfnEscapeCb || !cb->pfnAllocateCb || !cb->pfnRenderCb || !cb->pfnCreateContextCb)
+   if (!cb || !cb->pfnEscapeCb || !cb->pfnAllocateCb || !cb->pfnRenderCb || !cb->pfnCreateContextCb) {
+      DebugPrintf("bind: the runtime's callbacks are incomplete (%p)\n", (void *)cb);
       return -1;
+   }
    AcquireSRWLockExclusive(&wddm_lock);
    /* Ask the adapter through the callbacks: a software runtime routes them
     * to d3d10umd's own D3DKMT stubs, which fail. */
@@ -1207,11 +1217,13 @@ malikm_bind_d3dddi(HANDLE hRTAdapter, HANDLE hRTDevice, const void *pKTCallbacks
    e.pPrivateDriverData = &g;
    e.PrivateDriverDataSize = sizeof(g);
    g.Code = MW_ESCAPE_GPU_INFO;
-   if (cb->pfnEscapeCb(hRTAdapter, &e) >= 0 && g.Count != 0 && g.Valid != 0) {
+   HRESULT ehr = cb->pfnEscapeCb(hRTAdapter, &e), chr = E_FAIL;
+   if (ehr >= 0 && g.Count != 0 && g.Valid != 0) {
       D3DDDICB_CREATECONTEXT c = {0};
       c.NodeOrdinal = 0;
       c.EngineAffinity = 1;
-      if (cb->pfnCreateContextCb(hRTDevice, &c) >= 0) {
+      chr = cb->pfnCreateContextCb(hRTDevice, &c);
+      if (chr >= 0) {
          ddi.on = 1;
          ddi.adapter = hRTAdapter;
          ddi.device = hRTDevice;
@@ -1230,6 +1242,12 @@ malikm_bind_d3dddi(HANDLE hRTAdapter, HANDLE hRTDevice, const void *pKTCallbacks
       }
    }
    ReleaseSRWLockExclusive(&wddm_lock);
+   /* Why a process does or does not get the Mali: without this the only
+    * sign is "screen softpipe" a few lines later. */
+   DebugPrintf("bind: runtime device %p: %s (GPU info escape 0x%08lx, %u params, valid 0x%llx;"
+               " create context 0x%08lx)\n", hRTDevice, ret == 0 ? "bound" : "NOT bound",
+               (unsigned long)ehr, (unsigned)g.Count, (unsigned long long)g.Valid,
+               (unsigned long)chr);
    if (trace_on())
       fprintf(stderr, "malikm: bind to the runtime device %p: %s\n", hRTDevice,
               ret == 0 ? "yes, through its callbacks" : "no (not maliwddm, or software runtime)");
