@@ -146,6 +146,10 @@ struct _MW_ADAPTER {
     struct _MW_ALLOCATION *volatile ScanAlloc;
     struct _MW_ALLOCATION *ShownAlloc;
     ULONG Vsyncs, Flips, FlipCopies, FlipCopySkips;
+    /* Why a flip did or did not reach the framebuffer; logged by the stats
+     * escape, which runs at passive level. */
+    ULONG CommitsPinned, CommitsUnpinned, CommitsNoPath, CommitsNotOurs;
+    ULONG VisibleOn, VisibleOff, FlipsNullAlloc, FlipsInvisible, LastFlipFlags, LastFlipContexts;
 
     /* Counters for the trace. */
     ULONG Renders, Presents, Submits;

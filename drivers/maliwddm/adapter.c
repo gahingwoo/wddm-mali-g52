@@ -450,6 +450,24 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         if (Esc->PrivateDriverDataSize < (UINT)FIELD_OFFSET(MW_ESCAPE_STATS_DATA, Vsyncs))
             return STATUS_INVALID_PARAMETER;
         Stats(a, (MW_ESCAPE_STATS_DATA *)Esc->pPrivateDriverData, Esc->PrivateDriverDataSize);
+        MwLog(a, L"T_CommitsPinned", a->CommitsPinned);
+        MwLog(a, L"T_CommitsUnpinned", a->CommitsUnpinned);
+        MwLog(a, L"T_CommitsNoPath", a->CommitsNoPath);
+        MwLog(a, L"T_CommitsNotOurs", a->CommitsNotOurs);
+        MwLog(a, L"T_VisibleOn", a->VisibleOn);
+        MwLog(a, L"T_VisibleOff", a->VisibleOff);
+        MwLog(a, L"T_SourceVisible", a->SourceVisible);
+        MwLog(a, L"T_PathActive", a->PathActive);
+        MwLog(a, L"T_Flips", a->Flips);
+        MwLog(a, L"T_FlipsNullAlloc", a->FlipsNullAlloc);
+        MwLog(a, L"T_FlipsInvisible", a->FlipsInvisible);
+        MwLog(a, L"T_LastFlipFlags", a->LastFlipFlags);
+        MwLog(a, L"T_LastFlipContexts", a->LastFlipContexts);
+        MwLog(a, L"T_ScanAllocSet", a->ScanAlloc != NULL);
+        MwLog(a, L"T_ShownAllocSet", a->ShownAlloc != NULL);
+        MwLog(a, L"T_ScanAddrLow", a->ScanAddr.LowPart);
+        MwLog(a, L"T_FlipCopies", a->FlipCopies);
+        MwLog(a, L"T_FlipCopySkips", a->FlipCopySkips);
         return STATUS_SUCCESS;
     default:
         MwLog(a, L"EscapeUnknownCode", code);

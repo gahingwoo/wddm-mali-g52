@@ -343,6 +343,7 @@ NTSTATUS APIENTRY MwSetVidPnSourceVisibility(IN_CONST_HANDLE hAdapter,
 {
     MW_ADAPTER *dev = (MW_ADAPTER *)hAdapter;
     dev->SourceVisible = Arg->Visible;
+    if (Arg->Visible) dev->VisibleOn++; else dev->VisibleOff++;
     /* Invisible means blank: clear the framebuffer once. */
     if (!Arg->Visible && dev->FbVa != NULL)
         RtlZeroMemory(dev->FbVa, dev->FbSize);
@@ -365,6 +366,7 @@ NTSTATUS APIENTRY MwCommitVidPn(IN_CONST_HANDLE hAdapter, const DXGKARG_COMMITVI
     if (st == STATUS_GRAPHICS_INVALID_VIDEO_PRESENT_SOURCE || !NT_SUCCESS(st)) {
         /* No path for our source: it is being turned off. */
         dev->PathActive = FALSE;
+        dev->CommitsNoPath++;
         MwLog(dev, L"CommitNoPath", (ULONG)st);
         return STATUS_SUCCESS;
     }
@@ -376,12 +378,14 @@ NTSTATUS APIENTRY MwCommitVidPn(IN_CONST_HANDLE hAdapter, const DXGKARG_COMMITVI
         setIf->pfnReleaseModeInfo(set, pinned);
         st = ours ? STATUS_SUCCESS : STATUS_GRAPHICS_INVALID_VIDPN;
         dev->PathActive = ours;
+        if (ours) dev->CommitsPinned++; else dev->CommitsNotOurs++;
     } else if (NT_SUCCESS(st)) {
         /* Nothing pinned: the source is being turned off. AcquirePinnedModeInfo
          * says so with an informational status (0x401E0307), which is not
          * ours to return: dxgkrnl logged "Driver returned an invalid NTSTATUS
          * code: 0x401e0307" for every such commit. */
         dev->PathActive = FALSE;
+        dev->CommitsUnpinned++;
         MwLog(dev, L"CommitUnpinned", (ULONG)st);
         st = STATUS_SUCCESS;
     }
@@ -476,5 +480,9 @@ NTSTATUS APIENTRY MwSetVidPnSourceAddress(IN_CONST_HANDLE hAdapter, const DXGKAR
     dev->ScanAddr = Arg->PrimaryAddress;
     dev->ScanAlloc = (MW_ALLOCATION *)Arg->hAllocation;
     dev->Flips++;
+    if (Arg->hAllocation == NULL) dev->FlipsNullAlloc++;
+    if (!dev->SourceVisible) dev->FlipsInvisible++;
+    dev->LastFlipFlags = Arg->Flags.Value;
+    dev->LastFlipContexts = Arg->ContextCount;
     return STATUS_SUCCESS;
 }
