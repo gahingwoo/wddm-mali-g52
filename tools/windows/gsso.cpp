@@ -13,7 +13,8 @@
 // accepted. A create that fails is UNSUPPORTED, unless "gs" was given.
 //
 // Steps (one PASS / FAIL / UNSUPPORTED line each):
-//   1  CreateGeometryShader (a triangle GS that swaps red and blue)
+//   1  CreateGeometryShader (a triangle GS that swaps red and blue, no
+//      loop and no indexing of its inputs by a variable)
 //   2  CreateGeometryShaderWithStreamOutput, with that GS
 //   3  CreateGeometryShaderWithStreamOutput, vertex shader bytecode
 //      (stream output without a GS)
@@ -23,8 +24,9 @@
 //   6  DrawAuto from that buffer: a red triangle
 //   7  the same Draw with no GS: red (the device still draws)
 //   8  release everything, ClearState, Flush; the device is not removed
-// Exit code: the number of FAIL lines. "done" is the last line printed; a
-// run that does not print it crashed.
+// Exit code: the number of FAIL lines; 200 when a step made no progress for
+// 30 s (the hung step is named). "done" is the last line printed; a run that
+// prints neither crashed.
 //
 #include <windows.h>
 #include <d3d11.h>
@@ -46,7 +48,9 @@ static const char kHlsl[] =
     "struct V { float4 p : SV_Position; float4 c : COLOR; };\n"
     "V vs(float4 p : POSITION, float4 c : COLOR) { V o; o.p = p; o.c = c; return o; }\n"
     "[maxvertexcount(3)] void gs(triangle V i[3], inout TriangleStream<V> s) {\n"
-    "  for (int k = 0; k < 3; k++) { V o = i[k]; o.c = float4(o.c.b, o.c.g, o.c.r, 1); s.Append(o); }\n"
+    "  V o; o = i[0]; o.c = i[0].c.bgra; s.Append(o);\n"
+    "  o = i[1]; o.c = i[1].c.bgra; s.Append(o);\n"
+    "  o = i[2]; o.c = i[2].c.bgra; s.Append(o);\n"
     "  s.RestartStrip(); }\n"
     "float4 ps(V i) : SV_Target { return i.c; }\n";
 
@@ -63,6 +67,26 @@ static const Vtx kTri[3] = {
 };
 
 static int g_fail;
+static volatile LONG g_step;
+
+/* A step that does not return within 30 s is a FAIL too; say which one and
+ * end the process rather than leave CI (or the board) waiting. */
+static DWORD WINAPI watchdog(void *)
+{
+    LONG last = -1;
+    int same = 0;
+    for (;;) {
+        Sleep(1000);
+        LONG now = g_step;
+        same = now == last ? same + 1 : 0;
+        last = now;
+        if (same >= 30) {
+            printf("FAIL        %ld hung: no progress for 30 s\n", now);
+            fflush(stdout);
+            ExitProcess(200);
+        }
+    }
+}
 static int g_expect; /* 1 gs, -1 nogs, 0 either */
 
 static void line(const char *verdict, const char *step, const char *fmt, ...)
@@ -160,6 +184,7 @@ int main(int argc, char **argv)
     HRESULT hr;
 
     setvbuf(stdout, nullptr, _IONBF, 0);
+    CreateThread(nullptr, 0, watchdog, nullptr, 0, nullptr);
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
 
     if (hw) {
@@ -286,6 +311,7 @@ int main(int argc, char **argv)
     UINT soStride = sizeof(Vtx);
 
     /* 1 */
+    g_step = 1;
     ID3D11GeometryShader *gs = nullptr;
     hr = dev->CreateGeometryShader(gsb->GetBufferPointer(), gsb->GetBufferSize(), nullptr, &gs);
     created("1 CreateGeometryShader", hr);
@@ -293,6 +319,7 @@ int main(int argc, char **argv)
         gs = nullptr;
 
     /* 2 */
+    g_step = 2;
     ID3D11GeometryShader *gsSo = nullptr;
     hr = dev->CreateGeometryShaderWithStreamOutput(gsb->GetBufferPointer(), gsb->GetBufferSize(), so, 2,
                                                    &soStride, 1, 0, nullptr, &gsSo);
@@ -301,6 +328,7 @@ int main(int argc, char **argv)
         gsSo = nullptr;
 
     /* 3 */
+    g_step = 3;
     ID3D11GeometryShader *passSo = nullptr;
     hr = dev->CreateGeometryShaderWithStreamOutput(vsb->GetBufferPointer(), vsb->GetBufferSize(), so, 2,
                                                    &soStride, 1, 0, nullptr, &passSo);
@@ -309,6 +337,7 @@ int main(int argc, char **argv)
         passSo = nullptr;
 
     /* 4 */
+    g_step = 4;
     if (gs) {
         clear();
         ctx->GSSetShader(gs, nullptr, 0);
@@ -320,6 +349,7 @@ int main(int argc, char **argv)
         line("UNSUPPORTED", "4 GSSetShader + Draw", "no geometry shader to bind");
     }
 
+    g_step = 5;
     /* 5: with no SO shader the same calls still run (targets, queries, a
      * draw); nothing is written and the counts are zero. */
     {
@@ -380,6 +410,7 @@ int main(int argc, char **argv)
     }
 
     /* 6 */
+    g_step = 6;
     {
         clear();
         ctx->IASetVertexBuffers(0, 1, &sob, &stride, &offset);
@@ -394,6 +425,7 @@ int main(int argc, char **argv)
     }
 
     /* 7 */
+    g_step = 7;
     {
         clear();
         ctx->Draw(3, 0);
@@ -402,6 +434,7 @@ int main(int argc, char **argv)
     }
 
     /* 8 */
+    g_step = 8;
     {
         if (gs)
             gs->Release();
