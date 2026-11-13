@@ -1,0 +1,163 @@
+== LogonUI.exe-4212.txt 67624 (1 files)
+lines 1619
+   2592312  2216 . CreateDevice
+   2592312  2216 CreateDevice Interface 0xa0009 Version 0x177a
+   2592328  2216 CreateDevice: screen Mali-G52 r1 MC3 (Panfrost)
+   2592328  2216 CreateDevice: done, DXGI_STATUS_NO_REDIRECTION
+   2592625  1316 shared create: resource 000001CFFEDB5B00 device 000001CFFB2400E8 (bound device 000001CFFB2400E8), 4227072 bytes: pfnAllocateCb 0x00000000, allocation 0x40000680, kernel resource 0x0
+   2592625  1316 shared create: allocation 0x40000680 at GPU 0x4f1e000, 4227072 bytes
+   2594859  1316 shared create: resource 000001CFFFAE2000 device 000001CFFB2400E8 (bound device 000001CFFB2400E8), 3170304 bytes: pfnAllocateCb 0x00000000, allocation 0x40001240, kernel resource 0x0
+   2594859  1316 shared create: allocation 0x40001240 at GPU 0x4072000, 3170304 bytes
+   2594890  1316 shared create: resource 000001CFFFAE1F20 device 000001CFFB2400E8 (bound device 000001CFFB2400E8), 4227072 bytes: pfnAllocateCb 0x00000000, allocation 0x400012c0, kernel resource 0x0
+   2594890  1316 shared create: allocation 0x400012c0 at GPU 0x4378000, 4227072 bytes
+   2594906  1316 shared create: resource 000001CFFFAE2080 device 000001CFFB2400E8 (bound device 000001CFFB2400E8), 4227072 bytes: pfnAllocateCb 0x00000000, allocation 0x40001340, kernel resource 0x0
+   2594906  1316 shared create: allocation 0x40001340 at GPU 0x4780000, 4227072 bytes
+   2594937  1316 shared create: resource 000001CFFF1A9420 device 000001CFFB2400E8 (bound device 000001CFFB2400E8), 4227072 bytes: pfnAllocateCb 0x00000000, allocation 0x400013c0, kernel resource 0x0
+   2594937  1316 shared create: allocation 0x400013c0 at GPU 0x540e000, 4227072 bytes
+   2594953  1316 shared create: resource 000001CFFFAE1D40 device 000001CFFB2400E8 (bound device 000001CFFB2400E8), 3698688 bytes: pfnAllocateCb 0x00000000, allocation 0x40001440, kernel resource 0x0
+   2594953  1316 shared create: allocation 0x40001440 at GPU 0x5816000, 3698688 bytes
+   2595031  1316 . _Present
+   2595031  1316 Present: flags 0x1 interval 0, src primary 0x0, dst 0000000000000000 primary 0x0
+   2595031  1316 present: shared allocation 0x40001440 -> 0x0, pfnPresentCb 0x00000000
+   2595031  1316 . _Present
+   2595031  1316 Present: flags 0x1 interval 0, src primary 0x0, dst 0000000000000000 primary 0x0
+   2595031  1316 present: shared allocation 0x400013c0 -> 0x0, pfnPresentCb 0x00000000
+   2595031  1316 . _Present
+   2595031  1316 Present: flags 0x1 interval 0, src primary 0x0, dst 0000000000000000 primary 0x0
+   2595031  1316 present: shared allocation 0x40001340 -> 0x0, pfnPresentCb 0x00000000
+   2595031  1316 . _Present
+   2595031  1316 Present: flags 0x1 interval 0, src primary 0x0, dst 0000000000000000 primary 0x0
+   2595031  1316 present: shared allocation 0x400012c0 -> 0x0, pfnPresentCb 0x00000000
+   2595031  1316 . _Present
+   2595031  1316 Present: flags 0x1 interval 0, src primary 0x0, dst 0000000000000000 primary 0x0
+   2595031  1316 present: shared allocation 0x40001240 -> 0x0, pfnPresentCb 0x00000000
+   2595031  1316 . _Present
+   2595031  1316 Present: flags 0x1 interval 0, src primary 0x0, dst 0000000000000000 primary 0x0
+   2595031  1316 present: shared allocation 0x40000680 -> 0x0, pfnPresentCb 0x00000000
+== dwm.exe-3728.txt 135059 (1 files)
+lines 3491
+   2594937  1992 . CreateDevice
+   2594937  1992 CreateDevice Interface 0xa0009 Version 0x177a
+   2594953  1992 CreateDevice: screen Mali-G52 r1 MC3 (Panfrost)
+   2594953  1992 CreateDevice: done, DXGI_STATUS_NO_REDIRECTION
+   2595406  1992 OpenResource(hResource=0000022150EF6730): runtime resource 0000022151A3BC80, runtime device 000002214DFDF6F8, kernel resource 0x40001100, 1 allocation(s), resource private data 000002215084C4C0 64 bytes
+   2595406  1992   allocation 0: handle 0x40001140, private data 0000022151AC8190 96 bytes
+   2595406  1992 shared open: resource 0000022151A3BC80 device 000002214DFDF6F8 (bound device 000002214DFDF6F8), allocation 0x40001140: escape 0x00000000, GPU 0x4f1e000, 4227072 bytes, wanted 4227072
+   2595406  1992 OpenResource(hResource=0000022150EF71B0): runtime resource 0000022151A3BAA0, runtime device 000002214DFDF6F8, kernel resource 0x40001180, 1 allocation(s), resource private data 000002215084C780 64 bytes
+   2595406  1992   allocation 0: handle 0x400011c0, private data 0000022151AC8190 96 bytes
+   2595406  1992 shared open: resource 0000022151A3BAA0 device 000002214DFDF6F8 (bound device 000002214DFDF6F8), allocation 0x400011c0: escape 0x00000000, GPU 0x4072000, 3170304 bytes, wanted 3170304
+   2595406  1992 OpenResource(hResource=0000022150EF7F30): runtime resource 0000022151A3BAE0, runtime device 000002214DFDF6F8, kernel resource 0x40001200, 1 allocation(s), resource private data 000002215084C740 64 bytes
+   2595406  1992   allocation 0: handle 0x40001240, private data 0000022151AC83D0 96 bytes
+   2595406  1992 shared open: resource 0000022151A3BAE0 device 000002214DFDF6F8 (bound device 000002214DFDF6F8), allocation 0x40001240: escape 0x00000000, GPU 0x4378000, 4227072 bytes, wanted 4227072
+   2595406  1992 OpenResource(hResource=0000022150EF6AB0): runtime resource 0000022151A3B9A0, runtime device 000002214DFDF6F8, kernel resource 0x40001280, 1 allocation(s), resource private data 000002215084CF00 64 bytes
+   2595406  1992   allocation 0: handle 0x400012c0, private data 0000022151AC86D0 96 bytes
+   2595406  1992 shared open: resource 0000022151A3B9A0 device 000002214DFDF6F8 (bound device 000002214DFDF6F8), allocation 0x400012c0: escape 0x00000000, GPU 0x4780000, 4227072 bytes, wanted 4227072
+   2595406  1992 OpenResource(hResource=0000022150EF7830): runtime resource 0000022151A3B9E0, runtime device 000002214DFDF6F8, kernel resource 0x40001300, 1 allocation(s), resource private data 000002215084CC40 64 bytes
+   2595406  1992   allocation 0: handle 0x40001340, private data 0000022151AC8730 96 bytes
+   2595406  1992 shared open: resource 0000022151A3B9E0 device 000002214DFDF6F8 (bound device 000002214DFDF6F8), allocation 0x40001340: escape 0x00000000, GPU 0x540e000, 4227072 bytes, wanted 4227072
+   2595406  1992 OpenResource(hResource=0000022150EF6430): runtime resource 0000022151A3BB20, runtime device 000002214DFDF6F8, kernel resource 0x40001380, 1 allocation(s), resource private data 000002215084CB80 64 bytes
+   2595406  1992   allocation 0: handle 0x400013c0, private data 0000022151AC7F50 96 bytes
+   2595406  1992 shared open: resource 0000022151A3BB20 device 000002214DFDF6F8 (bound device 000002214DFDF6F8), allocation 0x400013c0: escape 0x00000000, GPU 0x5816000, 3698688 bytes, wanted 3698688
+   2597609  1992 DestroyResource: shared, runtime resource 0000022151A3BAA0 allocation 0x400011c0
+   2597609  1992 shared destroy: resource 0000022151A3BAA0 device 000002214DFDF6F8, idle 0, 0 buffer(s) still held, pfnDeallocateCb 0x00000000
+   2597609  1992 DestroyResource: shared, runtime resource 0000022151A3BAE0 allocation 0x40001240
+   2597609  1992 shared destroy: resource 0000022151A3BAE0 device 000002214DFDF6F8, idle 0, 0 buffer(s) still held, pfnDeallocateCb 0x00000000
+   2597609  1992 DestroyResource: shared, runtime resource 0000022151A3B9A0 allocation 0x400012c0
+   2597609  1992 shared destroy: resource 0000022151A3B9A0 device 000002214DFDF6F8, idle 0, 0 buffer(s) still held, pfnDeallocateCb 0x00000000
+   2597609  1992 DestroyResource: shared, runtime resource 0000022151A3B9E0 allocation 0x40001340
+   2597609  1992 shared destroy: resource 0000022151A3B9E0 device 000002214DFDF6F8, idle 0, 0 buffer(s) still held, pfnDeallocateCb 0x00000000
+   2597609  1992 DestroyResource: shared, runtime resource 0000022151A3BB20 allocation 0x400013c0
+   2597609  1992 shared destroy: resource 0000022151A3BB20 device 000002214DFDF6F8, idle 0, 0 buffer(s) still held, pfnDeallocateCb 0x00000000
+   2597609  1992 DestroyResource: shared, runtime resource 0000022151A3BC80 allocation 0x40001140
+   2597609  1992 shared destroy: resource 0000022151A3BC80 device 000002214DFDF6F8, idle 0, 0 buffer(s) still held, pfnDeallocateCb 0x00000000
+   2741218  1992 OpenResource(hResource=0000022150EF60B0): runtime resource 0000022151A39580, runtime device 000002214DFDF6F8, kernel resource 0x40001840, 1 allocation(s), resource private data 000002215084D740 64 bytes
+   2741218  1992   allocation 0: handle 0x40001880, private data 0000022151AC74D0 96 bytes
+   2741218  1992 shared open: resource 0000022151A39580 device 000002214DFDF6F8 (bound device 000002214DFDF6F8), allocation 0x40001880: escape 0x00000000, GPU 0x2788000, 15048704 bytes, wanted 15048704
+   2741218  1992 OpenResource(hResource=0000022150EF6730): runtime resource 000002214DF71D00, runtime device 000002214DFDF6F8, kernel resource 0x400018c0, 1 allocation(s), resource private data 0000022151A371A0 64 bytes
+   2741218  1992   allocation 0: handle 0x40001900, private data 0000022151AC8A30 96 bytes
+   2741218  1992 shared open: resource 000002214DF71D00 device 000002214DFDF6F8 (bound device 000002214DFDF6F8), allocation 0x40001900: escape 0x00000000, GPU 0x22a8000, 4227072 bytes, wanted 4227072
+
+Later, display on again, LogonUI.exe pid 256 and the same dwm.exe (pid 3728), UMD from run 43389770021:
+== LogonUI.exe-256.txt 52046 (1 files)
+lines 1495
+   2709937  4652 shared create: resource 0000027E72685560 device 0000027E6683FB68 (bound device 0000027E6683FB68), 4227072 bytes: pfnAllocateCb 0x00000000, allocation 0x40000680, kernel resource 0x0
+   2709937  4652 shared create: allocation 0x40000680 at GPU 0x22a8000, 4227072 bytes
+   2740937  4652 shared create: resource 0000027E742199A0 device 0000027E6683FB68 (bound device 0000027E6683FB68), 15048704 bytes: pfnAllocateCb 0x00000000, allocation 0x40000840, kernel resource 0x0
+   2740937  4652 shared create: allocation 0x40000840 at GPU 0x2788000, 15048704 bytes
+   2741093  4652 present: shared allocation 0x40000840 -> 0x0, pfnPresentCb 0x00000000
+   2741093  4652 present: shared allocation 0x40000680 -> 0x0, pfnPresentCb 0x00000000
+   2744156  4652 present: shared allocation 0x40000680 -> 0x0, pfnPresentCb 0x00000000
+   2744203  4652 present: shared allocation 0x40000680 -> 0x0, pfnPresentCb 0x00000000
+   2775109  4652 present: shared allocation 0x40000680 -> 0x0, pfnPresentCb 0x00000000
+   2775281  4652 present: shared allocation 0x40000680 -> 0x0, pfnPresentCb 0x00000000
+
+dwm.exe after that present: entry points from the two OpenResource calls to the next Present
+   2741218  1992 . OpenResource
+   2741218  1992 OpenResource(hResource=0000022150EF60B0): runtime resource 0000022151A39580, runtime device 000002214DFDF6F8, kernel resource 0x40001840, 1 allocation(s), resource private data 000002215084D740 64 bytes
+   2741218  1992   allocation 0: handle 0x40001880, private data 0000022151AC74D0 96 bytes
+   2741218  1992   description in the resource's private data
+   2741218  1992   2592x1440x1 array 1 levels 1 samples 1, target 2 format DXGI_FORMAT_B8G8R8A8_UNORM (PIPE_FORMAT_B8G8R8A8_UNORM), bind 0x10008a usage 0
+   2741218  1992 shared open: resource 0000022151A39580 device 000002214DFDF6F8 (bound device 000002214DFDF6F8), allocation 0x40001880: escape 0x00000000, GPU 0x2788000, 15048704 bytes, wanted 15048704
+   2741218  1992   opened: pipe resource 0000022150F4CE90 on allocation 0x40001880
+   2741218  1992   shared: exported, stride 10368 offset 0 modifier 0x0
+   2741218  1992 . OpenResource
+   2741218  1992 OpenResource(hResource=0000022150EF6730): runtime resource 000002214DF71D00, runtime device 000002214DFDF6F8, kernel resource 0x400018c0, 1 allocation(s), resource private data 0000022151A371A0 64 bytes
+   2741218  1992   allocation 0: handle 0x40001900, private data 0000022151AC8A30 96 bytes
+   2741218  1992   description in the resource's private data
+   2741218  1992   1024x1024x1 array 1 levels 1 samples 1, target 2 format DXGI_FORMAT_B8G8R8A8_UNORM (PIPE_FORMAT_B8G8R8A8_UNORM), bind 0x10008a usage 0
+   2741218  1992 shared open: resource 000002214DF71D00 device 000002214DFDF6F8 (bound device 000002214DFDF6F8), allocation 0x40001900: escape 0x00000000, GPU 0x22a8000, 4227072 bytes, wanted 4227072
+   2741218  1992   opened: pipe resource 0000022150F4F490 on allocation 0x40001900
+   2741218  1992   shared: exported, stride 4096 offset 0 modifier 0x0
+   2741218  1992 . PsSetShaderResources
+   2741218  1992 . PsSetShaderResources
+   2741218  1992 . SetRenderTargets
+   2741218  1992 . SetViewports
+   2741218  1992 . SetRasterizerState
+   2741218  1992 . SetDepthStencilState
+   2741218  1992 . IaSetIndexBuffer
+   2741218  1992 . VsSetConstantBuffers
+   2741218  1992 . CreateShaderResourceView
+   2741218  1992 . VsSetShader
+   2741218  1992 . PsSetShader
+   2741218  1992 . PsSetShaderResources
+   2741218  1992 . PsSetSamplers
+   2741218  1992 . IaSetInputLayout
+   2741218  1992 . IaSetVertexBuffers
+   2741218  1992 . ResourceMap
+   2741218  1992 . ResourceMap
+   2741218  1992 . ResourceUnmap
+   2741218  1992 . ResourceUnmap
+   2741218  1992 . DrawIndexed
+   2741234  1992 . SetBlendState
+   2741234  1992 . CreateShaderResourceView
+   2741234  1992 . PsSetShader
+   2741234  1992 . PsSetShaderResources
+   2741234  1992 . PsSetSamplers
+   2741234  1992 . ResourceMap
+   2741234  1992 . ResourceMap
+   2741234  1992 . ResourceUnmap
+   2741234  1992 . ResourceUnmap
+   2741234  1992 . DrawIndexed
+   2741234  1992 . PsSetShader
+   2741234  1992 . PsSetShaderResources
+   2741234  1992 . PsSetSamplers
+   2741234  1992 . ResourceMap
+   2741234  1992 . ResourceMap
+   2741234  1992 . ResourceUnmap
+   2741234  1992 . ResourceUnmap
+   2741234  1992 . DrawIndexed
+   2741234  1992 . VsSetShader
+   2741234  1992 . PsSetShader
+   2741234  1992 . PsSetSamplers
+   2741234  1992 . IaSetInputLayout
+   2741234  1992 . PsSetShaderResources
+   2741234  1992 . IaSetVertexBuffers
+   2741234  1992 . IaSetIndexBuffer
+   2741234  1992 . SetRasterizerState
+   2741234  1992 . SetBlendState
+   2741234  1992 . SetDepthStencilState
+   2741234  1992 . VsSetConstantBuffers
+   2741234  1992 . PsSetConstantBuffers
+   2741234  1992 . SetScissorRects
+   2741234  1992 . SetRenderTargets
+   2741234  1992 . _Present
