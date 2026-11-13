@@ -1,0 +1,85 @@
+diff --git a/src/gallium/auxiliary/nir/tgsi_to_nir.c b/src/gallium/auxiliary/nir/tgsi_to_nir.c
+index fc917f2..8507b53 100644
+--- a/src/gallium/auxiliary/nir/tgsi_to_nir.c
++++ b/src/gallium/auxiliary/nir/tgsi_to_nir.c
+@@ -24,6 +24,7 @@
+ 
+ #include "util/blob.h"
+ #include "util/u_debug.h"
++#include "util/log.h"
+ #include "util/disk_cache.h"
+ #include "util/u_memory.h"
+ #include "util/perf/cpu_trace.h"
+@@ -646,7 +647,11 @@ ttn_src_for_file_and_index(struct ttn_compile *c, unsigned file, unsigned index,
+          return nir_src_for_ssa(ttn_emulate_tgsi_front_face(c));
+       } else if (c->scan->processor == MESA_SHADER_FRAGMENT &&
+           c->scan->input_semantic_name[index] == TGSI_SEMANTIC_POSITION) {
+-         assert(!c->cap_position_is_sysval && c->input_var_position);
++         /* A fragment position declared as a TGSI input is given a system
++          * value variable above when the driver wants one, and loading that
++          * variable is fine; only its absence is an error. The d3d10umd
++          * frontend always declares the position as an input. */
++         assert(c->input_var_position);
+          return nir_src_for_ssa(nir_load_var(&c->build, c->input_var_position));
+       } else if (c->scan->processor == MESA_SHADER_FRAGMENT &&
+           c->scan->input_semantic_name[index] == TGSI_SEMANTIC_PCOORD) {
+@@ -745,7 +750,22 @@ ttn_src_for_file_and_index(struct ttn_compile *c, unsigned file, unsigned index,
+    }
+ 
+    default:
+-      UNREACHABLE("bad src file");
++      /* Say which, and hand back zeros, so that one unsupported register
++       * kind costs a wrong pixel and not the process. */
++      mesa_loge("tgsi_to_nir: unsupported source register file %u index %u", file, index);
++#if defined(_WIN32) && defined(_wassert)
++      {
++         /* The wddm-mali-g52 assertion log (src/util/mali_wassert.c), with
++          * the numbers an assert() cannot carry. */
++         wchar_t what[96];
++         swprintf(what, 96, L"bad src file %u index %u", file, index);
++         _wassert(what, L"tgsi_to_nir.c", __LINE__);
++      }
++#else
++      assert(!"bad src file");
++#endif
++      src = nir_src_for_ssa(nir_imm_vec4(b, 0.0f, 0.0f, 0.0f, 0.0f));
++      break;
+    }
+ 
+ 
+diff --git a/src/gallium/frontends/d3d10umd/ShaderTGSI.c b/src/gallium/frontends/d3d10umd/ShaderTGSI.c
+index 653cb96..e9748ed 100644
+--- a/src/gallium/frontends/d3d10umd/ShaderTGSI.c
++++ b/src/gallium/frontends/d3d10umd/ShaderTGSI.c
+@@ -2298,6 +2298,31 @@ Shader_tgsi_translate(const unsigned *code,
+    assert(tokens);
+    ureg_destroy(ureg);
+ 
++   /* The TGSI of every shader, to the file log (DebugPrintf writes there
++    * while C:\\mali\\log exists): when the driver's TGSI-to-NIR step rejects
++    * one, this is what it was given. */
++   if (tokens) {
++      const size_t size = 65536;
++      char *text = (char *)malloc(size);
++      if (text) {
++         char *line = text;
++         text[0] = 0;
++         tgsi_dump_str(tokens, 0, text, size);
++         DebugPrintf("TGSI begin\n");
++         while (*line) {
++            char *end = strchr(line, '\n');
++            if (end)
++               *end = 0;
++            DebugPrintf("TGSI %s\n", line);
++            if (!end)
++               break;
++            line = end + 1;
++         }
++         DebugPrintf("TGSI end\n");
++         free(text);
++      }
++   }
++
+    if (st_debug & ST_DEBUG_TGSI) {
+       tgsi_dump(tokens, 0);
+    }
