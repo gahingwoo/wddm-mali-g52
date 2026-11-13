@@ -441,10 +441,10 @@ index ba748c0..5421a9f 100644
        /* Nothing may still be drawing into or sampling the allocation when
         * the runtime gets it back: submit what refers to it, drop the
 diff --git a/src/gallium/frontends/d3d10umd/Shader.cpp b/src/gallium/frontends/d3d10umd/Shader.cpp
-index df6ffa1..babe998 100644
+index fb32f8b..ad5b58f 100644
 --- a/src/gallium/frontends/d3d10umd/Shader.cpp
 +++ b/src/gallium/frontends/d3d10umd/Shader.cpp
-@@ -1199,6 +1199,9 @@ CreateShaderResourceView(
+@@ -1263,6 +1263,9 @@ CreateShaderResourceView(
     struct pipe_resource *resource;
     enum pipe_format format;
  
@@ -454,7 +454,7 @@ index df6ffa1..babe998 100644
     struct pipe_sampler_view desc;
     memset(&desc, 0, sizeof desc);
     resource = CastPipeResource(pCreateSRView->hDrvResource);
-@@ -1251,6 +1254,15 @@ CreateShaderResourceView(
+@@ -1315,6 +1318,15 @@ CreateShaderResourceView(
     }
  
     pSRView->handle = pipe->create_sampler_view(pipe, resource, &desc);
@@ -470,7 +470,7 @@ index df6ffa1..babe998 100644
  }
  
  
-@@ -1279,6 +1291,9 @@ CreateShaderResourceView1(
+@@ -1343,6 +1355,9 @@ CreateShaderResourceView1(
     struct pipe_resource *resource;
     enum pipe_format format;
  
@@ -480,7 +480,7 @@ index df6ffa1..babe998 100644
     struct pipe_sampler_view desc;
     memset(&desc, 0, sizeof desc);
     resource = CastPipeResource(pCreateSRView->hDrvResource);
-@@ -1333,6 +1348,15 @@ CreateShaderResourceView1(
+@@ -1397,6 +1412,15 @@ CreateShaderResourceView1(
     }
  
     pSRView->handle = pipe->create_sampler_view(pipe, resource, &desc);
@@ -496,7 +496,7 @@ index df6ffa1..babe998 100644
  }
  
  
-@@ -1360,6 +1384,17 @@ DestroyShaderResourceView(D3D10DDI_HDEVICE hDevice,                           //
+@@ -1424,6 +1448,17 @@ DestroyShaderResourceView(D3D10DDI_HDEVICE hDevice,                           //
     Device *pDevice = CastDevice(hDevice);
     struct pipe_context *pipe = pDevice->pipe;
  
@@ -515,10 +515,10 @@ index df6ffa1..babe998 100644
     pSRView->handle = NULL;
  }
 diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
-index 9078c89..47f112f 100644
+index dda47ba..3e976c6 100644
 --- a/src/gallium/frontends/d3d10umd/State.h
 +++ b/src/gallium/frontends/d3d10umd/State.h
-@@ -203,6 +203,11 @@ enum {
+@@ -212,6 +212,11 @@ enum {
     D3D10_PERF_IDLE_IN_PRESENT = 8,/* the wait before presenting a primary */
     D3D10_PERF_BO_CREATE = 9,      /* each buffer allocation */
  };
@@ -530,7 +530,7 @@ index 9078c89..47f112f 100644
  unsigned long long d3d10_perf_now(void);
  void d3d10_perf_add(unsigned stage, unsigned long long since);
  void d3d10_perf_frame(void);
-@@ -225,8 +230,33 @@ struct Resource
+@@ -234,8 +239,33 @@ struct Resource
      * allocation. NULL and 0 otherwise. */
     void *shared_rt_resource;
     unsigned shared_allocation;
@@ -564,7 +564,7 @@ index 9078c89..47f112f 100644
  
  static inline Resource *
  CastResource(D3D10DDI_HRESOURCE hResource)
-@@ -273,6 +303,9 @@ struct RenderTargetView
+@@ -282,6 +312,9 @@ struct RenderTargetView
  {
     struct pipe_surface surface;
     D3D10DDI_HRTRENDERTARGETVIEW hRTRenderTargetView;
@@ -574,7 +574,7 @@ index 9078c89..47f112f 100644
  };
  
  
-@@ -428,6 +461,9 @@ CastPipeSamplerState(D3D10DDI_HSAMPLER hSampler)
+@@ -437,6 +470,9 @@ CastPipeSamplerState(D3D10DDI_HSAMPLER hSampler)
  struct ShaderResourceView
  {
     struct pipe_sampler_view *handle;

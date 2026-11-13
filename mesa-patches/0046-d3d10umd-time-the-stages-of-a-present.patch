@@ -45,10 +45,10 @@ index 6deb4a8..fef467c 100644
  }
  
 diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
-index c0a40f1..9078c89 100644
+index 63dfe01..dda47ba 100644
 --- a/src/gallium/frontends/d3d10umd/State.h
 +++ b/src/gallium/frontends/d3d10umd/State.h
-@@ -189,6 +189,23 @@ void d3d10_shared_destroy(void *hRTDevice, void *hRTResource);
+@@ -198,6 +198,23 @@ void d3d10_shared_destroy(void *hRTDevice, void *hRTResource);
   * runtime's present callback. */
  long d3d10_present_allocation(void *hRTDevice, unsigned src_allocation, unsigned dst_allocation,
                                void *dxgi_context);
