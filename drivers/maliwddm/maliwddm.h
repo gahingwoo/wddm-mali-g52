@@ -148,7 +148,21 @@ struct _MW_ADAPTER {
     /* Every flip, including one to the allocation already on screen: its
      * contents have changed, which is the point of flipping to it. */
     volatile LONG FlipSeq;
-    LONG ShownSeq;
+    volatile LONG ShownSeq;
+    /* The copy runs on a thread of its own (command.c), not in the vsync
+     * DPC: at 2560x1440 it took about 50 ms, and for that long the timer
+     * missed its ticks and nothing else ran on that processor. The thread
+     * holds CopyLock while it reads a primary; freeing or unmapping an
+     * allocation takes it too. ShownAddr is the address of the flip whose
+     * pixels are on the screen, which is what a vsync reports. With no
+     * thread the DPC copies as before. */
+    PKTHREAD CopyThread;
+    KEVENT CopyEvent;
+    FAST_MUTEX CopyLock;
+    volatile LONG CopyBusy;
+    volatile BOOLEAN CopyStop;
+    PHYSICAL_ADDRESS ShownAddr;
+    ULONG CopyDeferred;
     ULONG Vsyncs, Flips, FlipCopies, FlipCopySkips;
     /* Why a flip did or did not reach the framebuffer; logged by the stats
      * escape, which runs at passive level. */
@@ -250,5 +264,6 @@ DXGKDDI_CONTROLINTERRUPT MwControlInterrupt;
 DXGKDDI_GETSCANLINE MwGetScanLine;
 BOOLEAN MwJobInterrupt(MW_ADAPTER *A);    /* from the ISR, at DIRQL */
 void MwCommandInit(MW_ADAPTER *A);
+void MwCopyForget(MW_ADAPTER *A, struct _MW_ALLOCATION *Alloc, BOOLEAN Freed);
 void MwCommandStop(MW_ADAPTER *A);
 void MwArmPoll(MW_ADAPTER *A);

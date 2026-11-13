@@ -463,7 +463,8 @@ static BOOLEAN SyncVsync(PVOID Context)
 
     n.InterruptType = DXGK_INTERRUPT_CRTC_VSYNC;
     n.CrtcVsync.VidPnTargetId = 0;
-    n.CrtcVsync.PhysicalAddress = a->ScanAddr;   /* the flip this vsync completes */
+    /* The flip this vsync completes: the one whose pixels are shown. */
+    n.CrtcVsync.PhysicalAddress = a->CopyThread != NULL ? a->ShownAddr : a->ScanAddr;
     a->Dxgk.DxgkCbNotifyInterrupt(a->Dxgk.DeviceHandle, &n);
     return TRUE;
 }
@@ -515,7 +516,23 @@ static VOID VsyncDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
     /* Compare flips, not allocations. On the TaishanPi 3M the compositor
      * flipped 71 times and one frame reached the framebuffer: it flips to
      * the same primary again and again, with new pixels in it. */
-    {
+    if (a->CopyThread != NULL) {
+        LONG seq = a->FlipSeq;
+        if (seq != a->ShownSeq) {
+            if (InterlockedCompareExchange(&a->CopyBusy, 1, 0) == 0) {
+                if (p != NULL && a->SourceVisible) {
+                    KeSetEvent(&a->CopyEvent, IO_NO_INCREMENT, FALSE);
+                } else {
+                    /* Nothing to copy: the flip is done as it is. */
+                    a->ShownAddr = a->ScanAddr;
+                    a->ShownSeq = seq;
+                    InterlockedExchange(&a->CopyBusy, 0);
+                }
+            } else {
+                a->CopyDeferred++;      /* the previous frame is still being copied */
+            }
+        }
+    } else {
         LONG seq = a->FlipSeq;
         if (p != NULL && seq != a->ShownSeq && a->SourceVisible) {
             ULONG64 flipped = a->FlipTick;
@@ -532,9 +549,74 @@ static VOID VsyncDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
         a->Dxgk.DxgkCbQueueDpc(a->Dxgk.DeviceHandle);
 }
 
+/* Copies the current primary to the framebuffer when the vsync DPC asks,
+ * and then lets the next vsync report that flip. It reads which primary
+ * under CopyLock, so an allocation freed meanwhile is not touched. */
+static VOID CopyThread(PVOID Context)
+{
+    MW_ADAPTER *a = (MW_ADAPTER *)Context;
+    KAFFINITY big = (KAFFINITY)0xF0 & KeQueryActiveProcessors();
+
+    /* The Cortex-A72 cores are 4 to 7 on the RK3576. */
+    if (big != 0)
+        KeSetSystemAffinityThreadEx(big);
+    KeSetPriorityThread(KeGetCurrentThread(), 15);
+    for (;;) {
+        KeWaitForSingleObject(&a->CopyEvent, Executive, KernelMode, FALSE, NULL);
+        if (a->CopyStop)
+            break;
+        ExAcquireFastMutex(&a->CopyLock);
+        {
+            LONG seq = a->FlipSeq;
+            MW_ALLOCATION *p = a->ScanAlloc;
+            PHYSICAL_ADDRESS addr = a->ScanAddr;
+            ULONG64 flipped = a->FlipTick;
+
+            if (p != NULL && a->SourceVisible && !a->Stopping)
+                ShowPrimary(a, p);
+            a->ShownAlloc = p;
+            a->ShownAddr = addr;
+            a->ShownSeq = seq;
+            if (flipped != 0)
+                MwTickAdd(&a->FlipWaitTicks, &a->FlipWaitMaxTicks, flipped);
+        }
+        ExReleaseFastMutex(&a->CopyLock);
+        InterlockedExchange(&a->CopyBusy, 0);
+    }
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+/* An allocation is going away or losing its pages: the copy thread must
+ * not be reading it, and must not pick it up afterwards. */
+void MwCopyForget(MW_ADAPTER *A, MW_ALLOCATION *Alloc, BOOLEAN Freed)
+{
+    ExAcquireFastMutex(&A->CopyLock);
+    if (Freed) {
+        InterlockedCompareExchangePointer((PVOID volatile *)&A->ScanAlloc, NULL, Alloc);
+        if (A->ShownAlloc == Alloc)
+            A->ShownAlloc = NULL;
+    } else {
+        Alloc->Mdl = NULL;
+    }
+    ExReleaseFastMutex(&A->CopyLock);
+}
+
 void MwCommandInit(MW_ADAPTER *A)
 {
+    HANDLE h;
+    OBJECT_ATTRIBUTES oa;
+
     A->Stopping = FALSE;
+    ExInitializeFastMutex(&A->CopyLock);
+    KeInitializeEvent(&A->CopyEvent, SynchronizationEvent, FALSE);
+    A->CopyStop = FALSE;
+    InitializeObjectAttributes(&oa, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
+    if (NT_SUCCESS(PsCreateSystemThread(&h, THREAD_ALL_ACCESS, &oa, NULL, NULL, CopyThread, A))) {
+        if (!NT_SUCCESS(ObReferenceObjectByHandle(h, THREAD_ALL_ACCESS, *PsThreadType, KernelMode,
+                                                  (PVOID *)&A->CopyThread, NULL)))
+            A->CopyThread = NULL;       /* it runs, idle; the DPC copies */
+        ZwClose(h);
+    }
     KeInitializeTimer(&A->PollTimer);
     KeInitializeDpc(&A->PollDpc, PollDpc, A);
     KeInitializeTimer(&A->VsyncTimer);
@@ -550,6 +632,14 @@ void MwCommandStop(MW_ADAPTER *A)
     KeCancelTimer(&A->VsyncTimer);
     KeFlushQueuedDpcs();
     InterlockedExchange(&A->PollArmed, 0);
+    if (A->CopyThread != NULL) {
+        PKTHREAD t = A->CopyThread;
+        A->CopyStop = TRUE;
+        KeSetEvent(&A->CopyEvent, IO_NO_INCREMENT, FALSE);
+        KeWaitForSingleObject(t, Executive, KernelMode, FALSE, NULL);
+        A->CopyThread = NULL;
+        ObDereferenceObject(t);
+    }
 }
 
 NTSTATUS APIENTRY MwSubmitCommand(IN_CONST_HANDLE hAdapter, const DXGKARG_SUBMITCOMMAND *Arg)

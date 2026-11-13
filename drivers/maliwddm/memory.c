@@ -98,6 +98,7 @@ static NTSTATUS NewAllocation(MW_ADAPTER *A, const MW_ALLOCATION_INFO *In, DXGK_
 
 static void FreeAllocation(MW_ADAPTER *A, MW_ALLOCATION *Alloc)
 {
+    MwCopyForget(A, Alloc, TRUE);
     ExAcquireFastMutex(&A->MmuLock);
     if (Alloc->Mapped && A->GpuUp)
         MkMmuUnmapPages(&A->Gpu, Alloc->GpuVa, Alloc->Pages);
@@ -277,8 +278,8 @@ NTSTATUS APIENTRY MwBuildPagingBuffer(IN_CONST_HANDLE hAdapter, DXGKARG_BUILDPAG
         if (alloc->Mapped)
             MkMmuUnmapPages(&a->Gpu, alloc->GpuVa, alloc->Pages);
         alloc->Mapped = FALSE;
-        alloc->Mdl = NULL;
         ExReleaseFastMutex(&a->MmuLock);
+        MwCopyForget(a, alloc, FALSE);
         return STATUS_SUCCESS;
     }
     default:

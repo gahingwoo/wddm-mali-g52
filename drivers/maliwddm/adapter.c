@@ -521,6 +521,8 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         MwLog(a, L"T_PresentBltUsAvg",
               TicksEachUs(a, a->PresentBltTicks, a->PresentBlts + a->PresentFills));
         MwLog(a, L"T_FlipsWhileBusy", a->FlipsWhileBusy);
+        MwLog(a, L"T_CopyThread", a->CopyThread != NULL);
+        MwLog(a, L"T_CopyDeferred", a->CopyDeferred);
         return STATUS_SUCCESS;
     default:
         MwLog(a, L"EscapeUnknownCode", code);
