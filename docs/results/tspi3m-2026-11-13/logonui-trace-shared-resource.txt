@@ -1,0 +1,472 @@
+LogonUI.exe-2456.txt
+LogonUI.exe-3464.txt
+LogonUI.exe-3596.txt
+LogonUI.exe-884.txt
+=== LogonUI.exe-3596.txt
+    714171  3480 . OpenAdapter10_2
+    714171  3480 . GetCaps
+    714171  3480 . GetSupportedVersions
+    714171  3480 . GetSupportedVersions
+    714171  3480 . OpenAdapter10_2
+    714171  3480 . GetSupportedVersions
+    714171  3480 . GetSupportedVersions
+    714171  3480 . CreateDevice
+    714171  3480 CreateDevice Interface 0xa0009 Version 0x177a
+    714171  3480 CreateDevice: screen Mali-G52 r1 MC3 (Panfrost)
+    714187  3480 CreateDevice: done, DXGI_STATUS_NO_REDIRECTION
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateDepthStencilState
+    714187  3480 . CreateRasterizerState
+    714187  3480 . CreateSampler
+    714187  3480 . SetBlendState
+    714187  3480 . SetDepthStencilState
+    714187  3480 . SetRasterizerState
+    714187  3480 . VsSetSamplers
+    714187  3480 . GsSetSamplers
+    714187  3480 . PsSetSamplers
+    714187  3480 . CloseAdapter
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateBlendState
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateSampler
+    714187  3480 . CreateRasterizerState
+    714187  3480 . CreateRasterizerState
+    714187  3480 . CreateRasterizerState
+    714187  3480 . CreateRasterizerState
+    714187  3480 . CreateRasterizerState
+    714187  3480 . CreateRasterizerState
+    714187  3480 . CreateRasterizerState
+    714187  3480 . CreateRasterizerState
+    714187  3480 . CreateRasterizerState
+    714187  3480 . CreateDepthStencilState
+    714187  3480 . CreateDepthStencilState
+    714187  3480 . CreateDepthStencilState
+    714187  3480 . CreateDepthStencilState
+    714187  3480 . CalcPrivateResourceSize
+    714187  3480 . CreateResource
+    714187  3480   primary 0 shared 0
+    714187  3480 CreateResource(48x1x1 hResource=000001F34FAC4CB0)
+    714187  3480   ResourceDimension = 1
+    714187  3480   Usage = 0
+    714187  3480   BindFlags = 0x4
+    714187  3480   MapFlags = 0x0
+    714187  3480   MiscFlags = 0x0
+    714187  3480   Format = DXGI_FORMAT_UNKNOWN
+    714187  3480   SampleDesc.Count = 1
+    714187  3480   SampleDesc.Quality = 0
+    714187  3480   MipLevels = 1
+    714187  3480   ArraySize = 1
+    714187  3480   pPrimaryDesc = 0000000000000000
+    714187  3480 . CalcPrivateResourceSize
+    714187  3480 . CreateResource
+    714187  3480   primary 0 shared 0
+    714187  3480 CreateResource(4000x1x1 hResource=000001F34FB1CBB0)
+    714187  3480   ResourceDimension = 1
+    714187  3480   Usage = 0
+    714187  3480   BindFlags = 0x4
+    714187  3480   MapFlags = 0x0
+    714187  3480   MiscFlags = 0x0
+    714187  3480   Format = DXGI_FORMAT_UNKNOWN
+    714187  3480   SampleDesc.Count = 1
+    714187  3480   SampleDesc.Quality = 0
+    714187  3480   MipLevels = 1
+    714187  3480   ArraySize = 1
+    714187  3480   pPrimaryDesc = 0000000000000000
+    714187  3480 . CalcPrivateResourceSize
+    714187  3480 . CreateResource
+    714187  3480   primary 0 shared 0
+    714187  3480 CreateResource(16x1x1 hResource=000001F34FB1D430)
+    714187  3480   ResourceDimension = 1
+    714187  3480   Usage = 0
+    714187  3480   BindFlags = 0x4
+    714187  3480   MapFlags = 0x0
+    714187  3480   MiscFlags = 0x0
+    714187  3480   Format = DXGI_FORMAT_UNKNOWN
+    714187  3480   SampleDesc.Count = 1
+    714187  3480   SampleDesc.Quality = 0
+    714187  3480   MipLevels = 1
+    714187  3480   ArraySize = 1
+    714187  3480   pPrimaryDesc = 0000000000000000
+    714187  3480 . CalcPrivateResourceSize
+    714187  3480 . CreateResource
+    714187  3480   primary 0 shared 0
+    714187  3480 CreateResource(48x1x1 hResource=000001F34FB1DC30)
+    714187  3480   ResourceDimension = 1
+    714187  3480   Usage = 0
+    714187  3480   BindFlags = 0x4
+    714187  3480   MapFlags = 0x0
+    714187  3480   MiscFlags = 0x0
+    714187  3480   Format = DXGI_FORMAT_UNKNOWN
+    714187  3480   SampleDesc.Count = 1
+    714187  3480   SampleDesc.Quality = 0
+    714187  3480   MipLevels = 1
+    714187  3480   ArraySize = 1
+    714187  3480   pPrimaryDesc = 0000000000000000
+    714187  3480 . CalcPrivateResourceSize
+    714187  3480 . CreateResource
+    714187  3480   primary 0 shared 0
+    714187  3480 CreateResource(240012x1x1 hResource=000001F34FB1E430)
+    714187  3480   ResourceDimension = 1
+    714187  3480   Usage = 2
+    714187  3480   BindFlags = 0x1
+    714187  3480   MapFlags = 0x1
+    714187  3480   MiscFlags = 0x0
+    714187  3480   Format = DXGI_FORMAT_UNKNOWN
+    714187  3480   SampleDesc.Count = 1
+    714187  3480   SampleDesc.Quality = 0
+    714187  3480   MipLevels = 1
+    714187  3480   ArraySize = 1
+    714187  3480   pPrimaryDesc = 0000000000000000
+    714187  3480 . CalcPrivateResourceSize
+    714187  3480 . CreateResource
+    714187  3480   primary 0 shared 0
+    714187  3480 CreateResource(16x16x1 hResource=000001F34FB2B0B0)
+    714187  3480   ResourceDimension = 3
+    714187  3480   Usage = 0
+    714187  3480   BindFlags = 0x28
+    714187  3480   MapFlags = 0x0
+    714187  3480   MiscFlags = 0x0
+    714187  3480   Format = DXGI_FORMAT_B8G8R8A8_UNORM
+    714187  3480   SampleDesc.Count = 1
+    714187  3480   SampleDesc.Quality = 0
+    714187  3480   MipLevels = 1
+    714187  3480   ArraySize = 1
+    714187  3480   pPrimaryDesc = 0000000000000000
+    714187  3480 . CreateShaderResourceView
+    714187  3480 . CreateRenderTargetView
+    714203  3480 . SoSetTargets
+    714203  3480 . SetRenderTargets
+    714203  3480 . SetViewports
+    714203  3480 . SetScissorRects
+    714203  3480 . SetPredication
+    714203  3480 . PsSetSamplers
+    714203  3480 . VsSetShaderResources
+    714203  3480 . PsSetShaderResources
+    714203  3480 . IaSetVertexBuffers
+    714203  3480 . SetRenderTargets
+    714203  3480 . VsSetConstantBuffers
+    714203  3480 . PsSetConstantBuffers
+    714203  3480 . PsSetShaderResources
+    714203  3480 . ResourceMap
+    714203  3480 . CreateVertexShader
+    714203  3480 TGSI begin
+    714203  3480 TGSI VERT
+    714203  3480 TGSI PROPERTY NEXT_SHADER FRAG
+    714203  3480 TGSI DCL IN[0]
+    714203  3480 TGSI DCL IN[1]
+    714203  3480 TGSI DCL OUT[0], POSITION
+    714203  3480 TGSI DCL OUT[1], GENERIC[1]
+    714203  3480 TGSI DCL CONST[0][0]
+    714203  3480 TGSI DCL CONST[1][0..249]
+    714203  3480 TGSI DCL TEMP[0]
+    714203  3480 TGSI IMM[0] UINT32 {0, 1056964608, 1065353216, 0}
+    714203  3480 TGSI   0: MAD OUT[0].xy, IN[0].xyxx, CONST[0][0].xzxx, CONST[0][0].ywyy
+    714203  3480 TGSI   1: MOV OUT[0].zw, IMM[0].xxyz
+    714203  3480 TGSI   2: MOV TEMP[0].x, IN[1].xxxx
+    714203  3480 TGSI   3: MOV OUT[1], CONST[1][TEMP[0].x]
+    714203  3480 TGSI   4: RET
+    714203  3480 TGSI   5: END
+    714203  3480 TGSI end
+    714218  3480 . CreatePixelShader
+    714218  3480 TGSI begin
+    714218  3480 TGSI FRAG
+    714218  3480 TGSI DCL IN[0], GENERIC[1], PERSPECTIVE
+    714218  3480 TGSI DCL OUT[0], COLOR
+    714218  3480 TGSI   0: MOV OUT[0], IN[0]
+    714218  3480 TGSI   1: RET
+    714218  3480 TGSI   2: END
+    714218  3480 TGSI end
+    714218  3480 . CalcPrivateResourceSize
+    714218  3480 . CreateResource
+    714218  3480   primary 0 shared 0
+    714218  3480 CreateResource(524288x1x1 hResource=000001F34FBC0AB0)
+    714218  3480   ResourceDimension = 1
+    714218  3480   Usage = 2
+    714218  3480   BindFlags = 0x1
+    714218  3480   MapFlags = 0x1
+    714218  3480   MiscFlags = 0x0
+    714218  3480   Format = DXGI_FORMAT_UNKNOWN
+    714218  3480   SampleDesc.Count = 1
+    714218  3480   SampleDesc.Quality = 0
+    714218  3480   MipLevels = 1
+    714218  3480   ArraySize = 1
+    714218  3480   pPrimaryDesc = 0000000000000000
+    714218  3480 . CalcPrivateResourceSize
+    714218  3480 . CreateResource
+    714218  3480   primary 0 shared 0
+    714218  3480 CreateResource(524288x1x1 hResource=000001F34FB3B7B0)
+    714218  3480   ResourceDimension = 1
+    714218  3480   Usage = 0
+    714218  3480   BindFlags = 0x8
+    714218  3480   MapFlags = 0x0
+    714218  3480   MiscFlags = 0x0
+    714218  3480   Format = DXGI_FORMAT_UNKNOWN
+    714218  3480   SampleDesc.Count = 1
+    714218  3480   SampleDesc.Quality = 0
+    714218  3480   MipLevels = 1
+    714218  3480   ArraySize = 1
+    714218  3480   pPrimaryDesc = 0000000000000000
+    714218  3480 . CreateShaderResourceView
+    714218  3480 . CalcPrivateResourceSize
+    714218  3480 . CreateResource
+    714218  3480   primary 0 shared 0
+    714218  3480 CreateResource(16x1x1 hResource=000001F34FBCA830)
+    714218  3480   ResourceDimension = 1
+    714218  3480   Usage = 0
+    714218  3480   BindFlags = 0x1
+    714218  3480   MapFlags = 0x0
+    714218  3480   MiscFlags = 0x0
+    714218  3480   Format = DXGI_FORMAT_UNKNOWN
+    714218  3480   SampleDesc.Count = 1
+    714218  3480   SampleDesc.Quality = 0
+    714218  3480   MipLevels = 1
+    714218  3480   ArraySize = 1
+    714218  3480   pPrimaryDesc = 0000000000000000
+    714218  3480 . CalcPrivateResourceSize
+    714218  3480 . CreateResource
+    714218  3480   primary 0 shared 0
+    714218  3480 CreateResource(12x1x1 hResource=000001F34FBCB0B0)
+    714218  3480   ResourceDimension = 1
+    714218  3480   Usage = 0
+    714218  3480   BindFlags = 0x2
+    714218  3480   MapFlags = 0x0
+    714218  3480   MiscFlags = 0x0
+    714218  3480   Format = DXGI_FORMAT_UNKNOWN
+    714218  3480   SampleDesc.Count = 1
+    714218  3480   SampleDesc.Quality = 0
+    714218  3480   MipLevels = 1
+    714218  3480   ArraySize = 1
+    714218  3480   pPrimaryDesc = 0000000000000000
+    714218  3480 . CalcPrivateResourceSize
+    714218  3480 . CreateResource
+    714218  3480   primary 0 shared 0
+    714218  3480 CreateResource(256x80x1 hResource=000001F34FBCC7B0)
+    714218  3480   ResourceDimension = 3
+    714218  3480   Usage = 0
+    714218  3480   BindFlags = 0x8
+    714218  3480   MapFlags = 0x0
+    714218  3480   MiscFlags = 0x0
+    714218  3480   Format = DXGI_FORMAT_B8G8R8A8_UNORM
+    714218  3480   SampleDesc.Count = 1
+    714218  3480   SampleDesc.Quality = 0
+    714218  3480   MipLevels = 1
+    714218  3480   ArraySize = 1
+    714218  3480   pPrimaryDesc = 0000000000000000
+    714218  3480 . CreateShaderResourceView
+    714218  3480 . ResourceMap
+    714218  3480 . ResourceUnmap
+    714218  3480 . ResourceUnmap
+    714218  3480 . ResourceCopyRegion
+    714218  3480 . VsSetConstantBuffers
+    714218  3480 . PsSetConstantBuffers
+    714218  3480 . PsSetShaderResources
+    714218  3480 . SetRasterizerState
+    714218  3480 . ResourceUpdateSubResourceUP
+    714250  3480 . PsSetShaderResources
+    714250  3480 . SetRenderTargets
+    714250  3480 . SetScissorRects
+    714250  3480 . SetViewports
+    714250  3480 . ResourceUpdateSubResourceUP
+    714296  3480 . IaSetTopology
+    714296  3480 . CreateElementLayout
+    714296  3480 . IaSetInputLayout
+    714296  3480 . VsSetShader
+    714296  3480 . PsSetShader
+    714296  3480 . ResourceUpdateSubResourceUP
+    714312  3480 . ResourceUpdateSubResourceUP
+    714312  3480 . SetDepthStencilState
+    714312  3480 . IaSetVertexBuffers
+    714312  3480 . Draw
+    714312  3480 . CreateVertexShader
+    714312  3480 TGSI begin
+    714312  3480 TGSI VERT
+    714312  3480 TGSI PROPERTY NEXT_SHADER FRAG
+    714312  3480 TGSI DCL IN[0]
+    714312  3480 TGSI DCL IN[1]
+    714312  3480 TGSI DCL IN[2]
+    714312  3480 TGSI DCL IN[3]
+    714312  3480 TGSI DCL IN[4]
+    714312  3480 TGSI DCL OUT[0], POSITION
+    714312  3480 TGSI DCL OUT[1], GENERIC[1]
+    714312  3480 TGSI DCL OUT[2], GENERIC[2]
+    714312  3480 TGSI DCL CONST[0][0]
+    714312  3480 TGSI DCL TEMP[0..1]
+    714312  3480 TGSI IMM[0] FLT32 {    8.0000,     1.0000,     0.0000,     0.0000}
+    714312  3480 TGSI IMM[1] UINT32 {0, 1056964608, 1065353216, 0}
+    714312  3480 TGSI   0: I2F TEMP[0].xy, IN[2].xyxx
+    714312  3480 TGSI   1: I2F TEMP[0].zw, IN[1].xxxy
+    714312  3480 TGSI   2: ADD TEMP[0].xy, -TEMP[0].zwzz, TEMP[0].xyxx
+    714312  3480 TGSI   3: I2F TEMP[1].xy, IN[0].xyxx
+    714312  3480 TGSI   4: MAD TEMP[0].zw, TEMP[1].xxxy, TEMP[0].xxxy, TEMP[0].zzzw
+    714312  3480 TGSI   5: MUL TEMP[0].xy, TEMP[0].xyxx, IMM[0].xyzz
+    714312  3480 TGSI   6: MUL OUT[1].xy, TEMP[0].xyxx, TEMP[1].xyxx
+    714312  3480 TGSI   7: MAD OUT[0].xy, TEMP[0].zwzz, CONST[0][0].xzxx, CONST[0][0].ywyy
+    714312  3480 TGSI   8: MOV OUT[0].zw, IMM[1].xxyz
+    714312  3480 TGSI   9: MOV OUT[2].x, IN[4].xxxx
+    714312  3480 TGSI  10: MOV OUT[2].yz, IN[3].yyxy
+    714312  3480 TGSI  11: RET
+    714312  3480 TGSI  12: END
+    714312  3480 TGSI end
+    714312  3480 . CreatePixelShader
+    714312  3480 TGSI begin
+    714312  3480 TGSI FRAG
+    714312  3480 TGSI DCL IN[0], GENERIC[1], LINEAR
+    714312  3480 TGSI DCL IN[1], GENERIC[2], CONSTANT
+    714312  3480 TGSI DCL OUT[0], COLOR
+    714312  3480 TGSI DCL SVIEW[0], BUFFER, UINT
+    714312  3480 TGSI DCL SVIEW[1], 2D, FLOAT
+    714312  3480 TGSI DCL TEMP[0..3]
+    714312  3480 TGSI IMM[0] FLT32 {2147483648.0000,     0.0000,     0.0000,     0.0000}
+    714312  3480 TGSI IMM[1] INT32 {2147483647, 3, 0, 0}
+    714312  3480 TGSI IMM[2] UINT32 {0, 0, 0, 0}
+    714312  3480 TGSI   0: MOV TEMP[0].x, IN[1].xxxx
+    714312  3480 TGSI   1: MOV TEMP[0].y, IN[1].yyyy
+    714312  3480 TGSI   2: MOV TEMP[0].z, IN[1].zzzz
+    714312  3480 TGSI   3: FSGE TEMP[2], IN[0].xyxx, IMM[0].xxxx
+    714312  3480 TGSI   4: F2I TEMP[3], IN[0].xyxx
+    714312  3480 TGSI   5: UCMP TEMP[1].xy, TEMP[2], IMM[1].xxxx, TEMP[3]
+    714312  3480 TGSI   6: UADD TEMP[1].x, TEMP[1].xxxx, TEMP[0].xxxx
+    714312  3480 TGSI   7: ISHR TEMP[1].x, TEMP[1].xxxx, IMM[1].yyyy
+    714312  3480 TGSI   8: UMAD TEMP[1].x, TEMP[1].yyyy, TEMP[0].yyyy, TEMP[1].xxxx
+    714312  3480 TGSI   9: SAMPLE_I TEMP[1], TEMP[1].xxxx, SVIEW[0]
+    714312  3480 TGSI  10: MOV TEMP[1].y, TEMP[0].zzzz
+    714312  3480 TGSI  11: MOV TEMP[1].zw, IMM[2].xxxx
+    714312  3480 TGSI  12: SAMPLE_I TEMP[1], TEMP[1], SVIEW[1]
+    714312  3480 TGSI  13: MOV OUT[0], TEMP[1]
+    714312  3480 TGSI  14: RET
+    714312  3480 TGSI  15: END
+    714312  3480 TGSI end
+    714312  3480 . IaSetTopology
+    714312  3480 . CreateElementLayout
+    714312  3480 . IaSetInputLayout
+    714312  3480 . SetBlendState
+    714312  3480 . VsSetShader
+    714312  3480 . PsSetShader
+    714312  3480 . PsSetSamplers
+    714312  3480 . PsSetShaderResources
+    714312  3480 . IaSetIndexBuffer
+    714312  3480 . IaSetVertexBuffers
+    714312  3480 . DrawIndexedInstanced
+    714328  3480 . PsSetShaderResources
+    714328  3480 . IaSetVertexBuffers
+    714328  3480 . IaSetIndexBuffer
+    714328  3480 . SetRenderTargets
+    714328  3480 . DestroyShaderResourceView
+    714328  4720 . CreateVertexShader
+    714328  4720 TGSI begin
+    714328  4720 TGSI VERT
+    714328  4720 TGSI PROPERTY NEXT_SHADER FRAG
+    714328  4720 TGSI DCL SV[0], VERTEXID_NOBASE
+    714328  4720 TGSI DCL OUT[0], POSITION
+    714328  4720 TGSI DCL TEMP[0..8]
+    714328  4720 TGSI IMM[0] UINT32 {3212836864, 1065353216, 0, 0}
+    714328  4720 TGSI IMM[1] INT32 {1, 0, 0, 0}
+    714328  4720 TGSI   0: MOV TEMP[1].x, IMM[0].xxxx
+    714328  4720 TGSI   1: MOV TEMP[2].x, IMM[0].xxxx
+    714328  4720 TGSI   2: MOV TEMP[3].x, IMM[0].xxxx
+    714328  4720 TGSI   3: MOV TEMP[4].x, IMM[0].yyyy
+    714328  4720 TGSI   4: MOV TEMP[5].x, IMM[0].yyyy
+    714328  4720 TGSI   5: MOV TEMP[6].x, IMM[0].xxxx
+    714328  4720 TGSI   6: MOV TEMP[7].x, IMM[0].yyyy
+    714328  4720 TGSI   7: MOV TEMP[8].x, IMM[0].yyyy
+    714328  4720 TGSI   8: SHL TEMP[0].x, SV[0].xxxx, IMM[1].xxxx
+    714328  4720 TGSI   9: MOV OUT[0].x, TEMP[TEMP[0].x+1].xxxx
+    714328  4720 TGSI  10: MOV OUT[0].y, TEMP[TEMP[0].x+2].xxxx
+    714328  4720 TGSI  11: MOV OUT[0].zw, IMM[0].zzzy
+    714328  4720 TGSI  12: RET
+    714328  4720 TGSI  13: END
+    714328  4720 TGSI end
+    714328  4720 . CreatePixelShader
+    714328  4720 TGSI begin
+    714328  4720 TGSI FRAG
+    714328  4720 TGSI DCL OUT[0], COLOR
+    714328  4720 TGSI DCL CONST[0][0]
+    714328  4720 TGSI   0: MOV OUT[0], CONST[0][0]
+    714328  4720 TGSI   1: RET
+    714328  4720 TGSI   2: END
+    714328  4720 TGSI end
+    714343  4720 . CalcPrivateResourceSize
+    714343  4720 . CreateResource
+    714343  4720   primary 0 shared 0
+    714343  4720 CreateResource(16x1x1 hResource=000001F35B047EB0)
+    714343  4720   ResourceDimension = 1
+    714343  4720   Usage = 0
+    714343  4720   BindFlags = 0x4
+    714343  4720   MapFlags = 0x0
+    714343  4720   MiscFlags = 0x0
+    714343  4720   Format = DXGI_FORMAT_UNKNOWN
+    714343  4720   SampleDesc.Count = 1
+    714343  4720   SampleDesc.Quality = 0
+    714343  4720   MipLevels = 1
+    714343  4720   ArraySize = 1
+    714343  4720   pPrimaryDesc = 0000000000000000
+    714656  4720 . CalcPrivateResourceSize
+    714656  4720 . CreateResource
+    714656  4720   primary 0 shared 1
+    714656  4720 CreateResource(1024x1024x1 hResource=000001F35B543330)
+    714656  4720   ResourceDimension = 3
+    714656  4720   Usage = 0
+    714656  4720   BindFlags = 0xa8
+    714656  4720   MapFlags = 0x0
+    714656  4720   MiscFlags = 0x2
+    714656  4720   Format = DXGI_FORMAT_B8G8R8A8_UNORM
+    714656  4720   SampleDesc.Count = 1
+    714656  4720   SampleDesc.Quality = 0
+    714656  4720   MipLevels = 1
+    714656  4720   ArraySize = 1
+    714656  4720   pPrimaryDesc = 0000000000000000
+    714656  4720 . DestroyResource
+
