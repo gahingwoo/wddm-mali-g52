@@ -1,0 +1,72 @@
+diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+index 73dfc2f..747cb59 100644
+--- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
++++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+@@ -263,3 +263,67 @@ no_screen:
+ no_winsys:
+    return NULL;
+ }
++
++
++/*
++ * Assertions, without the message box.
++ *
++ * The wddm-mali-g52 build passes -D_wassert=mali_wassert, so every assert()
++ * in this DLL calls through the pointer below instead of the C runtime. The
++ * runtime's version puts up an Abort/Retry/Ignore box and waits; inside
++ * dwm.exe or LogonUI.exe that box sits on the secure desktop where no key
++ * reaches it, and the process stops for good with nothing recorded.
++ *
++ * This one writes the assertion to C:\mali\log\<exe>-<pid>-assert.txt (when
++ * that directory exists) and to the debugger, and returns, which is what
++ * Ignore does. Each site is reported the first 20 times.
++ */
++#include <windows.h>
++#include <stdio.h>
++
++static void __cdecl
++mali_wassert_impl(const wchar_t *message, const wchar_t *file, unsigned line)
++{
++   static volatile LONG count = 0;
++   static HANDLE log = NULL;
++   char buf[1024];
++   int len;
++   DWORD done;
++
++   if (InterlockedIncrement(&count) > 2000)
++      return;
++   len = snprintf(buf, sizeof buf, "%10lu %5lu ASSERT %ls:%u: %ls\n",
++                  (unsigned long)GetTickCount(), (unsigned long)GetCurrentThreadId(),
++                  file, line, message);
++   if (len <= 0)
++      return;
++   if (len >= (int)sizeof buf)
++      len = (int)sizeof buf - 1;
++   OutputDebugStringA(buf);
++
++   if (log == NULL) {
++      HANDLE h = INVALID_HANDLE_VALUE;
++      if (GetFileAttributesA("C:\\mali\\log") != INVALID_FILE_ATTRIBUTES) {
++         char exe[MAX_PATH], path[MAX_PATH];
++         const char *base = exe;
++         DWORD n = GetModuleFileNameA(NULL, exe, sizeof exe);
++         exe[n < sizeof exe ? n : sizeof exe - 1] = 0;
++         for (const char *c = exe; *c; c++)
++            if (*c == '\\' || *c == '/')
++               base = c + 1;
++         snprintf(path, sizeof path, "C:\\mali\\log\\%s-%lu-assert.txt", base,
++                  (unsigned long)GetCurrentProcessId());
++         h = CreateFileA(path, FILE_APPEND_DATA,
++                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
++                         NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
++      }
++      if (InterlockedCompareExchangePointer((PVOID volatile *)&log, h, NULL) != NULL &&
++          h != INVALID_HANDLE_VALUE)
++         CloseHandle(h);
++   }
++   if (log != INVALID_HANDLE_VALUE)
++      WriteFile(log, buf, (DWORD)len, &done, NULL);
++}
++
++/* What "__declspec(dllimport) mali_wassert" resolves to. */
++void (__cdecl *__imp_mali_wassert)(const wchar_t *, const wchar_t *, unsigned) = mali_wassert_impl;

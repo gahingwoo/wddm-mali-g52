@@ -1,0 +1,521 @@
+=== dwm.exe-3452.txt
+    982953  1708 . OpenAdapter10_2
+    982953  1708 . GetCaps
+    982953  1708 . GetSupportedVersions
+    982953  1708 . GetSupportedVersions
+    982953  1708 . OpenAdapter10_2
+    982953  1708 . GetSupportedVersions
+    982953  1708 . GetSupportedVersions
+    982953  1708 . CloseAdapter
+    982953  1708 . CloseAdapter
+    982968  1708 . OpenAdapter10_2
+    982968  1708 . GetCaps
+    982968  1708 . GetSupportedVersions
+    982968  1708 . GetSupportedVersions
+    982968  1708 . OpenAdapter10_2
+    982968  1708 . GetSupportedVersions
+    982968  1708 . GetSupportedVersions
+    982968  1708 . CreateDevice
+    982968  1708 CreateDevice Interface 0xa0009 Version 0x177a
+    982984  1708 CreateDevice: screen Mali-G52 r1 MC3 (Panfrost)
+    982984  1708 CreateDevice: done, DXGI_STATUS_NO_REDIRECTION
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateDepthStencilState
+    982984  1708 . CreateRasterizerState
+    982984  1708 . CreateSampler
+    982984  1708 . SetBlendState
+    982984  1708 . SetDepthStencilState
+    982984  1708 . SetRasterizerState
+    982984  1708 . VsSetSamplers
+    982984  1708 . GsSetSamplers
+    982984  1708 . PsSetSamplers
+    982984  1708 . CloseAdapter
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateBlendState
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateSampler
+    982984  1708 . CreateRasterizerState
+    982984  1708 . CreateRasterizerState
+    982984  1708 . CreateRasterizerState
+    982984  1708 . CreateRasterizerState
+    982984  1708 . CreateRasterizerState
+    982984  1708 . CreateRasterizerState
+    982984  1708 . CreateRasterizerState
+    982984  1708 . CreateRasterizerState
+    982984  1708 . CreateRasterizerState
+    982984  1708 . CreateDepthStencilState
+    982984  1708 . CreateDepthStencilState
+    982984  1708 . CreateDepthStencilState
+    982984  1708 . CreateDepthStencilState
+    982984  1708 . CalcPrivateResourceSize
+    982984  1708 . CreateResource
+    982984  1708   primary 0 shared 0
+    982984  1708 CreateResource(48x1x1 hResource=000002A1D55878B0)
+    982984  1708   ResourceDimension = 1
+    982984  1708   Usage = 0
+    982984  1708   BindFlags = 0x4
+    982984  1708   MapFlags = 0x0
+    982984  1708   MiscFlags = 0x0
+    982984  1708   Format = DXGI_FORMAT_UNKNOWN
+    982984  1708   SampleDesc.Count = 1
+    982984  1708   SampleDesc.Quality = 0
+    982984  1708   MipLevels = 1
+    982984  1708   ArraySize = 1
+    982984  1708   pPrimaryDesc = 0000000000000000
+    982984  1708 . CalcPrivateResourceSize
+    982984  1708 . CreateResource
+    982984  1708   primary 0 shared 0
+    982984  1708 CreateResource(4000x1x1 hResource=000002A1D17493B0)
+    982984  1708   ResourceDimension = 1
+    982984  1708   Usage = 0
+    982984  1708   BindFlags = 0x4
+    982984  1708   MapFlags = 0x0
+    982984  1708   MiscFlags = 0x0
+    982984  1708   Format = DXGI_FORMAT_UNKNOWN
+    982984  1708   SampleDesc.Count = 1
+    982984  1708   SampleDesc.Quality = 0
+    982984  1708   MipLevels = 1
+    982984  1708   ArraySize = 1
+    982984  1708   pPrimaryDesc = 0000000000000000
+    982984  1708 . CalcPrivateResourceSize
+    982984  1708 . CreateResource
+    982984  1708   primary 0 shared 0
+    982984  1708 CreateResource(16x1x1 hResource=000002A1D1749BB0)
+    982984  1708   ResourceDimension = 1
+    982984  1708   Usage = 0
+    982984  1708   BindFlags = 0x4
+    982984  1708   MapFlags = 0x0
+    982984  1708   MiscFlags = 0x0
+    982984  1708   Format = DXGI_FORMAT_UNKNOWN
+    982984  1708   SampleDesc.Count = 1
+    982984  1708   SampleDesc.Quality = 0
+    982984  1708   MipLevels = 1
+    982984  1708   ArraySize = 1
+    982984  1708   pPrimaryDesc = 0000000000000000
+    982984  1708 . CalcPrivateResourceSize
+    982984  1708 . CreateResource
+    982984  1708   primary 0 shared 0
+    982984  1708 CreateResource(48x1x1 hResource=000002A1D174A3B0)
+    982984  1708   ResourceDimension = 1
+    982984  1708   Usage = 0
+    982984  1708   BindFlags = 0x4
+    982984  1708   MapFlags = 0x0
+    982984  1708   MiscFlags = 0x0
+    982984  1708   Format = DXGI_FORMAT_UNKNOWN
+    982984  1708   SampleDesc.Count = 1
+    982984  1708   SampleDesc.Quality = 0
+    982984  1708   MipLevels = 1
+    982984  1708   ArraySize = 1
+    982984  1708   pPrimaryDesc = 0000000000000000
+    982984  1708 . CalcPrivateResourceSize
+    982984  1708 . CreateResource
+    982984  1708   primary 0 shared 0
+    982984  1708 CreateResource(240012x1x1 hResource=000002A1D174ABB0)
+    982984  1708   ResourceDimension = 1
+    982984  1708   Usage = 2
+    982984  1708   BindFlags = 0x1
+    982984  1708   MapFlags = 0x1
+    982984  1708   MiscFlags = 0x0
+    982984  1708   Format = DXGI_FORMAT_UNKNOWN
+    982984  1708   SampleDesc.Count = 1
+    982984  1708   SampleDesc.Quality = 0
+    982984  1708   MipLevels = 1
+    982984  1708   ArraySize = 1
+    982984  1708   pPrimaryDesc = 0000000000000000
+    982984  1708 . SoSetTargets
+    982984  1708 . SetRenderTargets
+    982984  1708 . SetViewports
+    982984  1708 . SetScissorRects
+    982984  1708 . SetPredication
+    982984  1708 . IaSetTopology
+    982984  1708 . SetRasterizerState
+    982984  1708 . CalcPrivateResourceSize
+    982984  1708 . CreateResource
+    982984  1708   primary 0 shared 0
+    982984  1708 CreateResource(102400x1x1 hResource=000002A1D547AFB0)
+    982984  1708   ResourceDimension = 1
+    982984  1708   Usage = 2
+    982984  1708   BindFlags = 0x1
+    982984  1708   MapFlags = 0x1
+    982984  1708   MiscFlags = 0x0
+    982984  1708   Format = DXGI_FORMAT_UNKNOWN
+    982984  1708   SampleDesc.Count = 1
+    982984  1708   SampleDesc.Quality = 0
+    982984  1708   MipLevels = 1
+    982984  1708   ArraySize = 1
+    982984  1708   pPrimaryDesc = 0000000000000000
+    983000  1708 . CreatePixelShader
+    983000  1708 . CreateVertexShader
+    983000  1708 . CreateVertexShader
+    983015  1708 . CreateVertexShader
+    983015  1708 . CreateVertexShader
+    983062  1708 . CreateVertexShader
+    983093  1708 . CreateVertexShader
+    983125  1708 . CreateVertexShader
+    983125  1708 . CreateVertexShader
+    983140  1708 . CreateVertexShader
+    983140  1708 . CreateVertexShader
+    983156  1708 . CreateVertexShader
+    983156  1708 . CreateVertexShader
+    983187  1708 . CreateVertexShader
+    983234  1708 . CreateVertexShader
+    983265  1708 . CreateVertexShader
+    983281  1708 . CreateVertexShader
+    983296  1708 . CreatePixelShader
+
+=== LogonUI.exe-4356.txt
+    982828  1212 . OpenAdapter10_2
+    982828  1212 . GetCaps
+    982828  1212 . GetSupportedVersions
+    982828  1212 . GetSupportedVersions
+    982828  1212 . OpenAdapter10_2
+    982828  1212 . GetSupportedVersions
+    982828  1212 . GetSupportedVersions
+    982828  1212 . CreateDevice
+    982828  1212 CreateDevice Interface 0xa0009 Version 0x177a
+    982843  1212 CreateDevice: screen Mali-G52 r1 MC3 (Panfrost)
+    982843  1212 CreateDevice: done, DXGI_STATUS_NO_REDIRECTION
+    982843  1212 . CreateBlendState
+    982843  1212 . CreateDepthStencilState
+    982843  1212 . CreateRasterizerState
+    982843  1212 . CreateSampler
+    982843  1212 . SetBlendState
+    982843  1212 . SetDepthStencilState
+    982843  1212 . SetRasterizerState
+    982843  1212 . VsSetSamplers
+    982843  1212 . GsSetSamplers
+    982843  1212 . PsSetSamplers
+    982843  1212 . CloseAdapter
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateBlendState
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateSampler
+    982859  1212 . CreateRasterizerState
+    982859  1212 . CreateRasterizerState
+    982859  1212 . CreateRasterizerState
+    982859  1212 . CreateRasterizerState
+    982859  1212 . CreateRasterizerState
+    982859  1212 . CreateRasterizerState
+    982859  1212 . CreateRasterizerState
+    982859  1212 . CreateRasterizerState
+    982859  1212 . CreateRasterizerState
+    982859  1212 . CreateDepthStencilState
+    982859  1212 . CreateDepthStencilState
+    982859  1212 . CreateDepthStencilState
+    982859  1212 . CreateDepthStencilState
+    982859  1212 . CalcPrivateResourceSize
+    982859  1212 . CreateResource
+    982859  1212   primary 0 shared 0
+    982859  1212 CreateResource(48x1x1 hResource=00000231CFC831B0)
+    982859  1212   ResourceDimension = 1
+    982859  1212   Usage = 0
+    982859  1212   BindFlags = 0x4
+    982859  1212   MapFlags = 0x0
+    982859  1212   MiscFlags = 0x0
+    982859  1212   Format = DXGI_FORMAT_UNKNOWN
+    982859  1212   SampleDesc.Count = 1
+    982859  1212   SampleDesc.Quality = 0
+    982859  1212   MipLevels = 1
+    982859  1212   ArraySize = 1
+    982859  1212   pPrimaryDesc = 0000000000000000
+    982859  1212 . CalcPrivateResourceSize
+    982859  1212 . CreateResource
+    982859  1212   primary 0 shared 0
+    982859  1212 CreateResource(4000x1x1 hResource=00000231CFC83AB0)
+    982859  1212   ResourceDimension = 1
+    982859  1212   Usage = 0
+    982859  1212   BindFlags = 0x4
+    982859  1212   MapFlags = 0x0
+    982859  1212   MiscFlags = 0x0
+    982859  1212   Format = DXGI_FORMAT_UNKNOWN
+    982859  1212   SampleDesc.Count = 1
+    982859  1212   SampleDesc.Quality = 0
+    982859  1212   MipLevels = 1
+    982859  1212   ArraySize = 1
+    982859  1212   pPrimaryDesc = 0000000000000000
+    982859  1212 . CalcPrivateResourceSize
+    982859  1212 . CreateResource
+    982859  1212   primary 0 shared 0
+    982859  1212 CreateResource(16x1x1 hResource=00000231CFC83E30)
+    982859  1212   ResourceDimension = 1
+    982859  1212   Usage = 0
+    982859  1212   BindFlags = 0x4
+    982859  1212   MapFlags = 0x0
+    982859  1212   MiscFlags = 0x0
+    982859  1212   Format = DXGI_FORMAT_UNKNOWN
+    982859  1212   SampleDesc.Count = 1
+    982859  1212   SampleDesc.Quality = 0
+    982859  1212   MipLevels = 1
+    982859  1212   ArraySize = 1
+    982859  1212   pPrimaryDesc = 0000000000000000
+    982859  1212 . CalcPrivateResourceSize
+    982859  1212 . CreateResource
+    982859  1212   primary 0 shared 0
+    982859  1212 CreateResource(48x1x1 hResource=00000231CFCB88B0)
+    982859  1212   ResourceDimension = 1
+    982859  1212   Usage = 0
+    982859  1212   BindFlags = 0x4
+    982859  1212   MapFlags = 0x0
+    982859  1212   MiscFlags = 0x0
+    982859  1212   Format = DXGI_FORMAT_UNKNOWN
+    982859  1212   SampleDesc.Count = 1
+    982859  1212   SampleDesc.Quality = 0
+    982859  1212   MipLevels = 1
+    982859  1212   ArraySize = 1
+    982859  1212   pPrimaryDesc = 0000000000000000
+    982859  1212 . CalcPrivateResourceSize
+    982859  1212 . CreateResource
+    982859  1212   primary 0 shared 0
+    982859  1212 CreateResource(240012x1x1 hResource=00000231CFCB90B0)
+    982859  1212   ResourceDimension = 1
+    982859  1212   Usage = 2
+    982859  1212   BindFlags = 0x1
+    982859  1212   MapFlags = 0x1
+    982859  1212   MiscFlags = 0x0
+    982859  1212   Format = DXGI_FORMAT_UNKNOWN
+    982859  1212   SampleDesc.Count = 1
+    982859  1212   SampleDesc.Quality = 0
+    982859  1212   MipLevels = 1
+    982859  1212   ArraySize = 1
+    982859  1212   pPrimaryDesc = 0000000000000000
+    982859  1212 . CalcPrivateResourceSize
+    982859  1212 . CreateResource
+    982859  1212   primary 0 shared 0
+    982859  1212 CreateResource(16x16x1 hResource=00000231CFCC2AB0)
+    982859  1212   ResourceDimension = 3
+    982859  1212   Usage = 0
+    982859  1212   BindFlags = 0x28
+    982859  1212   MapFlags = 0x0
+    982859  1212   MiscFlags = 0x0
+    982859  1212   Format = DXGI_FORMAT_B8G8R8A8_UNORM
+    982859  1212   SampleDesc.Count = 1
+    982859  1212   SampleDesc.Quality = 0
+    982859  1212   MipLevels = 1
+    982859  1212   ArraySize = 1
+    982859  1212   pPrimaryDesc = 0000000000000000
+    982859  1212 . CreateShaderResourceView
+    982859  1212 . CreateRenderTargetView
+    982875  1212 . SoSetTargets
+    982875  1212 . SetRenderTargets
+    982875  1212 . SetViewports
+    982890  1212 . SetScissorRects
+    982890  1212 . SetPredication
+    982890  1212 . PsSetSamplers
+    982890  1212 . VsSetShaderResources
+    982890  1212 . PsSetShaderResources
+    982890  1212 . IaSetVertexBuffers
+    982890  1212 . SetRenderTargets
+    982890  1212 . VsSetConstantBuffers
+    982890  1212 . PsSetConstantBuffers
+    982890  1212 . PsSetShaderResources
+    982890  1212 . ResourceMap
+    982890  1212 . CreateVertexShader
+    982906  1212 . CreatePixelShader
+    982906  1212 . CalcPrivateResourceSize
+    982906  1212 . CreateResource
+    982906  1212   primary 0 shared 0
+    982906  1212 CreateResource(524288x1x1 hResource=00000231CFD3BB30)
+    982906  1212   ResourceDimension = 1
+    982906  1212   Usage = 2
+    982906  1212   BindFlags = 0x1
+    982906  1212   MapFlags = 0x1
+    982906  1212   MiscFlags = 0x0
+    982906  1212   Format = DXGI_FORMAT_UNKNOWN
+    982906  1212   SampleDesc.Count = 1
+    982906  1212   SampleDesc.Quality = 0
+    982906  1212   MipLevels = 1
+    982906  1212   ArraySize = 1
+    982906  1212   pPrimaryDesc = 0000000000000000
+    982906  1212 . CalcPrivateResourceSize
+    982906  1212 . CreateResource
+    982906  1212   primary 0 shared 0
+    982906  1212 CreateResource(524288x1x1 hResource=00000231CFD3C330)
+    982906  1212   ResourceDimension = 1
+    982906  1212   Usage = 0
+    982906  1212   BindFlags = 0x8
+    982906  1212   MapFlags = 0x0
+    982906  1212   MiscFlags = 0x0
+    982906  1212   Format = DXGI_FORMAT_UNKNOWN
+    982906  1212   SampleDesc.Count = 1
+    982906  1212   SampleDesc.Quality = 0
+    982906  1212   MipLevels = 1
+    982906  1212   ArraySize = 1
+    982906  1212   pPrimaryDesc = 0000000000000000
+    982906  1212 . CreateShaderResourceView
+    982906  1212 . CalcPrivateResourceSize
+    982906  1212 . CreateResource
+    982906  1212   primary 0 shared 0
+    982906  1212 CreateResource(16x1x1 hResource=00000231CFD8D230)
+    982906  1212   ResourceDimension = 1
+    982906  1212   Usage = 0
+    982906  1212   BindFlags = 0x1
+    982906  1212   MapFlags = 0x0
+    982906  1212   MiscFlags = 0x0
+    982906  1212   Format = DXGI_FORMAT_UNKNOWN
+    982906  1212   SampleDesc.Count = 1
+    982906  1212   SampleDesc.Quality = 0
+    982906  1212   MipLevels = 1
+    982906  1212   ArraySize = 1
+    982906  1212   pPrimaryDesc = 0000000000000000
+    982906  1212 . CalcPrivateResourceSize
+    982906  1212 . CreateResource
+    982906  1212   primary 0 shared 0
+    982906  1212 CreateResource(12x1x1 hResource=00000231CFD8DA30)
+    982906  1212   ResourceDimension = 1
+    982906  1212   Usage = 0
+    982906  1212   BindFlags = 0x2
+    982906  1212   MapFlags = 0x0
+    982906  1212   MiscFlags = 0x0
+    982906  1212   Format = DXGI_FORMAT_UNKNOWN
+    982906  1212   SampleDesc.Count = 1
+    982906  1212   SampleDesc.Quality = 0
+    982906  1212   MipLevels = 1
+    982906  1212   ArraySize = 1
+    982906  1212   pPrimaryDesc = 0000000000000000
+    982906  1212 . CalcPrivateResourceSize
+    982906  1212 . CreateResource
+    982906  1212   primary 0 shared 0
+    982906  1212 CreateResource(256x80x1 hResource=00000231CFDB6B30)
+    982906  1212   ResourceDimension = 3
+    982906  1212   Usage = 0
+    982906  1212   BindFlags = 0x8
+    982906  1212   MapFlags = 0x0
+    982906  1212   MiscFlags = 0x0
+    982906  1212   Format = DXGI_FORMAT_B8G8R8A8_UNORM
+    982906  1212   SampleDesc.Count = 1
+    982906  1212   SampleDesc.Quality = 0
+    982906  1212   MipLevels = 1
+    982906  1212   ArraySize = 1
+    982906  1212   pPrimaryDesc = 0000000000000000
+    982906  1212 . CreateShaderResourceView
+    982906  1212 . ResourceMap
+    982906  1212 . ResourceUnmap
+    982906  1212 . ResourceUnmap
+    982906  1212 . ResourceCopyRegion
+    982906  1212 . VsSetConstantBuffers
+    982906  1212 . PsSetConstantBuffers
+    982906  1212 . PsSetShaderResources
+    982906  1212 . SetRasterizerState
+    982906  1212 . ResourceUpdateSubResourceUP
+    983000  1212 . PsSetShaderResources
+    983000  1212 . SetRenderTargets
+    983000  1212 . SetScissorRects
+    983000  1212 . SetViewports
+    983000  1212 . ResourceUpdateSubResourceUP
+    983000  1212 . IaSetTopology
+    983000  1212 . CreateElementLayout
+    983000  1212 . IaSetInputLayout
+    983000  1212 . VsSetShader
+    983000  1212 . PsSetShader
+    983000  1212 . ResourceUpdateSubResourceUP
+    983000  1212 . ResourceUpdateSubResourceUP
+    983000  1212 . SetDepthStencilState
+    983000  1212 . IaSetVertexBuffers
+    983000  1212 . Draw
+
