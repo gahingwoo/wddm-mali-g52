@@ -1,0 +1,331 @@
+diff --git a/src/gallium/frontends/d3d10umd/Debug.cpp b/src/gallium/frontends/d3d10umd/Debug.cpp
+index 5b5dc5d..e9e2ee5 100644
+--- a/src/gallium/frontends/d3d10umd/Debug.cpp
++++ b/src/gallium/frontends/d3d10umd/Debug.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include <stdarg.h>
+ #include <stdio.h>
++#include <stdint.h>
+ 
+ 
+ #if MESA_DEBUG
+@@ -29,10 +30,87 @@ st_debug_parse(void)
+  * writes one file per process, <exe>-<pid>.txt. Each line is appended with
+  * a single WriteFile so threads do not interleave inside a line.
+  */
++/*
++ * A crash inside this DLL, to the file log: the event log gives one offset
++ * and no caller. First-chance, and only for faults whose address is in this
++ * module; the exception then goes on to whoever handles it. The offsets are
++ * relative to the module base, as llvm-symbolizer --relative-address takes
++ * them with the build's .pdb.
++ */
++static LONG CALLBACK
++DebugCrashHandler(EXCEPTION_POINTERS *info)
++{
++   static volatile LONG reports = 0;
++   const EXCEPTION_RECORD *rec = info->ExceptionRecord;
++   DWORD code = rec->ExceptionCode;
++   HMODULE self = NULL;
++
++   if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION &&
++       code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_PRIV_INSTRUCTION &&
++       code != EXCEPTION_IN_PAGE_ERROR)
++      return EXCEPTION_CONTINUE_SEARCH;
++   if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
++                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                           (LPCSTR)(void *)&DebugCrashHandler, &self) || !self)
++      return EXCEPTION_CONTINUE_SEARCH;
++
++   uintptr_t base = (uintptr_t)self;
++   const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)base;
++   const IMAGE_NT_HEADERS *nt = (const IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
++   uintptr_t size = nt->OptionalHeader.SizeOfImage;
++   uintptr_t pc = (uintptr_t)rec->ExceptionAddress;
++
++   if (pc - base >= size)
++      return EXCEPTION_CONTINUE_SEARCH;
++   if (InterlockedIncrement(&reports) > 4)
++      return EXCEPTION_CONTINUE_SEARCH;
++
++   DebugPrintf("CRASH code 0x%08lx at maliumd+0x%llx, %s address 0x%llx\n",
++               (unsigned long)code, (unsigned long long)(pc - base),
++               rec->NumberParameters >= 2 ? (rec->ExceptionInformation[0] == 1 ? "writing" :
++                                             rec->ExceptionInformation[0] == 8 ? "executing" :
++                                             "reading") : "no",
++               rec->NumberParameters >= 2 ? (unsigned long long)rec->ExceptionInformation[1] : 0ull);
++#if defined(_M_ARM64)
++   {
++      const CONTEXT *c = info->ContextRecord;
++      uintptr_t lr = (uintptr_t)c->Lr;
++      char line[1024];
++      int n = 0;
++
++      if (lr - base < size)
++         DebugPrintf("CRASH lr maliumd+0x%llx\n", (unsigned long long)(lr - base));
++      else
++         DebugPrintf("CRASH lr 0x%llx (not in this module)\n", (unsigned long long)lr);
++      DebugPrintf("CRASH x0 0x%llx x1 0x%llx x2 0x%llx x8 0x%llx x9 0x%llx x19 0x%llx x20 0x%llx\n",
++                  (unsigned long long)c->X[0], (unsigned long long)c->X[1],
++                  (unsigned long long)c->X[2], (unsigned long long)c->X[8],
++                  (unsigned long long)c->X[9], (unsigned long long)c->X[19],
++                  (unsigned long long)c->X[20]);
++
++      /* Return addresses, or what looks like them: every word of the stack
++       * above sp that points into this module. */
++      const uintptr_t *sp = (const uintptr_t *)c->Sp;
++      NT_TIB *tib = (NT_TIB *)NtCurrentTeb();
++      const uintptr_t *top = (const uintptr_t *)tib->StackBase;
++      for (unsigned i = 0; i < 2048 && sp + i < top && n < (int)sizeof line - 24; i++) {
++         uintptr_t v = sp[i];
++         if (v - base < size && (v & 3) == 0)
++            n += snprintf(line + n, sizeof line - n, " +0x%llx", (unsigned long long)(v - base));
++      }
++      line[n] = 0;
++      DebugPrintf("CRASH stack words in this module:%s\n", line);
++   }
++#endif
++   return EXCEPTION_CONTINUE_SEARCH;
++}
++
++
+ static HANDLE
+ DebugLogFile(void)
+ {
+    static volatile LONG state = 0;       /* 0 untried, 1 opening, 2 done */
++   static volatile LONG tries = 0;
+    static HANDLE file = INVALID_HANDLE_VALUE;
+ 
+    if (state == 2)
+@@ -54,6 +132,15 @@ DebugLogFile(void)
+                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                          NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    }
++   if (InterlockedIncrement(&tries) == 1)
++      AddVectoredExceptionHandler(1, DebugCrashHandler);
++   /* explorer.exe had this DLL loaded and no log: the first call there may
++    * come on a thread that cannot create the file. Try again on later calls
++    * instead of giving up for the life of the process. */
++   if (file == INVALID_HANDLE_VALUE && tries < 200) {
++      InterlockedExchange(&state, 0);
++      return file;
++   }
+    InterlockedExchange(&state, 2);
+    return file;
+ }
+diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
+index ff76504..bf54fcb 100644
+--- a/src/gallium/frontends/d3d10umd/Device.cpp
++++ b/src/gallium/frontends/d3d10umd/Device.cpp
+@@ -380,6 +380,7 @@ DestroyDevice(D3D10DDI_HDEVICE hDevice)   // IN
+    }
+ 
+    pipe_resource_reference(&pDevice->index_buffer, NULL);
++   pipe_resource_reference(&pDevice->null_vertex_buffer, NULL);
+ 
+    static struct pipe_sampler_view * sampler_views[PIPE_MAX_SHADER_SAMPLER_VIEWS];
+    memset(sampler_views, 0, sizeof sampler_views);
+diff --git a/src/gallium/frontends/d3d10umd/InputAssembly.cpp b/src/gallium/frontends/d3d10umd/InputAssembly.cpp
+index 4c12840..a8c4fd5 100644
+--- a/src/gallium/frontends/d3d10umd/InputAssembly.cpp
++++ b/src/gallium/frontends/d3d10umd/InputAssembly.cpp
+@@ -128,6 +128,25 @@ IaSetVertexBuffers(D3D10DDI_HDEVICE hDevice,
+    Device *pDevice = CastDevice(hDevice);
+    unsigned i;
+ 
++   /*
++    * A slot with no buffer reads zeros in Direct3D. For softpipe that is a
++    * user buffer of four floats. A hardware driver that does not take user
++    * vertex buffers (Panfrost; CSO_NO_VBUF leaves nothing in between) reads
++    * the pointer as a pipe_resource: explorer.exe died in
++    * pan_resource_afbcp_update, writing to what it took for a field of the
++    * resource, which was read-only data of this DLL behind those four
++    * floats. Such a driver gets a real buffer of zeros instead, read with a
++    * stride of 0.
++    */
++   bool user_buffers = pDevice->pipe->screen->caps.user_vertex_buffers;
++   if (!user_buffers && !pDevice->null_vertex_buffer) {
++      static const uint8_t zeros[4096] = {0};
++      pDevice->null_vertex_buffer =
++         pipe_buffer_create_with_data(pDevice->pipe, PIPE_BIND_VERTEX_BUFFER,
++                                      PIPE_USAGE_IMMUTABLE, sizeof zeros, zeros);
++      DebugPrintf("  null vertex buffer %p\n", pDevice->null_vertex_buffer);
++   }
++
+    for (i = 0; i < NumBuffers; i++) {
+       struct pipe_vertex_buffer *vb = &pDevice->vertex_buffers[StartBuffer + i];
+       struct pipe_resource *resource = CastPipeResource(phBuffers[i]);
+@@ -155,6 +174,14 @@ IaSetVertexBuffers(D3D10DDI_HDEVICE hDevice,
+       else {
+          pDevice->vertex_strides[StartBuffer + i] = 0;
+          vb->buffer_offset = 0;
++         if (!user_buffers) {
++            if (vb->is_user_buffer) {
++               vb->buffer.resource = NULL;
++               vb->is_user_buffer = false;
++            }
++            pipe_resource_reference(&vb->buffer.resource, pDevice->null_vertex_buffer);
++            continue;
++         }
+          if (!vb->is_user_buffer) {
+             pipe_resource_reference(&vb->buffer.resource, NULL);
+             vb->is_user_buffer = true;
+@@ -170,6 +197,10 @@ IaSetVertexBuffers(D3D10DDI_HDEVICE hDevice,
+       if (!vb->is_user_buffer && !vb->buffer.resource) {
+          pDevice->vertex_strides[i] = 0;
+          vb->buffer_offset = 0;
++         if (!user_buffers) {
++            pipe_resource_reference(&vb->buffer.resource, pDevice->null_vertex_buffer);
++            continue;
++         }
+          vb->is_user_buffer = true;
+          vb->buffer.user = dummy;
+       }
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index fa04416..b5397b3 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -76,6 +76,9 @@ struct Device
+    struct cso_context *cso;
+    struct pipe_framebuffer_state fb;
+    struct pipe_vertex_buffer vertex_buffers[PIPE_MAX_ATTRIBS];
++   /* What an input slot with no buffer reads from, for a driver that takes
++    * no user vertex buffers: zeros. Created on first use. */
++   struct pipe_resource *null_vertex_buffer;
+    unsigned vertex_strides[PIPE_MAX_ATTRIBS];
+    struct pipe_resource *index_buffer;
+    unsigned restart_index;
+diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+index 9093e4b..da58f98 100644
+--- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
++++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+@@ -307,6 +307,8 @@ d3d10_present_result(void)
+ #endif
+ }
+ 
++void DebugPrintf(const char *format, ...);
++
+ struct pipe_screen *
+ d3d10_create_screen(void)
+ {
+@@ -358,6 +360,8 @@ d3d10_create_screen(void)
+                                ARRAY_SIZE(d3d10_pan_driconf));
+          }
+          screen = panfrost_drm_screen_create(fd, &config);
++         if (screen == NULL)
++            DebugPrintf("create screen: Panfrost could not create a screen (fd %d)\n", fd);
+          if (screen == NULL)
+             fprintf(stderr, "d3d10umd: \\\\.\\MaliG52 opened, but Panfrost could not create a screen on it "
+                             "(MALIKM_TRACE=1 shows each driver call)\n");
+@@ -365,6 +369,8 @@ d3d10_create_screen(void)
+          if (screen)
+             screen->flush_frontbuffer = d3d10_pan_flush_frontbuffer;
+       }
++      if (fd < 0)
++         DebugPrintf("create screen: no Mali device to open\n");
+       if (screen == NULL)
+          fprintf(stderr, "d3d10umd: Panfrost found no Mali device, using softpipe\n");
+    }
+diff --git a/src/util/log.c b/src/util/log.c
+index b594a8f..b0b2adc 100644
+--- a/src/util/log.c
++++ b/src/util/log.c
+@@ -413,6 +413,11 @@ logger_windbg(enum mesa_log_level level,
+          level, tag, format, va);
+ 
+    OutputDebugStringA(msg);
++   {
++      /* wddm-mali-g52: also to the file log; see mali_wassert.c. */
++      extern void mali_log_line(const char *msg);
++      mali_log_line(msg);
++   }
+ 
+    if (msg != local_msg)
+       free(msg);
+diff --git a/src/util/mali_wassert.c b/src/util/mali_wassert.c
+index b9a62fd..9636794 100644
+--- a/src/util/mali_wassert.c
++++ b/src/util/mali_wassert.c
+@@ -17,28 +17,15 @@
+ 
+ #include <windows.h>
+ #include <stdio.h>
++#include <string.h>
+ 
+-static void __cdecl
+-mali_wassert_impl(const wchar_t *message, const wchar_t *file, unsigned line)
++/* Append to C:\\mali\\log\\<exe>-<pid>-assert.txt, if that directory exists. */
++static void
++mali_log_append(const char *buf, int len)
+ {
+-   static volatile LONG count = 0;
+    static HANDLE log = NULL;
+-   char buf[1024];
+-   int len;
+    DWORD done;
+ 
+-   if (InterlockedIncrement(&count) > 2000)
+-      return;
+-   len = snprintf(buf, sizeof buf, "%10lu %5lu ASSERT %ls:%u: %ls\n",
+-                  (unsigned long)GetTickCount(), (unsigned long)GetCurrentThreadId(),
+-                  file, line, message);
+-   if (len <= 0)
+-      return;
+-   if (len >= (int)sizeof buf)
+-      len = (int)sizeof buf - 1;
+-   OutputDebugStringA(buf);
+-   fputs(buf, stderr);
+-
+    if (log == NULL) {
+       HANDLE h = INVALID_HANDLE_VALUE;
+       if (GetFileAttributesA("C:\\mali\\log") != INVALID_FILE_ATTRIBUTES) {
+@@ -63,6 +50,48 @@ mali_wassert_impl(const wchar_t *message, const wchar_t *file, unsigned line)
+       WriteFile(log, buf, (DWORD)len, &done, NULL);
+ }
+ 
++static void __cdecl
++mali_wassert_impl(const wchar_t *message, const wchar_t *file, unsigned line)
++{
++   static volatile LONG count = 0;
++   char buf[1024];
++   int len;
++
++   if (InterlockedIncrement(&count) > 2000)
++      return;
++   len = snprintf(buf, sizeof buf, "%10lu %5lu ASSERT %ls:%u: %ls\n",
++                  (unsigned long)GetTickCount(), (unsigned long)GetCurrentThreadId(),
++                  file, line, message);
++   if (len <= 0)
++      return;
++   if (len >= (int)sizeof buf)
++      len = (int)sizeof buf - 1;
++   OutputDebugStringA(buf);
++   fputs(buf, stderr);
++   mali_log_append(buf, len);
++}
++
++/* Mesa's own messages (mesa_loge and friends) go to stderr and the debugger,
++ * which nobody reads inside a shell process. Called from util/log.c. */
++void
++mali_log_line(const char *msg)
++{
++   static volatile LONG count = 0;
++   char buf[1024];
++   int len;
++
++   if (InterlockedIncrement(&count) > 2000)
++      return;
++   len = snprintf(buf, sizeof buf, "%10lu %5lu MESA %s%s",
++                  (unsigned long)GetTickCount(), (unsigned long)GetCurrentThreadId(), msg,
++                  (msg[0] && msg[strlen(msg) - 1] == '\n') ? "" : "\n");
++   if (len <= 0)
++      return;
++   if (len >= (int)sizeof buf)
++      len = (int)sizeof buf - 1;
++   mali_log_append(buf, len);
++}
++
+ /* What "__declspec(dllimport) mali_wassert" resolves to. */
+ void (__cdecl *__imp_mali_wassert)(const wchar_t *, const wchar_t *, unsigned) = mali_wassert_impl;
+ 

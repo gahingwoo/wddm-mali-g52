@@ -1,0 +1,82 @@
+UMD from CI run 43400578600 (0038, 0039, per-device shim), explorer.exe restarted 22:29, a This PC window opened from a scheduled task.
+
+22:30:53
+
+Name                      Id        CPU StartTime             
+----                      --        --- ---------             
+dwm                      280 507.859375 13/11/2026 9:41:19 pm 
+explorer                4616    8.53125 13/11/2026 10:29:00 pm
+explorer                7560   8.734375 13/11/2026 10:29:41 pm
+SearchHost              7080   7.390625 13/11/2026 10:29:03 pm
+ShellExperienceHost     3892   2.328125 13/11/2026 10:29:05 pm
+StartMenuExperienceHost 4760        4.5 13/11/2026 10:29:03 pm
+
+
+Application event 1000 since 22:29:
+assert files written since 22:29:
+
+== ShellExperienceHost.exe-3892.txt 43098 (1 files)
+lines 1039
+   7491437  1588 bind: runtime device 000001B1240BE728: bound (GPU info escape 0x00000000, 45 params, valid 0x11ffffffffff; create context 0x00000000)
+   7491453  1588 CreateDevice: screen Mali-G52 r1 MC3 (Panfrost)
+   7492234  6352   shared: runtime resource 000001B132985640, runtime device 000001B1240BE728, bind 0x10008a
+   7492234  6352 shared create: resource 000001B132985640 device 000001B1240BE728 (bound device 000001B1240BE728), 4227072 bytes: pfnAllocateCb 0x00000000, allocation 0x40000800, kernel resource 0x0
+   7492234  6352 shared create: allocation 0x40000800 at GPU 0x1d36c000, 4227072 bytes
+== StartMenuExperienceHost.exe-4760.txt 25095 (1 files)
+lines 592
+   7489828  2952 bind: runtime device 00000218056E6AE8: bound (GPU info escape 0x00000000, 45 params, valid 0x11ffffffffff; create context 0x00000000)
+   7489843  2952 CreateDevice: screen Mali-G52 r1 MC3 (Panfrost)
+   7491343  4572   shared: runtime resource 00000218165C8A60, runtime device 00000218056E6AE8, bind 0x10008a
+   7491343  4572 shared create: resource 00000218165C8A60 device 00000218056E6AE8 (bound device 00000218056E6AE8), 1490944 bytes: pfnAllocateCb 0x00000000, allocation 0x400006c0, kernel resource 0x0
+   7491343  4572 shared create: allocation 0x400006c0 at GPU 0x4a27000, 1490944 bytes
+== explorer.exe-7560.txt 285793 (1 files)
+lines 6762
+   7527187  7612 bind: runtime device 00000000036B7728: bound (GPU info escape 0x00000000, 45 params, valid 0x11ffffffffff; create context 0x00000000)
+   7527187  7612 CreateDevice: screen Mali-G52 r1 MC3 (Panfrost)
+   7528078  7688 bind: runtime device 000000000FFE1058: bound (GPU info escape 0x00000000, 45 params, valid 0x11ffffffffff; create context 0x00000000)
+   7528093  7688 CreateDevice: screen Mali-G52 r1 MC3 (Panfrost)
+   7529968  7624   shared: runtime resource 000000001D57C620, runtime device 000000000FFE1058, bind 0x10000a
+   7529968  7624 shared create: resource 000000001D57C620 device 000000000FFE1058 (bound device 000000000FFE1058), 4227072 bytes: pfnAllocateCb 0x00000000, allocation 0x40000fc0, kernel resource 0x0
+   7529968  7624 shared create: allocation 0x40000fc0 at GPU 0x1fb78000, 4227072 bytes
+   7531562  7704 bind: runtime device 0000000020C92EF8: bound (GPU info escape 0x00000000, 45 params, valid 0x11ffffffffff; create context 0x00000000)
+   7531562  7704 CreateDevice: screen Mali-G52 r1 MC3 (Panfrost)
+   7531781  7704   1024x1024x1 array 1 levels 1 samples 1, target 2 format DXGI_FORMAT_B8G8R8A8_UNORM (PIPE_FORMAT_B8G8R8A8_UNORM), bind 0x10000a usage 0
+   7531796  7704 shared open: resource 0000000028E9C420 device 0000000020C92EF8 (bound device 0000000020C92EF8), allocation 0x40001b80: escape 0x00000000, GPU 0x1fb78000, 4227072 bytes, wanted 4227072
+   7531796  7704   shared: runtime resource 0000000028E9CFA0, runtime device 0000000020C92EF8, bind 0x10008a
+   7531796  7704 shared create: resource 0000000028E9CFA0 device 0000000020C92EF8 (bound device 0000000020C92EF8), 745472 bytes: pfnAllocateCb 0x00000000, allocation 0x40001cc0, kernel resource 0x0
+   7531796  7704 shared create: allocation 0x40001cc0 at GPU 0x1ff80000, 745472 bytes
+   7532437  7704   shared: runtime resource 00000000297F0760, runtime device 0000000020C92EF8, bind 0x10008a
+   7532437  7704 shared create: resource 00000000297F0760 device 0000000020C92EF8 (bound device 0000000020C92EF8), 745472 bytes: pfnAllocateCb 0x00000000, allocation 0x40002340, kernel resource 0x0
+   7532437  7704 shared create: allocation 0x40002340 at GPU 0x20036000, 745472 bytes
+  jobs done 56243 failed 0 timedout 0 js 0x0 fault 0x0 @0x0 irqs 56241 resets 0
+  display: 243513 vsyncs, 16512 flips, 16503 copied to the framebuffer, 0 not
+
+
+
+Before, UMD from CI run 43397549388 (0038): a shell host and the window process
+== ShellExperienceHost.exe-4532.txt 22707 (1 files)
+lines 535
+   6253187  2212 bind: runtime device 000001DD784E06F8: bound (GPU info escape 0x00000000, 45 params, valid 0x11ffffffffff; create context 0x00000000)
+   6253187  2212 malikm_open: maliwddm is bound, but NUL does not open (errno 13, error 5)
+   6253312  2212 create screen: no Mali device to open
+   6253312  2212 CreateDevice: screen softpipe
+   6254859  4520   shared: runtime resource 000001DD7C3E28A0, runtime device 000001DD784E06F8, bind 0x10008a
+   6254859  4520 shared create: resource 000001DD7C3E28A0: no buffer was made on the allocation
+   6254859  4520 SetError 0x8007000e
+== explorer.exe-6276.txt 486925 (1 files)
+lines 11797
+   6326812  3512 shared create: resource 000000001E8F5AC0 device 00000000144223A8 (bound device 00000000144223A8), 4227072 bytes: pfnAllocateCb 0x00000000, allocation 0x40000fc0, kernel resource 0x0
+   6330656  5828 shared open: resource 0000000028991200 device 000000001C9EC2D8 (bound device 000000001C9EC2D8), allocation 0x40001b80: escape 0x00000000, GPU 0x1d0f4000, 4227072 bytes, wanted 4227072
+   6330734  5828 shared create: resource 0000000028995160 device 000000001C9EC2D8 (bound device 000000001C9EC2D8), 745472 bytes: pfnAllocateCb 0x00000000, allocation 0x40001cc0, kernel resource 0x0
+   6331234  5828 shared create: resource 0000000029424800 device 000000001C9EC2D8 (bound device 000000001C9EC2D8), 745472 bytes: pfnAllocateCb 0x00000000, allocation 0x40001e80, kernel resource 0x0
+   6331640  3512 SetError 0x80004005
+   6331734  5828 shared create: resource 0000000029423320 device 000000001C9EC2D8 (bound device 000000001C9EC2D8), 745472 bytes: pfnAllocateCb 0x00000000, allocation 0x40002800, kernel resource 0x0
+   6331906  3512 . DestroyDevice
+   6332328  3512 shared create: resource 000000000FBD1C80 device 000000001455D638 (bound device 000000001455D638), 8192 bytes: pfnAllocateCb 0x00000000, allocation 0x40002f40, kernel resource 0x0
+   6332359  3512 shared create: resource 000000001FEB4420 device 000000001455D638 (bound device 000000001455D638), 1998848 bytes: pfnAllocateCb 0x00000000, allocation 0x40003140, kernel resource 0x0
+   6332484  3512 . DestroyDevice
+    1x == explorer.exe-6276-assert.txt 6599 (1 files)
+    1x lines 99
+   97x MESA MESA: error: panfrost_batch_submit failed: 5
+    1x MESA MESA: error: mmap(..., size=4096, prot=3, flags=0x1) failed: Invalid argument
+    1x 

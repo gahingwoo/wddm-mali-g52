@@ -24,8 +24,9 @@ D3D11 triangle on it, byte for byte what the CPU renderer draws (M4). On
 the result on the monitor
 ([photo](docs/results/tspi3m-2026-11-13/desktop-on-mali.jpg),
 [what was done](docs/results/tspi3m-2026-11-13/README.md)). That is far
-from usable: it runs at a frame or two a second and the Start menu does not
-open.
+from usable: it runs at a frame or two a second. The Start menu, the tray and
+File Explorer came up later the same night
+([photo](docs/results/tspi3m-2026-11-13/start-menu-on-mali.jpg)).
 
 Windows on RK3576 boards
 ([woa-rk3576](https://github.com/gahingwoo/woa-rk3576)) draws its desktop on the
@@ -46,7 +47,7 @@ drivers only.
 | M5.1 | Display-only driver drives HDMI | done 2026-10-02, [result](docs/results/m5.1/README.md) |
 | M5.2 (b) | A job submitted through the WDDM driver | done 2026-10-02, [result](docs/results/m5.2-step-b/README.md) |
 | M5.2 (c) | The triangle through the WDDM driver, Mesa loaded by the runtime as the UMD | done 2026-10-03, [result](docs/results/m5.2-step-c2/README.md) |
-| M5.2 (d) | DWM composites on the Mali in installed Windows | **desktop on screen 2026-11-13**, [result](docs/results/tspi3m-2026-11-13/README.md); the desktop and Task Manager draw; Start menu crashes; 1 to 2 frames a second |
+| M5.2 (d) | DWM composites on the Mali in installed Windows | **desktop on screen 2026-11-13**, [result](docs/results/tspi3m-2026-11-13/README.md); the desktop, the Start menu, File Explorer and Device Manager draw; 1 to 2 frames a second |
 
 All results: [docs/results/](docs/results/README.md). All documents:
 [docs/](docs/README.md).

@@ -1,0 +1,25 @@
+diff --git a/src/gallium/auxiliary/tgsi/tgsi_exec.c b/src/gallium/auxiliary/tgsi/tgsi_exec.c
+index eaaa1e1..e97a9bb 100644
+--- a/src/gallium/auxiliary/tgsi/tgsi_exec.c
++++ b/src/gallium/auxiliary/tgsi/tgsi_exec.c
+@@ -1515,8 +1515,18 @@ get_index_registers(const struct tgsi_exec_machine *mach,
+    if (reg->Register.Indirect) {
+       const unsigned execmask = mach->ExecMask;
+ 
+-      assert(reg->Indirect.File == TGSI_FILE_ADDRESS);
+-      const union tgsi_exec_channel *addr = &mach->Addrs[reg->Indirect.Index].xyzw[reg->Indirect.Swizzle];
++      /* The d3d10umd frontend indexes through a temporary, not through an
++       * address register (Direct3D 10 has none). Reading mach->Addrs with a
++       * temporary's index was an out-of-bounds read whenever a process got
++       * softpipe: the shell's XAML hosts asserted here and then failed. */
++      const union tgsi_exec_channel *addr;
++      if (reg->Indirect.File == TGSI_FILE_TEMPORARY &&
++          reg->Indirect.Index >= 0 && reg->Indirect.Index < TGSI_EXEC_NUM_TEMPS) {
++         addr = &mach->Temps[reg->Indirect.Index].xyzw[reg->Indirect.Swizzle];
++      } else {
++         assert(reg->Indirect.File == TGSI_FILE_ADDRESS);
++         addr = &mach->Addrs[reg->Indirect.Index].xyzw[reg->Indirect.Swizzle];
++      }
+       for (int i = 0; i < TGSI_QUAD_SIZE; i++)
+          index->i[i] += addr->u[i];
+ 
