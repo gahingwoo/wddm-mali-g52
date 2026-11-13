@@ -1,0 +1,20 @@
+
+Image Name                     PID Modules                                     
+========================= ======== ============================================
+dwm.exe                       1168 maliumd.dll                                 
+LogonUI.exe                   1176 maliumd.dll                                 
+
+Image Name                     PID Modules                                     
+========================= ======== ============================================
+dwm.exe                       1168 d3d11.dll                                   
+LogonUI.exe                   1176 d3d11.dll                                   
+
+Name          Id StartTime             CPU
+----          -- ---------             ---
+csrss        784 12/11/2026 9:42:42 am 0.5
+dwm         1168 12/11/2026 9:42:45 am 2.7
+fontdrvhost  592 12/11/2026 9:42:44 am 0.1
+LogonUI     1176 12/11/2026 9:42:45 am 0.8
+winlogon     848 12/11/2026 9:42:42 am 0.2
+
+

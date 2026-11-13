@@ -1,0 +1,20 @@
+adapter 0 (luid 00000000:00007f98): escape 0x00000000, 45 params, GPU_ID 0x7402
+stats at start: gpu 1 renders 2 presents 5662 submits 5664 fence 5664/5664 queued 0 running 0
+  jobs done 2 failed 0 timedout 0 js 0x0 fault 0x0 @0x0 irqs 2 resets 0
+  allocations 27 (last at 0x13caf000); aperture maps 4 (fails 0, last 0x13caf000 x1 pages, 0x00000000), unmaps 2
+  paging ops by type: [5]=6 [6]=2
+  patches 3: last with 1 allocations, 1 patch locations; allocation 0 in segment 1 at 0x3c20000
+  presents: 5662 blts, 0 fills, 0 skipped
+  display: 16584 vsyncs, 2 flips, 1 copied to the framebuffer, 0 not
+device 0x40000080 context 0x400000c0, command buffer 16384 bytes, 256 allocation slots
+allocation 0x40000100 at GPU 0x13caf000, 4096 bytes
+rendered
+stats after the job: gpu 1 renders 3 presents 5662 submits 5665 fence 5665/5665 queued 0 running 0
+  jobs done 3 failed 0 timedout 0 js 0x0 fault 0x0 @0x0 irqs 3 resets 0
+  allocations 28 (last at 0x13caf000); aperture maps 5 (fails 0, last 0x13caf000 x1 pages, 0x00000000), unmaps 2
+  paging ops by type: [5]=7 [6]=2
+  patches 4: last with 1 allocations, 1 patch locations; allocation 0 in segment 1 at 0x3c20000
+  presents: 5662 blts, 0 fills, 0 skipped
+  display: 16584 vsyncs, 2 flips, 1 copied to the framebuffer, 0 not
+after 15 ms: target 0xc0ffee52 (want 0xc0ffee52), job header status word 0x00000001
+PASS: the Mali ran a job submitted through WDDM

@@ -1,0 +1,99 @@
+diff --git a/src/gallium/frontends/d3d10umd/Debug.cpp b/src/gallium/frontends/d3d10umd/Debug.cpp
+index 17f7292..990756f 100644
+--- a/src/gallium/frontends/d3d10umd/Debug.cpp
++++ b/src/gallium/frontends/d3d10umd/Debug.cpp
+@@ -23,17 +23,66 @@ st_debug_parse(void)
+ #endif
+ 
+ 
++/*
++ * A file log, for processes no debugger is attached to (dwm.exe, LogonUI.exe,
++ * explorer.exe). It is on only while the directory C:\mali\log exists, and
++ * writes one file per process, <exe>-<pid>.txt. Each line is appended with
++ * a single WriteFile so threads do not interleave inside a line.
++ */
++static HANDLE
++DebugLogFile(void)
++{
++   static volatile LONG state = 0;       /* 0 untried, 1 opening, 2 done */
++   static HANDLE file = INVALID_HANDLE_VALUE;
++
++   if (state == 2)
++      return file;
++   if (InterlockedCompareExchange(&state, 1, 0) != 0)
++      return INVALID_HANDLE_VALUE;
++
++   if (GetFileAttributesA("C:\\mali\\log") != INVALID_FILE_ATTRIBUTES) {
++      char exe[MAX_PATH], path[MAX_PATH];
++      const char *base = exe;
++      DWORD n = GetModuleFileNameA(NULL, exe, sizeof exe);
++      exe[n < sizeof exe ? n : sizeof exe - 1] = 0;
++      for (const char *c = exe; *c; c++)
++         if (*c == '\\' || *c == '/')
++            base = c + 1;
++      snprintf(path, sizeof path, "C:\\mali\\log\\%s-%lu.txt", base,
++               (unsigned long)GetCurrentProcessId());
++      file = CreateFileA(path, FILE_APPEND_DATA,
++                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
++                         NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
++   }
++   InterlockedExchange(&state, 2);
++   return file;
++}
++
++
+ void
+ DebugPrintf(const char *format, ...)
+ {
+     char buf[4096];
++    int off, len;
++    HANDLE file;
++
++    off = snprintf(buf, sizeof buf, "%10lu %5lu ", (unsigned long)GetTickCount(),
++                   (unsigned long)GetCurrentThreadId());
+ 
+     va_list ap;
+     va_start(ap, format);
+-    vsnprintf(buf, sizeof buf, format, ap);
++    len = vsnprintf(buf + off, sizeof buf - off, format, ap);
+     va_end(ap);
+ 
+-    OutputDebugStringA(buf);
++    OutputDebugStringA(buf + off);
++
++    file = DebugLogFile();
++    if (file != INVALID_HANDLE_VALUE && len > 0) {
++       DWORD done;
++       if (len > (int)(sizeof buf - off - 1))
++          len = (int)(sizeof buf - off - 1);
++       WriteFile(file, buf, (DWORD)(off + len), &done, NULL);
++    }
+ }
+ 
+ 
+diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
+index 11b0907..e02e646 100644
+--- a/src/gallium/frontends/d3d10umd/Device.cpp
++++ b/src/gallium/frontends/d3d10umd/Device.cpp
+@@ -107,6 +107,9 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+ {
+    LOG_ENTRYPOINT();
+ 
++   DebugPrintf("CreateDevice Interface 0x%x Version 0x%x\n",
++               (unsigned)pCreateData->Interface, (unsigned)pCreateData->Version);
++
+    if (0) {
+       DebugPrintf("hAdapter = %p\n", hAdapter);
+       DebugPrintf("pKTCallbacks = %p\n", pCreateData->pKTCallbacks);
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index 633dc2d..0dc2a20 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -157,6 +157,7 @@ SetError(D3D10DDI_HDEVICE hDevice, HRESULT hr)
+ {
+    if (FAILED(hr)) {
+       Device *pDevice = CastDevice(hDevice);
++      DebugPrintf("SetError 0x%08lx\n", (unsigned long)hr);
+       pDevice->UMCallbacks.pfnSetErrorCb(pDevice->hRTCoreLayer, hr);
+    }
+ }
