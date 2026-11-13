@@ -20,6 +20,7 @@
 #include <winternl.h>
 #include <d3dkmthk.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "maliwddm_abi.h"
 
@@ -149,9 +150,71 @@ static void print_stats(D3DKMT_HANDLE adapter, const char *when)
     printf("  presents: %u blts, %u fills, %u skipped\n", s.PresentBlts, s.PresentFills, s.PresentSkips);
     printf("  display: %u vsyncs, %u flips, %u copied to the framebuffer, %u not\n",
            s.Vsyncs, s.Flips, s.FlipCopies, s.FlipCopySkips);
+    if (s.PerfHz != 0)
+        printf("  longest since start, us: flip copy %u, flip to shown %u, job %u, between vsyncs %u;"
+               " %u flips came with jobs outstanding\n",
+               s.FlipCopyMaxUs, s.FlipWaitMaxUs, s.JobMaxUs, s.VsyncGapMaxUs, s.FlipsWhileBusy);
 }
 
-int main(void)
+/* Ticks over a count, as microseconds each. */
+static unsigned long long each_us(unsigned long long ticks, unsigned long long hz, unsigned count)
+{
+    return count != 0 && hz != 0 ? ticks * 1000000ull / hz / count : 0;
+}
+
+/* m5test perf [seconds]: what the driver did in an interval, from two
+ * readings of its counters. Nothing is submitted; run it while the desktop
+ * is doing whatever is to be measured. */
+static int perf(D3DKMT_HANDLE adapter, unsigned seconds)
+{
+    MW_ESCAPE_STATS_DATA a = {0}, b = {0};
+    LARGE_INTEGER hz, t0, t1;
+    double secs;
+
+    a.Code = b.Code = MW_ESCAPE_STATS;
+    QueryPerformanceFrequency(&hz);
+    if (escape(adapter, 0, &a, sizeof(a)) < 0)
+        return fail("Escape(STATS)", 0);
+    QueryPerformanceCounter(&t0);
+    if (a.PerfHz == 0) {
+        printf("perf: this maliwddm.sys has no timing counters\n");
+        return 1;
+    }
+    Sleep(seconds * 1000);
+    if (escape(adapter, 0, &b, sizeof(b)) < 0)
+        return fail("Escape(STATS)", 0);
+    QueryPerformanceCounter(&t1);
+    secs = (double)(t1.QuadPart - t0.QuadPart) / (double)hz.QuadPart;
+
+    unsigned flips = b.Flips - a.Flips, copies = b.FlipCopies - a.FlipCopies;
+    unsigned jobs = (b.JobsDone + b.JobsFailed) - (a.JobsDone + a.JobsFailed);
+    unsigned vsyncs = b.Vsyncs - a.Vsyncs;
+    unsigned blts = (b.PresentBlts + b.PresentFills) - (a.PresentBlts + a.PresentFills);
+    unsigned long long jobTicks = b.JobTicks - a.JobTicks;
+
+    printf("perf over %.2f s:\n", secs);
+    printf("  flips %u (%.1f/s), copied to the framebuffer %u, with jobs outstanding %u\n",
+           flips, flips / secs, copies, b.FlipsWhileBusy - a.FlipsWhileBusy);
+    printf("  flip copy: %llu us each (longest since start %u)\n",
+           each_us(b.FlipCopyTicks - a.FlipCopyTicks, b.PerfHz, copies), b.FlipCopyMaxUs);
+    printf("  flip to shown, copy included: %llu us each (longest since start %u)\n",
+           each_us(b.FlipWaitTicks - a.FlipWaitTicks, b.PerfHz, copies), b.FlipWaitMaxUs);
+    printf("  vsyncs %u (%.1f/s), %llu us apart (longest since start %u)\n",
+           vsyncs, vsyncs / secs, each_us(b.VsyncTicks - a.VsyncTicks, b.PerfHz, vsyncs),
+           b.VsyncGapMaxUs);
+    printf("  jobs %u (%.1f/s, %.1f a flip), %llu us each (longest since start %u), GPU busy %.0f%%\n",
+           jobs, jobs / secs, flips ? (double)jobs / flips : 0.0,
+           each_us(jobTicks, b.PerfHz, jobs), b.JobMaxUs,
+           100.0 * (double)jobTicks / (double)b.PerfHz / secs);
+    printf("  blt and fill presents %u, %llu us each\n", blts,
+           each_us(b.PresentBltTicks - a.PresentBltTicks, b.PerfHz, blts));
+    printf("  renders %u, submissions %u, interrupts %u, aperture maps %u, unmaps %u\n",
+           b.Renders - a.Renders, b.Submits - a.Submits, b.Irqs - a.Irqs, b.Maps - a.Maps,
+           b.Unmaps - a.Unmaps);
+    return 0;
+}
+
+int main(int argc, char **argv)
 {
     D3DKMT_HANDLE adapter;
     D3DKMT_CREATEDEVICE dev = {0};
@@ -175,6 +238,10 @@ int main(void)
     }
 
     g_adapter = adapter;
+    if (argc >= 2 && strcmp(argv[1], "perf") == 0) {
+        int seconds = argc >= 3 ? atoi(argv[2]) : 5;
+        return perf(adapter, seconds > 0 && seconds <= 600 ? (unsigned)seconds : 5);
+    }
     print_stats(adapter, "at start");
     dev.hAdapter = adapter;
     if ((st = pCreateDevice(&dev)) < 0)

@@ -95,4 +95,18 @@ typedef struct _MW_ESCAPE_STATS_DATA {
     /* Emulated vsyncs, flips (SetVidPnSourceAddress), and flips whose
      * primary was copied to the framebuffer or could not be. */
     mw_u32 Vsyncs, Flips, FlipCopies, FlipCopySkips;
+    /* Where the time goes, summed since the driver started, in ticks of the
+     * performance counter (PerfHz a second; 0 from a driver without these).
+     * Two readings a few seconds apart give the cost per flip, per job and
+     * per vsync in between (m5test perf). The Max values are microseconds,
+     * since the start. */
+    mw_u64 PerfHz;
+    mw_u64 FlipCopyTicks;               /* copying a primary to the framebuffer */
+    mw_u64 FlipWaitTicks;               /* SetVidPnSourceAddress to the vsync that showed it */
+    mw_u64 JobTicks;                    /* a job chain on the GPU, start to collected */
+    mw_u64 PresentBltTicks;             /* blt and fill presents on the CPU */
+    mw_u64 VsyncTicks;                  /* between emulated vsyncs; with Vsyncs, the period */
+    mw_u32 FlipCopyMaxUs, FlipWaitMaxUs, JobMaxUs, VsyncGapMaxUs;
+    /* Flips that arrived while a job chain was running or queued. */
+    mw_u32 FlipsWhileBusy, Reserved1;
 } MW_ESCAPE_STATS_DATA;

@@ -480,6 +480,9 @@ NTSTATUS APIENTRY MwSetVidPnSourceAddress(IN_CONST_HANDLE hAdapter, const DXGKAR
     dev->ScanAddr = Arg->PrimaryAddress;
     dev->ScanAlloc = (MW_ALLOCATION *)Arg->hAllocation;
     dev->Flips++;
+    dev->FlipTick = MwTick();
+    if (dev->QCount != 0)
+        dev->FlipsWhileBusy++;
     InterlockedIncrement(&dev->FlipSeq);
     if (Arg->hAllocation == NULL) dev->FlipsNullAlloc++;
     if (!dev->SourceVisible) dev->FlipsInvisible++;

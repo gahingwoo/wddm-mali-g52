@@ -207,6 +207,7 @@ static void DoPresent(MW_ADAPTER *A, const MW_PRESENT_OP *Op)
     PUCHAR dst, src = NULL;
     LONG dstW, dstH, dstPitch, srcPitch = 0, srcW = 0, srcH = 0;
     ULONG n = Op->NumRects ? Op->NumRects : 1;
+    ULONG64 t0 = MwTick(), longest = 0;
 
     if (Op->Dst != NULL && (Op->Dst->Flags & MW_ALLOC_PRIMARY) && A->FbVa != NULL) {
         dst = A->FbVa;
@@ -263,6 +264,7 @@ static void DoPresent(MW_ADAPTER *A, const MW_PRESENT_OP *Op)
         A->PresentBlts++;
     else
         A->PresentFills++;
+    MwTickAdd(&A->PresentBltTicks, &longest, t0);
 }
 
 NTSTATUS APIENTRY MwPatch(IN_CONST_HANDLE hAdapter, const DXGKARG_PATCH *Arg)
@@ -312,6 +314,7 @@ static void Kick(MW_ADAPTER *A)
         A->RunningSlot = c->Slot;
         A->Running = TRUE;
         A->JobStart = KeQueryInterruptTime();
+        A->JobStartTick = MwTick();
         (void)MkJobTakeStatus(&A->Gpu, c->Slot);
         InterlockedExchange(&A->Gpu.MmuIrqStatus, 0);
         MkJobStart(&A->Gpu, c->Slot, c->Jc, (A->ChainFlag++ & 1) != 0);
@@ -344,6 +347,7 @@ static BOOLEAN Reap(MW_ADAPTER *A, BOOLEAN CheckTimeout)
     }
 
     A->Running = FALSE;
+    MwTickAdd(&A->JobTicks, &A->JobMaxTicks, A->JobStartTick);
     if (!failed) {
         A->JobsDone++;
         return TRUE;
@@ -471,6 +475,7 @@ static void ShowPrimary(MW_ADAPTER *A, MW_ALLOCATION *P)
 {
     PUCHAR src;
     ULONG w, h, pitch;
+    ULONG64 t0 = MwTick();
 
     if (A->FbVa == NULL || P->Mdl == NULL) {
         A->FlipCopySkips++;
@@ -488,6 +493,7 @@ static void ShowPrimary(MW_ADAPTER *A, MW_ALLOCATION *P)
     for (ULONG y = 0; y < h; y++)
         RtlCopyMemory(A->FbVa + (SIZE_T)y * A->Fb.Pitch, src + (SIZE_T)y * pitch, (SIZE_T)w * 4);
     A->FlipCopies++;
+    MwTickAdd(&A->FlipCopyTicks, &A->FlipCopyMaxTicks, t0);
 }
 
 static VOID VsyncDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
@@ -500,6 +506,11 @@ static VOID VsyncDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
 
     if (a->Stopping || !a->VsyncOn)
         return;
+    /* The period the timer really keeps, which is the most flips a second
+     * there can be. */
+    if (a->LastVsyncTick != 0)
+        MwTickAdd(&a->VsyncTicks, &a->VsyncGapMaxTicks, a->LastVsyncTick);
+    a->LastVsyncTick = MwTick();
     p = a->ScanAlloc;
     /* Compare flips, not allocations. On the TaishanPi 3M the compositor
      * flipped 71 times and one frame reached the framebuffer: it flips to
@@ -507,9 +518,13 @@ static VOID VsyncDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
     {
         LONG seq = a->FlipSeq;
         if (p != NULL && seq != a->ShownSeq && a->SourceVisible) {
+            ULONG64 flipped = a->FlipTick;
             ShowPrimary(a, p);
             a->ShownAlloc = p;
             a->ShownSeq = seq;
+            /* How long the flip waited for this vsync, copy included. */
+            if (flipped != 0)
+                MwTickAdd(&a->FlipWaitTicks, &a->FlipWaitMaxTicks, flipped);
         }
     }
     a->Vsyncs++;
@@ -682,6 +697,7 @@ NTSTATUS APIENTRY MwControlInterrupt(IN_CONST_HANDLE hAdapter, IN_CONST_DXGK_INT
     if (Enable) {
         if (InterlockedExchange(&a->VsyncOn, 1) == 0) {
             LARGE_INTEGER due;
+            a->LastVsyncTick = 0;       /* the gap while it was off is not a period */
             due.QuadPart = -166667;           /* 16.7 ms, relative */
             KeSetTimerEx(&a->VsyncTimer, due, 16, &a->VsyncDpc);
         }

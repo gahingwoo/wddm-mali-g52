@@ -133,6 +133,11 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
     UNREFERENCED_PARAMETER(StartInfo);
 
     a->Dxgk = *Dxgk;
+    {
+        LARGE_INTEGER hz;
+        (void)KeQueryPerformanceCounter(&hz);
+        a->PerfHz = (ULONG64)hz.QuadPart;
+    }
     MwLog(a, L"Build", MW_BUILD);
     MwLog(a, L"RenderOnly", MW_RENDER_ONLY);
 #if !MW_RENDER_ONLY
@@ -385,6 +390,19 @@ static NTSTATUS APIENTRY MwQueryAdapterInfo(IN_CONST_HANDLE hAdapter, const DXGK
     return st;
 }
 
+/* Ticks of the performance counter as microseconds, saturating. */
+static ULONG TicksToUs(const MW_ADAPTER *A, ULONG64 Ticks)
+{
+    ULONG64 us = A->PerfHz != 0 ? Ticks * 1000000ULL / A->PerfHz : 0;
+    return us > 0xFFFFFFFFULL ? 0xFFFFFFFFUL : (ULONG)us;
+}
+
+/* A sum of ticks over a count, as microseconds each. */
+static ULONG TicksEachUs(const MW_ADAPTER *A, ULONG64 Ticks, ULONG Count)
+{
+    return Count != 0 ? TicksToUs(A, Ticks / Count) : 0;
+}
+
 static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D, UINT Size)
 {
     D->GpuUp = A->GpuUp;
@@ -427,6 +445,19 @@ static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D, UINT Size)
         D->Flips = A->Flips;
         D->FlipCopies = A->FlipCopies;
         D->FlipCopySkips = A->FlipCopySkips;
+    }
+    if (Size >= sizeof(MW_ESCAPE_STATS_DATA) && A->PerfHz != 0) {
+        D->PerfHz = A->PerfHz;
+        D->FlipCopyTicks = A->FlipCopyTicks;
+        D->FlipWaitTicks = A->FlipWaitTicks;
+        D->JobTicks = A->JobTicks;
+        D->PresentBltTicks = A->PresentBltTicks;
+        D->VsyncTicks = A->VsyncTicks;
+        D->FlipCopyMaxUs = TicksToUs(A, A->FlipCopyMaxTicks);
+        D->FlipWaitMaxUs = TicksToUs(A, A->FlipWaitMaxTicks);
+        D->JobMaxUs = TicksToUs(A, A->JobMaxTicks);
+        D->VsyncGapMaxUs = TicksToUs(A, A->VsyncGapMaxTicks);
+        D->FlipsWhileBusy = A->FlipsWhileBusy;
     }
 }
 
@@ -477,6 +508,19 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         MwLog(a, L"T_FlipCopySkips", a->FlipCopySkips);
         MwLog(a, L"T_PresentFlips", a->PresentFlips);
         MwLog(a, L"T_Presents", a->Presents);
+        /* Averages since the driver started, in microseconds; m5test perf
+         * gives them for an interval. */
+        MwLog(a, L"T_FlipCopyUsAvg", TicksEachUs(a, a->FlipCopyTicks, a->FlipCopies));
+        MwLog(a, L"T_FlipCopyUsMax", TicksToUs(a, a->FlipCopyMaxTicks));
+        MwLog(a, L"T_FlipWaitUsAvg", TicksEachUs(a, a->FlipWaitTicks, a->FlipCopies));
+        MwLog(a, L"T_FlipWaitUsMax", TicksToUs(a, a->FlipWaitMaxTicks));
+        MwLog(a, L"T_JobUsAvg", TicksEachUs(a, a->JobTicks, a->JobsDone + a->JobsFailed));
+        MwLog(a, L"T_JobUsMax", TicksToUs(a, a->JobMaxTicks));
+        MwLog(a, L"T_VsyncGapUsAvg", TicksEachUs(a, a->VsyncTicks, a->Vsyncs));
+        MwLog(a, L"T_VsyncGapUsMax", TicksToUs(a, a->VsyncGapMaxTicks));
+        MwLog(a, L"T_PresentBltUsAvg",
+              TicksEachUs(a, a->PresentBltTicks, a->PresentBlts + a->PresentFills));
+        MwLog(a, L"T_FlipsWhileBusy", a->FlipsWhileBusy);
         return STATUS_SUCCESS;
     default:
         MwLog(a, L"EscapeUnknownCode", code);
