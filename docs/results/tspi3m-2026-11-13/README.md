@@ -47,8 +47,9 @@ Still wrong or not looked at:
   work; there is no photo of them.
 - Patch 0040 (softpipe indexing through a temporary, for the fallback
   path) is built and has not run on the board.
-- `dwm.exe` was not restarted and still runs the UMD from before these
-  three fixes. No boot has been done with the new UMD.
+- A cold boot with the new UMD was done afterwards: the sign-in screen,
+  the desktop and the Start menu came up as before, with `dwm.exe` on the
+  new UMD from the start.
 - The cause of the `explorer.exe` fault was worked out from the
   disassembly and the source; the crash reporter added with the fix has
   not caught one to confirm it.
