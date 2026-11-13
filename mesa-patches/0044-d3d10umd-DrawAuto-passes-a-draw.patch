@@ -1,0 +1,18 @@
+diff --git a/src/gallium/frontends/d3d10umd/Draw.cpp b/src/gallium/frontends/d3d10umd/Draw.cpp
+index b0c7673..142697f 100644
+--- a/src/gallium/frontends/d3d10umd/Draw.cpp
++++ b/src/gallium/frontends/d3d10umd/Draw.cpp
+@@ -422,5 +422,12 @@ DrawAuto(D3D10DDI_HDEVICE hDevice)  // IN
+    memset(&indirect, 0, sizeof indirect);
+    indirect.count_from_stream_output = pDevice->draw_so_target;
+ 
+-   pDevice->pipe->draw_vbo(pDevice->pipe, &info, 0, &indirect, NULL, 1);
++   /* One draw, its count taken from the target. draw_vbo with draws == NULL
++    * and num_draws 1 is read as draws[0] by the draw module
++    * (resolve_draw_info copies *raw_draw) and by Panfrost's direct path;
++    * glDrawTransformFeedback (main/draw.c) passes a zeroed one. */
++   struct pipe_draw_start_count_bias draw;
++   memset(&draw, 0, sizeof draw);
++
++   pDevice->pipe->draw_vbo(pDevice->pipe, &info, 0, &indirect, &draw, 1);
+ }
