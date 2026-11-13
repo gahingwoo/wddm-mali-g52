@@ -324,7 +324,7 @@ drmGetVersion(int fd)
    if (fake_on())
       fake_ioctl(IOCTL_MALIKM_VERSION, &v, sizeof(v));
    else if (wddm_on())
-      wddm_ioctl(IOCTL_MALIKM_VERSION, &v, sizeof(v));
+      wddm_ioctl(fd, IOCTL_MALIKM_VERSION, &v, sizeof(v));
    else if (h == INVALID_HANDLE_VALUE ||
             !DeviceIoControl(h, IOCTL_MALIKM_VERSION, &v, sizeof(v), &v, sizeof(v), &got, NULL) ||
             got < sizeof(v)) {
