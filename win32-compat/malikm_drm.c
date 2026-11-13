@@ -211,6 +211,80 @@ call(int fd, DWORD code, void *buf, DWORD len)
    return 0;
 }
 
+/* ---- where a frame's time goes ----
+ *
+ * One line in the UMD's file log every few seconds while a process presents:
+ * for each stage, the time spent in it per present and how often it ran.
+ * The stages are the places a present can wait or copy; see MALIKM_PERF_* in
+ * the frontend (d3d10_gdi.c has the same numbers). Sums are per process, not
+ * per device: the process that presents full frames is the one of interest.
+ */
+#define PERF_STAGES 10
+static const char *const perf_names[PERF_STAGES] = {
+   "flush", "readback-map", "readback-copy", "primary-copy", "present-cb",
+   "rotate", "submit", "gpu-wait", "idle-in-present", "bo-create",
+};
+static struct {
+   volatile LONG64 ticks;
+   volatile LONG calls;
+} perf[PERF_STAGES];
+static volatile LONG perf_presents, perf_reporting;
+static volatile LONG64 perf_since;
+
+unsigned long long
+malikm_perf_now(void)
+{
+   LARGE_INTEGER t;
+   QueryPerformanceCounter(&t);
+   return (unsigned long long)t.QuadPart;
+}
+
+/* The time since Since (a malikm_perf_now) went into this stage. */
+void
+malikm_perf_add(unsigned stage, unsigned long long since)
+{
+   if (stage >= PERF_STAGES)
+      return;
+   InterlockedAdd64(&perf[stage].ticks, (LONG64)(malikm_perf_now() - since));
+   InterlockedIncrement(&perf[stage].calls);
+}
+
+/* A present is over. Every PERF_REPORT_MS, say what the presents since the
+ * last report cost. */
+#define PERF_REPORT_MS 5000
+void
+malikm_perf_frame(void)
+{
+   LARGE_INTEGER hz;
+   LONG64 now = (LONG64)malikm_perf_now(), since = perf_since;
+   char line[640];
+   int off;
+
+   InterlockedIncrement(&perf_presents);
+   QueryPerformanceFrequency(&hz);
+   if (since == 0) {
+      InterlockedCompareExchange64(&perf_since, now, 0);
+      return;
+   }
+   if ((now - since) * 1000 / hz.QuadPart < PERF_REPORT_MS ||
+       InterlockedExchange(&perf_reporting, 1) != 0)
+      return;
+   LONG n = InterlockedExchange(&perf_presents, 0);
+   InterlockedExchange64(&perf_since, now);
+   if (n < 1)
+      n = 1;
+   off = snprintf(line, sizeof line, "perf: %ld presents in %lld ms; us per present (calls):",
+                  (long)n, (long long)((now - since) * 1000 / hz.QuadPart));
+   for (int i = 0; i < PERF_STAGES && off < (int)sizeof line - 48; i++) {
+      LONG64 t = InterlockedExchange64(&perf[i].ticks, 0);
+      LONG c = InterlockedExchange(&perf[i].calls, 0);
+      off += snprintf(line + off, sizeof line - off, " %s %lld (%ld)", perf_names[i],
+                      (long long)(t * 1000000 / hz.QuadPart / n), (long)c);
+   }
+   DebugPrintf("%s\n", line);
+   InterlockedExchange(&perf_reporting, 0);
+}
+
 static int64_t
 relative_timeout(int64_t abs_ns)
 {
@@ -639,6 +713,11 @@ struct wbo {
    /* Given back already, while Panfrost still holds the BO: kept out of
     * every allocation list until its GEM_CLOSE. */
    int released;
+   /* A primary Panfrost renders into (malikm_primary_begin_create). Listed
+    * only in the submissions that name it: a job that does not draw to a
+    * primary has no business holding a reference on one the display is
+    * flipping to or from. */
+   int primary;
 };
 static struct wbo *wbo;
 static uint32_t wbo_cap;
@@ -1019,7 +1098,7 @@ w_unlock(D3DKMT_HANDLE h)
 /* Render what is in the command buffer and allocation list; on return the
  * buffers are the new ones the runtime handed back. */
 static NTSTATUS
-w_render(UINT commandLength, UINT allocations)
+w_render_inner(UINT commandLength, UINT allocations)
 {
    if (ddi.on) {
       D3DDDICB_RENDER r = {0};
@@ -1073,6 +1152,15 @@ w_render(UINT commandLength, UINT allocations)
    return 0;
 }
 
+static NTSTATUS
+w_render(UINT commandLength, UINT allocations)
+{
+   unsigned long long t0 = malikm_perf_now();
+   NTSTATUS st = w_render_inner(commandLength, allocations);
+   malikm_perf_add(6 /* submit */, t0);
+   return st;
+}
+
 /* Everything the KMD was given has completed: its fences agree and nothing
  * is queued or running. For when there is no event to wait on. */
 static int
@@ -1105,6 +1193,7 @@ static int
 wddm_idle(void)
 {
    int ret = 0;
+   unsigned long long t0 = malikm_perf_now();
 
    if (ddi.on) {
       if (ddi.last_event && WaitForSingleObject(ddi.last_event, 10000) != WAIT_OBJECT_0)
@@ -1116,6 +1205,7 @@ wddm_idle(void)
       w.hDevice = wdevice;
       ret = kmt.WaitForIdle(&w) >= 0 ? 0 : -MK_EIO;
    }
+   malikm_perf_add(7 /* gpu-wait */, t0);
    if (ret == 0)
       wdead_flush();
    if (ret == 0 && trace_on()) {
@@ -1274,7 +1364,9 @@ malikm_present_allocation(void *hRTDevice, unsigned src_allocation, unsigned dst
       p.hDstAllocation = dst_allocation;
       p.pDXGIContext = dxgi_context;
       p.hContext = ddi.context;
+      unsigned long long t0 = malikm_perf_now();
       hr = ddi.dxgi->pfnPresentCb(ddi.device, &p);
+      malikm_perf_add(4 /* present-cb */, t0);
    }
    if (InterlockedIncrement(&said) <= 40 || hr < 0)
       DebugPrintf("present: shared allocation 0x%x -> 0x%x, pfnPresentCb 0x%08lx\n",
@@ -1305,6 +1397,7 @@ malikm_present_d3dddi(const void *bgrx, unsigned w, unsigned h, void *dxgi_conte
    }
    if (present_target.set && present_target.src) {
       /* A primary: copy the frame into its own allocation and present that. */
+      unsigned long long t0 = malikm_perf_now();
       void *cpu = w_lock(present_target.src);
       HRESULT hr = E_FAIL;
 
@@ -1312,11 +1405,14 @@ malikm_present_d3dddi(const void *bgrx, unsigned w, unsigned h, void *dxgi_conte
          DXGIDDICB_PRESENT p = {0};
          memcpy(cpu, bgrx, (size_t)w * h * 4);
          w_unlock(present_target.src);
+         malikm_perf_add(3 /* primary-copy */, t0);
          p.hSrcAllocation = present_target.src;
          p.hDstAllocation = present_target.dst;
          p.pDXGIContext = dxgi_context;
          p.hContext = ddi.context;
+         t0 = malikm_perf_now();
          hr = ddi.dxgi->pfnPresentCb(ddi.device, &p);
+         malikm_perf_add(4 /* present-cb */, t0);
       }
       present_result = hr;
       if (InterlockedIncrement(&said) <= 20)
@@ -1538,6 +1634,7 @@ wddm_bo_is_resource(int fd, uint32_t handle)
  */
 #define SHARED_CREATE 1
 #define SHARED_OPEN   2
+#define SHARED_PRIMARY 3        /* malikm_primary_begin_create, below */
 #define SHARED_PRIV_MAX 128
 
 static __declspec(thread) struct {
@@ -1546,6 +1643,7 @@ static __declspec(thread) struct {
    HANDLE device;               /* the runtime device of the resource */
    void *rt_resource;
    unsigned w, h;
+   unsigned pitch, vidpn_source;   /* a primary's */
    unsigned char priv[SHARED_PRIV_MAX];
    unsigned priv_size;
    D3DKMT_HANDLE allocation;    /* open: in; create: out */
@@ -1579,6 +1677,66 @@ malikm_shared_begin_open(void *hRTDevice, void *hRTResource, unsigned hAllocatio
    shared_next.allocation = hAllocation;
 }
 
+/*
+ * A primary Panfrost renders into.
+ *
+ * malikm_primary_create (above) gives the runtime an allocation next to
+ * Panfrost's own buffer, and every present copies the frame from one to the
+ * other on the CPU. A primary can instead be made the way a shared resource
+ * is: the buffer Panfrost creates between this call and malikm_shared_end is
+ * the runtime's primary allocation itself, made through pfnAllocateCb with
+ * the resource handle and the Primary flag. maliwddm already gives every
+ * allocation, primaries included, a GPU address and maps its pages there
+ * when VidMm makes it resident, so nothing changes in the kernel. A present
+ * of such a primary is malikm_present_allocation: no pixel is touched.
+ *
+ * Pitch is the row pitch Panfrost will use (the caller checks afterwards
+ * that it did); maliwddm copies the primary to the framebuffer with it.
+ * The allocation goes back through malikm_shared_destroy.
+ */
+void
+malikm_primary_begin_create(void *hRTDevice, void *hRTResource, unsigned w, unsigned h,
+                            unsigned pitch, unsigned vidpn_source)
+{
+   memset(&shared_next, 0, sizeof(shared_next));
+   shared_next.mode = SHARED_PRIMARY;
+   shared_next.device = hRTDevice;
+   shared_next.rt_resource = hRTResource;
+   shared_next.w = w;
+   shared_next.h = h;
+   shared_next.pitch = pitch;
+   shared_next.vidpn_source = vidpn_source;
+}
+
+/* RotateResourceIdentities gave the primary on this allocation to another
+ * runtime resource: it is that resource's deallocation that returns it. */
+void
+malikm_primary_rebind(void *hRTDevice, unsigned allocation, void *hRTResource)
+{
+   AcquireSRWLockExclusive(&wddm_lock);
+   if (wselect_rt(hRTDevice)) {
+      for (uint32_t i = 0; i < wbo_cap; i++) {
+         if (wbo[i].h == allocation && wbo[i].primary && !wbo[i].released)
+            wbo[i].rt_resource = hRTResource;
+      }
+   }
+   ReleaseSRWLockExclusive(&wddm_lock);
+}
+
+/* Everything this device has submitted is done. For a present that may not
+ * rely on the scheduler to keep a flip behind the rendering it shows. */
+int
+malikm_wait_idle(void *hRTDevice)
+{
+   int ret = -1;
+
+   AcquireSRWLockExclusive(&wddm_lock);
+   if (wselect_rt(hRTDevice) && ddi.on)
+      ret = wddm_idle();
+   ReleaseSRWLockExclusive(&wddm_lock);
+   return ret;
+}
+
 /* The allocation the BO was made on; 0 if no BO was created in between (a
  * BO from Panfrost's cache, or not the runtime's device) or it failed. */
 unsigned
@@ -1588,7 +1746,9 @@ malikm_shared_end(void)
 
    if (shared_next.mode && !shared_next.done)
       DebugPrintf("shared %s: resource %p: no buffer was made on the allocation\n",
-                  shared_next.mode == SHARED_CREATE ? "create" : "open", shared_next.rt_resource);
+                  shared_next.mode == SHARED_CREATE ? "create" :
+                  shared_next.mode == SHARED_PRIMARY ? "primary" : "open",
+                  shared_next.rt_resource);
    memset(&shared_next, 0, sizeof(shared_next));
    return ret;
 }
@@ -1653,6 +1813,12 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       D3DDDI_ALLOCATIONINFO ai = {0};
       MW_ESCAPE_ALLOC_INFO_DATA where = {0};
       int shared = ddi.on && !shared_next.done ? shared_next.mode : 0;
+      unsigned long long t0 = malikm_perf_now();
+
+      /* The primary's buffer holds all its rows; anything smaller made
+       * first is something else. */
+      if (shared == SHARED_PRIMARY && sz < (uint64_t)shared_next.pitch * shared_next.h)
+         shared = 0;
 
       memset(&priv, 0, sizeof(priv));
       priv.pi.Version = MW_ABI_VERSION;
@@ -1719,6 +1885,39 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
          DebugPrintf("shared create: allocation 0x%x at GPU 0x%llx, %llu bytes\n",
                      (unsigned)ai.hAllocation, (unsigned long long)where.GpuVa,
                      (unsigned long long)where.Size);
+      } else if (shared == SHARED_PRIMARY) {
+         /* The runtime's primary: what malikm_primary_create asks for, with
+          * the size and pitch of the buffer Panfrost is creating. */
+         D3DDDICB_ALLOCATE al = {0};
+         HRESULT hr;
+
+         priv.pi.Flags = MW_ALLOC_NOEXEC | MW_ALLOC_PRIMARY;
+         priv.pi.Width = shared_next.w;
+         priv.pi.Height = shared_next.h;
+         priv.pi.Pitch = shared_next.pitch;
+         priv.pi.Format = D3DDDIFMT_A8R8G8B8;
+         ai.VidPnSourceId = shared_next.vidpn_source;
+         ai.Flags.Primary = 1;
+         al.hResource = shared_next.rt_resource;
+         al.NumAllocations = 1;
+         al.pAllocationInfo = &ai;
+         hr = ddi.cb.pfnAllocateCb(shared_next.device, &al);
+         if (hr >= 0) {
+            where.hAllocation = ai.hAllocation;
+            if (w_escape(&where, sizeof(where)) < 0 || where.GpuVa == 0 || where.Size < sz) {
+               D3DDDICB_DEALLOCATE d = {0};
+               d.hResource = shared_next.rt_resource;
+               ddi.cb.pfnDeallocateCb(shared_next.device, &d);
+               hr = E_FAIL;
+            }
+         }
+         DebugPrintf("primary: rendered into, %ux%u pitch %u source %u, %llu bytes:"
+                     " pfnAllocateCb 0x%08lx, allocation 0x%x at GPU 0x%llx\n",
+                     shared_next.w, shared_next.h, shared_next.pitch, shared_next.vidpn_source,
+                     (unsigned long long)sz, (unsigned long)hr, (unsigned)ai.hAllocation,
+                     (unsigned long long)where.GpuVa);
+         if (hr < 0)
+            return -MK_ENOMEM;
       } else {
          if (w_create(&ai) < 0)
             return -MK_ENOMEM;
@@ -1736,7 +1935,7 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
          uint32_t cap = wbo_cap ? wbo_cap * 2 : 256;
          struct wbo *n = realloc(wbo, cap * sizeof(*n));
          if (!n) {
-            if (shared == SHARED_CREATE) {
+            if (shared == SHARED_CREATE || shared == SHARED_PRIMARY) {
                D3DDDICB_DEALLOCATE d = {0};
                d.hResource = shared_next.rt_resource;
                ddi.cb.pfnDeallocateCb(shared_next.device, &d);
@@ -1754,11 +1953,13 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       if (shared) {
          wbo[h - 1].rt_resource = shared_next.rt_resource;
          wbo[h - 1].rt_device = shared_next.device;
+         wbo[h - 1].primary = shared == SHARED_PRIMARY;
          shared_next.allocation = ai.hAllocation;
          shared_next.done = 1;
       }
       a->handle = h;
       a->offset = where.GpuVa;
+      malikm_perf_add(9 /* bo-create */, t0);
       /* Where every BO lives, so a GPU fault address can be traced back to
        * the buffer it fell in (the 0x4002c3 faults at a fixed VA). */
       if (trace_on())
@@ -1821,7 +2022,7 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       uint32_t named = n;
       for (uint32_t i = 0; i < wbo_cap && n < walloc_size; i++) {
          struct wbo *bo = &wbo[i];
-         if (!bo->h || bo->released || bo->listed == mark)
+         if (!bo->h || bo->released || bo->primary || bo->listed == mark)
             continue;
          bo->listed = mark;
          memset(&walloc[n], 0, sizeof(walloc[n]));

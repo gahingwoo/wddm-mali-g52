@@ -1,0 +1,638 @@
+diff --git a/src/gallium/frontends/d3d10umd/DxgiFns.cpp b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+index fef467c..9aaf663 100644
+--- a/src/gallium/frontends/d3d10umd/DxgiFns.cpp
++++ b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+@@ -91,6 +91,29 @@ _Present(DXGI_DDI_ARG_PRESENT *pPresentData)
+       return hr;
+    }
+ 
++   /*
++    * A primary that was rendered into: the same. The frame is already in
++    * the allocation the runtime flips to. The jobs that draw it were
++    * submitted by the flush above with the allocation in their lists, and
++    * the flip is queued behind them on the same context; a wait here, for
++    * a kernel that shows the primary before they are done, is one file away.
++    */
++   if (pSrcResource->direct_primary) {
++      if (PresentWaitsForGpu()) {
++         t0 = d3d10_perf_now();
++         d3d10_wait_idle(device->hDevice);
++         d3d10_perf_add(D3D10_PERF_IDLE_IN_PRESENT, t0);
++      }
++      HRESULT hr = (HRESULT)d3d10_present_allocation(
++         device->hDevice, pSrcResource->present_allocation,
++         pDstResource ? pDstResource->present_allocation : 0,
++         pPresentData->pDXGIContext);
++      if (hr != S_OK)
++         DebugPrintf("Present: rendered-into primary, result 0x%08lx\n", (unsigned long)hr);
++      d3d10_perf_frame();
++      return hr;
++   }
++
+    d3d10_present_target(device->hDevice, pSrcResource->present_allocation,
+                         pDstResource ? pDstResource->present_allocation : 0, 1);
+    device->pipe->screen->flush_frontbuffer(device->pipe->screen, device->pipe, 
+@@ -227,6 +250,112 @@ _QueryResourceResidency( DXGI_DDI_ARG_QUERYRESOURCERESIDENCY *QueryResourceResid
+  * ----------------------------------------------------------------------
+  */
+ 
++/*
++ * Rotate primaries by exchanging what they are made of. After the call
++ * resource i has the buffer, the presented allocation and the contents that
++ * resource i + 1 had, and the last has the first's: no pixel moves. The
++ * views made on the resources, the bound framebuffer and the bound sampler
++ * views are pointed at the buffers the resources then have.
++ *
++ * The copy this replaces went through the driver's resource_copy_region,
++ * which for Panfrost is a CPU copy between mapped buffers: one more than
++ * there are surfaces, each of a whole surface, at every present.
++ */
++#define ROTATE_MAX 16
++
++static bool
++RotateByExchangingBuffers(DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *Rotate)
++{
++   UINT n = Rotate->Resources;
++   Device *pDevice = CastDevice(Rotate->hDevice);
++   struct pipe_context *pipe = pDevice->pipe;
++   Resource *res[ROTATE_MAX];
++   struct pipe_resource *old[ROTATE_MAX];
++   unsigned old_allocation[ROTATE_MAX];
++   bool old_direct[ROTATE_MAX];
++
++   if (n > ROTATE_MAX)
++      return false;
++   for (UINT i = 0; i < n; ++i) {
++      res[i] = CastResource(Rotate->pResources[i]);
++      if (!res[i] || !res[i]->primary || !res[i]->resource)
++         return false;
++      for (UINT k = 0; k < res[i]->NumSubResources; ++k)
++         if (res[i]->transfers[k])
++            return false;          /* mapped: its transfer names the buffer */
++   }
++
++   for (UINT i = 0; i < n; ++i) {
++      old[i] = NULL;
++      pipe_resource_reference(&old[i], res[i]->resource);
++      old_allocation[i] = res[i]->present_allocation;
++      old_direct[i] = res[i]->direct_primary;
++   }
++   for (UINT i = 0; i < n; ++i) {
++      UINT from = (i + 1) % n;
++
++      pipe_resource_reference(&res[i]->resource, old[from]);
++      res[i]->present_allocation = old_allocation[from];
++      res[i]->direct_primary = old_direct[from];
++      if (res[i]->direct_primary)
++         d3d10_primary_rebind(pDevice->hDevice, res[i]->present_allocation,
++                              res[i]->rt_resource);
++   }
++
++   /* The views. */
++   for (UINT i = 0; i < n; ++i) {
++      for (RenderTargetView *v = res[i]->rtvs; v; v = v->next)
++         pipe_resource_reference(&v->surface.texture, res[i]->resource);
++
++      for (ShaderResourceView *v = res[i]->srvs; v; v = v->next) {
++         struct pipe_sampler_view *was = v->handle;
++         struct pipe_sampler_view templ;
++         struct pipe_sampler_view *now;
++
++         if (!was)
++            continue;
++         templ = *was;
++         now = pipe->create_sampler_view(pipe, res[i]->resource, &templ);
++         if (!now)
++            continue;
++         for (unsigned stage = 0; stage < MESA_SHADER_STAGES; ++stage) {
++            bool bound = false;
++            for (unsigned slot = 0; slot < PIPE_MAX_SHADER_SAMPLER_VIEWS; ++slot) {
++               if (pDevice->sampler_views[stage][slot] == was) {
++                  pDevice->sampler_views[stage][slot] = now;
++                  bound = true;
++               }
++            }
++            if (bound)
++               pipe->set_sampler_views(pipe, (mesa_shader_stage)stage, 0,
++                                       PIPE_MAX_SHADER_SAMPLER_VIEWS, 0,
++                                       pDevice->sampler_views[stage]);
++         }
++         v->handle = now;
++         pipe->sampler_view_release(pipe, was);
++      }
++   }
++
++   /* What is bound for drawing. */
++   bool fb_changed = false;
++   for (unsigned c = 0; c < PIPE_MAX_COLOR_BUFS; ++c) {
++      for (UINT i = 0; i < n; ++i) {
++         if (pDevice->fb.cbufs[c].texture == old[i]) {
++            pipe_resource_reference(&pDevice->fb.cbufs[c].texture, old[(i + 1) % n]);
++            fb_changed = true;
++            break;
++         }
++      }
++   }
++   if (fb_changed)
++      pipe->set_framebuffer_state(pipe, &pDevice->fb);
++
++   for (UINT i = 0; i < n; ++i)
++      pipe_resource_reference(&old[i], NULL);
++   return true;
++}
++
++
+ HRESULT APIENTRY
+ _RotateResourceIdentities( DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *RotateResourceIdentities )
+ {
+@@ -240,6 +369,27 @@ _RotateResourceIdentities( DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *RotateResour
+    struct pipe_screen *screen = pipe->screen;
+    unsigned long long t0 = d3d10_perf_now();
+ 
++   if (RotateByExchange() && RotateByExchangingBuffers(RotateResourceIdentities)) {
++      d3d10_perf_add(D3D10_PERF_ROTATE, t0);
++      return S_OK;
++   }
++
++   /* The copy below gives each resource the next one's contents and leaves
++    * the buffers where they are, which a primary that is its own presented
++    * allocation cannot follow. */
++   for (UINT i = 0; i < RotateResourceIdentities->Resources; ++i) {
++      Resource *r = CastResource(RotateResourceIdentities->pResources[i]);
++      if (r && r->direct_primary) {
++         static volatile LONG said = 0;
++         if (InterlockedIncrement(&said) <= 20)
++            DebugPrintf("RotateResourceIdentities XXX: a rendered-into primary cannot be"
++                        " rotated by copying (resource %u of %u)\n", i,
++                        RotateResourceIdentities->Resources);
++         d3d10_perf_add(D3D10_PERF_ROTATE, t0);
++         return E_FAIL;
++      }
++   }
++
+    struct pipe_resource *resource0 = CastPipeResource(RotateResourceIdentities->pResources[0]);
+ 
+    assert(resource0);
+diff --git a/src/gallium/frontends/d3d10umd/OutputMerger.cpp b/src/gallium/frontends/d3d10umd/OutputMerger.cpp
+index ccda02e..251fe77 100644
+--- a/src/gallium/frontends/d3d10umd/OutputMerger.cpp
++++ b/src/gallium/frontends/d3d10umd/OutputMerger.cpp
+@@ -86,6 +86,9 @@ CreateRenderTargetView(
+    struct pipe_resource *resource = CastPipeResource(pCreateRenderTargetView->hDrvResource);
+    RenderTargetView *pRTView = CastRenderTargetView(hRenderTargetView);
+ 
++   pRTView->owner = NULL;
++   pRTView->next = NULL;
++
+    struct pipe_surface desc;
+ 
+    memset(&desc, 0, sizeof desc);
+@@ -130,6 +133,15 @@ CreateRenderTargetView(
+    }
+ 
+    pRTView->surface = desc;
++
++   /* A rotation of the swap chain gives a primary another buffer; the view
++    * has to follow it. */
++   Resource *pResource = CastResource(pCreateRenderTargetView->hDrvResource);
++   if (pResource && pResource->primary) {
++      pRTView->owner = pResource;
++      pRTView->next = pResource->rtvs;
++      pResource->rtvs = pRTView;
++   }
+ }
+ 
+ 
+@@ -153,6 +165,17 @@ DestroyRenderTargetView(D3D10DDI_HDEVICE hDevice,                       // IN
+ 
+    RenderTargetView *pRTView = CastRenderTargetView(hRenderTargetView);
+ 
++   if (pRTView->owner) {
++      for (RenderTargetView **p = &pRTView->owner->rtvs; *p; p = &(*p)->next) {
++         if (*p == pRTView) {
++            *p = pRTView->next;
++            break;
++         }
++      }
++      pRTView->owner = NULL;
++      pRTView->next = NULL;
++   }
++
+    pipe_resource_reference(&pRTView->surface.texture, NULL);
+ }
+ 
+diff --git a/src/gallium/frontends/d3d10umd/Resource.cpp b/src/gallium/frontends/d3d10umd/Resource.cpp
+index ba748c0..5421a9f 100644
+--- a/src/gallium/frontends/d3d10umd/Resource.cpp
++++ b/src/gallium/frontends/d3d10umd/Resource.cpp
+@@ -92,7 +92,8 @@ FindSharedDesc(const void *pData, UINT Size)
+  * not used; the surface travels through the runtime.
+  */
+ static bool
+-MarkResourceShared(struct pipe_context *pipe, struct pipe_resource *resource)
++MarkResourceShared(struct pipe_context *pipe, struct pipe_resource *resource,
++                   unsigned *pStride = NULL)
+ {
+    struct pipe_screen *screen = pipe->screen;
+    struct winsys_handle whandle;
+@@ -107,10 +108,62 @@ MarkResourceShared(struct pipe_context *pipe, struct pipe_resource *resource)
+    _close((int)(intptr_t)whandle.handle);
+    DebugPrintf("  shared: exported, stride %u offset %u modifier 0x%llx\n",
+                whandle.stride, whandle.offset, (unsigned long long)whandle.modifier);
++   if (pStride)
++      *pStride = whandle.stride;
+    return true;
+ }
+ 
+ 
++static bool
++SwitchFileAbsent(const char *path, const char *what_absent, const char *what_present)
++{
++   bool absent = GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES;
++
++   DebugPrintf("switch %s: %s\n", path, absent ? what_absent : what_present);
++   return absent;
++}
++
++
++bool
++PrimaryRenderedInto(void)
++{
++   static int state = -1;
++
++   if (state < 0)
++      state = SwitchFileAbsent("C:\\mali\\primary-copy",
++                               "absent, primaries are rendered into",
++                               "present, the frame is copied into the primary at each present");
++   /* A rendered-into primary cannot be rotated by copying. */
++   return state != 0 && RotateByExchange();
++}
++
++
++bool
++RotateByExchange(void)
++{
++   static int state = -1;
++
++   if (state < 0)
++      state = SwitchFileAbsent("C:\\mali\\rotate-copy",
++                               "absent, a rotation exchanges the primaries' buffers",
++                               "present, a rotation copies the primaries' contents");
++   return state != 0;
++}
++
++
++bool
++PresentWaitsForGpu(void)
++{
++   static int state = -1;
++
++   if (state < 0)
++      state = SwitchFileAbsent("C:\\mali\\present-wait",
++                               "absent, a present does not wait for the GPU",
++                               "present, a present of a rendered-into primary waits for the GPU");
++   return state == 0;
++}
++
++
+ /*
+  * ----------------------------------------------------------------------
+  *
+@@ -416,8 +469,74 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+                                 templat.width0, templat.height0, &desc, sizeof desc);
+    }
+ 
++   /*
++    * A primary is rendered into as well: the driver's buffer is made the
++    * runtime's primary allocation, the same way, and a present hands that
++    * allocation over without reading the frame back and copying it. That
++    * needs the layout the kernel driver shows a primary with: 32 bits a
++    * pixel, blue first, one level, rows at the pitch told here, which is
++    * the driver's for a linear surface and is checked below.
++    */
++   bool direct = false;
++   unsigned direct_pitch = 0;
++   if (pCreateResource->pPrimaryDesc && !shared && templat.target == PIPE_TEXTURE_2D &&
++       templat.last_level == 0 && templat.array_size == 1 && templat.nr_samples <= 1 &&
++       (templat.format == PIPE_FORMAT_B8G8R8A8_UNORM ||
++        templat.format == PIPE_FORMAT_B8G8R8X8_UNORM ||
++        templat.format == PIPE_FORMAT_B8G8R8A8_SRGB ||
++        templat.format == PIPE_FORMAT_B8G8R8X8_SRGB) &&
++       PrimaryRenderedInto()) {
++      direct = true;
++      direct_pitch = align(templat.width0 * 4, 64);
++      templat.bind |= PIPE_BIND_SHARED;
++      d3d10_primary_begin_create(CastDevice(hDevice)->hDevice, hRTResource.handle,
++                                 templat.width0, templat.height0, direct_pitch,
++                                 pCreateResource->pPrimaryDesc->VidPnSourceId);
++   }
++
+    pResource->resource = screen->resource_create(screen, &templat);
+ 
++   if (direct) {
++      Device *pDevice = CastDevice(hDevice);
++      unsigned allocation = d3d10_shared_end();
++      unsigned stride = 0;
++
++      if (pResource->resource && allocation) {
++         if (!MarkResourceShared(pipe, pResource->resource, &stride)) {
++            /* Without the mark the driver may exchange the buffer under the
++             * allocation; with it gone the buffer may be handed out again. */
++            DebugPrintf("  primary: the buffer could not be marked shared, failing the"
++                        " resource (C:\\mali\\primary-copy avoids this path)\n");
++            pipe_resource_reference(&pResource->resource, NULL);
++            d3d10_shared_destroy(pDevice->hDevice, hRTResource.handle);
++            SetError(hDevice, E_OUTOFMEMORY);
++            return;
++         }
++         if (stride == direct_pitch) {
++            pResource->direct_primary = true;
++            pResource->present_allocation = allocation;
++            DebugPrintf("  primary: rendered into, pipe resource %p on allocation 0x%x,"
++                        " pitch %u\n", pResource->resource, allocation, stride);
++         } else {
++            /* Not the rows the kernel driver was told: back to a primary of
++             * its own. */
++            DebugPrintf("  primary: pitch %u, not the %u expected; copying instead\n",
++                        stride, direct_pitch);
++            pipe_resource_reference(&pResource->resource, NULL);
++            d3d10_shared_destroy(pDevice->hDevice, hRTResource.handle);
++            templat.bind &= ~PIPE_BIND_SHARED;
++            pResource->resource = screen->resource_create(screen, &templat);
++         }
++      } else if (pResource->resource) {
++         /* The software runtime, another driver, or a buffer that was not
++          * made on the allocation: the frame is copied, as before. */
++         DebugPrintf("  primary: not on a runtime allocation; copying instead\n");
++      } else {
++         templat.bind &= ~PIPE_BIND_SHARED;
++         pResource->resource = screen->resource_create(screen, &templat);
++      }
++   }
++
+    if (shared) {
+       pResource->shared_allocation = d3d10_shared_end();
+       DebugPrintf("  shared: pipe resource %p on allocation 0x%x\n",
+@@ -439,8 +558,11 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+       return;
+    }
+ 
+-   pResource->present_allocation = 0;
+-   if (pCreateResource->pPrimaryDesc && pResource->resource) {
++   if (pCreateResource->pPrimaryDesc) {
++      pResource->primary = true;
++      pResource->rt_resource = hRTResource.handle;
++   }
++   if (pCreateResource->pPrimaryDesc && pResource->resource && !pResource->direct_primary) {
+       pResource->present_allocation =
+          d3d10_primary_create(CastDevice(hDevice)->hDevice, (void *)hRTResource.handle,
+                               pCreateResource->pMipInfoList[0].TexelWidth,
+@@ -677,11 +799,28 @@ DestroyResource(D3D10DDI_HDEVICE hDevice,       // IN
+       pipe_so_target_reference(&pResource->so_target, NULL);
+    }
+ 
+-   if (pResource->present_allocation) {
++   if (pResource->present_allocation && !pResource->direct_primary) {
+       d3d10_primary_destroy(CastDevice(hDevice)->hDevice, pResource->present_allocation);
+       pResource->present_allocation = 0;
+    }
+ 
++   /* Views should be gone by now; ones that are not must not find this
++    * resource again. */
++   for (RenderTargetView *v = pResource->rtvs; v; ) {
++      RenderTargetView *next = v->next;
++      v->owner = NULL;
++      v->next = NULL;
++      v = next;
++   }
++   pResource->rtvs = NULL;
++   for (ShaderResourceView *v = pResource->srvs; v; ) {
++      ShaderResourceView *next = v->next;
++      v->owner = NULL;
++      v->next = NULL;
++      v = next;
++   }
++   pResource->srvs = NULL;
++
+    for (UINT SubResource = 0; SubResource < pResource->NumSubResources; ++SubResource) {
+       if (pResource->transfers[SubResource]) {
+          if (pResource->buffer) {
+@@ -694,6 +833,22 @@ DestroyResource(D3D10DDI_HDEVICE hDevice,       // IN
+    }
+    free(pResource->transfers);
+ 
++   if (pResource->direct_primary) {
++      /* The buffer is the runtime's allocation, as a shared resource's is:
++       * the same order. The allocation is the one the runtime counts as
++       * this resource's, whichever resource it was made for. */
++      Device *pDevice = CastDevice(hDevice);
++
++      DebugPrintf("DestroyResource: rendered-into primary, runtime resource %p allocation 0x%x\n",
++                  pResource->rt_resource, pResource->present_allocation);
++      pipe->flush(pipe, NULL, 0);
++      pipe_resource_reference(&pResource->resource, NULL);
++      d3d10_shared_destroy(pDevice->hDevice, pResource->rt_resource);
++      pResource->direct_primary = false;
++      pResource->present_allocation = 0;
++      return;
++   }
++
+    if (pResource->shared_rt_resource) {
+       /* Nothing may still be drawing into or sampling the allocation when
+        * the runtime gets it back: submit what refers to it, drop the
+diff --git a/src/gallium/frontends/d3d10umd/Shader.cpp b/src/gallium/frontends/d3d10umd/Shader.cpp
+index df6ffa1..babe998 100644
+--- a/src/gallium/frontends/d3d10umd/Shader.cpp
++++ b/src/gallium/frontends/d3d10umd/Shader.cpp
+@@ -1199,6 +1199,9 @@ CreateShaderResourceView(
+    struct pipe_resource *resource;
+    enum pipe_format format;
+ 
++   pSRView->owner = NULL;
++   pSRView->next = NULL;
++
+    struct pipe_sampler_view desc;
+    memset(&desc, 0, sizeof desc);
+    resource = CastPipeResource(pCreateSRView->hDrvResource);
+@@ -1251,6 +1254,15 @@ CreateShaderResourceView(
+    }
+ 
+    pSRView->handle = pipe->create_sampler_view(pipe, resource, &desc);
++
++   /* A rotation of the swap chain gives a primary another buffer; the view
++    * has to follow it. */
++   Resource *pResource = CastResource(pCreateSRView->hDrvResource);
++   if (pResource && pResource->primary && pSRView->handle) {
++      pSRView->owner = pResource;
++      pSRView->next = pResource->srvs;
++      pResource->srvs = pSRView;
++   }
+ }
+ 
+ 
+@@ -1279,6 +1291,9 @@ CreateShaderResourceView1(
+    struct pipe_resource *resource;
+    enum pipe_format format;
+ 
++   pSRView->owner = NULL;
++   pSRView->next = NULL;
++
+    struct pipe_sampler_view desc;
+    memset(&desc, 0, sizeof desc);
+    resource = CastPipeResource(pCreateSRView->hDrvResource);
+@@ -1333,6 +1348,15 @@ CreateShaderResourceView1(
+    }
+ 
+    pSRView->handle = pipe->create_sampler_view(pipe, resource, &desc);
++
++   /* A rotation of the swap chain gives a primary another buffer; the view
++    * has to follow it. */
++   Resource *pResource = CastResource(pCreateSRView->hDrvResource);
++   if (pResource && pResource->primary && pSRView->handle) {
++      pSRView->owner = pResource;
++      pSRView->next = pResource->srvs;
++      pResource->srvs = pSRView;
++   }
+ }
+ 
+ 
+@@ -1360,6 +1384,17 @@ DestroyShaderResourceView(D3D10DDI_HDEVICE hDevice,                           //
+    Device *pDevice = CastDevice(hDevice);
+    struct pipe_context *pipe = pDevice->pipe;
+ 
++   if (pSRView->owner) {
++      for (ShaderResourceView **p = &pSRView->owner->srvs; *p; p = &(*p)->next) {
++         if (*p == pSRView) {
++            *p = pSRView->next;
++            break;
++         }
++      }
++      pSRView->owner = NULL;
++      pSRView->next = NULL;
++   }
++
+    pipe->sampler_view_release(pipe, pSRView->handle);
+    pSRView->handle = NULL;
+ }
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index 9078c89..47f112f 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -203,6 +203,11 @@ enum {
+    D3D10_PERF_IDLE_IN_PRESENT = 8,/* the wait before presenting a primary */
+    D3D10_PERF_BO_CREATE = 9,      /* each buffer allocation */
+ };
++/* Primaries the driver renders into; see Resource.cpp. */
++void d3d10_primary_begin_create(void *hRTDevice, void *hRTResource, unsigned w, unsigned h,
++                                unsigned pitch, unsigned vidpn_source);
++void d3d10_primary_rebind(void *hRTDevice, unsigned allocation, void *hRTResource);
++void d3d10_wait_idle(void *hRTDevice);
+ unsigned long long d3d10_perf_now(void);
+ void d3d10_perf_add(unsigned stage, unsigned long long since);
+ void d3d10_perf_frame(void);
+@@ -225,8 +230,33 @@ struct Resource
+     * allocation. NULL and 0 otherwise. */
+    void *shared_rt_resource;
+    unsigned shared_allocation;
++   /* A primary (a swap chain surface the runtime presents). A rotation of
++    * the swap chain moves the buffers from one Resource to the next, so the
++    * views made on a primary are kept in these lists and pointed at the
++    * buffer the resource then has. rt_resource is the runtime's handle of
++    * this resource, which does not move. */
++   bool primary;
++   void *rt_resource;
++   struct RenderTargetView *rtvs;
++   struct ShaderResourceView *srvs;
++   /* A primary whose present_allocation is the driver's own buffer: it is
++    * rendered into and presented as it is, with no copy. Moves with the
++    * buffer in a rotation. */
++   bool direct_primary;
+ };
+ 
++/* Run-time switches, each a file under C:\mali whose existence brings the
++ * older behaviour back; read once per process.
++ *   primary-copy   a primary is a second buffer the frame is copied into at
++ *                  each present, instead of the buffer rendered into
++ *   rotate-copy    RotateResourceIdentities copies the surfaces' contents
++ *                  around instead of exchanging the buffers
++ *   present-wait   a present of a rendered-into primary first waits for the
++ *                  GPU, instead of leaving the order to the scheduler */
++bool PrimaryRenderedInto(void);
++bool RotateByExchange(void);
++bool PresentWaitsForGpu(void);
++
+ 
+ static inline Resource *
+ CastResource(D3D10DDI_HRESOURCE hResource)
+@@ -273,6 +303,9 @@ struct RenderTargetView
+ {
+    struct pipe_surface surface;
+    D3D10DDI_HRTRENDERTARGETVIEW hRTRenderTargetView;
++   /* On a primary: that resource, and its next view. */
++   Resource *owner;
++   RenderTargetView *next;
+ };
+ 
+ 
+@@ -428,6 +461,9 @@ CastPipeSamplerState(D3D10DDI_HSAMPLER hSampler)
+ struct ShaderResourceView
+ {
+    struct pipe_sampler_view *handle;
++   /* On a primary: that resource, and its next view. */
++   Resource *owner;
++   ShaderResourceView *next;
+ };
+ 
+ 
+diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+index 88d51e7..7f3170b 100644
+--- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
++++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+@@ -213,8 +213,47 @@ unsigned malikm_shared_end(void);
+ void malikm_shared_destroy(void *hRTDevice, void *hRTResource);
+ long malikm_present_allocation(void *hRTDevice, unsigned src_allocation, unsigned dst_allocation,
+                                void *dxgi_context);
++void malikm_primary_begin_create(void *hRTDevice, void *hRTResource, unsigned w, unsigned h,
++                                 unsigned pitch, unsigned vidpn_source);
++void malikm_primary_rebind(void *hRTDevice, unsigned allocation, void *hRTResource);
++int malikm_wait_idle(void *hRTDevice);
+ #endif
+ 
++/* A primary the driver renders into: the buffer it creates between this and
++ * d3d10_shared_end is the runtime's primary allocation. See malikm_drm.c. */
++void
++d3d10_primary_begin_create(void *hRTDevice, void *hRTResource, unsigned w, unsigned h,
++                           unsigned pitch, unsigned vidpn_source)
++{
++#ifdef GALLIUM_PANFROST
++   malikm_primary_begin_create(hRTDevice, hRTResource, w, h, pitch, vidpn_source);
++#else
++   (void)hRTDevice; (void)hRTResource; (void)w; (void)h; (void)pitch; (void)vidpn_source;
++#endif
++}
++
++/* After a rotation: this allocation now belongs to this runtime resource. */
++void
++d3d10_primary_rebind(void *hRTDevice, unsigned allocation, void *hRTResource)
++{
++#ifdef GALLIUM_PANFROST
++   malikm_primary_rebind(hRTDevice, allocation, hRTResource);
++#else
++   (void)hRTDevice; (void)allocation; (void)hRTResource;
++#endif
++}
++
++/* Wait until everything the device has submitted is done. */
++void
++d3d10_wait_idle(void *hRTDevice)
++{
++#ifdef GALLIUM_PANFROST
++   (void)malikm_wait_idle(hRTDevice);
++#else
++   (void)hRTDevice;
++#endif
++}
++
+ long
+ d3d10_present_allocation(void *hRTDevice, unsigned src_allocation, unsigned dst_allocation,
+                          void *dxgi_context)

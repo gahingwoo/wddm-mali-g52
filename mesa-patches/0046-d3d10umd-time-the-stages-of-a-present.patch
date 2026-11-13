@@ -1,0 +1,148 @@
+diff --git a/src/gallium/frontends/d3d10umd/DxgiFns.cpp b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+index 6deb4a8..fef467c 100644
+--- a/src/gallium/frontends/d3d10umd/DxgiFns.cpp
++++ b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+@@ -68,7 +68,9 @@ _Present(DXGI_DDI_ARG_PRESENT *pPresentData)
+                pSrcResource->present_allocation, pDstResource,
+                pDstResource ? pDstResource->present_allocation : 0);
+ 
++   unsigned long long t0 = d3d10_perf_now();
+    device->pipe->flush(device->pipe, NULL, 0);
++   d3d10_perf_add(D3D10_PERF_FLUSH, t0);
+ 
+    /*
+     * A shared surface (LogonUI.exe presents the two it shares with dwm.exe,
+@@ -85,6 +87,7 @@ _Present(DXGI_DDI_ARG_PRESENT *pPresentData)
+          pPresentData->pDXGIContext);
+       if (hr != S_OK)
+          DebugPrintf("Present: shared, result 0x%08lx\n", (unsigned long)hr);
++      d3d10_perf_frame();
+       return hr;
+    }
+ 
+@@ -93,6 +96,7 @@ _Present(DXGI_DDI_ARG_PRESENT *pPresentData)
+    device->pipe->screen->flush_frontbuffer(device->pipe->screen, device->pipe, 
+       pSrcResource->resource, 0, 0, pPresentData->pDXGIContext, 0, NULL);
+    d3d10_present_target(NULL, 0, 0, 0);
++   d3d10_perf_frame();
+ 
+    /* What the runtime made of it. DXGI acts on this (a changed present mode,
+     * an occluded window); returning S_OK regardless hid every failure. */
+@@ -234,6 +238,7 @@ _RotateResourceIdentities( DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *RotateResour
+ 
+    struct pipe_context *pipe = CastPipeDevice(RotateResourceIdentities->hDevice);
+    struct pipe_screen *screen = pipe->screen;
++   unsigned long long t0 = d3d10_perf_now();
+ 
+    struct pipe_resource *resource0 = CastPipeResource(RotateResourceIdentities->pResources[0]);
+ 
+@@ -310,6 +315,7 @@ _RotateResourceIdentities( DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *RotateResour
+          first_allocation;
+    }
+ 
++   d3d10_perf_add(D3D10_PERF_ROTATE, t0);
+    return S_OK;
+ }
+ 
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index c0a40f1..9078c89 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -189,6 +189,23 @@ void d3d10_shared_destroy(void *hRTDevice, void *hRTResource);
+  * runtime's present callback. */
+ long d3d10_present_allocation(void *hRTDevice, unsigned src_allocation, unsigned dst_allocation,
+                               void *dxgi_context);
++/* The time a present spends in each stage, summed by the shim and written
++ * to the file log every few seconds. The numbers are the shim's. */
++enum {
++   D3D10_PERF_FLUSH = 0,          /* pipe->flush in Present */
++   D3D10_PERF_READBACK_MAP = 1,   /* mapping the frame: waits for the GPU */
++   D3D10_PERF_READBACK_COPY = 2,  /* the frame out of the driver's buffer */
++   D3D10_PERF_PRIMARY_COPY = 3,   /* the frame into the primary */
++   D3D10_PERF_PRESENT_CB = 4,     /* the runtime's present callback */
++   D3D10_PERF_ROTATE = 5,         /* RotateResourceIdentities */
++   D3D10_PERF_SUBMIT = 6,         /* each job submission */
++   D3D10_PERF_GPU_WAIT = 7,       /* each wait for the GPU, wherever */
++   D3D10_PERF_IDLE_IN_PRESENT = 8,/* the wait before presenting a primary */
++   D3D10_PERF_BO_CREATE = 9,      /* each buffer allocation */
++};
++unsigned long long d3d10_perf_now(void);
++void d3d10_perf_add(unsigned stage, unsigned long long since);
++void d3d10_perf_frame(void);
+ }
+ 
+ struct Resource
+diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+index 2855b2b..88d51e7 100644
+--- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
++++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+@@ -108,6 +108,9 @@ d3d10_gdi_release_hdc(void *winsys_drawable_handle, HDC hDC) {
+  * the software winsys does. One copy per frame: enough until a WDDM driver
+  * owns the display. */
+ int malikm_present_d3dddi(const void *bgrx, unsigned w, unsigned h, void *dxgi_context);
++unsigned long long malikm_perf_now(void);
++void malikm_perf_add(unsigned stage, unsigned long long since);
++void malikm_perf_frame(void);
+ 
+ static void
+ d3d10_pan_flush_frontbuffer(struct pipe_screen *screen, struct pipe_context *pipe,
+@@ -121,10 +124,14 @@ d3d10_pan_flush_frontbuffer(struct pipe_screen *screen, struct pipe_context *pip
+ 
+    if (!pipe || !desc || desc->block.bits != 32)
+       return;
++   /* Mapping waits for the GPU to finish the frame. */
++   unsigned long long t0 = malikm_perf_now();
+    const uint8_t *map = pipe_texture_map(pipe, res, level, layer, PIPE_MAP_READ,
+                                          0, 0, w, h, &xfer);
++   malikm_perf_add(1 /* readback-map */, t0);
+    if (!map)
+       return;
++   t0 = malikm_perf_now();
+ 
+    /* GDI wants B, G, R, X in memory. */
+    bool rgba = desc->swizzle[0] == PIPE_SWIZZLE_X;
+@@ -140,6 +147,7 @@ d3d10_pan_flush_frontbuffer(struct pipe_screen *screen, struct pipe_context *pip
+       }
+    }
+    pipe_texture_unmap(pipe, xfer);
++   malikm_perf_add(2 /* readback-copy */, t0);
+    if (!bits)
+       return;
+ 
+@@ -303,6 +311,36 @@ d3d10_set_display_mode(void *hRTDevice, unsigned primary_allocation)
+ #endif
+ }
+ 
++/* Where a present's time goes: the shim sums each stage and writes a line
++ * to the file log every few seconds (malikm_drm.c, PERF_STAGES). */
++unsigned long long
++d3d10_perf_now(void)
++{
++#ifdef GALLIUM_PANFROST
++   return malikm_perf_now();
++#else
++   return 0;
++#endif
++}
++
++void
++d3d10_perf_add(unsigned stage, unsigned long long since)
++{
++#ifdef GALLIUM_PANFROST
++   malikm_perf_add(stage, since);
++#else
++   (void)stage; (void)since;
++#endif
++}
++
++void
++d3d10_perf_frame(void)
++{
++#ifdef GALLIUM_PANFROST
++   malikm_perf_frame();
++#endif
++}
++
+ long
+ d3d10_present_result(void)
+ {
