@@ -1,0 +1,30 @@
+diff --git a/src/gallium/auxiliary/nir/tgsi_to_nir.c b/src/gallium/auxiliary/nir/tgsi_to_nir.c
+index 73cf542..4d85985 100644
+--- a/src/gallium/auxiliary/nir/tgsi_to_nir.c
++++ b/src/gallium/auxiliary/nir/tgsi_to_nir.c
+@@ -569,8 +569,24 @@ ttn_src_for_file_and_index(struct ttn_compile *c, unsigned file, unsigned index,
+                ttn_array_deref(c, var, offset, indirect));
+ 
+          src = nir_src_for_ssa(load);
++      } else if (indirect) {
++         /* An indirect read of temporaries that were not declared as an
++          * array. The d3d10umd frontend lays Direct3D's indexable temps out
++          * as a run of ordinary temporaries and addresses them this way.
++          * Each temporary is its own register here, so pick the one meant
++          * with a chain of selects over those from the base upwards. */
++         nir_def *offset = ttn_src_for_indirect(c, indirect);
++         nir_def *value = nir_load_reg(b, c->temp_regs[index].reg);
++         unsigned last = c->scan->file_max[TGSI_FILE_TEMPORARY];
++
++         for (unsigned i = index + 1; i <= last; i++) {
++            if (!c->temp_regs[i].reg)
++               continue;
++            value = nir_bcsel(b, nir_ieq_imm(b, offset, i - index),
++                              nir_load_reg(b, c->temp_regs[i].reg), value);
++         }
++         src = nir_src_for_ssa(value);
+       } else {
+-         assert(!indirect);
+          src = nir_src_for_ssa(nir_load_reg(b, c->temp_regs[index].reg));
+       }
+       assert(!dim);
