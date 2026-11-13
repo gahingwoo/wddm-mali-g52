@@ -1,0 +1,156 @@
+5266325078 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266326499 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266326520 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266326590 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266326751 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266327787 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266327808 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266327885 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266328032 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266329082 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266329103 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266329180 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266329334 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266331049 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266331070 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266331147 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266331294 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266332428 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266332449 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266332526 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266332673 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266333786 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266333807 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266333877 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266334024 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266335123 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266335144 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266335214 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266335361 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266337790 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266337811 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266337888 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266338028 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5279276310 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x5014f', 'RemainingQuantum': '0xfffffffffffc23a9', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x2', 'Reason': '0x2'}
+5279276569 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x5014f', 'RemainingQuantum': '0xfffffffffffc23a9', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x2', 'Reason': '0x3'}
+5279276968 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x5014f', 'RemainingQuantum': '0xfffffffffffc23a9', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x2', 'Reason': '0x3'}
+5279278018 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x5042b', 'RemainingQuantum': '0xfffffffffffc23a9', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x2', 'Reason': '0x2'}
+5279278130 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x5042b', 'RemainingQuantum': '0xfffffffffffc23a9', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x2', 'Reason': '0x3'}
+5266400170 113 0 {'hContext': '0xffff920a11deedc0', 'RunningTime': '0x0', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266400303 467 0 {'DxgDevice': '0xffff920a150a63d0', 'FromUserMode': '0x0', 'Reason': '0xe'}
+5266401038 113 0 {'hContext': '0xffff920a11deedc0', 'RunningTime': '0x0', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5274501522 131 0 {'DeviceObject': '0xffffa28320a10080', 'Status': '0xc00000bb'}
+5275592437 131 0 {'DeviceObject': '0xffffa28320a10080', 'Status': '0xc00000bb'}
+5274883162 131 0 {'DeviceObject': '0xffffa28320a10080', 'Status': '0xc00000bb'}
+5279275158 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x3c1', 'RemainingQuantum': '0x12137', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x1', 'Reason': '0x3'}
+5279275179 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x3c1', 'RemainingQuantum': '0x12137', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x1', 'Reason': '0x3'}
+5279276838 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x5014f', 'RemainingQuantum': '0xfffffffffffc23a9', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x2', 'Reason': '0x3'}
+5279276852 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x5014f', 'RemainingQuantum': '0xfffffffffffc23a9', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x2', 'Reason': '0x3'}
+5279279015 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x5042b', 'RemainingQuantum': '0xfffffffffffc23a9', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x2', 'Reason': '0x3'}
+5279279029 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x5042b', 'RemainingQuantum': '0xfffffffffffc23a9', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x2', 'Reason': '0x3'}
+5280854302 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0xba814', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5280854568 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x0', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x0'}
+5280855317 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x132', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x2'}
+5280855387 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x132', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5280856955 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x3df', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x2'}
+5280857018 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x3df', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5259753404 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x15b', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x1'}
+5259753467 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x15b', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5259753481 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x15b', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5259755217 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x0', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x0'}
+5259756064 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x160', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x2'}
+5259756400 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x160', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5260869995 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x160', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x1'}
+5260870065 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x160', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5260870079 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x160', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5260871514 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x160', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5260871969 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x0', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x0'}
+5260872893 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x17e', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x2'}
+5260873271 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x17e', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5262006704 103 0 {'Reason': '0x46'}
+5266885158 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x485', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5266885704 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x0', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x0'}
+5266894636 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0xe83', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x2'}
+5266895084 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0xe83', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5267759710 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0xe83', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x1'}
+5267759780 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0xe83', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5267759794 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0xe83', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5270670660 290 0 {'hAdapter': '0xffffa28320a22000', 'hSyncObject': '0xffffa283233c95d0', 'Reason': '0x0', 'Flags': '0x0', 'SharedHandle': '0x0', 'InitialValue': '0xffffec77'}
+5270670737 290 0 {'hAdapter': '0xffffa28320a22000', 'hSyncObject': '0xffffa283233c9c10', 'Reason': '0x0', 'Flags': '0x0', 'SharedHandle': '0x0', 'InitialValue': '0xffffec77'}
+5270686347 290 0 {'hAdapter': '0xffffa28320a22000', 'hSyncObject': '0xffffa283233ca7f0', 'Reason': '0x0', 'Flags': '0x90', 'SharedHandle': '0x0', 'InitialValue': '0x1b58'}
+5270703644 290 0 {'hAdapter': '0xffffa28320a22000', 'hSyncObject': '0xffffa283233d0c90', 'Reason': '0x0', 'Flags': '0x0', 'SharedHandle': '0x0', 'InitialValue': '0x1'}
+5280853007 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0xba814', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x1'}
+5280853126 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0xba814', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5280853147 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0xba814', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5280854820 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x0', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5280854834 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x0', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5280856654 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x132', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5280856668 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x132', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5269926644 360 0 {'pDxgAdapter': '0xffffa28320997000', 'FlushSchedulerReason': '0x1', 'VidPnSourceId': '0xffffffff'}
+5269927183 360 0 {'pDxgAdapter': '0xffffa28320a22000', 'FlushSchedulerReason': '0x1', 'VidPnSourceId': '0xffffffff'}
+5275656886 131 0 {'DeviceObject': '0xffffa28320a10080', 'Status': '0xc00000bb'}
+5278486986 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x0', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5278487007 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x0', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5278488813 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x0', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5278488834 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x0', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5278490976 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x0', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x1', 'Reason': '0x3'}
+5279279526 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x5069c', 'RemainingQuantum': '0xfffffffffffc23a9', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x2', 'Reason': '0x2'}
+5279279610 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x5069c', 'RemainingQuantum': '0xfffffffffffc23a9', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x2', 'Reason': '0x3'}
+5280900264 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x4a4a', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x2'}
+5280901174 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x4a4a', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5259754465 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x15b', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5267761051 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0xe83', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5267761884 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x0', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x0'}
+5269271987 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x999c8', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x2'}
+5269273303 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x999c8', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5280312821 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0xb9844', 'RemainingQuantum': '0xfffffffffffc23a9', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x2', 'Reason': '0x2'}
+5280322537 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0xba814', 'RemainingQuantum': '0xfffffffffffc23a9', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x2', 'Reason': '0x2'}
+5280323846 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0xba814', 'RemainingQuantum': '0xfffffffffffc23a9', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x2', 'Reason': '0x3'}
+5261726050 360 0 {'pDxgAdapter': '0xffffa28320997000', 'FlushSchedulerReason': '0x1', 'VidPnSourceId': '0xffffffff'}
+5261726953 360 0 {'pDxgAdapter': '0xffffa28320a22000', 'FlushSchedulerReason': '0x1', 'VidPnSourceId': '0xffffffff'}
+5275827004 131 0 {'DeviceObject': '0xffffa28320a10080', 'Status': '0xc00000bb'}
+5266314830 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266314858 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266315005 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266315334 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266320997 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266321018 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266321109 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266321333 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266324511 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266324532 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266324616 113 0 {'hContext': '0xffffa28320994b20', 'RunningTime': '0x0', 'RemainingQuantum': '0x186a0', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5266456461 362 0 {'Timeout': '0xffffffffca5b1700', 'WakeReason': '0x0'}
+5266461291 362 0 {'Timeout': '0xffffffffd845103c', 'WakeReason': '0x0'}
+5266463118 362 0 {'Timeout': '0xffffffffd845103c', 'WakeReason': '0x0'}
+5266464483 362 0 {'Timeout': '0xffffffffd845103c', 'WakeReason': '0x0'}
+5266465715 362 0 {'Timeout': '0xffffffffd845103c', 'WakeReason': '0x0'}
+5266467003 362 0 {'Timeout': '0xffffffffd845103c', 'WakeReason': '0x0'}
+5266474388 362 0 {'Timeout': '0xffffffffd845103c', 'WakeReason': '0x0'}
+5266474528 103 0 {'Reason': '0x3c'}
+5266476222 292 0 {'hAdapter': '0xffffa28320a22000', 'hSyncObject': '0xffffa283232a6470', 'Reason': '0x1', 'Flags': '0x0', 'SharedHandle': '0x0', 'InitialValue': '0xffffec77'}
+5266476432 292 0 {'hAdapter': '0xffffa28320a22000', 'hSyncObject': '0xffffa283232a5f70', 'Reason': '0x1', 'Flags': '0x0', 'SharedHandle': '0x0', 'InitialValue': '0xffffec77'}
+5266479897 292 0 {'hAdapter': '0xffffa28320a22000', 'hSyncObject': '0xffffa283232a7370', 'Reason': '0x1', 'Flags': '0x90', 'SharedHandle': '0x0', 'InitialValue': '0x1b58'}
+5266480702 292 0 {'hAdapter': '0xffffa28320a22000', 'hSyncObject': '0xffffa283232a9df0', 'Reason': '0x1', 'Flags': '0x0', 'SharedHandle': '0x0', 'InitialValue': '0x1'}
+5266516220 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x17e', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x1'}
+5266516367 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x17e', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5266516388 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x17e', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5266517676 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x17e', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5266518432 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x0', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x0'}
+5266588425 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x71e5', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x2'}
+5266589510 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x71e5', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5266594725 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x71e5', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x1'}
+5266594837 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x71e5', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5266594858 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x71e5', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5266595719 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x71e5', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5266596412 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x0', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x0'}
+5266599205 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x485', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x2'}
+5266599842 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x485', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5266884042 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x485', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x1'}
+5266884196 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x485', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5266884224 113 0 {'hContext': '0xffff920a12f5edc0', 'RunningTime': '0x485', 'RemainingQuantum': '0xc350', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x3', 'Reason': '0x3'}
+5278488551 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x0', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x3'}
+5278489027 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x0', 'RemainingQuantum': '0x124f8', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x0', 'Reason': '0x0'}
+5278491085 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x353', 'RemainingQuantum': '0x121a5', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x1', 'Reason': '0x2'}
+5278491330 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x3c1', 'RemainingQuantum': '0x12137', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x1', 'Reason': '0x2'}
+5278491428 113 0 {'hContext': '0xffff920a0fde9dd0', 'RunningTime': '0x3c1', 'RemainingQuantum': '0x12137', 'RemainingYieldBudget': '0x0', 'QuantumStatus': '0x1', 'Reason': '0x3'}

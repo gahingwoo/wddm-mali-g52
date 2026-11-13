@@ -1,0 +1,52 @@
+diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
+index c563ab8..ff76504 100644
+--- a/src/gallium/frontends/d3d10umd/Device.cpp
++++ b/src/gallium/frontends/d3d10umd/Device.cpp
+@@ -316,15 +316,21 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+    pCreateData->DXGIBaseDDI.pDXGIDDIBaseFunctions->pfnBlt =
+       _Blt;
+ 
+-   if (0) {
++   /*
++    * DXGI_STATUS_NO_REDIRECTION tells DXGI not to use the shared resource
++    * presentation path with DWM:
++    * http://msdn.microsoft.com/en-us/library/windows/hardware/ff569887(v=vs.85).aspx
++    * That is the honest answer while OpenResource is not implemented, and it
++    * is also why nothing composed through DWM (the logon screen, the shell)
++    * ever shows on maliwddm. For experiments, the file C:\mali\redirect
++    * switches to S_OK, so the log shows what DXGI and DWM ask for next.
++    */
++   if (GetFileAttributesA("C:\\mali\\redirect") != INVALID_FILE_ATTRIBUTES) {
++      DebugPrintf("CreateDevice: done, S_OK (redirection allowed)\n");
+       return S_OK;
+-   } else {
+-      // Tell DXGI to not use the shared resource presentation path when
+-      // communicating with DWM:
+-      // http://msdn.microsoft.com/en-us/library/windows/hardware/ff569887(v=vs.85).aspx
+-      DebugPrintf("CreateDevice: done, DXGI_STATUS_NO_REDIRECTION\n");
+-      return DXGI_STATUS_NO_REDIRECTION;
+    }
++   DebugPrintf("CreateDevice: done, DXGI_STATUS_NO_REDIRECTION\n");
++   return DXGI_STATUS_NO_REDIRECTION;
+ }
+ 
+ 
+diff --git a/src/gallium/frontends/d3d10umd/Resource.cpp b/src/gallium/frontends/d3d10umd/Resource.cpp
+index 65729f1..6b25a80 100644
+--- a/src/gallium/frontends/d3d10umd/Resource.cpp
++++ b/src/gallium/frontends/d3d10umd/Resource.cpp
+@@ -197,9 +197,11 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+ {
+    LOG_ENTRYPOINT();
+ 
+-   if ((pCreateResource->MiscFlags & D3D10_DDI_RESOURCE_MISC_SHARED) ||
+-       (pCreateResource->pPrimaryDesc &&
+-        pCreateResource->pPrimaryDesc->DriverFlags & DXGI_DDI_PRIMARY_OPTIONAL)) {
++   /* Every resource, not only the shared and primary ones: what a process
++    * creates on its way to a first frame is the question. */
++   {
++      DebugPrintf("  primary %d shared %d\n", pCreateResource->pPrimaryDesc != NULL,
++                  (pCreateResource->MiscFlags & D3D10_DDI_RESOURCE_MISC_SHARED) != 0);
+ 
+       DebugPrintf("%s(%dx%dx%d hResource=%p)\n",
+ 	       __func__,
