@@ -1,0 +1,34 @@
+diff --git a/src/gallium/drivers/panfrost/pan_cmdstream.c b/src/gallium/drivers/panfrost/pan_cmdstream.c
+index bad13f6..800dcf8 100644
+--- a/src/gallium/drivers/panfrost/pan_cmdstream.c
++++ b/src/gallium/drivers/panfrost/pan_cmdstream.c
+@@ -1633,10 +1633,25 @@ panfrost_emit_const_buf(struct panfrost_batch *batch,
+          unsigned ubo_adj = src.ubo - (src.ubo > sysval_ubo ? 1 : 0);
+ 
+          struct pipe_constant_buffer *cb = &buf->cb[ubo_adj];
+-         assert(!cb->buffer && cb->user_buffer &&
+-                "only user buffers use this path");
+-
+-         mapped_ubo = cb->user_buffer + cb->buffer_offset;
++         if (cb->buffer) {
++            /* A constant buffer that is a resource, which is the only kind
++             * Direct3D 10 has. Its contents come from the CPU
++             * (UpdateSubresource, Map), so the caveats above about reading
++             * back what the GPU wrote do not arise, and the pushed words can
++             * be read straight from its mapping. */
++            struct panfrost_resource *rsrc = pan_resource(cb->buffer);
++
++            if (!rsrc->bo->ptr.cpu)
++               panfrost_bo_mmap(rsrc->bo);
++            mapped_ubo = rsrc->bo->ptr.cpu
++                            ? (const uint8_t *)rsrc->bo->ptr.cpu + cb->buffer_offset
++                            : NULL;
++         } else {
++            assert(cb->user_buffer && "a constant buffer with nothing behind it");
++            mapped_ubo = cb->user_buffer
++                            ? (const uint8_t *)cb->user_buffer + cb->buffer_offset
++                            : NULL;
++         }
+       }
+ 
+       if (!mapped_ubo)

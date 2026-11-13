@@ -927,6 +927,9 @@ wddm_idle(void)
    return ret;
 }
 
+/* d3d10umd's log (Debug.cpp): the debugger and, when on, the file log. */
+void DebugPrintf(const char *format, ...);
+
 /* Present for d3d10umd on the hardware runtime: Bgrx is the frame, linear
  * and top-down; it is copied into a surface of the runtime device and
  * handed to DXGI, which has maliwddm blt it (on the CPU, for now) to the
@@ -937,9 +940,15 @@ malikm_present_d3dddi(const void *bgrx, unsigned w, unsigned h, void *dxgi_conte
 {
    int ret = -1;
 
+   static volatile LONG said = 0;
+
    AcquireSRWLockExclusive(&wddm_lock);
-   if (!ddi.on || !ddi.dxgi || !ddi.dxgi->pfnPresentCb)
+   if (!ddi.on || !ddi.dxgi || !ddi.dxgi->pfnPresentCb) {
+      if (InterlockedIncrement(&said) <= 20)
+         DebugPrintf("present: not through DXGI (bound %d, dxgi callbacks %p)\n",
+                     ddi.on, (void *)ddi.dxgi);
       goto out;
+   }
    if (ddi.present && (ddi.present_w != w || ddi.present_h != h)) {
       w_unlock(ddi.present);
       w_destroy(ddi.present);
@@ -973,7 +982,11 @@ malikm_present_d3dddi(const void *bgrx, unsigned w, unsigned h, void *dxgi_conte
    p.hSrcAllocation = ddi.present;
    p.pDXGIContext = dxgi_context;
    p.hContext = ddi.context;
-   ret = ddi.dxgi->pfnPresentCb(ddi.device, &p) >= 0 ? 0 : -1;
+   HRESULT hr = ddi.dxgi->pfnPresentCb(ddi.device, &p);
+   ret = hr >= 0 ? 0 : -1;
+   if (InterlockedIncrement(&said) <= 20)
+      DebugPrintf("present: %ux%u, pfnPresentCb 0x%08lx, DXGI context %p\n", w, h,
+                  (unsigned long)hr, dxgi_context);
    if (trace_on() && ret)
       fprintf(stderr, "malikm: pfnPresentCb failed\n");
 out:
