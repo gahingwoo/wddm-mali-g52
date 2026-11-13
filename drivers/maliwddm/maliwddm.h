@@ -153,6 +153,7 @@ struct _MW_ADAPTER {
     /* Why a flip did or did not reach the framebuffer; logged by the stats
      * escape, which runs at passive level. */
     ULONG CommitsPinned, CommitsUnpinned, CommitsNoPath, CommitsNotOurs;
+    ULONG PresentFlips;
     ULONG VisibleOn, VisibleOff, FlipsNullAlloc, FlipsInvisible, LastFlipFlags, LastFlipContexts;
 
     /* Counters for the trace. */

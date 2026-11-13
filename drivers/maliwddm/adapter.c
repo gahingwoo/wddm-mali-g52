@@ -475,6 +475,8 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         MwLog(a, L"T_ScanAddrLow", a->ScanAddr.LowPart);
         MwLog(a, L"T_FlipCopies", a->FlipCopies);
         MwLog(a, L"T_FlipCopySkips", a->FlipCopySkips);
+        MwLog(a, L"T_PresentFlips", a->PresentFlips);
+        MwLog(a, L"T_Presents", a->Presents);
         return STATUS_SUCCESS;
     default:
         MwLog(a, L"EscapeUnknownCode", code);

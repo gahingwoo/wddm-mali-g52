@@ -132,6 +132,22 @@ NTSTATUS APIENTRY MwPresent(IN_CONST_HANDLE hContext, DXGKARG_PRESENT *Arg)
     MW_ADAPTER *a = ctx->Device->Adapter;
     MW_DMA_PRIVATE *priv = (MW_DMA_PRIVATE *)Arg->pDmaBufferPrivateData;
 
+    if (Arg->Flags.Flip) {
+        /* A flip is memory-mapped here (FlipOnVSyncMmIo): dxgkrnl calls
+         * SetVidPnSourceAddress for it and there is nothing to put in a DMA
+         * buffer. It also comes without the private data a blt has, which
+         * the check below turned into STATUS_INVALID_PARAMETER for every
+         * flip dwm made once SetDisplayMode worked (Fail_Present 0xC000000D
+         * on the TaishanPi 3M; the UMD saw E_INVALIDARG and dwm rebuilt its
+         * swap chain, 37 times in the trace). */
+        if (priv != NULL && Arg->DmaBufferPrivateDataSize >= sizeof(*priv)) {
+            RtlZeroMemory(priv, sizeof(*priv));
+            priv->Reserved = MW_DMA_MAGIC;
+        }
+        a->PresentFlips++;
+        a->Presents++;
+        return STATUS_SUCCESS;
+    }
     if (priv == NULL || Arg->DmaBufferPrivateDataSize < sizeof(*priv))
         return STATUS_INVALID_PARAMETER;
     RtlZeroMemory(priv, sizeof(*priv));
