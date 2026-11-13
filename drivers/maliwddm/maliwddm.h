@@ -165,7 +165,30 @@ struct _MW_ADAPTER {
     ULONG Patches, PatchAllocations, PatchPatchLocations, PatchSegment0;
     ULONG PresentBlts, PresentFills, PresentSkips;
     ULONG64 PatchAddress0;
+
+    /* Where the time goes (MW_ESCAPE_STATS_DATA has the meanings): sums in
+     * performance-counter ticks, and the moments they are measured from. */
+    ULONG64 PerfHz;
+    ULONG64 FlipCopyTicks, FlipWaitTicks, JobTicks, PresentBltTicks, VsyncTicks;
+    ULONG64 FlipCopyMaxTicks, FlipWaitMaxTicks, JobMaxTicks, VsyncGapMaxTicks;
+    ULONG64 JobStartTick, FlipTick, LastVsyncTick;
+    ULONG FlipsWhileBusy;
 };
+
+/* The performance counter, at any IRQL. */
+static __inline ULONG64 MwTick(void)
+{
+    return (ULONG64)KeQueryPerformanceCounter(NULL).QuadPart;
+}
+
+/* Add the time since Since to a sum and keep the longest. */
+static __inline void MwTickAdd(ULONG64 *Sum, ULONG64 *Max, ULONG64 Since)
+{
+    ULONG64 d = MwTick() - Since;
+    *Sum += d;
+    if (d > *Max)
+        *Max = d;
+}
 
 /* ---- trace: Seen_<ddi>, Fail_<ddi> in the device's registry key ---- */
 void MwLog(MW_ADAPTER *A, PCWSTR Name, ULONG Value);
