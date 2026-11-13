@@ -1,0 +1,19 @@
+diff --git a/src/gallium/auxiliary/nir/tgsi_to_nir.c b/src/gallium/auxiliary/nir/tgsi_to_nir.c
+index 4d85985..dd3c069 100644
+--- a/src/gallium/auxiliary/nir/tgsi_to_nir.c
++++ b/src/gallium/auxiliary/nir/tgsi_to_nir.c
+@@ -611,7 +611,13 @@ ttn_src_for_file_and_index(struct ttn_compile *c, unsigned file, unsigned index,
+ 
+       switch (c->scan->system_value_semantic_name[index]) {
+       case TGSI_SEMANTIC_VERTEXID_NOBASE:
+-         load = nir_load_vertex_id_zero_base(b);
++         /* The vertex id without the base vertex, which is what Direct3D's
++          * SV_VertexID is. Written as the difference of two values every
++          * driver has, because not every NIR backend takes
++          * load_vertex_id_zero_base (Panfrost's Bifrost compiler stops on
++          * it). For a non-indexed draw that does not start at vertex 0 this
++          * is the id counted from 0, not from the start. */
++         load = nir_isub(b, nir_load_vertex_id(b), nir_load_base_vertex(b));
+          break;
+       case TGSI_SEMANTIC_VERTEXID:
+          load = nir_load_vertex_id(b);
