@@ -14,17 +14,41 @@ a window ([photo](task-manager-on-mali.jpg)), all drawn by `explorer.exe`,
 `Taskmgr.exe` and the others through Panfrost and composed by `dwm.exe`.
 Five processes had the UMD loaded; 44803 render jobs had run, none failed.
 
-What does not work on that desktop:
+At that point the Start menu and Search crashed every ten seconds, the
+clock and tray were missing, and File Explorer closed a few seconds after
+opening. Three causes, fixed the same night (commits `44ae81c`, `b425cd2`,
+`33a8372`):
 
-- The Start menu and Search. `StartMenuExperienceHost.exe` and
-  `SearchHost.exe` crash (four times each in the first minutes) after
-  `tgsi_exec.c:1518: reg->Indirect.File == TGSI_FILE_ADDRESS`. That file is
-  the TGSI interpreter, which Panfrost does not use, so these two are not
-  rendering on the Mali at all. Found and fixed later that evening (item 14
-  below): the three shell hosts now render on the Mali and stay up. Whether
-  the Start menu, Search and the tray look right has not been looked at.
-- Parts of the taskbar: the clock and tray on the right are missing and a
-  blank flyout shows near the middle.
+- **A placeholder file descriptor that an AppContainer may not open.** The
+  shim opened `NUL` to have a descriptor to hand to Mesa.
+  `StartMenuExperienceHost.exe`, `ShellExperienceHost.exe` and
+  `SearchHost.exe` run in an AppContainer, where that fails with access
+  denied, so they fell back to softpipe and died in its TGSI interpreter
+  (`tgsi_exec.c:1518`). The shim now uses a pipe when `NUL` does not open.
+- **One set of shim state per process.** `explorer.exe` creates five
+  Direct3D devices in one process and shares surfaces between them; each
+  new device overwrote the state of the one before (97 failed job
+  submissions in one process). The state is now per device.
+- **Unbound vertex slots.** The frontend gave Panfrost a user constant for
+  a vertex input with no buffer bound, and Panfrost treated the pointer as
+  a resource. It now gets a real buffer of zeros.
+
+With those in, on the monitor
+([photo](start-menu-on-mali.jpg),
+[photo](explorer-and-device-manager-on-mali.jpg)): the Start menu opens
+with its pinned icons and text, the taskbar has the weather, the search
+box, the tray and the clock, File Explorer draws its toolbar and stays
+open, and Device Manager shows the adapter's property sheet. 56000 render
+jobs, none failed.
+
+Still wrong or not looked at:
+
+- Search and the tray flyouts have not been tried on screen.
+- `dwm.exe` was not restarted and still runs the UMD from before these
+  three fixes. No boot has been done with the new UMD.
+- The cause of the `explorer.exe` fault was worked out from the
+  disassembly and the source; the crash reporter added with the fix has
+  not caught one to confirm it.
 - The error box in the photos is not about graphics.
   `SecurityHealthSSO.dll` on this installation is 1418216 bytes of zeros,
   left by one of the day's hard resets or by the eMMC clock fault fixed that
