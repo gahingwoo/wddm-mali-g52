@@ -31,18 +31,18 @@
 #define VOP_MMU0                0x7E00u
 #define VOP_MMU1                0x7F00u
 
-#define MMU_DTE_ADDR            0x00
-#define MMU_STATUS              0x04
-#define MMU_COMMAND             0x08
-#define MMU_INT_MASK            0x1C
-#define MMU_AUTO_GATING         0x24
-#define MMU_STATUS_PAGING       0x1u
-#define MMU_STATUS_STALL        0x4u
-#define MMU_CMD_ENABLE_PAGING   0
-#define MMU_CMD_DISABLE_PAGING  1
-#define MMU_CMD_ENABLE_STALL    2
-#define MMU_CMD_DISABLE_STALL   3
-#define MMU_CMD_ZAP_CACHE       4
+#define VMMU_DTE_ADDR            0x00
+#define VMMU_STATUS              0x04
+#define VMMU_COMMAND             0x08
+#define VMMU_INT_MASK            0x1C
+#define VMMU_AUTO_GATING         0x24
+#define VMMU_STATUS_PAGING       0x1u
+#define VMMU_STATUS_STALL        0x4u
+#define VMMU_CMD_ENABLE_PAGING   0
+#define VMMU_CMD_DISABLE_PAGING  1
+#define VMMU_CMD_ENABLE_STALL    2
+#define VMMU_CMD_DISABLE_STALL   3
+#define VMMU_CMD_ZAP_CACHE       4
 
 /* IO addresses. DRAM starts at 0x40000000 on the RK3576, so the firmware
  * framebuffer, entered at its physical address, cannot be down here. */
@@ -105,15 +105,15 @@ static void Zap(MW_ADAPTER *A)
 {
     KeMemoryBarrier();
     if (A->ScanPaging) {
-        W(A, VOP_MMU0 + MMU_COMMAND, MMU_CMD_ZAP_CACHE);
-        W(A, VOP_MMU1 + MMU_COMMAND, MMU_CMD_ZAP_CACHE);
+        W(A, VOP_MMU0 + VMMU_COMMAND, VMMU_CMD_ZAP_CACHE);
+        W(A, VOP_MMU1 + VMMU_COMMAND, VMMU_CMD_ZAP_CACHE);
     }
 }
 
 static BOOLEAN WaitStatus(MW_ADAPTER *A, ULONG Mask, ULONG Want)
 {
     for (int i = 0; i < 200; i++) {
-        if ((R(A, VOP_MMU0 + MMU_STATUS) & Mask) == Want && (R(A, VOP_MMU1 + MMU_STATUS) & Mask) == Want)
+        if ((R(A, VOP_MMU0 + VMMU_STATUS) & Mask) == Want && (R(A, VOP_MMU1 + VMMU_STATUS) & Mask) == Want)
             return TRUE;
         KeStallExecutionProcessor(50);
     }
@@ -255,15 +255,15 @@ NTSTATUS MwScanSet(MW_ADAPTER *A, MW_ESCAPE_SCANOUT_DATA *D)
         if (!A->ScanPaging) {
             ULONG dte = Entry((ULONG64)A->ScanTablesPa.QuadPart, 1);
             for (ULONG m = VOP_MMU0; m <= VOP_MMU1; m += VOP_MMU1 - VOP_MMU0) {
-                W(A, m + MMU_DTE_ADDR, dte);
-                W(A, m + MMU_COMMAND, MMU_CMD_ZAP_CACHE);
-                W(A, m + MMU_INT_MASK, 0);
+                W(A, m + VMMU_DTE_ADDR, dte);
+                W(A, m + VMMU_COMMAND, VMMU_CMD_ZAP_CACHE);
+                W(A, m + VMMU_INT_MASK, 0);
                 /* "Workaround for iommu blocked" in Linux: bit 31. */
-                W(A, m + MMU_AUTO_GATING, R(A, m + MMU_AUTO_GATING) | 0x80000000u);
+                W(A, m + VMMU_AUTO_GATING, R(A, m + VMMU_AUTO_GATING) | 0x80000000u);
             }
-            W(A, VOP_MMU0 + MMU_COMMAND, MMU_CMD_ENABLE_PAGING);
-            W(A, VOP_MMU1 + MMU_COMMAND, MMU_CMD_ENABLE_PAGING);
-            A->ScanPaging = WaitStatus(A, MMU_STATUS_PAGING, MMU_STATUS_PAGING);
+            W(A, VOP_MMU0 + VMMU_COMMAND, VMMU_CMD_ENABLE_PAGING);
+            W(A, VOP_MMU1 + VMMU_COMMAND, VMMU_CMD_ENABLE_PAGING);
+            A->ScanPaging = WaitStatus(A, VMMU_STATUS_PAGING, VMMU_STATUS_PAGING);
         }
         InterlockedExchange(&A->ScanOn, A->ScanPaging ? 1 : 0);
     } else if (D->Mode == 0 || D->Mode == 2) {
@@ -273,19 +273,19 @@ NTSTATUS MwScanSet(MW_ADAPTER *A, MW_ESCAPE_SCANOUT_DATA *D)
             LARGE_INTEGER frames;
             frames.QuadPart = -500000;          /* 50 ms: the window has moved */
             KeDelayExecutionThread(KernelMode, FALSE, &frames);
-            W(A, VOP_MMU0 + MMU_COMMAND, MMU_CMD_ENABLE_STALL);
-            W(A, VOP_MMU1 + MMU_COMMAND, MMU_CMD_ENABLE_STALL);
-            WaitStatus(A, MMU_STATUS_STALL, MMU_STATUS_STALL);
-            W(A, VOP_MMU0 + MMU_COMMAND, MMU_CMD_DISABLE_PAGING);
-            W(A, VOP_MMU1 + MMU_COMMAND, MMU_CMD_DISABLE_PAGING);
-            A->ScanPaging = !WaitStatus(A, MMU_STATUS_PAGING, 0);
-            W(A, VOP_MMU0 + MMU_COMMAND, MMU_CMD_DISABLE_STALL);
-            W(A, VOP_MMU1 + MMU_COMMAND, MMU_CMD_DISABLE_STALL);
+            W(A, VOP_MMU0 + VMMU_COMMAND, VMMU_CMD_ENABLE_STALL);
+            W(A, VOP_MMU1 + VMMU_COMMAND, VMMU_CMD_ENABLE_STALL);
+            WaitStatus(A, VMMU_STATUS_STALL, VMMU_STATUS_STALL);
+            W(A, VOP_MMU0 + VMMU_COMMAND, VMMU_CMD_DISABLE_PAGING);
+            W(A, VOP_MMU1 + VMMU_COMMAND, VMMU_CMD_DISABLE_PAGING);
+            A->ScanPaging = !WaitStatus(A, VMMU_STATUS_PAGING, 0);
+            W(A, VOP_MMU0 + VMMU_COMMAND, VMMU_CMD_DISABLE_STALL);
+            W(A, VOP_MMU1 + VMMU_COMMAND, VMMU_CMD_DISABLE_STALL);
         }
     }
     D->Status = (A->ScanOn ? 1u : 0) | (A->ScanPaging ? 2u : 0) | (A->ScanShowing ? 4u : 0);
-    D->Mmu0Status = R(A, VOP_MMU0 + MMU_STATUS);
-    D->Mmu1Status = R(A, VOP_MMU1 + MMU_STATUS);
+    D->Mmu0Status = R(A, VOP_MMU0 + VMMU_STATUS);
+    D->Mmu1Status = R(A, VOP_MMU1 + VMMU_STATUS);
     D->Flips = A->ScanFlips;
     D->Maps = A->ScanMaps;
     D->ToFbs = A->ScanToFbs;
