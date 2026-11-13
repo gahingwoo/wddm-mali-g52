@@ -71,11 +71,13 @@ NTSTATUS MwDisplayStart(MW_ADAPTER *A)
         return STATUS_INSUFFICIENT_RESOURCES;
     A->SourceVisible = TRUE;
     A->PathActive = TRUE;
+    MwScanStart(A);
     return STATUS_SUCCESS;
 }
 
 void MwDisplayStop(MW_ADAPTER *A)
 {
+    MwScanStop(A);
     if (A->FbVa != NULL) {
         MmUnmapIoSpace(A->FbVa, A->FbSize);
         A->FbVa = NULL;
@@ -448,6 +450,7 @@ NTSTATUS APIENTRY MwSystemDisplayEnable(IN_CONST_PVOID MiniportDeviceContext,
     UNREFERENCED_PARAMETER(Flags);
     if (dev->FbVa == NULL)
         return STATUS_UNSUCCESSFUL;
+    MwScanToFb(dev);            /* the bugcheck screen is drawn in the framebuffer */
     *Width = dev->Fb.Width;
     *Height = dev->Fb.Height;
     *ColorFormat = dev->Fb.ColorFormat;
@@ -483,7 +486,14 @@ NTSTATUS APIENTRY MwSetVidPnSourceAddress(IN_CONST_HANDLE hAdapter, const DXGKAR
     dev->FlipTick = MwTick();
     if (dev->QCount != 0)
         dev->FlipsWhileBusy++;
-    InterlockedIncrement(&dev->FlipSeq);
+    {
+        LONG seq = InterlockedIncrement(&dev->FlipSeq);
+        /* Scanned out: nothing to copy, and the flip is as good as shown. */
+        if (MwScanFlip(dev, dev->ScanAlloc)) {
+            dev->ShownAddr = Arg->PrimaryAddress;
+            dev->ShownSeq = seq;
+        }
+    }
     if (Arg->hAllocation == NULL) dev->FlipsNullAlloc++;
     if (!dev->SourceVisible) dev->FlipsInvisible++;
     dev->LastFlipFlags = Arg->Flags.Value;

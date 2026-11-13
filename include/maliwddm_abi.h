@@ -53,6 +53,19 @@ typedef struct _MW_COMMAND {
 #define MW_ESCAPE_ALLOC_INFO    1
 #define MW_ESCAPE_GPU_INFO      2
 #define MW_ESCAPE_STATS         3
+#define MW_ESCAPE_SCANOUT       4
+
+/* Scan-out of primaries by the display controller, on and off.
+ * Mode: 1 on, 0 off (flips are copied), 2 off and the IOMMU off too,
+ * 3 only report. */
+typedef struct _MW_ESCAPE_SCANOUT_DATA {
+    mw_u32 Code;                        /* MW_ESCAPE_SCANOUT */
+    mw_u32 Mode;
+    mw_u32 Status;                      /* 1 on, 2 translating, 4 a primary is shown; ~0 not available */
+    mw_u32 Mmu0Status, Mmu1Status;
+    mw_u32 Flips, Maps, ToFbs, Mismatch, NoSlot;
+    mw_u32 FbPa;
+} MW_ESCAPE_SCANOUT_DATA;
 
 typedef struct _MW_ESCAPE_ALLOC_INFO_DATA {
     mw_u32 Code;                        /* MW_ESCAPE_ALLOC_INFO */

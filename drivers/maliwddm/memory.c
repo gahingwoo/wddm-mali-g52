@@ -100,6 +100,7 @@ static void FreeAllocation(MW_ADAPTER *A, MW_ALLOCATION *Alloc)
 {
     MwCopyForget(A, Alloc, TRUE);
     ExAcquireFastMutex(&A->MmuLock);
+    MwScanUnmap(A, Alloc);
     if (Alloc->Mapped && A->GpuUp)
         MkMmuUnmapPages(&A->Gpu, Alloc->GpuVa, Alloc->Pages);
     if (Alloc->GpuVa != 0 && A->GpuUp)
@@ -260,6 +261,8 @@ NTSTATUS APIENTRY MwBuildPagingBuffer(IN_CONST_HANDLE hAdapter, DXGKARG_BUILDPAG
         alloc->Mapped = NT_SUCCESS(st);
         alloc->Mdl = Arg->MapApertureSegment.pMdl;
         alloc->MdlPage = (ULONG)Arg->MapApertureSegment.MdlOffset;
+        if (alloc->Mapped)
+            MwScanMap(a, alloc, pfn, pages);
         ExReleaseFastMutex(&a->MmuLock);
         a->Maps++;
         if (!NT_SUCCESS(st))
@@ -275,6 +278,7 @@ NTSTATUS APIENTRY MwBuildPagingBuffer(IN_CONST_HANDLE hAdapter, DXGKARG_BUILDPAG
             return STATUS_SUCCESS;
         a->Unmaps++;
         ExAcquireFastMutex(&a->MmuLock);
+        MwScanUnmap(a, alloc);
         if (alloc->Mapped)
             MkMmuUnmapPages(&a->Gpu, alloc->GpuVa, alloc->Pages);
         alloc->Mapped = FALSE;

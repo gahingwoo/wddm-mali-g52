@@ -210,6 +210,7 @@ static void DoPresent(MW_ADAPTER *A, const MW_PRESENT_OP *Op)
     ULONG64 t0 = MwTick(), longest = 0;
 
     if (Op->Dst != NULL && (Op->Dst->Flags & MW_ALLOC_PRIMARY) && A->FbVa != NULL) {
+        MwScanToFb(A);          /* a blt goes to the framebuffer: show it */
         dst = A->FbVa;
         dstW = (LONG)A->Fb.Width;
         dstH = (LONG)A->Fb.Height;
@@ -572,8 +573,15 @@ static VOID CopyThread(PVOID Context)
             PHYSICAL_ADDRESS addr = a->ScanAddr;
             ULONG64 flipped = a->FlipTick;
 
-            if (p != NULL && a->SourceVisible && !a->Stopping)
+            if (MwScanUsable(a, p)) {
+                /* The display controller reads it; a flip that raced the
+                 * switch is put right here. */
+                if (!a->ScanShowing)
+                    MwScanFlip(a, p);
+            } else if (p != NULL && a->SourceVisible && !a->Stopping) {
                 ShowPrimary(a, p);
+                MwScanToFb(a);
+            }
             a->ShownAlloc = p;
             a->ShownAddr = addr;
             a->ShownSeq = seq;

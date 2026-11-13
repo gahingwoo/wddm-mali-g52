@@ -61,6 +61,7 @@
     <ClCompile Include="display.c" />
     <ClCompile Include="memory.c" />
     <ClCompile Include="command.c" />
+    <ClCompile Include="scanout.c" />
     <ClCompile Include="..\common\maligpu.c" />
   </ItemGroup>
 

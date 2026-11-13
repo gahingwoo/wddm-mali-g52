@@ -53,6 +53,9 @@ typedef struct _MW_ALLOCATION {
      * which is how a present reaches the pixels on the CPU. */
     PMDL Mdl;
     ULONG MdlPage;
+    /* A primary the display controller can read: its IO address while it
+     * is mapped (scanout.c), else 0. */
+    ULONG ScanIova;
 } MW_ALLOCATION;
 
 typedef struct _MW_ADAPTER MW_ADAPTER;
@@ -156,6 +159,17 @@ struct _MW_ADAPTER {
      * allocation takes it too. ShownAddr is the address of the flip whose
      * pixels are on the screen, which is what a vsync reports. With no
      * thread the DPC copies as before. */
+    /* Scan-out by the VOP2 through its IOMMU (scanout.c). */
+#define MW_SCAN_SLOTS 6
+    PUCHAR VopVa;
+    PVOID ScanTables;
+    PHYSICAL_ADDRESS ScanTablesPa;
+    ULONG ScanTablesUsed;
+    struct _MW_ALLOCATION *ScanSlot[MW_SCAN_SLOTS];
+    BOOLEAN ScanReady, ScanPaging;
+    volatile BOOLEAN ScanShowing;
+    volatile LONG ScanOn;
+    ULONG ScanFlips, ScanMaps, ScanToFbs, ScanMismatch, ScanNoSlot;
     PKTHREAD CopyThread;
     KEVENT CopyEvent;
     FAST_MUTEX CopyLock;
@@ -263,6 +277,14 @@ DXGKDDI_CANCELCOMMAND MwCancelCommand;
 DXGKDDI_CONTROLINTERRUPT MwControlInterrupt;
 DXGKDDI_GETSCANLINE MwGetScanLine;
 BOOLEAN MwJobInterrupt(MW_ADAPTER *A);    /* from the ISR, at DIRQL */
+void MwScanStart(MW_ADAPTER *A);
+void MwScanStop(MW_ADAPTER *A);
+void MwScanToFb(MW_ADAPTER *A);
+BOOLEAN MwScanUsable(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
+BOOLEAN MwScanFlip(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
+void MwScanMap(MW_ADAPTER *A, struct _MW_ALLOCATION *P, PPFN_NUMBER Pfn, ULONG Pages);
+void MwScanUnmap(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
+NTSTATUS MwScanSet(MW_ADAPTER *A, MW_ESCAPE_SCANOUT_DATA *D);
 void MwCommandInit(MW_ADAPTER *A);
 void MwCopyForget(MW_ADAPTER *A, struct _MW_ALLOCATION *Alloc, BOOLEAN Freed);
 void MwCommandStop(MW_ADAPTER *A);

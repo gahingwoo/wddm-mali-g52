@@ -238,6 +238,22 @@ int main(int argc, char **argv)
     }
 
     g_adapter = adapter;
+    if (argc >= 2 && strcmp(argv[1], "scan") == 0) {
+        /* scan 1: primaries are scanned out by the display controller;
+         * scan 0: copied again; scan 2: and its IOMMU off; scan: report. */
+        MW_ESCAPE_SCANOUT_DATA d = {0};
+        d.Code = MW_ESCAPE_SCANOUT;
+        d.Mode = argc >= 3 ? (unsigned)atoi(argv[2]) : 3;
+        st = escape(adapter, 0, &d, sizeof(d));
+        if (st < 0)
+            return fail("scan-out escape", st);
+        printf("scan-out: status 0x%x (1 on, 2 translating, 4 a primary is shown), mmu status 0x%08x 0x%08x\n",
+               d.Status, d.Mmu0Status, d.Mmu1Status);
+        printf("  %u flips scanned out, %u primaries mapped, %u returns to the framebuffer, "
+               "%u wrong size, %u without a slot; framebuffer at 0x%08x\n",
+               d.Flips, d.Maps, d.ToFbs, d.Mismatch, d.NoSlot, d.FbPa);
+        return 0;
+    }
     if (argc >= 2 && strcmp(argv[1], "perf") == 0) {
         int seconds = argc >= 3 ? atoi(argv[2]) : 5;
         return perf(adapter, seconds > 0 && seconds <= 600 ? (unsigned)seconds : 5);
