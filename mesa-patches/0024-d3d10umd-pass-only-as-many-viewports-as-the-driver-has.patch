@@ -1,0 +1,45 @@
+diff --git a/src/gallium/frontends/d3d10umd/Rasterizer.cpp b/src/gallium/frontends/d3d10umd/Rasterizer.cpp
+index a0262da..39554c6 100644
+--- a/src/gallium/frontends/d3d10umd/Rasterizer.cpp
++++ b/src/gallium/frontends/d3d10umd/Rasterizer.cpp
+@@ -84,8 +84,18 @@ SetViewports(D3D10DDI_HDEVICE hDevice,                                        //
+       memset(states + NumViewports, 0,
+              sizeof(struct pipe_viewport_state) * ClearViewports);
+    }
+-   pipe->set_viewport_states(pipe, 0, NumViewports + ClearViewports,
+-                             states);
++   /* D3D10 always has 16 viewport slots and clears the ones it does not
++    * set, so the runtime asks for all 16 even when one is in use. A driver
++    * with a single viewport (Panfrost asserts num_viewports == 1) gets
++    * only as many as it has. */
++   UINT count = NumViewports + ClearViewports;
++   UINT max = pipe->screen->caps.max_viewports;
++   if (max == 0)
++      max = 1;
++   if (count > max)
++      count = max;
++   if (count)
++      pipe->set_viewport_states(pipe, 0, count, states);
+ }
+ 
+ 
+@@ -127,8 +137,17 @@ SetScissorRects(D3D10DDI_HDEVICE hDevice,                            // IN
+       memset(states + NumScissorRects, 0,
+              sizeof(struct pipe_scissor_state) * ClearScissorRects);
+    }
+-   pipe->set_scissor_states(pipe, 0, NumScissorRects + ClearScissorRects,
+-                            states);
++   {
++      /* Same as the viewports: 16 slots in D3D10, one in Panfrost. */
++      UINT count = NumScissorRects + ClearScissorRects;
++      UINT max = pipe->screen->caps.max_viewports;
++      if (max == 0)
++         max = 1;
++      if (count > max)
++         count = max;
++      if (count)
++         pipe->set_scissor_states(pipe, 0, count, states);
++   }
+ }
+ 
+ 
