@@ -19,6 +19,7 @@
 //   3  CreateGeometryShaderWithStreamOutput, vertex shader bytecode
 //      (stream output without a GS)
 //   4  GSSetShader + Draw: a red triangle comes out blue
+//   4b the same with a GS that loops over its inputs (i[k], k a variable)
 //   5  SOSetTargets + Draw with the pass-through SO shader, SO_STATISTICS
 //      and SO_OVERFLOW_PREDICATE around it; the buffer holds the triangle
 //   6  DrawAuto from that buffer: a red triangle
@@ -52,6 +53,9 @@ static const char kHlsl[] =
     "  o = i[1]; o.c = i[1].c.bgra; s.Append(o);\n"
     "  o = i[2]; o.c = i[2].c.bgra; s.Append(o);\n"
     "  s.RestartStrip(); }\n"
+    "[maxvertexcount(3)] void gs_loop(triangle V i[3], inout TriangleStream<V> s) {\n"
+    "  for (int k = 0; k < 3; k++) { V o = i[k]; o.c = i[k].c.bgra; s.Append(o); }\n"
+    "  s.RestartStrip(); }\n"
     "float4 ps(V i) : SV_Target { return i.c; }\n";
 
 struct Vtx {
@@ -67,7 +71,14 @@ static const Vtx kTri[3] = {
 };
 
 static int g_fail;
-static volatile LONG g_step;
+static volatile LONG g_tick;
+static const char *volatile g_label = "setup";
+
+static void step(const char *label)
+{
+    g_label = label;
+    InterlockedIncrement(&g_tick);
+}
 
 /* A step that does not return within 30 s is a FAIL too; say which one and
  * end the process rather than leave CI (or the board) waiting. */
@@ -77,11 +88,11 @@ static DWORD WINAPI watchdog(void *)
     int same = 0;
     for (;;) {
         Sleep(1000);
-        LONG now = g_step;
+        LONG now = g_tick;
         same = now == last ? same + 1 : 0;
         last = now;
         if (same >= 30) {
-            printf("FAIL        %ld hung: no progress for 30 s\n", now);
+            printf("FAIL        %s hung: no progress for 30 s\n", g_label);
             fflush(stdout);
             ExitProcess(200);
         }
@@ -247,6 +258,7 @@ int main(int argc, char **argv)
     }
 
     ID3DBlob *vsb = compile("vs", "vs_4_0"), *gsb = compile("gs", "gs_4_0"), *psb = compile("ps", "ps_4_0");
+    ID3DBlob *gslb = compile("gs_loop", "gs_4_0");
     ID3D11VertexShader *vs = nullptr;
     ID3D11PixelShader *ps = nullptr;
     if (FAILED(dev->CreateVertexShader(vsb->GetBufferPointer(), vsb->GetBufferSize(), nullptr, &vs)) ||
@@ -311,7 +323,7 @@ int main(int argc, char **argv)
     UINT soStride = sizeof(Vtx);
 
     /* 1 */
-    g_step = 1;
+    step("1");
     ID3D11GeometryShader *gs = nullptr;
     hr = dev->CreateGeometryShader(gsb->GetBufferPointer(), gsb->GetBufferSize(), nullptr, &gs);
     created("1 CreateGeometryShader", hr);
@@ -319,7 +331,7 @@ int main(int argc, char **argv)
         gs = nullptr;
 
     /* 2 */
-    g_step = 2;
+    step("2");
     ID3D11GeometryShader *gsSo = nullptr;
     hr = dev->CreateGeometryShaderWithStreamOutput(gsb->GetBufferPointer(), gsb->GetBufferSize(), so, 2,
                                                    &soStride, 1, 0, nullptr, &gsSo);
@@ -328,7 +340,7 @@ int main(int argc, char **argv)
         gsSo = nullptr;
 
     /* 3 */
-    g_step = 3;
+    step("3");
     ID3D11GeometryShader *passSo = nullptr;
     hr = dev->CreateGeometryShaderWithStreamOutput(vsb->GetBufferPointer(), vsb->GetBufferSize(), so, 2,
                                                    &soStride, 1, 0, nullptr, &passSo);
@@ -337,7 +349,7 @@ int main(int argc, char **argv)
         passSo = nullptr;
 
     /* 4 */
-    g_step = 4;
+    step("4");
     if (gs) {
         clear();
         ctx->GSSetShader(gs, nullptr, 0);
@@ -349,7 +361,28 @@ int main(int argc, char **argv)
         line("UNSUPPORTED", "4 GSSetShader + Draw", "no geometry shader to bind");
     }
 
-    g_step = 5;
+    /* 4b: the same through a loop: the GS reads its input vertices with a
+     * variable index (an indirect second subscript). */
+    step("4b");
+    {
+        ID3D11GeometryShader *gsl = nullptr;
+        hr = dev->CreateGeometryShader(gslb->GetBufferPointer(), gslb->GetBufferSize(), nullptr, &gsl);
+        if (FAILED(hr)) {
+            line(g_expect > 0 ? "FAIL" : "UNSUPPORTED", "4b GS indexing its inputs + Draw", "create hr=0x%08lx",
+                 (unsigned long)hr);
+        } else {
+            clear();
+            ctx->GSSetShader(gsl, nullptr, 0);
+            ctx->Draw(3, 0);
+            ctx->GSSetShader(nullptr, nullptr, 0);
+            unsigned c = centre();
+            line(near_(c, BLUE) ? "PASS" : "FAIL", "4b GS indexing its inputs + Draw", "centre 0x%06x, want 0x%06x",
+                 c, BLUE);
+            gsl->Release();
+        }
+    }
+
+    step("5");
     /* 5: with no SO shader the same calls still run (targets, queries, a
      * draw); nothing is written and the counts are zero. */
     {
@@ -410,7 +443,7 @@ int main(int argc, char **argv)
     }
 
     /* 6 */
-    g_step = 6;
+    step("6");
     {
         clear();
         ctx->IASetVertexBuffers(0, 1, &sob, &stride, &offset);
@@ -425,7 +458,7 @@ int main(int argc, char **argv)
     }
 
     /* 7 */
-    g_step = 7;
+    step("7");
     {
         clear();
         ctx->Draw(3, 0);
@@ -434,7 +467,7 @@ int main(int argc, char **argv)
     }
 
     /* 8 */
-    g_step = 8;
+    step("8");
     {
         if (gs)
             gs->Release();

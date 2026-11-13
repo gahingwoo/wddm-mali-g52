@@ -1,0 +1,23 @@
+diff --git a/src/gallium/auxiliary/tgsi/tgsi_exec.c b/src/gallium/auxiliary/tgsi/tgsi_exec.c
+index e97a9bb..8bcf9c5 100644
+--- a/src/gallium/auxiliary/tgsi/tgsi_exec.c
++++ b/src/gallium/auxiliary/tgsi/tgsi_exec.c
+@@ -1567,8 +1567,16 @@ get_index_registers(const struct tgsi_exec_machine *mach,
+       if (reg->Dimension.Indirect) {
+          const unsigned execmask = mach->ExecMask;
+ 
+-         assert(reg->DimIndirect.File == TGSI_FILE_ADDRESS);
+-         const union tgsi_exec_channel *addr = &mach->Addrs[reg->DimIndirect.Index].xyzw[reg->DimIndirect.Swizzle];
++         /* As for the first subscript: d3d10umd indexes a geometry
++          * shader's input vertex through a temporary (v[r0.x][1]). */
++         const union tgsi_exec_channel *addr;
++         if (reg->DimIndirect.File == TGSI_FILE_TEMPORARY &&
++             reg->DimIndirect.Index >= 0 && reg->DimIndirect.Index < TGSI_EXEC_NUM_TEMPS) {
++            addr = &mach->Temps[reg->DimIndirect.Index].xyzw[reg->DimIndirect.Swizzle];
++         } else {
++            assert(reg->DimIndirect.File == TGSI_FILE_ADDRESS);
++            addr = &mach->Addrs[reg->DimIndirect.Index].xyzw[reg->DimIndirect.Swizzle];
++         }
+          for (int i = 0; i < TGSI_QUAD_SIZE; i++)
+             index2D->i[i] += addr->u[i];
+ 
