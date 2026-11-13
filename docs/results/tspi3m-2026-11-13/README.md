@@ -1,9 +1,34 @@
-# 2026-11-13: the sign-in screen composed on the Mali-G52
+# 2026-11-13: the Windows desktop composed on the Mali-G52
 
 Board: LCKFB TaishanPi 3M (RK3576, 4 GB), Windows 11 23H2 (22631) installed
 on the eMMC, 2560x1440 over HDMI. Firmware: edk2-rk3576 `00b82c4`, which
 powers the GPU and declares it as `ACPI\RKCP7402`. Everything here is on the
 branch `umd-file-log`; none of it is on `main`.
+
+![The Windows 11 desktop](desktop-on-mali.jpg)
+
+Later the same evening: signed in, and the desktop came up on the first try.
+Wallpaper, desktop icons with their labels, the taskbar, and Task Manager as
+a window ([photo](task-manager-on-mali.jpg)), all drawn by `explorer.exe`,
+`Taskmgr.exe` and the others through Panfrost and composed by `dwm.exe`.
+Five processes had the UMD loaded; 44803 render jobs had run, none failed.
+
+What does not work on that desktop:
+
+- The Start menu and Search. `StartMenuExperienceHost.exe` and
+  `SearchHost.exe` crash (four times each in the first minutes) after
+  `tgsi_exec.c:1518: reg->Indirect.File == TGSI_FILE_ADDRESS`. That file is
+  the TGSI interpreter, which Panfrost does not use, so these two are not
+  rendering on the Mali at all. Why not is the next thing to find.
+- Parts of the taskbar: the clock and tray on the right are missing and a
+  blank flyout shows near the middle.
+- The error box in the photos is not about graphics.
+  `SecurityHealthSSO.dll` on this installation is 1418216 bytes of zeros,
+  left by one of the day's hard resets or by the eMMC clock fault fixed that
+  morning.
+- Speed, as below.
+
+The sign-in screen, an hour earlier:
 
 ![The Windows sign-in screen](logon-screen-on-mali-with-text.jpg)
 
@@ -142,8 +167,6 @@ then dxgkrnl events.
   after opening them (seen once).
 - `DXGI_STATUS_NO_REDIRECTION` is still returned from `CreateDevice`; what
   windowed applications need has not been looked at.
-- Nothing past the sign-in screen has been tried: signing in, the shell, any
-  application.
 - Not run on the CM5-IO.
 
 ## Files
