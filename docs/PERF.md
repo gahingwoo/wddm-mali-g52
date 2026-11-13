@@ -1,12 +1,41 @@
 # Where a frame's time goes, and the plan to get it back
 
-Written 2026-11-13 from the code. Nothing here has been measured on a
-board yet; the branch `perf-primary` adds the timers that will measure it.
-Line numbers are those of `main` at `0a31314` and Mesa with patches up to
-0040.
+The cost model below was read from the code on 2026-11-13 and measured on
+the TaishanPi 3M on 2026-11-14 (2560x1440, one frame is 14.7 MB). Line
+numbers are those of `0a31314` and Mesa with patches up to 0040.
 
-The desktop runs at 1 to 2 flips a second with content on screen and 5 to 6
-when idle, at 2560x1440. One frame is 14.7 MB.
+## Measured, 2026-11-14
+
+`dwm.exe` with a window being dragged, from the UMD's `perf:` lines and the
+kernel driver's counters. Each row adds one change to the row above.
+
+| Path | Per present in the UMD | Presents in 5 s | Emulated vsync |
+|---|---|---|---|
+| as on 2026-11-13 (`primary-copy` and `rotate-copy` set) | readback 28 ms, copy to primary 2.7 ms, rotate 76 ms | 41 to 45 | not sampled |
+| rotation by exchange | readback 30 ms, copy 3.3 ms, rotate 0.025 ms | 35 to 46 | not sampled |
+| primaries rendered into | 0, 0, 0.025 ms | 46 to 55 | 30 to 36 a second, against 62 with the screen still |
+| the flip copy on a thread | the same | 63 to 92 | 16.0 ms apart on average |
+
+What the rows say:
+
+- The rotate was the largest cost in the UMD, as read from the code, and
+  exchange removes it. Removing 70 ms from each present did not change the
+  rate: something else set it.
+- That was the copy to the framebuffer in the vsync DPC. With a window
+  moving the timer lost half its ticks. On a thread the copy measures
+  27 ms on average (`T_FlipCopyUsAvg`), a flip reaches the screen 41 ms
+  after it was made, and 1282 of the vsyncs in the test found the previous
+  copy still running (`T_CopyDeferred`).
+- 8139 jobs in that session, none failed. The picture was right through
+  all four, by eye.
+
+So the rate is now set by a 27 ms copy that spans two vsyncs, plus the wait
+for the GPU (a few to 25 ms a present). Stage 2 below removes the copy.
+
+The first row is the state the 1 to 2 frames a second of 2026-11-13 was
+seen in; 41 to 45 presents in 5 s is 8 to 9 a second while dragging a
+window on an otherwise idle desktop. The lower figure was with the sign-in
+screen and the full file log.
 
 ## One present today
 
@@ -38,18 +67,18 @@ Other facts read from the code:
   56243 jobs for 16512 flips, about 3.4 per flip.
 - Every submission lists every live buffer of the device, up to 256.
 
-## Stage 1, on the branch `perf-primary`, not yet run on a board
+## Stage 1, done
 
 - Timers: the UMD logs microseconds per stage per present every 5 s
   (`perf:` lines); the kernel driver keeps `T_FlipCopyUs*`, `T_FlipWaitUs*`,
   `T_JobUs*`, `T_VsyncGapUs*`; `m5test perf [seconds]` prints rates.
 - The buffer Panfrost renders into is the primary: it is allocated through
   the runtime the way a shared surface is, and present hands it over with
-  no pixel copy. The kernel driver does not change.
+  no pixel copy (0047).
 - `RotateResourceIdentities` exchanges buffers and re-points the views on
-  them instead of copying contents.
-
-That removes steps 2, 3, 4 and 7 if it holds. Step 6 stays.
+  them instead of copying contents (0047).
+- The copy to the framebuffer runs on a thread on the Cortex-A72 cores; a
+  vsync reports a flip only once its pixels are shown.
 
 Switches, read once per process, each restoring the old behaviour when the
 file exists:
@@ -60,10 +89,8 @@ file exists:
 | `C:\mali\rotate-copy` | rotate by copying; implies `primary-copy` |
 | `C:\mali\present-wait` | wait for the GPU before presenting a rendered-into primary |
 
-What only hardware can answer: whether the scheduler holds a flip until the
-render that precedes it has finished (if not, half-drawn frames, and
-`present-wait` is the fallback); whether the runtime re-binds views after a
-rotation; the real vsync period.
+None of the three was needed. No half-drawn frame was seen without
+`present-wait`.
 
 ## Stage 2, design only: scan out the primary
 
@@ -88,3 +115,11 @@ What stands in the way:
   the HDMI signal before. The flip must be write-only.
 - The bugcheck screen and the hand-back to the firmware display must point
   `YRGB_MST` at the firmware framebuffer again.
+
+## Also run that day
+
+`gsso.exe hw nogs` on the Mali with patches 0041 to 0044: creating a
+geometry shader, with or without stream output, returns `E_OUTOFMEMORY`;
+the stream-output queries read zero; `DrawAuto` draws nothing; an ordinary
+draw is right; the device is not removed; 0 FAIL. Before these patches
+each of the creates called a NULL function pointer.
