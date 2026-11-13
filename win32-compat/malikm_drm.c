@@ -1075,6 +1075,31 @@ malikm_present_target(unsigned src_allocation, unsigned dst_allocation, int set)
    present_target.set = set;
 }
 
+/* Present an allocation the runtime knows as the presented resource's, as
+ * it is: a shared surface, which Panfrost has rendered into directly. The
+ * HRESULT of pfnPresentCb. */
+long
+malikm_present_allocation(unsigned src_allocation, unsigned dst_allocation, void *dxgi_context)
+{
+   static volatile LONG said = 0;
+   HRESULT hr = E_FAIL;
+
+   AcquireSRWLockExclusive(&wddm_lock);
+   if (ddi.on && ddi.dxgi && ddi.dxgi->pfnPresentCb && src_allocation) {
+      DXGIDDICB_PRESENT p = {0};
+      p.hSrcAllocation = src_allocation;
+      p.hDstAllocation = dst_allocation;
+      p.pDXGIContext = dxgi_context;
+      p.hContext = ddi.context;
+      hr = ddi.dxgi->pfnPresentCb(ddi.device, &p);
+   }
+   if (InterlockedIncrement(&said) <= 40 || hr < 0)
+      DebugPrintf("present: shared allocation 0x%x -> 0x%x, pfnPresentCb 0x%08lx\n",
+                  src_allocation, dst_allocation, (unsigned long)hr);
+   ReleaseSRWLockExclusive(&wddm_lock);
+   return hr;
+}
+
 /* Present for d3d10umd on the hardware runtime: Bgrx is the frame, linear
  * and top-down; it is copied into a surface of the runtime device and
  * handed to DXGI, which has maliwddm blt it (on the CPU, for now) to the

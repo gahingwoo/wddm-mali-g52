@@ -1,0 +1,71 @@
+diff --git a/src/gallium/frontends/d3d10umd/DxgiFns.cpp b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+index 651d5eb..1266e21 100644
+--- a/src/gallium/frontends/d3d10umd/DxgiFns.cpp
++++ b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+@@ -69,6 +69,25 @@ _Present(DXGI_DDI_ARG_PRESENT *pPresentData)
+                pDstResource ? pDstResource->present_allocation : 0);
+ 
+    device->pipe->flush(device->pipe, NULL, 0);
++
++   /*
++    * A shared surface (LogonUI.exe presents the two it shares with dwm.exe,
++    * with the Blt flag and no destination): the allocation the runtime has
++    * to be told about is the surface's own, which is also what was rendered
++    * into, so there is nothing to read back or copy. Presenting a private
++    * copy instead returned S_OK and told the compositor nothing about the
++    * surface it has open.
++    */
++   if (pSrcResource->shared_allocation) {
++      HRESULT hr = (HRESULT)d3d10_present_allocation(
++         pSrcResource->shared_allocation,
++         pDstResource ? pDstResource->present_allocation : 0,
++         pPresentData->pDXGIContext);
++      if (hr != S_OK)
++         DebugPrintf("Present: shared, result 0x%08lx\n", (unsigned long)hr);
++      return hr;
++   }
++
+    d3d10_present_target(pSrcResource->present_allocation,
+                         pDstResource ? pDstResource->present_allocation : 0, 1);
+    device->pipe->screen->flush_frontbuffer(device->pipe->screen, device->pipe, 
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index 22e1dde..fa04416 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -177,6 +177,10 @@ void d3d10_shared_begin_create(void *hRTDevice, void *hRTResource, unsigned w, u
+ void d3d10_shared_begin_open(void *hRTDevice, void *hRTResource, unsigned hAllocation);
+ unsigned d3d10_shared_end(void);
+ void d3d10_shared_destroy(void *hRTDevice, void *hRTResource);
++/* Present an allocation of the runtime's as it is; the HRESULT of the
++ * runtime's present callback. */
++long d3d10_present_allocation(unsigned src_allocation, unsigned dst_allocation,
++                              void *dxgi_context);
+ }
+ 
+ struct Resource
+diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+index ee02c01..9093e4b 100644
+--- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
++++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+@@ -199,8 +199,21 @@ void malikm_shared_begin_create(void *hRTDevice, void *hRTResource, unsigned w,
+ void malikm_shared_begin_open(void *hRTDevice, void *hRTResource, unsigned hAllocation);
+ unsigned malikm_shared_end(void);
+ void malikm_shared_destroy(void *hRTDevice, void *hRTResource);
++long malikm_present_allocation(unsigned src_allocation, unsigned dst_allocation,
++                               void *dxgi_context);
+ #endif
+ 
++long
++d3d10_present_allocation(unsigned src_allocation, unsigned dst_allocation, void *dxgi_context)
++{
++#ifdef GALLIUM_PANFROST
++   return malikm_present_allocation(src_allocation, dst_allocation, dxgi_context);
++#else
++   (void)src_allocation; (void)dst_allocation; (void)dxgi_context;
++   return 0;
++#endif
++}
++
+ void
+ d3d10_shared_begin_create(void *hRTDevice, void *hRTResource, unsigned w, unsigned h,
+                           const void *desc, unsigned desc_size)

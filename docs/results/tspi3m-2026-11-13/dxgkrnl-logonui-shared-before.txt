@@ -1,0 +1,32 @@
+dxgkrnl ETW, 12 s, UMD from CI run 43386010454 (before shared resources).
+LogonUI.exe (process 0x11d4) creates its 1024x1024 shared surface: event 33/36 show an
+allocation of 0x408000 bytes with hDxgResource 0 and hThunkResource 0, that is, not
+attached to any resource. The next call (function 0x81a) fails with dxgkrnl's own text
+'Input object handle is NULL', 0xC000000D. Twice in the 12 s, once per LogonUI start.
+
+34985693422 105 0 {'Function': '0x7ec'}
+34985693681 182 0 {'hDevice': '0xffffc1873fa81820', 'DeviceState': '0x1'}
+34985693702 106 0 {'Function': '0x7ec'}
+34985711622 105 0 {'Function': '0x7d3'}
+34985712301 105 0 {'Function': '0x138a'}
+34985712595 106 0 {'Function': '0x138a'}
+34985712651 105 0 {'Function': '0x13a4'}
+34985712798 106 0 {'Function': '0x13a4'}
+34985713134 33 3 {'hProcessId': '0x11d4', 'hDevice': '0xffffc1873fa81820', 'pDxgAdapter': '0xffff9c0d43415000', 'Flags': '0x1', 'allocSize': '0x408000', 'ulAlignment': '0x0', 'dwReadSegment': '0x1', 'dwWriteSegment': '0x1', 'PreferredSegment': '0x1', 'HintedBank': '0x0', 'dwEvictionSegment': '0x0', 'Priority': '0x78000000', 'hVidMmGlobalAlloc': '0xffffc1874647f4f0', 'hDxgGlobalAlloc': '0xffffc18747f15d40', 'hDxgSharedResource': '0x0', 'UsageVersion': '0x0', 'UsageFlags': '0x0', 'Format': '0x0', 'SwizzledFormat': '0x0', 'ByteOffset': '0x0', 'Width': '0x0', 'Height': '0x0', 'Pitch': '0x0', 'Depth': '0x0', 'SlicePitch': '0x0', 'BackingStoreWasPinned': '0x0', 'pSectionObject': '0x0', 'PhysicalAdapterIndex': 0, 'PageTableOrDirectory': '0x0'}
+34985713309 105 0 {'Function': '0x1f44'}
+34985714044 225 1 {'Handle': '0x245cde00000', 'Size': '0x408000', 'Mapping': '0x1', 'ProcessId': '0x11d4', 'IsHeapBlock': '0x0'}
+34985714065 288 0 {'ProcessId': '0x11d4', 'Handle': '0xffffc187475f1980', 'Size': '0x408000', 'hProcessAlloc': '0x245cde00000'}
+34985714093 106 0 {'Function': '0x1f44'}
+34985714135 36 2 {'hProcessId': '0x11d4', 'hDevice': '0xffffc1873fa81820', 'pDxgAdapter': '0xffff9c0d43415000', 'hVidMmAlloc': '0xffff9c0d44b69db0', 'hVidMmGlobalAlloc': '0xffffc1874647f4f0', 'hDxgResource': '0x0', 'hDxgSharedResource': '0x0', 'hThunkAllocation': '0x40000640', 'hThunkResource': '0x0', 'PrivateRuntimeResourceHandle': '0x0', 'pVirtualAddress': '0x245cde00000', 'hProcessAllocDetails': '0xffffc187475f1980', 'hOtherPartitionHandle': '0x0'}
+34985714317 106 0 {'Function': '0x7d3'}
+34985714499 105 0 {'Function': '0x7e0'}
+34985714681 105 0 {'Function': '0x139e'}
+34985714786 106 0 {'Function': '0x139e'}
+34985714828 106 0 {'Function': '0x7e0'}
+34985715773 105 0 {'Function': '0x808'}
+34985715906 106 0 {'Function': '0x808'}
+34985716571 105 0 {'Function': '0x81a'}
+34985716718 494 0 {'AgentID': 'NULL', 'EventType': '0x40000', 'PartitionId': '0xffffffff', 'EventDescription': 'Input object handle is NULL. Returning 0x%I64x', 'EventData1': '0xffffffffc000000d', 'EventData2': '0x0', 'EventData3': '0x0', 'EventData4': '0x0', 'EventData5': '0x0'}
+34985716753 106 0 {'Function': '0x81a'}
+...
+35176869595 494 0 {'AgentID': 'NULL', 'EventType': '0x40000', 'PartitionId': '0xffffffff', 'EventDescription': 'Input object handle is NULL. Returning 0x%I64x', 'EventData1': '0xffffffffc000000d', 'EventData2': '0x0', 'EventData3': '0x0', 'EventData4': '0x0', 'EventData5': '0x0'}

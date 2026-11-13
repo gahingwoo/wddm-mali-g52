@@ -1,0 +1,89 @@
+== LogonUI.exe-4452.txt 60668 (1 files)
+lines 1516
+   1990375  2452 . CreateDevice
+   1990375  2452 CreateDevice Interface 0xa0009 Version 0x177a
+   1990375  2452 CreateDevice: screen Mali-G52 r1 MC3 (Panfrost)
+   1990375  2452 CreateDevice: done, DXGI_STATUS_NO_REDIRECTION
+   1990750  1484   primary 0 shared 1
+   1990750  1484   shared: runtime resource 00000255CDE21BA0, runtime device 00000255C0AC5558, bind 0x10008a
+   1990750  1484 shared create: resource 00000255CDE21BA0 device 00000255C0AC5558 (bound device 00000255C0AC5558), 4227072 bytes: pfnAllocateCb 0x00000000, allocation 0x40000680, kernel resource 0x0
+   1990750  1484 shared create: allocation 0x40000680 at GPU 0x24ae000, 4227072 bytes
+   1990750  1484   shared: pipe resource 00000255CDE2E140 on allocation 0x40000680
+   1990750  1484   shared: exported, stride 4096 offset 0 modifier 0x0
+   1990890  1484 . _Present
+   1990890  1484 Present: flags 0x1 interval 0, src primary 0x0, dst 0000000000000000 primary 0x0
+   1990906  1484 present: 1024x1024, pfnPresentCb 0x00000000, DXGI context 0000008B373FDE68
+   1991015  1484 . _Present
+   1991015  1484 Present: flags 0x1 interval 0, src primary 0x0, dst 0000000000000000 primary 0x0
+   1991015  1484 present: 1024x1024, pfnPresentCb 0x00000000, DXGI context 0000008B373FDE68
+   1991031  1484 . _Present
+   1991031  1484 Present: flags 0x1 interval 0, src primary 0x0, dst 0000000000000000 primary 0x0
+   1991046  1484 present: 1024x1024, pfnPresentCb 0x00000000, DXGI context 0000008B373FDE68
+   1991468  1484   primary 0 shared 1
+   1991468  1484   shared: runtime resource 00000255CE6CDF40, runtime device 00000255C0AC5558, bind 0x10008a
+   1991468  1484 shared create: resource 00000255CE6CDF40 device 00000255C0AC5558 (bound device 00000255C0AC5558), 15048704 bytes: pfnAllocateCb 0x00000000, allocation 0x40000980, kernel resource 0x0
+   1991468  1484 shared create: allocation 0x40000980 at GPU 0x1239e000, 15048704 bytes
+   1991468  1484   shared: pipe resource 00000255CDE79480 on allocation 0x40000980
+   1991468  1484   shared: exported, stride 10368 offset 0 modifier 0x0
+   1991875  1484 . _Present
+   1991875  1484 Present: flags 0x1 interval 0, src primary 0x0, dst 0000000000000000 primary 0x0
+   1991890  1484 present: 1024x1024, pfnPresentCb 0x00000000, DXGI context 0000008B373FDE68
+   1991890  1484 . _Present
+   1991890  1484 Present: flags 0x1 interval 0, src primary 0x0, dst 0000000000000000 primary 0x0
+   1991937  1484 present: 2592x1440, pfnPresentCb 0x00000000, DXGI context 0000008B373FDE68
+   1991968  1484 . _Present
+   1991968  1484 Present: flags 0x1 interval 0, src primary 0x0, dst 0000000000000000 primary 0x0
+   1992078  1484 present: 1024x1024, pfnPresentCb 0x00000000, DXGI context 0000008B373FDE68
+   2023593  1484 . _Present
+   2023593  1484 Present: flags 0x1 interval 0, src primary 0x0, dst 0000000000000000 primary 0x0
+   2023609  1484 present: 1024x1024, pfnPresentCb 0x00000000, DXGI context 0000008B373FDE68
+   2023750  1484 . _Present
+   2023750  1484 Present: flags 0x1 interval 0, src primary 0x0, dst 0000000000000000 primary 0x0
+   2023781  1484 present: 1024x1024, pfnPresentCb 0x00000000, DXGI context 0000008B373FDE68
+   2053578  1484 . _Present
+   2053578  1484 Present: flags 0x1 interval 0, src primary 0x0, dst 0000000000000000 primary 0x0
+   2053609  1484 present: 1024x1024, pfnPresentCb 0x00000000, DXGI context 0000008B373FDE68
+   2083609  1484 . _Present
+   2083609  1484 Present: flags 0x1 interval 0, src primary 0x0, dst 0000000000000000 primary 0x0
+   2083625  1484 present: 1024x1024, pfnPresentCb 0x00000000, DXGI context 0000008B373FDE68
+== dwm.exe-4284.txt 283430 (1 files)
+lines 6392
+   1992937  1080 . OpenResource
+   1992937  1080 OpenResource(hResource=0000021BFBFFED30): runtime resource 0000021BFBEBB840, runtime device 0000021BF8B61488, kernel resource 0x40000f00, 1 allocation(s), resource private data 0000021BFC4F2E40 64 bytes
+   1992937  1080   allocation 0: handle 0x40000f40, private data 0000021BFC0D35F0 96 bytes
+   1992937  1080   description in the resource's private data
+   1992937  1080 shared open: resource 0000021BFBEBB840 device 0000021BF8B61488 (bound device 0000021BF8B61488), allocation 0x40000f40: escape 0x00000000, GPU 0x24ae000, 4227072 bytes, wanted 4227072
+   1992937  1080   opened: pipe resource 0000021BFC783180 on allocation 0x40000f40
+   1992937  1080   shared: exported, stride 4096 offset 0 modifier 0x0
+   1992953  1080 . OpenResource
+   1992953  1080 OpenResource(hResource=0000021BFC8CAF30): runtime resource 0000021BFBEBB8A0, runtime device 0000021BF8B61488, kernel resource 0x40001040, 1 allocation(s), resource private data 0000021BFC4F2E80 64 bytes
+   1992953  1080   allocation 0: handle 0x40001080, private data 0000021BFC0D30B0 96 bytes
+   1992953  1080   description in the resource's private data
+   1992953  1080 shared open: resource 0000021BFBEBB8A0 device 0000021BF8B61488 (bound device 0000021BF8B61488), allocation 0x40001080: escape 0x00000000, GPU 0x1239e000, 15048704 bytes, wanted 15048704
+   1992953  1080   opened: pipe resource 0000021BFC783640 on allocation 0x40001080
+   1992953  1080   shared: exported, stride 10368 offset 0 modifier 0x0
+   2090500  1080 DestroyResource: shared, runtime resource 0000021BFBEBB8A0 allocation 0x40001080
+   2090500  1080 shared destroy: resource 0000021BFBEBB8A0 device 0000021BF8B61488, idle 0, 0 buffer(s) still held, pfnDeallocateCb 0x00000000
+   2090500  1080 DestroyResource: shared, runtime resource 0000021BFBEBB840 allocation 0x40000f40
+   2090500  1080 shared destroy: resource 0000021BFBEBB840 device 0000021BF8B61488, idle 0, 0 buffer(s) still held, pfnDeallocateCb 0x00000000
+   2091390  1080 . OpenResource
+   2091390  1080 OpenResource(hResource=0000021BFC8CA4B0): runtime resource 0000021BFC965520, runtime device 0000021BF8B61488, kernel resource 0x40001d40, 1 allocation(s), resource private data 0000021BFD178180 64 bytes
+   2091390  1080   allocation 0: handle 0x40001d80, private data 0000021BFF2FE0B0 96 bytes
+   2091390  1080   description in the resource's private data
+   2091390  1080 shared open: resource 0000021BFC965520 device 0000021BF8B61488 (bound device 0000021BF8B61488), allocation 0x40001d80: escape 0x00000000, GPU 0x10eef000, 4227072 bytes, wanted 4227072
+   2091390  1080   opened: pipe resource 0000021BFC781040 on allocation 0x40001d80
+   2091390  1080   shared: exported, stride 4096 offset 0 modifier 0x0
+   2091765  1080 . OpenResource
+   2091765  1080 OpenResource(hResource=0000021BFC8C90B0): runtime resource 0000021BFC9667E0, runtime device 0000021BF8B61488, kernel resource 0x40001dc0, 1 allocation(s), resource private data 0000021BFD178A00 64 bytes
+   2091765  1080   allocation 0: handle 0x40001e00, private data 0000021BFF2FEB90 96 bytes
+   2091765  1080   description in the resource's private data
+   2091765  1080 shared open: resource 0000021BFC9667E0 device 0000021BF8B61488 (bound device 0000021BF8B61488), allocation 0x40001e00: escape 0x00000000, GPU 0x116f7000, 15048704 bytes, wanted 15048704
+   2091765  1080   opened: pipe resource 0000021BFC9CC350 on allocation 0x40001e00
+   2091765  1080   shared: exported, stride 10368 offset 0 modifier 0x0
+
+dxgkrnl ETW, same UMD, LogonUI restarted during the capture: Present events (184), counted
+      5 184 1 {'hContext': '0x40000540', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0x0', 'hSrcAllocHandle': '0x40001440', 'hDstAllocHandle': '0x0'}
+      5 184 1 {'hContext': '0x40000540', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0x0', 'hSrcAllocHandle': '0x400013c0', 'hDstAllocHandle': '0x0'}
+      5 184 1 {'hContext': '0x40000540', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0x0', 'hSrcAllocHandle': '0x40001340', 'hDstAllocHandle': '0x0'}
+      2 184 1 {'hContext': '0x400000c0', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x0', 'Flags': '0x8000', 'ReturnStatus': '0x0', 'hSrcAllocHandle': '0x400009c0', 'hDstAllocHandle': '0x0'}
+      1 184 1 {'hContext': '0x400000c0', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x0', 'Flags': '0x8000', 'ReturnStatus': '0x0', 'hSrcAllocHandle': '0x40000c00', 'hDstAllocHandle': '0x0'}
