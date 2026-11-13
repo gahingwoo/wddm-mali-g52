@@ -8,10 +8,10 @@ D3D11 triangle on it, byte for byte what the CPU renderer draws (M4). On
 2026-11-13 the Windows 11 sign-in screen was composed on it: `dwm.exe` and
 `LogonUI.exe` render through Panfrost and the WDDM driver puts the result on
 the monitor
-([photo](docs/results/tspi3m-2026-11-13/logon-screen-on-mali-no-text.jpg),
+([photo](docs/results/tspi3m-2026-11-13/logon-screen-on-mali-with-text.jpg),
 [what was done](docs/results/tspi3m-2026-11-13/README.md)). That is on a
-branch and far from usable: no text is drawn yet and it runs at a frame or
-two a second.
+branch and far from usable: it runs at a frame or two a second and nothing
+past the sign-in screen has been tried.
 
 Windows on RK3576 boards
 ([woa-rk3576](https://github.com/gahingwoo/woa-rk3576)) draws its desktop on the
@@ -32,7 +32,7 @@ drivers only.
 | M5.1 | Display-only driver drives HDMI | done 2026-10-02, [result](docs/results/m5.1/README.md) |
 | M5.2 (b) | A job submitted through the WDDM driver | done 2026-10-02, [result](docs/results/m5.2-step-b/README.md) |
 | M5.2 (c) | The triangle through the WDDM driver, Mesa loaded by the runtime as the UMD | done 2026-10-03, [result](docs/results/m5.2-step-c2/README.md) |
-| M5.2 (d) | DWM composites on the Mali in installed Windows | **first picture 2026-11-13**, [result](docs/results/tspi3m-2026-11-13/README.md); no text yet, 1 to 2 frames a second, on branch `umd-file-log` |
+| M5.2 (d) | DWM composites on the Mali in installed Windows | **first picture 2026-11-13**, [result](docs/results/tspi3m-2026-11-13/README.md); 1 to 2 frames a second, nothing past the sign-in screen tried, on branch `umd-file-log` |
 
 All results: [docs/results/](docs/results/README.md). All documents:
 [docs/](docs/README.md).

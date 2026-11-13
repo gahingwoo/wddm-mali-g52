@@ -5,7 +5,7 @@ on the eMMC, 2560x1440 over HDMI. Firmware: edk2-rk3576 `00b82c4`, which
 powers the GPU and declares it as `ACPI\RKCP7402`. Everything here is on the
 branch `umd-file-log`; none of it is on `main`.
 
-![The Windows sign-in screen](logon-screen-on-mali-no-text.jpg)
+![The Windows sign-in screen](logon-screen-on-mali-with-text.jpg)
 
 What is on the monitor in that photo:
 
@@ -16,16 +16,17 @@ What is on the monitor in that photo:
 - `maliwddm` takes each flip and copies the new primary to the firmware's
   framebuffer at the emulated vertical sync.
 
-The wallpaper, the account picture's circle, the password box with its caret
-and the mouse pointer are right. Two things are wrong:
+The wallpaper, the account picture, the user name, the password box with the
+typed dots, the icons in the corner and the mouse pointer are all right.
 
-- No text is drawn: no user name, no placeholder, no dots while typing. The
-  picture inside the circle is missing too. Both causes were found the same
-  evening with a Direct2D test that runs over SSH (item 12 below); nobody
-  has looked at the monitor since.
-- It is slow, about 1 to 2 flips a second with the sign-in screen up and 5
-  to 6 with an empty desktop. Every frame is read back from Panfrost's
-  buffer and copied twice on the CPU at 2560x1440.
+It is slow, about 1 to 2 flips a second with the sign-in screen up and 5 to 6
+with an empty desktop. Every frame is read back from Panfrost's buffer and
+copied twice on the CPU at 2560x1440.
+
+The first version of this picture, earlier the same evening, had no text and
+no account picture: [logon-screen-on-mali-no-text.jpg](logon-screen-on-mali-no-text.jpg).
+Both causes were found with a Direct2D test that runs over SSH (item 12
+below).
 
 An earlier photo, before `LogonUI.exe` got as far as presenting, shows DWM's
 empty desktop and the pointer: [dwm-on-mali-cursor-only.jpg](dwm-on-mali-cursor-only.jpg).
@@ -135,9 +136,6 @@ then dxgkrnl events.
 
 ## Open
 
-- Text and the account picture on the sign-in screen itself: fixed in the
-  Direct2D test, `LogonUI.exe` and `dwm.exe` run on that UMD without an
-  error in their logs, and the monitor has not been looked at.
 - Speed: render into the primary instead of reading back and copying, then
   scan out the primary directly.
 - With the display asleep, `dwm.exe` closed the shared surfaces two seconds
