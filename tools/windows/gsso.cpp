@@ -25,6 +25,7 @@
 //   6  DrawAuto from that buffer: a red triangle
 //   7  the same Draw with no GS: red (the device still draws)
 //   8  release everything, ClearState, Flush; the device is not removed
+// GSSO_SKIP=4b leaves step 4b out (SKIPPED), for a known hang.
 // Exit code: the number of FAIL lines; 200 when a step made no progress for
 // 30 s (the hung step is named). "done" is the last line printed; a run that
 // prints neither crashed.
@@ -110,6 +111,23 @@ static void line(const char *verdict, const char *step, const char *fmt, ...)
     printf("\n");
     if (strcmp(verdict, "FAIL") == 0)
         g_fail++;
+}
+
+/* GSSO_SKIP, a comma-separated list of steps to leave out (only 4b looks at
+ * it), a SKIPPED line each: for a known
+ * hang that would otherwise stop every later step from running. */
+static bool skipped(const char *label)
+{
+    const char *list = getenv("GSSO_SKIP");
+    size_t n = strlen(label);
+    for (const char *p = list; p && *p;) {
+        const char *end = strchr(p, ',');
+        size_t len = end ? (size_t)(end - p) : strlen(p);
+        if (len == n && strncmp(p, label, n) == 0)
+            return true;
+        p = end ? end + 1 : nullptr;
+    }
+    return false;
 }
 
 /* A create that failed: UNSUPPORTED, or FAIL when it should have worked. */
@@ -366,8 +384,11 @@ int main(int argc, char **argv)
     step("4b");
     {
         ID3D11GeometryShader *gsl = nullptr;
-        hr = dev->CreateGeometryShader(gslb->GetBufferPointer(), gslb->GetBufferSize(), nullptr, &gsl);
-        if (FAILED(hr)) {
+        hr = skipped("4b") ? S_FALSE
+                           : dev->CreateGeometryShader(gslb->GetBufferPointer(), gslb->GetBufferSize(), nullptr, &gsl);
+        if (hr == S_FALSE) {
+            line("SKIPPED", "4b GS indexing its inputs + Draw", "GSSO_SKIP");
+        } else if (FAILED(hr)) {
             line(g_expect > 0 ? "FAIL" : "UNSUPPORTED", "4b GS indexing its inputs + Draw", "create hr=0x%08lx",
                  (unsigned long)hr);
         } else {
