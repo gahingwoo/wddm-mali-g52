@@ -2,11 +2,19 @@
 
 A Windows (WDDM) driver for the Arm Mali-G52 GPU in the Rockchip RK3576.
 
-![The Windows 11 desktop composed on the Mali-G52](docs/results/tspi3m-2026-11-13/desktop-on-mali.jpg)
+![Device Manager: Rockchip RK3576 Mali-G52 (WDDM), this device is working properly](docs/results/tspi3m-2026-11-13/device-manager-on-mali.jpg)
 
-*2026-11-13, LCKFB TaishanPi 3M: the Windows 11 desktop rendered and composed
-on the Mali-G52. It works at a frame or two a second and is not usable yet;
-[what was done and what is missing](docs/results/tspi3m-2026-11-13/README.md).*
+*2026-11-13, LCKFB TaishanPi 3M. Windows 11 lists the Mali-G52 as a working
+display adapter and draws its desktop on it: the screen in this photo was
+composed on the GPU.*
+
+| | |
+|---|---|
+| ![The desktop](docs/results/tspi3m-2026-11-13/desktop-on-mali.jpg) | ![File Explorer](docs/results/tspi3m-2026-11-13/file-explorer-on-mali.jpg) |
+| The desktop after signing in | File Explorer; its toolbar is not drawn yet |
+
+It runs at a frame or two a second and is not usable yet:
+[what was done and what is missing](docs/results/tspi3m-2026-11-13/README.md).
 
 The Mali-G52 draws under Windows: on 2026-10-02 Mesa's Panfrost, inside the
 D3D10 software-driver DLL and talking to our own kernel driver, rendered a
