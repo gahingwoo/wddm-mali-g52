@@ -43,7 +43,10 @@ jobs, none failed.
 
 Still wrong or not looked at:
 
-- Search and the tray flyouts have not been tried on screen.
+- Search, the tray flyouts and Settings were tried by hand afterwards and
+  work; there is no photo of them.
+- Patch 0040 (softpipe indexing through a temporary, for the fallback
+  path) is built and has not run on the board.
 - `dwm.exe` was not restarted and still runs the UMD from before these
   three fixes. No boot has been done with the new UMD.
 - The cause of the `explorer.exe` fault was worked out from the
