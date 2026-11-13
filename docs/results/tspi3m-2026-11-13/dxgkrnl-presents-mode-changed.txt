@@ -1,0 +1,40 @@
+7394081668 494 0 {'AgentID': 'NULL', 'EventType': '0x40000', 'PartitionId': '0xffffffff', 'EventDescription': 'Input object handle is NULL. Returning 0x%I64x', 'EventData1': '0xffffffffc000000d', 'EventData2': '0x0', 'EventData3': '0x0', 'EventData4': '0x0', 'EventData5': '0x0'}
+7396220840 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001dc0', 'hDstAllocHandle': '0x0'}
+7385553344 182 0 {'hDevice': '0xffffac844e9c2010', 'DeviceState': '0x1'}
+7385679015 182 0 {'hDevice': '0xffffac844e9c2010', 'DeviceState': '0x1'}
+7385684853 182 0 {'hDevice': '0xffffac844e9c2010', 'DeviceState': '0x1'}
+7385699175 182 0 {'hDevice': '0xffffac844e9c2010', 'DeviceState': '0x1'}
+7385718922 182 0 {'hDevice': '0xffffac844e9c2010', 'DeviceState': '0x1'}
+7387685502 182 0 {'hDevice': '0xffffac844e9c2010', 'DeviceState': '0x1'}
+7387888236 182 0 {'hDevice': '0xffffac844e9c2010', 'DeviceState': '0x1'}
+7388084047 182 0 {'hDevice': '0xffffac844e9c2010', 'DeviceState': '0x1'}
+7388513217 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001cc0', 'hDstAllocHandle': '0x0'}
+7391551910 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001d40', 'hDstAllocHandle': '0x0'}
+7392441372 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001d40', 'hDstAllocHandle': '0x0'}
+7404759860 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001cc0', 'hDstAllocHandle': '0x0'}
+7405596962 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001cc0', 'hDstAllocHandle': '0x0'}
+7394045246 182 0 {'hDevice': '0xffffac844e9c2010', 'DeviceState': '0x1'}
+7379049322 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001d40', 'hDstAllocHandle': '0x0'}
+7379972055 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001d40', 'hDstAllocHandle': '0x0'}
+7383339405 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001dc0', 'hDstAllocHandle': '0x0'}
+7384251120 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001dc0', 'hDstAllocHandle': '0x0'}
+7387621879 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001cc0', 'hDstAllocHandle': '0x0'}
+7391569417 182 0 {'hDevice': '0xffffac844e9c2010', 'DeviceState': '0x1'}
+7391573673 182 0 {'hDevice': '0xffffac844e9c2010', 'DeviceState': '0x1'}
+7397049864 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001dc0', 'hDstAllocHandle': '0x0'}
+7408787639 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001d40', 'hDstAllocHandle': '0x0'}
+7409636158 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001d40', 'hDstAllocHandle': '0x0'}
+7412668705 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001dc0', 'hDstAllocHandle': '0x0'}
+7413522761 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001dc0', 'hDstAllocHandle': '0x0'}
+7416640904 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001cc0', 'hDstAllocHandle': '0x0'}
+7417460464 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001cc0', 'hDstAllocHandle': '0x0'}
+7420400793 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001d40', 'hDstAllocHandle': '0x0'}
+7421246946 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001d40', 'hDstAllocHandle': '0x0'}
+7424149384 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001dc0', 'hDstAllocHandle': '0x0'}
+7425008242 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001dc0', 'hDstAllocHandle': '0x0'}
+7428441644 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001cc0', 'hDstAllocHandle': '0x0'}
+7429282554 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001cc0', 'hDstAllocHandle': '0x0'}
+7432525094 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001d40', 'hDstAllocHandle': '0x0'}
+7433387690 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001d40', 'hDstAllocHandle': '0x0'}
+7441824132 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001dc0', 'hDstAllocHandle': '0x0'}
+7444982805 184 1 {'hContext': '0x40001280', 'hWindow': '0x0', 'VidPnSourceId': '0x0', 'FlipInterval': '0x1', 'Flags': '0x401004', 'ReturnStatus': '0xc01e0005', 'hSrcAllocHandle': '0x40001dc0', 'hDstAllocHandle': '0x0'}
