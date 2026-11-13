@@ -15,6 +15,7 @@ kernel driver's counters. Each row adds one change to the row above.
 | rotation by exchange | readback 30 ms, copy 3.3 ms, rotate 0.025 ms | 35 to 46 | not sampled |
 | primaries rendered into | 0, 0, 0.025 ms | 46 to 55 | 30 to 36 a second, against 62 with the screen still |
 | the flip copy on a thread | the same | 63 to 92 | 16.0 ms apart on average |
+| scan-out by the VOP2 (`m5test scan 1`) | the same | 135 to 268 | 16.0 ms apart; no copy |
 
 What the rows say:
 
@@ -29,8 +30,13 @@ What the rows say:
 - 8139 jobs in that session, none failed. The picture was right through
   all four, by eye.
 
-So the rate is now set by a 27 ms copy that spans two vsyncs, plus the wait
-for the GPU (a few to 25 ms a present). Stage 2 below removes the copy.
+So the rate was set by a 27 ms copy that spans two vsyncs, plus the wait
+for the GPU (a few to 25 ms a present). Stage 2 below removes the copy,
+and was switched on the same day: 365 flips in 10.02 s with none copied
+(`m5test perf 10`), up to 268 presents in 5 s, 11707 jobs and none failed,
+the GPU busy 5% of the time. By eye the desktop keeps up with a drag about
+as well as the CPU-rendered desktop does
+([photo](results/tspi3m-2026-11-14/desktop-scanned-out.jpg)).
 
 The first row is the state the 1 to 2 frames a second of 2026-11-13 was
 seen in; 41 to 45 presents in 5 s is 8 to 9 a second while dragging a
@@ -92,29 +98,41 @@ file exists:
 None of the three was needed. No half-drawn frame was seen without
 `present-wait`.
 
-## Stage 2, design only: scan out the primary
+## Stage 2: the VOP2 scans out the primary
 
-Step 6 goes away when the display controller reads the primary directly.
+Written as a design on 2026-11-13 around a contiguous pool for primaries;
+done on 2026-11-14 with the VOP2's IOMMU instead, which leaves the memory
+model alone (`drivers/maliwddm/scanout.c`).
 
-A flip is two writes to VOP2 (`0x27D00000`): `ESMART0 YRGB_MST` (`0x1814`)
-with the primary's physical address, then `REG_CFG_DONE` (`0x000`). The
-shadow registers latch at frame start, so the flip does not tear. A real
-vsync interrupt exists (VP0, SPI 379).
+- A primary gets a fixed range of IO addresses. When VidMm maps it, its
+  pages are entered in the VOP2 IOMMU's tables from the same page list the
+  Mali's MMU is given.
+- The firmware framebuffer is entered at its own physical address, so the
+  picture survives translation being switched on, and the bugcheck screen,
+  a blt present and a stop have something to return to.
+- A flip is two writes: `ESMART0 YRGB_MST` (`0x1814`), then `REG_CFG_DONE`
+  (`0x000`, value `0x00018001` for VP0). The VOP2's own registers are
+  written and never read; on this SoC reading them has cost the HDMI signal
+  before. The IOMMU's registers (`0x27D07E00`, `0x27D07F00`) are read.
+- It is off after every boot. `m5test scan 1` turns it on, `m5test scan 0`
+  goes back to the copy, `m5test scan 2` also turns translation off, and
+  `m5test scan` reports.
 
-What stands in the way:
+Measured when it was first turned on: both IOMMU instances report paging
+enabled (status `0x19`), four primaries had been entered, none refused for
+size, and no flip went back to the framebuffer.
 
-- `YRGB_MST` is a 32-bit physical address and no IOMMU is on. The primary's
-  pages today are scattered and can lie above 4 GB. Either the VOP IOMMU is
-  programmed from the same page list the Mali MMU gets, or primaries come
-  from a contiguous pool below 4 GB. Both change the kernel driver's memory
-  model.
-- The VOP registers belong to the `DSP0` ACPI device, not the GPU, and the
-  interrupt was left out of its description after bugchecks in WinPE.
-- Nothing in Windows keeps the VOP clocks and power domain on.
-- On this SoC, reading VOP2 registers and incremental writes have killed
-  the HDMI signal before. The flip must be write-only.
-- The bugcheck screen and the hand-back to the firmware display must point
-  `YRGB_MST` at the firmware framebuffer again.
+Not done:
+
+- The vsync is still the 16 ms timer, not the VOP2's. A flip is reported
+  at the next tick, which is not the frame the VOP2 latched it on. No
+  tearing was seen; none was looked for with a test pattern.
+- It does not survive a reboot by itself, on purpose, until it has run for
+  longer than one session.
+- Nothing in Windows keeps the VOP2's clocks and power domain on.
+- Display off and on, a mode change, sleep, and the bugcheck screen have
+  not been tried with it on.
+- Only the TaishanPi 3M at 2560x1440, the firmware's mode.
 
 ## Also run that day
 
