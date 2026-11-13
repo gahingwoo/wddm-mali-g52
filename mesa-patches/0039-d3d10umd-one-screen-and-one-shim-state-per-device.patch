@@ -1,0 +1,261 @@
+diff --git a/src/gallium/auxiliary/util/u_screen.c b/src/gallium/auxiliary/util/u_screen.c
+index da9cdfc..0e3e17b 100644
+--- a/src/gallium/auxiliary/util/u_screen.c
++++ b/src/gallium/auxiliary/util/u_screen.c
+@@ -229,6 +229,14 @@ equal_file_description(const void *key1, const void *key2)
+    if (fd1 == fd2)
+       return true;
+ 
++#ifdef _WIN32
++   /* wddm-mali-g52: the fd is a placeholder (NUL or a pipe end) and says
++    * nothing about the device. Every Direct3D device gets a screen of its
++    * own, bound to that device's runtime callbacks; two placeholders must
++    * never compare equal, whatever fstat makes of them. */
++   return false;
++#endif
++
+    ret = os_same_file_description(fd1, fd2);
+    if (ret >= 0)
+       return (ret == 0);
+diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
+index bf54fcb..611efd4 100644
+--- a/src/gallium/frontends/d3d10umd/Device.cpp
++++ b/src/gallium/frontends/d3d10umd/Device.cpp
+@@ -393,6 +393,8 @@ DestroyDevice(D3D10DDI_HDEVICE hDevice)   // IN
+ 
+    pipe->destroy(pipe);
+    pDevice->screen->destroy(pDevice->screen);
++   /* The shim keeps a set of state per runtime device. */
++   d3d10_unbind_runtime(pDevice->hDevice);
+ }
+ 
+ 
+diff --git a/src/gallium/frontends/d3d10umd/DxgiFns.cpp b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+index 1266e21..6deb4a8 100644
+--- a/src/gallium/frontends/d3d10umd/DxgiFns.cpp
++++ b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+@@ -80,7 +80,7 @@ _Present(DXGI_DDI_ARG_PRESENT *pPresentData)
+     */
+    if (pSrcResource->shared_allocation) {
+       HRESULT hr = (HRESULT)d3d10_present_allocation(
+-         pSrcResource->shared_allocation,
++         device->hDevice, pSrcResource->shared_allocation,
+          pDstResource ? pDstResource->present_allocation : 0,
+          pPresentData->pDXGIContext);
+       if (hr != S_OK)
+@@ -88,11 +88,11 @@ _Present(DXGI_DDI_ARG_PRESENT *pPresentData)
+       return hr;
+    }
+ 
+-   d3d10_present_target(pSrcResource->present_allocation,
++   d3d10_present_target(device->hDevice, pSrcResource->present_allocation,
+                         pDstResource ? pDstResource->present_allocation : 0, 1);
+    device->pipe->screen->flush_frontbuffer(device->pipe->screen, device->pipe, 
+       pSrcResource->resource, 0, 0, pPresentData->pDXGIContext, 0, NULL);
+-   d3d10_present_target(0, 0, 0);
++   d3d10_present_target(NULL, 0, 0, 0);
+ 
+    /* What the runtime made of it. DXGI acts on this (a changed present mode,
+     * an occluded window); returning S_OK regardless hid every failure. */
+@@ -165,7 +165,8 @@ _SetDisplayMode( DXGI_DDI_ARG_SETDISPLAYMODE *SetDisplayMode )
+    Resource *pResource = CastResource(SetDisplayMode->hResource);
+ 
+    if (pResource && pResource->present_allocation)
+-      return (HRESULT)d3d10_set_display_mode(pResource->present_allocation);
++      return (HRESULT)d3d10_set_display_mode(CastDevice(SetDisplayMode->hDevice)->hDevice,
++                                             pResource->present_allocation);
+ 
+    return S_OK;
+ }
+diff --git a/src/gallium/frontends/d3d10umd/Resource.cpp b/src/gallium/frontends/d3d10umd/Resource.cpp
+index 80d32bb..ba748c0 100644
+--- a/src/gallium/frontends/d3d10umd/Resource.cpp
++++ b/src/gallium/frontends/d3d10umd/Resource.cpp
+@@ -442,7 +442,7 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+    pResource->present_allocation = 0;
+    if (pCreateResource->pPrimaryDesc && pResource->resource) {
+       pResource->present_allocation =
+-         d3d10_primary_create((void *)hRTResource.handle,
++         d3d10_primary_create(CastDevice(hDevice)->hDevice, (void *)hRTResource.handle,
+                               pCreateResource->pMipInfoList[0].TexelWidth,
+                               pCreateResource->pMipInfoList[0].TexelHeight,
+                               pCreateResource->pPrimaryDesc->VidPnSourceId);
+@@ -678,7 +678,7 @@ DestroyResource(D3D10DDI_HDEVICE hDevice,       // IN
+    }
+ 
+    if (pResource->present_allocation) {
+-      d3d10_primary_destroy(pResource->present_allocation);
++      d3d10_primary_destroy(CastDevice(hDevice)->hDevice, pResource->present_allocation);
+       pResource->present_allocation = 0;
+    }
+ 
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index b5397b3..c0a40f1 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -167,10 +167,15 @@ SetError(D3D10DDI_HDEVICE hDevice, HRESULT hr)
+ 
+ 
+ extern "C" {
+-unsigned d3d10_primary_create(void *hRTResource, unsigned w, unsigned h, unsigned vidpn_source);
+-void d3d10_primary_destroy(unsigned handle);
+-void d3d10_present_target(unsigned src_allocation, unsigned dst_allocation, int set);
+-long d3d10_set_display_mode(unsigned primary_allocation);
++/* The first argument of each is the runtime's device handle: a process may
++ * have several devices, each with its own screen and allocations. */
++unsigned d3d10_primary_create(void *hRTDevice, void *hRTResource, unsigned w, unsigned h,
++                              unsigned vidpn_source);
++void d3d10_primary_destroy(void *hRTDevice, unsigned handle);
++void d3d10_present_target(void *hRTDevice, unsigned src_allocation, unsigned dst_allocation,
++                          int set);
++long d3d10_set_display_mode(void *hRTDevice, unsigned primary_allocation);
++void d3d10_unbind_runtime(void *hRTDevice);
+ long d3d10_present_result(void);
+ /* Shared resources on the hardware runtime; see malikm_drm.c. Between a
+  * begin and the end, the buffer the driver creates on this thread is the
+@@ -182,7 +187,7 @@ unsigned d3d10_shared_end(void);
+ void d3d10_shared_destroy(void *hRTDevice, void *hRTResource);
+ /* Present an allocation of the runtime's as it is; the HRESULT of the
+  * runtime's present callback. */
+-long d3d10_present_allocation(unsigned src_allocation, unsigned dst_allocation,
++long d3d10_present_allocation(void *hRTDevice, unsigned src_allocation, unsigned dst_allocation,
+                               void *dxgi_context);
+ }
+ 
+diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+index da58f98..2855b2b 100644
+--- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
++++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+@@ -189,27 +189,32 @@ d3d10_bind_runtime(HANDLE hRTAdapter, HANDLE hRTDevice, const void *pKTCallbacks
+ /* Primaries and presents on the hardware runtime; see malikm_drm.c. Without
+  * Panfrost there is no runtime device to ask and these do nothing. */
+ #ifdef GALLIUM_PANFROST
+-unsigned malikm_primary_create(void *hRTResource, unsigned w, unsigned h, unsigned vidpn_source);
+-void malikm_primary_destroy(unsigned handle);
+-void malikm_present_target(unsigned src_allocation, unsigned dst_allocation, int set);
+-long malikm_set_display_mode(unsigned primary_allocation);
++unsigned malikm_primary_create(void *hRTDevice, void *hRTResource, unsigned w, unsigned h,
++                               unsigned vidpn_source);
++void malikm_primary_destroy(void *hRTDevice, unsigned handle);
++void malikm_present_target(void *hRTDevice, unsigned src_allocation, unsigned dst_allocation,
++                           int set);
++long malikm_set_display_mode(void *hRTDevice, unsigned primary_allocation);
++void malikm_bind_done(void);
++void malikm_unbind_d3dddi(void *hRTDevice);
+ long malikm_present_result(void);
+ void malikm_shared_begin_create(void *hRTDevice, void *hRTResource, unsigned w, unsigned h,
+                                 const void *desc, unsigned desc_size);
+ void malikm_shared_begin_open(void *hRTDevice, void *hRTResource, unsigned hAllocation);
+ unsigned malikm_shared_end(void);
+ void malikm_shared_destroy(void *hRTDevice, void *hRTResource);
+-long malikm_present_allocation(unsigned src_allocation, unsigned dst_allocation,
++long malikm_present_allocation(void *hRTDevice, unsigned src_allocation, unsigned dst_allocation,
+                                void *dxgi_context);
+ #endif
+ 
+ long
+-d3d10_present_allocation(unsigned src_allocation, unsigned dst_allocation, void *dxgi_context)
++d3d10_present_allocation(void *hRTDevice, unsigned src_allocation, unsigned dst_allocation,
++                         void *dxgi_context)
+ {
+ #ifdef GALLIUM_PANFROST
+-   return malikm_present_allocation(src_allocation, dst_allocation, dxgi_context);
++   return malikm_present_allocation(hRTDevice, src_allocation, dst_allocation, dxgi_context);
+ #else
+-   (void)src_allocation; (void)dst_allocation; (void)dxgi_context;
++   (void)hRTDevice; (void)src_allocation; (void)dst_allocation; (void)dxgi_context;
+    return 0;
+ #endif
+ }
+@@ -256,43 +261,44 @@ d3d10_shared_destroy(void *hRTDevice, void *hRTResource)
+ }
+ 
+ unsigned
+-d3d10_primary_create(void *hRTResource, unsigned w, unsigned h, unsigned vidpn_source)
++d3d10_primary_create(void *hRTDevice, void *hRTResource, unsigned w, unsigned h,
++                     unsigned vidpn_source)
+ {
+ #ifdef GALLIUM_PANFROST
+-   return malikm_primary_create(hRTResource, w, h, vidpn_source);
++   return malikm_primary_create(hRTDevice, hRTResource, w, h, vidpn_source);
+ #else
+-   (void)hRTResource; (void)w; (void)h; (void)vidpn_source;
++   (void)hRTDevice; (void)hRTResource; (void)w; (void)h; (void)vidpn_source;
+    return 0;
+ #endif
+ }
+ 
+ void
+-d3d10_primary_destroy(unsigned handle)
++d3d10_primary_destroy(void *hRTDevice, unsigned handle)
+ {
+ #ifdef GALLIUM_PANFROST
+-   malikm_primary_destroy(handle);
++   malikm_primary_destroy(hRTDevice, handle);
+ #else
+-   (void)handle;
++   (void)hRTDevice; (void)handle;
+ #endif
+ }
+ 
+ void
+-d3d10_present_target(unsigned src_allocation, unsigned dst_allocation, int set)
++d3d10_present_target(void *hRTDevice, unsigned src_allocation, unsigned dst_allocation, int set)
+ {
+ #ifdef GALLIUM_PANFROST
+-   malikm_present_target(src_allocation, dst_allocation, set);
++   malikm_present_target(hRTDevice, src_allocation, dst_allocation, set);
+ #else
+-   (void)src_allocation; (void)dst_allocation; (void)set;
++   (void)hRTDevice; (void)src_allocation; (void)dst_allocation; (void)set;
+ #endif
+ }
+ 
+ long
+-d3d10_set_display_mode(unsigned primary_allocation)
++d3d10_set_display_mode(void *hRTDevice, unsigned primary_allocation)
+ {
+ #ifdef GALLIUM_PANFROST
+-   return malikm_set_display_mode(primary_allocation);
++   return malikm_set_display_mode(hRTDevice, primary_allocation);
+ #else
+-   (void)primary_allocation;
++   (void)hRTDevice; (void)primary_allocation;
+    return 0;
+ #endif
+ }
+@@ -309,8 +315,34 @@ d3d10_present_result(void)
+ 
+ void DebugPrintf(const char *format, ...);
+ 
++void
++d3d10_unbind_runtime(void *hRTDevice)
++{
++#ifdef GALLIUM_PANFROST
++   malikm_unbind_d3dddi(hRTDevice);
++#else
++   (void)hRTDevice;
++#endif
++}
++
++static struct pipe_screen *
++d3d10_create_screen_inner(void);
++
++/* The screen of the device d3d10_bind_runtime was just called for (or of
++ * none). The shim tells this device's fds from other devices' by their
++ * first use happening in here. */
+ struct pipe_screen *
+ d3d10_create_screen(void)
++{
++   struct pipe_screen *screen = d3d10_create_screen_inner();
++#ifdef GALLIUM_PANFROST
++   malikm_bind_done();
++#endif
++   return screen;
++}
++
++static struct pipe_screen *
++d3d10_create_screen_inner(void)
+ {
+    const char *default_driver;
+    const char *driver;
