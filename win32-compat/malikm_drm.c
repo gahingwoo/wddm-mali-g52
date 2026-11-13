@@ -336,10 +336,26 @@ drmCloseBufferHandle(int fd, uint32_t handle)
    return drmIoctl(fd, DRM_IOCTL_GEM_CLOSE, &c);
 }
 
+/* Set by the maliwddm backend below: 1 if the BO is the allocation of a
+ * runtime resource (a shared resource, created or opened). */
+static int wddm_bo_is_resource(uint32_t handle);
+
+/* Panfrost exports a BO to mark it as shared: from then on it neither goes
+ * back to the BO cache nor is swapped for a fresh one when it is mapped for
+ * writing. On maliwddm a shared resource travels through the runtime, not
+ * through an fd, so the export of such a BO only has to succeed: the fd is
+ * a placeholder the caller closes. Everything else is still unsupported. */
 int
 drmPrimeHandleToFD(int fd, uint32_t handle, uint32_t flags, int *prime_fd)
 {
-   (void)fd; (void)handle; (void)flags; (void)prime_fd;
+   (void)fd; (void)flags;
+   if (wddm_on() && prime_fd && wddm_bo_is_resource(handle)) {
+      int p = _open("NUL", _O_RDWR | _O_NOINHERIT);
+      if (p >= 0) {
+         *prime_fd = p;
+         return 0;
+      }
+   }
    errno = ENOSYS;
    return -ENOSYS;
 }
@@ -582,6 +598,15 @@ struct wbo {
    uint64_t size, va;
    void *cpu;
    uint64_t listed;     /* submit that last put it in the allocation list */
+   /* The allocation of a runtime resource (a shared resource, created here
+    * or opened from another process): the runtime resource and the runtime
+    * device it belongs to. Such an allocation is given back through the
+    * resource (malikm_shared_destroy), never by handle at GEM_CLOSE. */
+   void *rt_resource;
+   HANDLE rt_device;
+   /* Given back already, while Panfrost still holds the BO: kept out of
+    * every allocation list until its GEM_CLOSE. */
+   int released;
 };
 static struct wbo *wbo;
 static uint32_t wbo_cap;
@@ -1193,6 +1218,129 @@ wddm_bo(uint32_t h)
 }
 
 static int
+wddm_bo_is_resource(uint32_t handle)
+{
+   int ret;
+
+   AcquireSRWLockShared(&wddm_lock);
+   struct wbo *bo = wddm_bo(handle);
+   ret = bo && bo->rt_resource && !bo->released;
+   ReleaseSRWLockShared(&wddm_lock);
+   return ret;
+}
+
+/*
+ * Shared resources (D3D10_DDI_RESOURCE_MISC_SHARED): one process renders
+ * into the surface and another samples it, with no copy in between
+ * (LogonUI.exe and dwm.exe: the logon screen). So the buffer Panfrost
+ * renders into has to be an allocation the runtime knows as the resource's:
+ * made through pfnAllocateCb with the runtime's resource handle on the
+ * creating side, and on the opening side the allocation handle the runtime
+ * passes to OpenResource. maliwddm gives an allocation one GPU address for
+ * its whole life in the one address space all processes share, so both
+ * sides see the same GPU address.
+ *
+ * d3d10umd brackets screen->resource_create with malikm_shared_begin_* and
+ * malikm_shared_end on the calling thread; the first CREATE_BO in between
+ * becomes (create) or wraps (open) that allocation. The template has
+ * PIPE_BIND_SHARED, which keeps Panfrost away from its BO cache and makes
+ * the layout linear on both sides.
+ */
+#define SHARED_CREATE 1
+#define SHARED_OPEN   2
+#define SHARED_PRIV_MAX 128
+
+static __declspec(thread) struct {
+   int mode;                    /* 0, SHARED_CREATE, SHARED_OPEN */
+   int done;                    /* a BO took the allocation */
+   HANDLE device;               /* the runtime device of the resource */
+   void *rt_resource;
+   unsigned w, h;
+   unsigned char priv[SHARED_PRIV_MAX];
+   unsigned priv_size;
+   D3DKMT_HANDLE allocation;    /* open: in; create: out */
+} shared_next;
+
+void
+malikm_shared_begin_create(void *hRTDevice, void *hRTResource, unsigned w, unsigned h,
+                           const void *desc, unsigned desc_size)
+{
+   memset(&shared_next, 0, sizeof(shared_next));
+   if (desc_size > SHARED_PRIV_MAX) {
+      DebugPrintf("shared create: description of %u bytes does not fit\n", desc_size);
+      return;
+   }
+   shared_next.mode = SHARED_CREATE;
+   shared_next.device = hRTDevice;
+   shared_next.rt_resource = hRTResource;
+   shared_next.w = w;
+   shared_next.h = h;
+   memcpy(shared_next.priv, desc, desc_size);
+   shared_next.priv_size = desc_size;
+}
+
+void
+malikm_shared_begin_open(void *hRTDevice, void *hRTResource, unsigned hAllocation)
+{
+   memset(&shared_next, 0, sizeof(shared_next));
+   shared_next.mode = SHARED_OPEN;
+   shared_next.device = hRTDevice;
+   shared_next.rt_resource = hRTResource;
+   shared_next.allocation = hAllocation;
+}
+
+/* The allocation the BO was made on; 0 if no BO was created in between (a
+ * BO from Panfrost's cache, or not the runtime's device) or it failed. */
+unsigned
+malikm_shared_end(void)
+{
+   unsigned ret = shared_next.done ? shared_next.allocation : 0;
+
+   if (shared_next.mode && !shared_next.done)
+      DebugPrintf("shared %s: resource %p: no buffer was made on the allocation\n",
+                  shared_next.mode == SHARED_CREATE ? "create" : "open", shared_next.rt_resource);
+   memset(&shared_next, 0, sizeof(shared_next));
+   return ret;
+}
+
+/* Give the resource's allocations back to the runtime: the creator's are
+ * destroyed when the last process lets go, an opener's are closed. Called
+ * after d3d10umd has flushed and dropped its reference. */
+void
+malikm_shared_destroy(void *hRTDevice, void *hRTResource)
+{
+   if (!hRTResource)
+      return;
+   AcquireSRWLockExclusive(&wddm_lock);
+   if (ddi.on && ddi.cb.pfnDeallocateCb) {
+      D3DDDICB_DEALLOCATE d = {0};
+      unsigned held = 0;
+      HRESULT hr;
+      int idle;
+
+      /* Nothing submitted may still be running on it. */
+      idle = wddm_idle();
+      for (uint32_t i = 0; i < wbo_cap; i++) {
+         struct wbo *bo = &wbo[i];
+         if (!bo->h || bo->rt_resource != hRTResource || bo->rt_device != (HANDLE)hRTDevice)
+            continue;
+         /* Panfrost has not closed it (a batch still refers to it). */
+         if (bo->cpu)
+            w_unlock(bo->h);
+         bo->cpu = NULL;
+         bo->released = 1;
+         held++;
+      }
+      d.hResource = hRTResource;
+      hr = ddi.cb.pfnDeallocateCb((HANDLE)hRTDevice, &d);
+      DebugPrintf("shared destroy: resource %p device %p, idle %d, %u buffer(s) still held,"
+                  " pfnDeallocateCb 0x%08lx\n", hRTResource, hRTDevice, idle, held,
+                  (unsigned long)hr);
+   }
+   ReleaseSRWLockExclusive(&wddm_lock);
+}
+
+static int
 wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
 {
    switch (nr) {
@@ -1208,21 +1356,87 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       uint64_t sz = ((uint64_t)a->size + 4095) & ~4095ull;
       if (a->flags & PANFROST_BO_HEAP)
          sz = (sz + 0x1fffff) & ~0x1fffffull;
-      MW_ALLOCATION_INFO pi = {0};
-      pi.Version = MW_ABI_VERSION;
-      pi.Flags = (a->flags & PANFROST_BO_NOEXEC) ? MW_ALLOC_NOEXEC : 0;
-      pi.Size = sz;
+      struct {
+         MW_ALLOCATION_INFO pi;
+         unsigned char desc[SHARED_PRIV_MAX];   /* a shared resource's description */
+      } priv;
       D3DDDI_ALLOCATIONINFO ai = {0};
-      ai.pPrivateDriverData = &pi;
-      ai.PrivateDriverDataSize = sizeof(pi);
-      if (w_create(&ai) < 0)
-         return -MK_ENOMEM;
       MW_ESCAPE_ALLOC_INFO_DATA where = {0};
+      int shared = ddi.on && !shared_next.done ? shared_next.mode : 0;
+
+      memset(&priv, 0, sizeof(priv));
+      priv.pi.Version = MW_ABI_VERSION;
+      priv.pi.Flags = (a->flags & PANFROST_BO_NOEXEC) ? MW_ALLOC_NOEXEC : 0;
+      priv.pi.Size = sz;
+      ai.pPrivateDriverData = &priv;
+      ai.PrivateDriverDataSize = sizeof(priv.pi);
       where.Code = MW_ESCAPE_ALLOC_INFO;
-      where.hAllocation = ai.hAllocation;
-      if (w_escape(&where, sizeof(where)) < 0 || where.GpuVa == 0) {
-         w_destroy(ai.hAllocation);
-         return -MK_ENOMEM;
+
+      if (shared_next.mode && !shared)
+         DebugPrintf("shared: another buffer of %llu bytes while resource %p is being made"
+                     " (bound %d); it gets an allocation of its own\n",
+                     (unsigned long long)sz, shared_next.rt_resource, ddi.on);
+
+      if (shared == SHARED_OPEN) {
+         /* The allocation exists: the runtime opened it for this device. */
+         NTSTATUS est;
+         where.hAllocation = shared_next.allocation;
+         est = w_escape(&where, sizeof(where));
+         DebugPrintf("shared open: resource %p device %p (bound device %p), allocation 0x%x:"
+                     " escape 0x%08lx, GPU 0x%llx, %llu bytes, wanted %llu\n",
+                     shared_next.rt_resource, (void *)shared_next.device, (void *)ddi.device,
+                     (unsigned)shared_next.allocation, (unsigned long)est,
+                     (unsigned long long)where.GpuVa, (unsigned long long)where.Size,
+                     (unsigned long long)sz);
+         if (est < 0 || where.GpuVa == 0 || where.Size < sz)
+            return -MK_ENOMEM;
+         ai.hAllocation = shared_next.allocation;
+      } else if (shared == SHARED_CREATE) {
+         /* The runtime's resource gets this allocation, and with it the
+          * description the opening side rebuilds the resource from: as the
+          * resource's private data and again behind the allocation's. */
+         D3DDDICB_ALLOCATE al = {0};
+         HRESULT hr;
+
+         priv.pi.Width = shared_next.w;
+         priv.pi.Height = shared_next.h;
+         priv.pi.Pitch = shared_next.w * 4;
+         priv.pi.Format = D3DDDIFMT_A8R8G8B8;
+         memcpy(priv.desc, shared_next.priv, shared_next.priv_size);
+         ai.PrivateDriverDataSize = sizeof(priv.pi) + shared_next.priv_size;
+         al.pPrivateDriverData = shared_next.priv;
+         al.PrivateDriverDataSize = shared_next.priv_size;
+         al.hResource = shared_next.rt_resource;
+         al.NumAllocations = 1;
+         al.pAllocationInfo = &ai;
+         hr = ddi.cb.pfnAllocateCb(shared_next.device, &al);
+         DebugPrintf("shared create: resource %p device %p (bound device %p), %llu bytes:"
+                     " pfnAllocateCb 0x%08lx, allocation 0x%x, kernel resource 0x%x\n",
+                     shared_next.rt_resource, (void *)shared_next.device, (void *)ddi.device,
+                     (unsigned long long)sz, (unsigned long)hr, (unsigned)ai.hAllocation,
+                     (unsigned)al.hKMResource);
+         if (hr < 0)
+            return -MK_ENOMEM;
+         where.hAllocation = ai.hAllocation;
+         if (w_escape(&where, sizeof(where)) < 0 || where.GpuVa == 0) {
+            D3DDDICB_DEALLOCATE d = {0};
+            DebugPrintf("shared create: no GPU address for allocation 0x%x\n",
+                        (unsigned)ai.hAllocation);
+            d.hResource = shared_next.rt_resource;
+            ddi.cb.pfnDeallocateCb(shared_next.device, &d);
+            return -MK_ENOMEM;
+         }
+         DebugPrintf("shared create: allocation 0x%x at GPU 0x%llx, %llu bytes\n",
+                     (unsigned)ai.hAllocation, (unsigned long long)where.GpuVa,
+                     (unsigned long long)where.Size);
+      } else {
+         if (w_create(&ai) < 0)
+            return -MK_ENOMEM;
+         where.hAllocation = ai.hAllocation;
+         if (w_escape(&where, sizeof(where)) < 0 || where.GpuVa == 0) {
+            w_destroy(ai.hAllocation);
+            return -MK_ENOMEM;
+         }
       }
       uint32_t h = 0;
       for (uint32_t i = 0; i < wbo_cap && !h; i++)
@@ -1231,14 +1445,28 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       if (!h) {
          uint32_t cap = wbo_cap ? wbo_cap * 2 : 256;
          struct wbo *n = realloc(wbo, cap * sizeof(*n));
-         if (!n)
+         if (!n) {
+            if (shared == SHARED_CREATE) {
+               D3DDDICB_DEALLOCATE d = {0};
+               d.hResource = shared_next.rt_resource;
+               ddi.cb.pfnDeallocateCb(shared_next.device, &d);
+            } else if (!shared) {
+               w_destroy(ai.hAllocation);
+            }
             return -MK_ENOMEM;
+         }
          memset(n + wbo_cap, 0, (cap - wbo_cap) * sizeof(*n));
          wbo = n;
          h = wbo_cap + 1;
          wbo_cap = cap;
       }
       wbo[h - 1] = (struct wbo){ai.hAllocation, where.Size, where.GpuVa, NULL};
+      if (shared) {
+         wbo[h - 1].rt_resource = shared_next.rt_resource;
+         wbo[h - 1].rt_device = shared_next.device;
+         shared_next.allocation = ai.hAllocation;
+         shared_next.done = 1;
+      }
       a->handle = h;
       a->offset = where.GpuVa;
       /* Where every BO lives, so a GPU fault address can be traced back to
@@ -1286,7 +1514,7 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
          struct wbo *bo = wddm_bo(bos[i]);
          if (!bo)
             return -MK_ENOENT;
-         if (bo->listed == mark)
+         if (bo->listed == mark || bo->released)
             continue;
          bo->listed = mark;
          memset(&walloc[n], 0, sizeof(walloc[n]));
@@ -1303,7 +1531,7 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       uint32_t named = n;
       for (uint32_t i = 0; i < wbo_cap && n < walloc_size; i++) {
          struct wbo *bo = &wbo[i];
-         if (!bo->h || bo->listed == mark)
+         if (!bo->h || bo->released || bo->listed == mark)
             continue;
          bo->listed = mark;
          memset(&walloc[n], 0, sizeof(walloc[n]));
@@ -1336,6 +1564,12 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
                  ((struct drm_gem_close *)b)->handle, (unsigned long long)bo->va);
       if (bo->cpu)
          w_unlock(bo->h);
+      if (bo->rt_resource) {
+         /* A runtime resource's allocation goes back through the resource,
+          * in malikm_shared_destroy. */
+         memset(bo, 0, sizeof(*bo));
+         return 0;
+      }
       /* Not destroyed yet: see wdead. The handle number is free at once. */
       if (wdead_n == wdead_cap) {
          uint32_t cap = wdead_cap ? wdead_cap * 2 : WDEAD_FLUSH;
@@ -1400,7 +1634,7 @@ wddm_ioctl(DWORD code, void *buf, DWORD len)
       MALIKM_MAP *m = (MALIKM_MAP *)(h + 1);
       struct wbo *bo = wddm_bo(MALIKM_MMAP_HANDLE(m->Offset));
       h->Result = -MK_EINVAL;
-      if (bo && m->Size <= bo->size) {
+      if (bo && !bo->released && m->Size <= bo->size) {
          if (!bo->cpu)
             bo->cpu = w_lock(bo->h);
          if (bo->cpu) {

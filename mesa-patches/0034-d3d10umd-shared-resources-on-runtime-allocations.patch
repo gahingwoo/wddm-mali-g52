@@ -1,0 +1,361 @@
+diff --git a/src/gallium/frontends/d3d10umd/Resource.cpp b/src/gallium/frontends/d3d10umd/Resource.cpp
+index 442b174..80d32bb 100644
+--- a/src/gallium/frontends/d3d10umd/Resource.cpp
++++ b/src/gallium/frontends/d3d10umd/Resource.cpp
+@@ -41,6 +41,74 @@
+ #include "util/u_math.h"
+ #include "util/u_rect.h"
+ #include "util/u_surface.h"
++#include "frontend/winsys_handle.h"
++
++#include <io.h>
++
++
++/*
++ * What the process that opens a shared resource needs to build the same
++ * pipe_resource on the creator's allocation. It travels through the runtime
++ * as private driver data: the resource's, and again behind the kernel
++ * driver's own data in the allocation's. Both sides are this DLL.
++ */
++#define SHARED_DESC_MAGIC0 0x494c414d  /* "MALI" */
++#define SHARED_DESC_MAGIC1 0x31524853  /* "SHR1" */
++
++struct SharedResourceDesc
++{
++   uint32_t Magic0, Magic1;
++   uint32_t Size;
++   uint32_t Target, PipeFormat;
++   uint32_t Width, Height, Depth, ArraySize, LastLevel;
++   uint32_t NrSamples, NrStorageSamples;
++   uint32_t Bind, Usage;
++   uint32_t DxgiFormat, MipLevels;
++};
++
++
++static const SharedResourceDesc *
++FindSharedDesc(const void *pData, UINT Size)
++{
++   const uint8_t *p = (const uint8_t *)pData;
++
++   if (!p)
++      return NULL;
++   for (UINT off = 0; off + sizeof(SharedResourceDesc) <= Size; off += 4) {
++      SharedResourceDesc desc;
++      memcpy(&desc, p + off, sizeof desc);
++      if (desc.Magic0 == SHARED_DESC_MAGIC0 && desc.Magic1 == SHARED_DESC_MAGIC1 &&
++          desc.Size == sizeof desc)
++         return (const SharedResourceDesc *)(p + off);
++   }
++   return NULL;
++}
++
++
++/*
++ * Have the driver treat the buffer as shared for good: Panfrost marks it
++ * when it is exported, and from then on neither returns it to its buffer
++ * cache nor replaces it when it is mapped for writing. The handle itself is
++ * not used; the surface travels through the runtime.
++ */
++static bool
++MarkResourceShared(struct pipe_context *pipe, struct pipe_resource *resource)
++{
++   struct pipe_screen *screen = pipe->screen;
++   struct winsys_handle whandle;
++
++   memset(&whandle, 0, sizeof whandle);
++   whandle.type = WINSYS_HANDLE_TYPE_FD;
++   if (!screen->resource_get_handle ||
++       !screen->resource_get_handle(screen, pipe, resource, &whandle, 0)) {
++      DebugPrintf("  shared: the driver did not export the buffer\n");
++      return false;
++   }
++   _close((int)(intptr_t)whandle.handle);
++   DebugPrintf("  shared: exported, stride %u offset %u modifier 0x%llx\n",
++               whandle.stride, whandle.offset, (unsigned long long)whandle.modifier);
++   return true;
++}
+ 
+ 
+ /*
+@@ -309,8 +377,63 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+       }
+    }
+ 
++   /*
++    * A shared resource is rendered here and sampled in another process, so
++    * the driver's buffer has to be the allocation the runtime shares: made
++    * through the runtime with its resource handle while the driver creates
++    * the buffer. PIPE_BIND_SHARED keeps the driver from reusing a cached
++    * buffer for it and fixes the layout, which the opening side repeats.
++    */
++   bool shared = (pCreateResource->MiscFlags & D3D10_DDI_RESOURCE_MISC_SHARED) != 0 &&
++                 templat.target != PIPE_BUFFER && !pCreateResource->pPrimaryDesc;
++   if (shared) {
++      Device *pDevice = CastDevice(hDevice);
++      SharedResourceDesc desc;
++
++      templat.bind |= PIPE_BIND_SHARED;
++
++      memset(&desc, 0, sizeof desc);
++      desc.Magic0 = SHARED_DESC_MAGIC0;
++      desc.Magic1 = SHARED_DESC_MAGIC1;
++      desc.Size = sizeof desc;
++      desc.Target = templat.target;
++      desc.PipeFormat = templat.format;
++      desc.Width = templat.width0;
++      desc.Height = templat.height0;
++      desc.Depth = templat.depth0;
++      desc.ArraySize = templat.array_size;
++      desc.LastLevel = templat.last_level;
++      desc.NrSamples = templat.nr_samples;
++      desc.NrStorageSamples = templat.nr_storage_samples;
++      desc.Bind = templat.bind;
++      desc.Usage = templat.usage;
++      desc.DxgiFormat = pCreateResource->Format;
++      desc.MipLevels = pCreateResource->MipLevels;
++
++      DebugPrintf("  shared: runtime resource %p, runtime device %p, bind 0x%x\n",
++                  hRTResource.handle, pDevice->hDevice, templat.bind);
++      d3d10_shared_begin_create(pDevice->hDevice, hRTResource.handle,
++                                templat.width0, templat.height0, &desc, sizeof desc);
++   }
++
+    pResource->resource = screen->resource_create(screen, &templat);
+-   if (!pResource) {
++
++   if (shared) {
++      pResource->shared_allocation = d3d10_shared_end();
++      DebugPrintf("  shared: pipe resource %p on allocation 0x%x\n",
++                  pResource->resource, pResource->shared_allocation);
++      if (pResource->resource && pResource->shared_allocation) {
++         pResource->shared_rt_resource = hRTResource.handle;
++         MarkResourceShared(pipe, pResource->resource);
++      } else if (pResource->resource) {
++         /* A buffer the runtime knows nothing about cannot be shared; the
++          * runtime gives up on the resource in that case (LogonUI.exe). */
++         DebugPrintf("  shared: not on a runtime allocation, failing the resource\n");
++         pipe_resource_reference(&pResource->resource, NULL);
++      }
++   }
++
++   if (!pResource->resource) {
+       DebugPrintf("%s: failed to create resource\n", __func__);
+       SetError(hDevice, E_OUTOFMEMORY);
+       return;
+@@ -429,8 +552,101 @@ OpenResource(D3D10DDI_HDEVICE hDevice,                            // IN
+              D3D10DDI_HRESOURCE hResource,                        // IN
+              D3D10DDI_HRTRESOURCE hRTResource)                    // IN
+ {
+-   LOG_UNSUPPORTED_ENTRYPOINT();
+-   SetError(hDevice, E_OUTOFMEMORY);
++   LOG_ENTRYPOINT();
++
++   Device *pDevice = CastDevice(hDevice);
++   struct pipe_context *pipe = pDevice->pipe;
++   struct pipe_screen *screen = pipe->screen;
++   Resource *pResource = CastResource(hResource);
++
++   memset(pResource, 0, sizeof *pResource);
++
++   DebugPrintf("OpenResource(hResource=%p): runtime resource %p, runtime device %p,"
++               " kernel resource 0x%x, %u allocation(s), resource private data %p %u bytes\n",
++               hResource.pDrvPrivate, hRTResource.handle, pDevice->hDevice,
++               (unsigned)pOpenResource->hKMResource.handle, pOpenResource->NumAllocations,
++               pOpenResource->pPrivateDriverData, pOpenResource->PrivateDriverDataSize);
++   if (pOpenResource->NumAllocations >= 1 && pOpenResource->pOpenAllocationInfo) {
++      DebugPrintf("  allocation 0: handle 0x%x, private data %p %u bytes\n",
++                  (unsigned)pOpenResource->pOpenAllocationInfo[0].hAllocation,
++                  pOpenResource->pOpenAllocationInfo[0].pPrivateDriverData,
++                  pOpenResource->pOpenAllocationInfo[0].PrivateDriverDataSize);
++   }
++   if (pOpenResource->NumAllocations != 1 || !pOpenResource->pOpenAllocationInfo) {
++      DebugPrintf("OpenResource XXX: not one allocation\n");
++      SetError(hDevice, E_INVALIDARG);
++      return;
++   }
++
++   /* The creator's description: with the resource, or else behind the
++    * kernel driver's data in the allocation's private data. */
++   const SharedResourceDesc *found =
++      FindSharedDesc(pOpenResource->pPrivateDriverData, pOpenResource->PrivateDriverDataSize);
++   if (found) {
++      DebugPrintf("  description in the resource's private data\n");
++   } else {
++      found = FindSharedDesc(pOpenResource->pOpenAllocationInfo[0].pPrivateDriverData,
++                             pOpenResource->pOpenAllocationInfo[0].PrivateDriverDataSize);
++      if (found)
++         DebugPrintf("  description in the allocation's private data\n");
++   }
++   if (!found) {
++      /* Not made by this driver's CreateResource for a shared resource: a
++       * surface the runtime or the kernel created itself. */
++      DebugPrintf("OpenResource XXX: no description of the resource in its private data\n");
++      SetError(hDevice, E_INVALIDARG);
++      return;
++   }
++
++   SharedResourceDesc desc;
++   memcpy(&desc, found, sizeof desc);
++   DebugPrintf("  %ux%ux%u array %u levels %u samples %u, target %u format %s (%s),"
++               " bind 0x%x usage %u\n",
++               desc.Width, desc.Height, desc.Depth, desc.ArraySize, desc.LastLevel + 1,
++               desc.NrSamples, desc.Target, FormatToName((DXGI_FORMAT)desc.DxgiFormat),
++               util_format_name((enum pipe_format)desc.PipeFormat), desc.Bind, desc.Usage);
++
++   struct pipe_resource templat;
++
++   memset(&templat, 0, sizeof templat);
++   templat.target     = (enum pipe_texture_target)desc.Target;
++   templat.format     = (enum pipe_format)desc.PipeFormat;
++   templat.width0     = desc.Width;
++   templat.height0    = desc.Height;
++   templat.depth0     = desc.Depth;
++   templat.array_size = desc.ArraySize;
++   templat.last_level = desc.LastLevel;
++   templat.nr_samples = desc.NrSamples;
++   templat.nr_storage_samples = desc.NrStorageSamples;
++   templat.bind       = desc.Bind | PIPE_BIND_SHARED;
++   templat.usage      = (enum pipe_resource_usage)desc.Usage;
++
++   pResource->Format = (DXGI_FORMAT)desc.DxgiFormat;
++   pResource->MipLevels = desc.MipLevels;
++   pResource->buffer = templat.target == PIPE_BUFFER;
++
++   /* The same pipe_resource as the creator's, on the allocation the runtime
++    * opened for this device instead of a new one. */
++   d3d10_shared_begin_open(pDevice->hDevice, hRTResource.handle,
++                           (unsigned)pOpenResource->pOpenAllocationInfo[0].hAllocation);
++   pResource->resource = screen->resource_create(screen, &templat);
++   pResource->shared_allocation = d3d10_shared_end();
++   DebugPrintf("  opened: pipe resource %p on allocation 0x%x\n",
++               pResource->resource, pResource->shared_allocation);
++   if (pResource->resource && !pResource->shared_allocation) {
++      DebugPrintf("OpenResource XXX: the buffer is not the opened allocation\n");
++      pipe_resource_reference(&pResource->resource, NULL);
++   }
++   if (!pResource->resource) {
++      SetError(hDevice, E_OUTOFMEMORY);
++      return;
++   }
++   pResource->shared_rt_resource = hRTResource.handle;
++   MarkResourceShared(pipe, pResource->resource);
++
++   pResource->NumSubResources = desc.MipLevels * desc.ArraySize;
++   pResource->transfers = (struct pipe_transfer **)calloc(pResource->NumSubResources,
++                                                          sizeof *pResource->transfers);
+ }
+ 
+ 
+@@ -478,6 +694,22 @@ DestroyResource(D3D10DDI_HDEVICE hDevice,       // IN
+    }
+    free(pResource->transfers);
+ 
++   if (pResource->shared_rt_resource) {
++      /* Nothing may still be drawing into or sampling the allocation when
++       * the runtime gets it back: submit what refers to it, drop the
++       * buffer, then return it (the shim waits for the GPU first). */
++      Device *pDevice = CastDevice(hDevice);
++
++      DebugPrintf("DestroyResource: shared, runtime resource %p allocation 0x%x\n",
++                  pResource->shared_rt_resource, pResource->shared_allocation);
++      pipe->flush(pipe, NULL, 0);
++      pipe_resource_reference(&pResource->resource, NULL);
++      d3d10_shared_destroy(pDevice->hDevice, pResource->shared_rt_resource);
++      pResource->shared_rt_resource = NULL;
++      pResource->shared_allocation = 0;
++      return;
++   }
++
+    pipe_resource_reference(&pResource->resource, NULL);
+ }
+ 
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index 25869f4..22e1dde 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -169,6 +169,14 @@ void d3d10_primary_destroy(unsigned handle);
+ void d3d10_present_target(unsigned src_allocation, unsigned dst_allocation, int set);
+ long d3d10_set_display_mode(unsigned primary_allocation);
+ long d3d10_present_result(void);
++/* Shared resources on the hardware runtime; see malikm_drm.c. Between a
++ * begin and the end, the buffer the driver creates on this thread is the
++ * runtime resource's allocation. */
++void d3d10_shared_begin_create(void *hRTDevice, void *hRTResource, unsigned w, unsigned h,
++                               const void *desc, unsigned desc_size);
++void d3d10_shared_begin_open(void *hRTDevice, void *hRTResource, unsigned hAllocation);
++unsigned d3d10_shared_end(void);
++void d3d10_shared_destroy(void *hRTDevice, void *hRTResource);
+ }
+ 
+ struct Resource
+@@ -183,6 +191,11 @@ struct Resource
+    /* For a primary on the hardware runtime: the allocation the runtime
+     * presents, 0 otherwise. See d3d10_primary_create(). */
+    unsigned present_allocation;
++   /* For a shared resource on the hardware runtime, created or opened: the
++    * runtime's resource, whose allocation the driver's buffer is, and that
++    * allocation. NULL and 0 otherwise. */
++   void *shared_rt_resource;
++   unsigned shared_allocation;
+ };
+ 
+ 
+diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+index 408d1ef..ee02c01 100644
+--- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
++++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+@@ -194,8 +194,54 @@ void malikm_primary_destroy(unsigned handle);
+ void malikm_present_target(unsigned src_allocation, unsigned dst_allocation, int set);
+ long malikm_set_display_mode(unsigned primary_allocation);
+ long malikm_present_result(void);
++void malikm_shared_begin_create(void *hRTDevice, void *hRTResource, unsigned w, unsigned h,
++                                const void *desc, unsigned desc_size);
++void malikm_shared_begin_open(void *hRTDevice, void *hRTResource, unsigned hAllocation);
++unsigned malikm_shared_end(void);
++void malikm_shared_destroy(void *hRTDevice, void *hRTResource);
+ #endif
+ 
++void
++d3d10_shared_begin_create(void *hRTDevice, void *hRTResource, unsigned w, unsigned h,
++                          const void *desc, unsigned desc_size)
++{
++#ifdef GALLIUM_PANFROST
++   malikm_shared_begin_create(hRTDevice, hRTResource, w, h, desc, desc_size);
++#else
++   (void)hRTDevice; (void)hRTResource; (void)w; (void)h; (void)desc; (void)desc_size;
++#endif
++}
++
++void
++d3d10_shared_begin_open(void *hRTDevice, void *hRTResource, unsigned hAllocation)
++{
++#ifdef GALLIUM_PANFROST
++   malikm_shared_begin_open(hRTDevice, hRTResource, hAllocation);
++#else
++   (void)hRTDevice; (void)hRTResource; (void)hAllocation;
++#endif
++}
++
++unsigned
++d3d10_shared_end(void)
++{
++#ifdef GALLIUM_PANFROST
++   return malikm_shared_end();
++#else
++   return 0;
++#endif
++}
++
++void
++d3d10_shared_destroy(void *hRTDevice, void *hRTResource)
++{
++#ifdef GALLIUM_PANFROST
++   malikm_shared_destroy(hRTDevice, hRTResource);
++#else
++   (void)hRTDevice; (void)hRTResource;
++#endif
++}
++
+ unsigned
+ d3d10_primary_create(void *hRTResource, unsigned w, unsigned h, unsigned vidpn_source)
+ {
