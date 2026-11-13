@@ -1,0 +1,290 @@
+diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
+index 611efd4..131187f 100644
+--- a/src/gallium/frontends/d3d10umd/Device.cpp
++++ b/src/gallium/frontends/d3d10umd/Device.cpp
+@@ -46,6 +46,7 @@
+ 
+ #include "util/u_sampler.h"
+ #include "util/u_framebuffer.h"
++#include "util/u_debug.h"
+ 
+ 
+ EXTERN_C struct pipe_screen *
+@@ -157,6 +158,17 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+    pDevice->pipe = pipe;
+    pDevice->cso = cso_create_context(pipe, CSO_NO_VBUF);
+ 
++   /* D3D10UMD_NO_GS=1 takes the path Panfrost takes on a screen that has
++    * the stage (softpipe), so the failure paths can be tested without a
++    * Mali. */
++   pDevice->has_gs = pipe->create_gs_state && pipe->bind_gs_state && pipe->delete_gs_state &&
++                     screen->shader_caps[MESA_SHADER_GEOMETRY].max_instructions > 0 &&
++                     !debug_get_bool_option("D3D10UMD_NO_GS", false);
++   if (!pDevice->has_gs)
++      DebugPrintf("CreateDevice: %s has no geometry shaders; geometry shader and "
++                  "stream output creation will fail with E_OUTOFMEMORY\n",
++                  screen->get_name(screen));
++
+    pDevice->empty_vs = CreateEmptyShader(pDevice, MESA_SHADER_VERTEX);
+    pDevice->empty_fs = CreateEmptyShader(pDevice, MESA_SHADER_FRAGMENT);
+ 
+diff --git a/src/gallium/frontends/d3d10umd/Draw.cpp b/src/gallium/frontends/d3d10umd/Draw.cpp
+index 3b39f88..b0c7673 100644
+--- a/src/gallium/frontends/d3d10umd/Draw.cpp
++++ b/src/gallium/frontends/d3d10umd/Draw.cpp
+@@ -79,7 +79,7 @@ update_velems(Device *pDevice)
+ static void
+ ResolveState(Device *pDevice)
+ {
+-   if (pDevice->bound_empty_gs && pDevice->bound_vs &&
++   if (pDevice->has_gs && pDevice->bound_empty_gs && pDevice->bound_vs &&
+        pDevice->bound_vs->state.tokens) {
+       Shader *gs = pDevice->bound_empty_gs;
+       Shader *vs = pDevice->bound_vs;
+@@ -111,6 +111,25 @@ ResolveState(Device *pDevice)
+ }
+ 
+ 
++/*
++ * A geometry shader the screen could not create is bound (GsSetShader keeps
++ * nothing on a screen without the stage). Running the vertex shader straight
++ * into the rasterizer would draw something the application did not ask for;
++ * draw nothing instead.
++ */
++static bool
++SkipDrawForGs(Device *pDevice, const char *what)
++{
++   static volatile LONG skipped = 0;
++
++   if (!pDevice->gs_ignored)
++      return false;
++   if (InterlockedIncrement(&skipped) <= 4)
++      DebugPrintf("%s: skipped, a geometry shader this screen cannot run is bound\n", what);
++   return true;
++}
++
++
+ /* The parameters of the first draws of a process, to the file log: which
+  * draw a missing primitive was, without a debugger. */
+ static void
+@@ -170,6 +189,8 @@ Draw(D3D10DDI_HDEVICE hDevice,   // IN
+ 
+    Device *pDevice = CastDevice(hDevice);
+    LogDraw(pDevice, "Draw", VertexCount, 1, StartVertexLocation, 0, 0);
++   if (SkipDrawForGs(pDevice, "Draw"))
++      return;
+ 
+    ResolveState(pDevice);
+ 
+@@ -201,6 +222,8 @@ DrawIndexed(D3D10DDI_HDEVICE hDevice,  // IN
+ 
+    Device *pDevice = CastDevice(hDevice);
+    LogDraw(pDevice, "DrawIndexed", IndexCount, 1, StartIndexLocation, BaseVertexLocation, 0);
++   if (SkipDrawForGs(pDevice, "DrawIndexed"))
++      return;
+    struct pipe_draw_info info;
+    struct pipe_draw_start_count_bias draw;
+    struct pipe_resource *null_ib = NULL;
+@@ -260,6 +283,8 @@ DrawInstanced(D3D10DDI_HDEVICE hDevice,      // IN
+ 
+    Device *pDevice = CastDevice(hDevice);
+    LogDraw(pDevice, "DrawInstanced", VertexCountPerInstance, InstanceCount, StartVertexLocation, 0, StartInstanceLocation);
++   if (SkipDrawForGs(pDevice, "DrawInstanced"))
++      return;
+ 
+    if (!InstanceCount) {
+       return;
+@@ -300,6 +325,8 @@ DrawIndexedInstanced(D3D10DDI_HDEVICE hDevice,   // IN
+ 
+    Device *pDevice = CastDevice(hDevice);
+    LogDraw(pDevice, "DrawIndexedInstanced", IndexCountPerInstance, InstanceCount, StartIndexLocation, BaseVertexLocation, StartInstanceLocation);
++   if (SkipDrawForGs(pDevice, "DrawIndexedInstanced"))
++      return;
+    struct pipe_draw_info info;
+    struct pipe_draw_start_count_bias draw;
+    struct pipe_resource *null_ib = NULL;
+@@ -373,6 +400,19 @@ DrawAuto(D3D10DDI_HDEVICE hDevice)  // IN
+       return;
+    }
+ 
++   if (SkipDrawForGs(pDevice, "DrawAuto"))
++      return;
++
++   /* Without a geometry shader stage no stream output was ever written, so
++    * there is nothing to draw. Panfrost would also take draws == NULL with
++    * count_from_stream_output for a direct draw and read draws[0]. */
++   if (!pDevice->has_gs) {
++      static volatile LONG logged = 0;
++      if (InterlockedIncrement(&logged) == 1)
++         DebugPrintf("DrawAuto: nothing drawn, no stream output on a screen with no geometry shaders\n");
++      return;
++   }
++
+    assert(pDevice->primitive < MESA_PRIM_COUNT);
+ 
+    ResolveState(pDevice);
+diff --git a/src/gallium/frontends/d3d10umd/Query.cpp b/src/gallium/frontends/d3d10umd/Query.cpp
+index 721256b..665c25d 100644
+--- a/src/gallium/frontends/d3d10umd/Query.cpp
++++ b/src/gallium/frontends/d3d10umd/Query.cpp
+@@ -115,6 +115,16 @@ CreateQuery(D3D10DDI_HDEVICE hDevice,                          // IN
+    pQuery->Flags = pCreateQuery->MiscFlags;
+ 
+    pQuery->pipe_type = TranslateQueryType(pCreateQuery->Query);
++   if (!pDevice->has_gs &&
++       (pCreateQuery->Query == D3D10DDI_QUERY_STREAMOUTPUTSTATS ||
++        pCreateQuery->Query == D3D10DDI_QUERY_STREAMOVERFLOWPREDICATE)) {
++      /* No stream output can be written on this screen, so these count
++       * nothing: Panfrost keeps no SO statistics and answers zero/FALSE. */
++      static volatile LONG logged = 0;
++      if (InterlockedIncrement(&logged) == 1)
++         DebugPrintf("CreateQuery: stream output query %u on a screen with no geometry "
++                     "shaders; it will read zero\n", (unsigned)pCreateQuery->Query);
++   }
+    if (pQuery->pipe_type < PIPE_QUERY_TYPES) {
+       pQuery->handle = pipe->create_query(pipe, pQuery->pipe_type, 0);
+    }
+diff --git a/src/gallium/frontends/d3d10umd/Shader.cpp b/src/gallium/frontends/d3d10umd/Shader.cpp
+index df6ffa1..fb32f8b 100644
+--- a/src/gallium/frontends/d3d10umd/Shader.cpp
++++ b/src/gallium/frontends/d3d10umd/Shader.cpp
+@@ -45,6 +45,31 @@
+ #include "util/format/u_format.h"
+ 
+ 
++/*
++ * A screen without a geometry shader stage (Panfrost) has no
++ * create_gs_state, and d3d10umd's stream output without a geometry shader
++ * is an empty geometry shader too. Creating either fails the way the DDI
++ * allows, E_OUTOFMEMORY; the object is left empty so that a later bind,
++ * draw or destroy of it touches nothing.
++ */
++static bool
++GeometryShaderUnsupported(D3D10DDI_HDEVICE hDevice, Shader *pShader, const char *what)
++{
++   Device *pDevice = CastDevice(hDevice);
++
++   if (pDevice->has_gs)
++      return false;
++
++   memset(pShader, 0, sizeof *pShader);
++   pShader->type = MESA_SHADER_GEOMETRY;
++   pShader->output_resolved = true;
++   DebugPrintf("%s: no geometry shader stage on %s, E_OUTOFMEMORY\n", what,
++               pDevice->screen->get_name(pDevice->screen));
++   SetError(hDevice, E_OUTOFMEMORY);
++   return true;
++}
++
++
+ /*
+  * ----------------------------------------------------------------------
+  *
+@@ -306,7 +331,8 @@ DestroyShader(D3D10DDI_HDEVICE hDevice,   // IN
+          pipe->delete_vs_state(pipe, pShader->handle);
+          break;
+       case MESA_SHADER_GEOMETRY:
+-         pipe->delete_gs_state(pipe, pShader->handle);
++         if (pipe->delete_gs_state)
++            pipe->delete_gs_state(pipe, pShader->handle);
+          break;
+       default:
+          assert(0);
+@@ -679,6 +705,9 @@ CreateGeometryShader(D3D10DDI_HDEVICE hDevice,                                //
+    struct pipe_context *pipe = CastPipeContext(hDevice);
+    Shader *pShader = CastShader(hShader);
+ 
++   if (GeometryShaderUnsupported(hDevice, pShader, "CreateGeometryShader"))
++      return;
++
+    pShader->type = MESA_SHADER_GEOMETRY;
+    pShader->output_resolved = true;
+ 
+@@ -711,6 +740,19 @@ GsSetShader(D3D10DDI_HDEVICE hDevice,  // IN
+    void *state = CastPipeShader(hShader);
+    Shader *pShader = CastShader(hShader);
+ 
++   if (!pDevice->has_gs) {
++      /* Nothing was created, so nothing can be bound; a non-NULL handle
++       * here is one whose creation failed. Draws while it is bound draw
++       * nothing (see Draw.cpp). */
++      bool ignored = pShader != NULL;
++      if (ignored != pDevice->gs_ignored)
++         DebugPrintf("GsSetShader: %s on a screen with no geometry shaders\n",
++                     ignored ? "a geometry shader bound, draws are skipped"
++                             : "unbound, draws resume");
++      pDevice->gs_ignored = ignored;
++      return;
++   }
++
+    assert(pipe->bind_gs_state);
+ 
+    if (pShader && !pShader->state.tokens) {
+@@ -843,6 +885,15 @@ CreateGeometryShaderWithStreamOutput(
+    unsigned num_holes = 0;
+    bool all_slot_zero = true;
+ 
++   /* Panfrost does stream output for GLES with a vertex-shader variant whose
++    * outputs come from NIR xfb info; a TGSI shader's pipe_stream_output_info
++    * is stored and never turned into that, and the frontend's pass-through
++    * stream output is an empty geometry shader. Neither exists here. */
++   if (GeometryShaderUnsupported(hDevice, pShader,
++                                 pData->pShaderCode ? "CreateGeometryShaderWithStreamOutput"
++                                                    : "CreateGeometryShaderWithStreamOutput (no GS, stream output only)"))
++      return;
++
+    pShader->type = MESA_SHADER_GEOMETRY;
+ 
+    memset(&pShader->state, 0, sizeof pShader->state);
+@@ -948,9 +999,10 @@ SoSetTargets(D3D10DDI_HDEVICE hDevice,                                     // IN
+             if (so_target) {
+                pipe_so_target_reference(&so_target, NULL);
+             }
+-            so_target = pipe->create_stream_output_target(pipe, buffer,
++            so_target = pipe->create_stream_output_target ?
++                        pipe->create_stream_output_target(pipe, buffer,
+                                                           0,/*buffer offset*/
+-                                                          buffer_size);
++                                                          buffer_size) : NULL;
+             resource->so_target = so_target;
+          }
+       }
+@@ -966,6 +1018,18 @@ SoSetTargets(D3D10DDI_HDEVICE hDevice,                                     // IN
+       return;
+    }
+ 
++   if (!pDevice->has_gs && SOTargets) {
++      /* Targets are kept (DrawAuto and IaSetVertexBuffers look them up) but
++       * nothing can be written to them: no shader that could create stream
++       * output was created. */
++      static bool logged;
++      if (!logged) {
++         logged = true;
++         DebugPrintf("SoSetTargets: %u targets on a screen with no geometry shaders; "
++                     "nothing will be written to them\n", SOTargets);
++      }
++   }
++
+    pipe->set_stream_output_targets(pipe, SOTargets, pDevice->so_targets,
+                                    pOffsets, MESA_PRIM_UNKNOWN);
+ }
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index c0a40f1..63dfe01 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -97,6 +97,15 @@ struct Device
+    Shader *bound_empty_gs;
+    Shader *bound_vs;
+ 
++   /* Whether the screen has a geometry shader stage (create/bind/delete_gs_state
++    * and shader caps for it). Without one, stream output has nowhere to come
++    * from either: d3d10umd does pass-through SO with an empty geometry shader.
++    * Panfrost has none. */
++   bool has_gs;
++   /* A geometry shader handle was bound on a screen without the stage: draws
++    * draw nothing rather than run the vertex shader as if it were absent. */
++   bool gs_ignored;
++
+    unsigned max_dual_source_render_targets;
+ 
+    D3D10DDI_HRTCORELAYER  hRTCoreLayer;

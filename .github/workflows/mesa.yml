@@ -12,6 +12,7 @@ on:
       - 'ci/**'
       - 'win32-compat/**'
       - 'include/**'
+      - 'tools/windows/gsso.cpp'
   workflow_dispatch:
 
 permissions:
@@ -97,7 +98,18 @@ jobs:
           if ($LASTEXITCODE) { throw 'present build failed' }
           .\present.exe $dll
           if ($LASTEXITCODE) { throw "softpipe present test failed ($LASTEXITCODE)" }
-          Copy-Item $dll, triangle.exe, present.exe out\
+          # Geometry shaders and stream output: softpipe has them; with
+          # D3D10UMD_NO_GS=1 the frontend takes the path it takes on Panfrost
+          # (every create fails, nothing after that crashes).
+          cl /nologo /EHsc /O2 /MD tools\windows\gsso.cpp /Fe:gsso.exe
+          if ($LASTEXITCODE) { throw 'gsso build failed' }
+          .\gsso.exe $dll gs
+          if ($LASTEXITCODE) { throw "gsso on softpipe failed ($LASTEXITCODE)" }
+          $env:D3D10UMD_NO_GS = '1'
+          .\gsso.exe $dll nogs
+          if ($LASTEXITCODE) { throw "gsso on softpipe without geometry shaders failed ($LASTEXITCODE)" }
+          Remove-Item Env:D3D10UMD_NO_GS
+          Copy-Item $dll, triangle.exe, present.exe, gsso.exe out\
 
       - uses: actions/upload-artifact@v4
         with:
@@ -242,6 +254,8 @@ jobs:
           if ($LASTEXITCODE) { throw 'test build failed' }
           cl /nologo /EHsc /O2 /MD tests\d3d11-present\present.cpp /Fe:present.exe
           if ($LASTEXITCODE) { throw 'test build failed' }
+          cl /nologo /EHsc /O2 /MD tools\windows\gsso.cpp /Fe:gsso.exe
+          if ($LASTEXITCODE) { throw 'gsso build failed' }
           .\triangle.exe $dll
           if ($LASTEXITCODE) { throw "softpipe smoke test failed ($LASTEXITCODE)" }
           # No Mali on the runner: Panfrost must report no device and hand
@@ -253,7 +267,7 @@ jobs:
           New-Item -ItemType Directory -Force out | Out-Null
           .\present.exe $dll
           if ($LASTEXITCODE) { throw "softpipe present test failed ($LASTEXITCODE)" }
-          Copy-Item $dll, triangle.exe, present.exe out\
+          Copy-Item $dll, triangle.exe, present.exe, gsso.exe out\
 
       - name: Panfrost on the emulated driver (MALIKM_FAKE)
         timeout-minutes: 15
@@ -271,8 +285,8 @@ jobs:
 
           # Run with a time limit; on a hang, every thread's stack; on a
           # crash, the faulting stack. stdout and stderr go to files.
-          function Run-Triangle($tag, $exe = 'triangle.exe') {
-            $p = Start-Process -FilePath (Resolve-Path out\$exe).Path -ArgumentList "`"$dll`"" -NoNewWindow -PassThru `
+          function Run-Triangle($tag, $exe = 'triangle.exe', $extra = '') {
+            $p = Start-Process -FilePath (Resolve-Path out\$exe).Path -ArgumentList "`"$dll`" $extra" -NoNewWindow -PassThru `
                    -RedirectStandardOutput "$tag.out" -RedirectStandardError "$tag.err"
             if (-not $p.WaitForExit(120000)) {
               Write-Host "${tag}: still running after 120 s, dumping threads"
@@ -312,12 +326,27 @@ jobs:
           if (Test-Path present-crash.txt) { Get-Content present-crash.txt | Select-String -NotMatch 'NatVis|ModLoad' | Select-Object -Last 60 }
           if (Test-Path present-hang.txt) { Get-Content present-hang.txt | Select-String -NotMatch 'NatVis|ModLoad' | Select-Object -Last 150 }
 
+          # Geometry shaders and stream output on Panfrost, which has
+          # neither: the three creates fail with E_OUTOFMEMORY and every step
+          # after them returns. Nothing executes the jobs, so the pixel
+          # checks are arbitrary; only the create lines and "done" count.
+          $gr = Run-Triangle 'gsso' 'gsso.exe' 'nogs'
+          Get-Content gsso.out, gsso.err -ErrorAction SilentlyContinue | Select-String -NotMatch 'ioctl|  ->' | Select-Object -Last 30
+          if (Test-Path gsso-crash.txt) { Get-Content gsso-crash.txt | Select-String -NotMatch 'NatVis|ModLoad' | Select-Object -Last 60 }
+          if (Test-Path gsso-hang.txt) { Get-Content gsso-hang.txt | Select-String -NotMatch 'NatVis|ModLoad' | Select-Object -Last 150 }
+          $gout = (Get-Content gsso.out -ErrorAction SilentlyContinue) -join "`n"
+
           $all = (Get-Content fake.out, fake.err -ErrorAction SilentlyContinue) -join "`n"
           if ($r -eq 'hang') { throw 'triangle.exe hung' }
           if ($all -match 'using softpipe') { throw 'fell back to softpipe' }
           if ($all -notmatch 'malikm-fake: submit') { throw 'no job was submitted' }
           if ($r -ne 0 -and $r -ne 2) { throw "triangle.exe died ($r)" }
           if ($pr -ne 0) { throw "present.exe failed ($pr)" }
+          if ($gr -eq 'hang') { throw 'gsso.exe hung' }
+          if ($gout -notmatch '(?m)^done') { throw "gsso.exe did not finish ($gr)" }
+          foreach ($n in 1, 2, 3) {
+            if ($gout -notmatch "(?m)^UNSUPPORTED +$n ") { throw "gsso.exe step $n was not UNSUPPORTED on Panfrost" }
+          }
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -328,6 +357,8 @@ jobs:
             fake-*.txt
             present.*
             present-*.txt
+            gsso.*
+            gsso-*.txt
             trace.*
             trace/
 
