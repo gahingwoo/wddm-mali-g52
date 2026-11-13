@@ -7,6 +7,8 @@
 | [M3.md](M3.md) | Design of `malikm` and the shim under Panfrost | current |
 | [M5-PLAN.md](M5-PLAN.md) | First plan for the WDDM driver, with sources | superseded after M5.1 |
 | [M5.2-PLAN.md](M5.2-PLAN.md) | The full WDDM driver in steps (a) to (d) | current; step (d) in progress |
+| [PERF.md](PERF.md) | Where a frame's time goes and how to get it back | from the code; not measured yet |
+| [FEASIBILITY-D3D11-WDDM2.md](FEASIBILITY-D3D11-WDDM2.md) | What Direct3D 11 and WDDM 2.x would take | study, 2026-11-13 |
 | [BOARD-DAY.md](BOARD-DAY.md) | Checklist for the October 2026 board sessions | historical |
 | [results/](results/README.md) | What was measured, one folder per milestone | |
 
