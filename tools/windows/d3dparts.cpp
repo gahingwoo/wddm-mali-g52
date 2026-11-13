@@ -77,7 +77,7 @@ static int near_(unsigned got, unsigned want)
 }
 
 /* RGBA8 in memory is R,G,B,A: as a little-endian word 0xAABBGGRR. */
-#define RGB(r, g, b) ((unsigned)(r) | ((unsigned)(g) << 8) | ((unsigned)(b) << 16))
+#define RGB3(r, g, b) ((unsigned)(r) | ((unsigned)(g) << 8) | ((unsigned)(b) << 16))
 
 static const unsigned char *g_px;
 static unsigned g_pitch;
@@ -146,17 +146,17 @@ int main(int argc, char **argv)
     unsigned texels[16];
     for (int y = 0; y < 4; y++)
         for (int x = 0; x < 4; x++)
-            texels[y * 4 + x] = RGB(50 + 50 * x, 50 + 50 * y, 0) | 0xff000000u;
+            texels[y * 4 + x] = RGB3(50 + 50 * x, 50 + 50 * y, 0) | 0xff000000u;
     D3D11_TEXTURE2D_DESC sd = td;
     sd.Width = sd.Height = 4;
     sd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
     D3D11_SUBRESOURCE_DATA init = {};
     init.pSysMem = texels;
     init.SysMemPitch = 16;
-    ID3D11Texture2D *small = nullptr;
+    ID3D11Texture2D *tex4 = nullptr;
     ID3D11ShaderResourceView *srv2d = nullptr;
-    CHECK(dev->CreateTexture2D(&sd, &init, &small), "CreateTexture2D (4x4)");
-    CHECK(dev->CreateShaderResourceView(small, nullptr, &srv2d), "CreateShaderResourceView (4x4)");
+    CHECK(dev->CreateTexture2D(&sd, &init, &tex4), "CreateTexture2D (4x4)");
+    CHECK(dev->CreateShaderResourceView(tex4, nullptr, &srv2d), "CreateShaderResourceView (4x4)");
 
     /* The buffer: 16 bytes, value 100 + 10 i. */
     unsigned char bytes[16];
@@ -300,17 +300,17 @@ int main(int argc, char **argv)
     int failed = 0, ok;
 
     printf("1 Texture2D.Load\n");
-    ok = expect("texel (1,2)", 5, 6, RGB(100, 150, 0));
-    ok &= expect("texel (3,0)", 43, 32, RGB(200, 50, 0));
+    ok = expect("texel (1,2)", 5, 6, RGB3(100, 150, 0));
+    ok &= expect("texel (3,0)", 43, 32, RGB3(200, 50, 0));
     failed += !ok;
 
     printf("2 Buffer<uint>.Load\n");
-    ok = expect("element 9", 64 + 5, 6, RGB(190, 0, 128));
-    ok &= expect("element 3", 64 + 43, 32, RGB(130, 0, 128));
+    ok = expect("element 9", 64 + 5, 6, RGB3(190, 0, 128));
+    ok &= expect("element 3", 64 + 43, 32, RGB3(130, 0, 128));
     failed += !ok;
 
     printf("3 integer, vertex to pixel shader\n");
-    ok = expect("0x00C0FFEE arrives", 160, 32, RGB(0, 255, 0));
+    ok = expect("0x00C0FFEE arrives", 160, 32, RGB3(0, 255, 0));
     failed += !ok;
 
     for (int cell = 0; cell < 2; cell++) {
@@ -321,9 +321,9 @@ int main(int argc, char **argv)
             char what[32];
             snprintf(what, sizeof(what), "instance %d", n);
             ok &= expect(what, 192 + 64 * cell + 16 * n + 8, 16 * n + 8,
-                         RGB(40 * (n + 1), 20 * (n + 1), 10 * (n + 1)));
+                         RGB3(40 * (n + 1), 20 * (n + 1), 10 * (n + 1)));
         }
-        ok &= expect("between the squares", 192 + 64 * cell + 40, 8, RGB(64, 64, 64));
+        ok &= expect("between the squares", 192 + 64 * cell + 40, 8, RGB3(64, 64, 64));
         failed += !ok;
     }
 
