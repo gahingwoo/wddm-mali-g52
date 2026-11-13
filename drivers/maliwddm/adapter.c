@@ -286,9 +286,16 @@ static NTSTATUS DriverCaps(const DXGKARG_QUERYADAPTERINFO *Info)
      * SetVidPnSourceAddress. DXGK_SEGMENTFLAGS' remarks give the way out:
      * a section-backed primary. */
     caps->MemoryManagementCaps.SectionBackedPrimary = 1;
+    /* Flips are memory-mapped and take effect at the vertical sync: dxgkrnl
+     * calls SetVidPnSourceAddress for each one, and the emulated vsync shows
+     * the new primary and reports it (display.c, command.c). This too sat
+     * inside the render-only block below (c389f13) and so was 0 in the only
+     * build there is. With it 0, on the TaishanPi 3M, dwm's presents were
+     * all accepted (pfnPresentCb S_OK, three primaries in rotation) and
+     * neither Present nor SetVidPnSourceAddress was called for them. */
+    caps->FlipCaps.FlipOnVSyncMmIo = 1;
 #if MW_RENDER_ONLY
     caps->PresentationCaps.SupportKernelModeCommandBuffer = 1; /* see MwRenderKm */
-    caps->FlipCaps.FlipOnVSyncMmIo = 1;                         /* no display: unused */
     if (FITS(size, DXGK_DRIVERCAPS, PreemptionCaps)) {
         /* Honest: a DMA buffer always runs to its end. */
         caps->PreemptionCaps.GraphicsPreemptionGranularity = D3DKMDT_GRAPHICS_PREEMPTION_DMA_BUFFER_BOUNDARY;
