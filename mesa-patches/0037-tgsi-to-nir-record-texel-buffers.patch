@@ -1,0 +1,18 @@
+diff --git a/src/gallium/auxiliary/nir/tgsi_to_nir.c b/src/gallium/auxiliary/nir/tgsi_to_nir.c
+index 876561b..4cfceed 100644
+--- a/src/gallium/auxiliary/nir/tgsi_to_nir.c
++++ b/src/gallium/auxiliary/nir/tgsi_to_nir.c
+@@ -1166,6 +1166,13 @@ get_sampler_var(struct ttn_compile *c, int binding,
+       if (op == nir_texop_txf || op == nir_texop_txf_ms)
+          BITSET_SET(c->build.shader->info.textures_used_by_txf, binding);
+       BITSET_SET(c->build.shader->info.samplers_used, binding);
++      /* The GLSL linker records which textures are buffers; nothing else
++       * does. Panfrost on Bifrost reaches a texel buffer through the
++       * attribute array and sizes that array from this set: without it a
++       * fragment shader has no attributes at all and every fetch reads
++       * zero (Direct2D's text: the glyph coverage is in a buffer). */
++      if (dim == GLSL_SAMPLER_DIM_BUF)
++         BITSET_SET(c->build.shader->info.texture_buffers, binding);
+    }
+ 
+    return var;
