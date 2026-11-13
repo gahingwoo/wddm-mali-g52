@@ -145,6 +145,10 @@ struct _MW_ADAPTER {
     PHYSICAL_ADDRESS ScanAddr;
     struct _MW_ALLOCATION *volatile ScanAlloc;
     struct _MW_ALLOCATION *ShownAlloc;
+    /* Every flip, including one to the allocation already on screen: its
+     * contents have changed, which is the point of flipping to it. */
+    volatile LONG FlipSeq;
+    LONG ShownSeq;
     ULONG Vsyncs, Flips, FlipCopies, FlipCopySkips;
     /* Why a flip did or did not reach the framebuffer; logged by the stats
      * escape, which runs at passive level. */

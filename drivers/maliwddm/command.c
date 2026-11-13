@@ -485,9 +485,16 @@ static VOID VsyncDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
     if (a->Stopping || !a->VsyncOn)
         return;
     p = a->ScanAlloc;
-    if (p != NULL && p != a->ShownAlloc && a->SourceVisible) {
-        ShowPrimary(a, p);
-        a->ShownAlloc = p;
+    /* Compare flips, not allocations. On the TaishanPi 3M the compositor
+     * flipped 71 times and one frame reached the framebuffer: it flips to
+     * the same primary again and again, with new pixels in it. */
+    {
+        LONG seq = a->FlipSeq;
+        if (p != NULL && seq != a->ShownSeq && a->SourceVisible) {
+            ShowPrimary(a, p);
+            a->ShownAlloc = p;
+            a->ShownSeq = seq;
+        }
     }
     a->Vsyncs++;
     if (Synchronize(a, SyncVsync, a))

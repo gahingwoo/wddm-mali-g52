@@ -1,0 +1,1746 @@
+   2738015  3380 . OpenAdapter10_2
+   2738015  3380 . GetCaps
+   2738015  3380 . GetSupportedVersions
+   2738015  3380 . GetSupportedVersions
+   2738015  3380 . OpenAdapter10_2
+   2738015  3380 . GetSupportedVersions
+   2738015  3380 . GetSupportedVersions
+   2738015  3380 . CloseAdapter
+   2738015  3380 . CloseAdapter
+   2738031  3380 . OpenAdapter10_2
+   2738031  3380 . GetCaps
+   2738031  3380 . GetSupportedVersions
+   2738031  3380 . GetSupportedVersions
+   2738031  3380 . OpenAdapter10_2
+   2738031  3380 . GetSupportedVersions
+   2738031  3380 . GetSupportedVersions
+   2738031  3380 . CreateDevice
+   2738031  3380 CreateDevice Interface 0xa0009 Version 0x177a
+   2738046  3380 CreateDevice: screen Mali-G52 r1 MC3 (Panfrost)
+   2738046  3380 CreateDevice: done, DXGI_STATUS_NO_REDIRECTION
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateDepthStencilState
+   2738046  3380 . CreateRasterizerState
+   2738046  3380 . CreateSampler
+   2738046  3380 . SetBlendState
+   2738046  3380 . SetDepthStencilState
+   2738046  3380 . SetRasterizerState
+   2738046  3380 . VsSetSamplers
+   2738046  3380 . GsSetSamplers
+   2738046  3380 . PsSetSamplers
+   2738046  3380 . CloseAdapter
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateBlendState
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateSampler
+   2738046  3380 . CreateRasterizerState
+   2738046  3380 . CreateRasterizerState
+   2738046  3380 . CreateRasterizerState
+   2738046  3380 . CreateRasterizerState
+   2738046  3380 . CreateRasterizerState
+   2738046  3380 . CreateRasterizerState
+   2738046  3380 . CreateRasterizerState
+   2738046  3380 . CreateRasterizerState
+   2738046  3380 . CreateRasterizerState
+   2738046  3380 . CreateDepthStencilState
+   2738046  3380 . CreateDepthStencilState
+   2738046  3380 . CreateDepthStencilState
+   2738046  3380 . CreateDepthStencilState
+   2738046  3380 . CalcPrivateResourceSize
+   2738046  3380 . CreateResource
+   2738046  3380   primary 0 shared 0
+   2738046  3380 CreateResource(48x1x1 hResource=0000023784544530)
+   2738046  3380   ResourceDimension = 1
+   2738046  3380   Usage = 0
+   2738046  3380   BindFlags = 0x4
+   2738046  3380   MapFlags = 0x0
+   2738046  3380   MiscFlags = 0x0
+   2738046  3380   Format = DXGI_FORMAT_UNKNOWN
+   2738046  3380   SampleDesc.Count = 1
+   2738046  3380   SampleDesc.Quality = 0
+   2738046  3380   MipLevels = 1
+   2738046  3380   ArraySize = 1
+   2738046  3380   pPrimaryDesc = 0000000000000000
+   2738046  3380 . CalcPrivateResourceSize
+   2738046  3380 . CreateResource
+   2738046  3380   primary 0 shared 0
+   2738046  3380 CreateResource(4000x1x1 hResource=00000237845B8F30)
+   2738046  3380   ResourceDimension = 1
+   2738046  3380   Usage = 0
+   2738046  3380   BindFlags = 0x4
+   2738046  3380   MapFlags = 0x0
+   2738046  3380   MiscFlags = 0x0
+   2738046  3380   Format = DXGI_FORMAT_UNKNOWN
+   2738046  3380   SampleDesc.Count = 1
+   2738046  3380   SampleDesc.Quality = 0
+   2738046  3380   MipLevels = 1
+   2738046  3380   ArraySize = 1
+   2738046  3380   pPrimaryDesc = 0000000000000000
+   2738046  3380 . CalcPrivateResourceSize
+   2738046  3380 . CreateResource
+   2738046  3380   primary 0 shared 0
+   2738046  3380 CreateResource(16x1x1 hResource=0000023784558C30)
+   2738046  3380   ResourceDimension = 1
+   2738046  3380   Usage = 0
+   2738046  3380   BindFlags = 0x4
+   2738046  3380   MapFlags = 0x0
+   2738046  3380   MiscFlags = 0x0
+   2738046  3380   Format = DXGI_FORMAT_UNKNOWN
+   2738046  3380   SampleDesc.Count = 1
+   2738046  3380   SampleDesc.Quality = 0
+   2738046  3380   MipLevels = 1
+   2738046  3380   ArraySize = 1
+   2738046  3380   pPrimaryDesc = 0000000000000000
+   2738046  3380 . CalcPrivateResourceSize
+   2738046  3380 . CreateResource
+   2738046  3380   primary 0 shared 0
+   2738046  3380 CreateResource(48x1x1 hResource=00000237845594B0)
+   2738046  3380   ResourceDimension = 1
+   2738046  3380   Usage = 0
+   2738046  3380   BindFlags = 0x4
+   2738046  3380   MapFlags = 0x0
+   2738046  3380   MiscFlags = 0x0
+   2738046  3380   Format = DXGI_FORMAT_UNKNOWN
+   2738046  3380   SampleDesc.Count = 1
+   2738046  3380   SampleDesc.Quality = 0
+   2738046  3380   MipLevels = 1
+   2738046  3380   ArraySize = 1
+   2738046  3380   pPrimaryDesc = 0000000000000000
+   2738046  3380 . CalcPrivateResourceSize
+   2738046  3380 . CreateResource
+   2738046  3380   primary 0 shared 0
+   2738046  3380 CreateResource(240012x1x1 hResource=0000023784540AB0)
+   2738046  3380   ResourceDimension = 1
+   2738046  3380   Usage = 2
+   2738046  3380   BindFlags = 0x1
+   2738046  3380   MapFlags = 0x1
+   2738046  3380   MiscFlags = 0x0
+   2738046  3380   Format = DXGI_FORMAT_UNKNOWN
+   2738046  3380   SampleDesc.Count = 1
+   2738046  3380   SampleDesc.Quality = 0
+   2738046  3380   MipLevels = 1
+   2738046  3380   ArraySize = 1
+   2738046  3380   pPrimaryDesc = 0000000000000000
+   2738046  3380 . SoSetTargets
+   2738046  3380 . SetRenderTargets
+   2738046  3380 . SetViewports
+   2738046  3380 . SetScissorRects
+   2738046  3380 . SetPredication
+   2738046  3380 . IaSetTopology
+   2738046  3380 . SetRasterizerState
+   2738046  3380 . CalcPrivateResourceSize
+   2738046  3380 . CreateResource
+   2738046  3380   primary 0 shared 0
+   2738046  3380 CreateResource(102400x1x1 hResource=00000237887F7330)
+   2738046  3380   ResourceDimension = 1
+   2738046  3380   Usage = 2
+   2738046  3380   BindFlags = 0x1
+   2738046  3380   MapFlags = 0x1
+   2738046  3380   MiscFlags = 0x0
+   2738046  3380   Format = DXGI_FORMAT_UNKNOWN
+   2738046  3380   SampleDesc.Count = 1
+   2738046  3380   SampleDesc.Quality = 0
+   2738046  3380   MipLevels = 1
+   2738046  3380   ArraySize = 1
+   2738046  3380   pPrimaryDesc = 0000000000000000
+   2738062  3380 . CreatePixelShader
+   2738062  3380 TGSI begin
+   2738062  3380 TGSI FRAG
+   2738062  3380 TGSI DCL OUT[0], COLOR
+   2738062  3380 TGSI DCL CONST[0][0]
+   2738062  3380 TGSI   0: MOV OUT[0], CONST[0][0]
+   2738062  3380 TGSI   1: RET
+   2738062  3380 TGSI   2: END
+   2738062  3380 TGSI end
+   2738062  3380 . CreateVertexShader
+   2738062  3380 TGSI begin
+   2738062  3380 TGSI VERT
+   2738062  3380 TGSI PROPERTY NEXT_SHADER FRAG
+   2738062  3380 TGSI DCL IN[0]
+   2738062  3380 TGSI DCL IN[1]
+   2738062  3380 TGSI DCL IN[2]
+   2738062  3380 TGSI DCL IN[3]
+   2738062  3380 TGSI DCL OUT[0], POSITION
+   2738062  3380 TGSI DCL OUT[1], GENERIC[1]
+   2738062  3380 TGSI DCL OUT[2], GENERIC[2]
+   2738062  3380 TGSI DCL OUT[3], GENERIC[3]
+   2738062  3380 TGSI DCL CONST[0][0]
+   2738062  3380 TGSI DCL TEMP[0]
+   2738062  3380 TGSI IMM[0] UINT32 {0, 0, 0, 0}
+   2738062  3380 TGSI   0: MUL TEMP[0], IN[0].xyzz, CONST[0][0]
+   2738062  3380 TGSI   1: ADD OUT[0].xy, TEMP[0].zwzz, TEMP[0].xyxx
+   2738062  3380 TGSI   2: MOV OUT[0].z, IMM[0].xxxx
+   2738062  3380 TGSI   3: MOV OUT[0].w, IN[0].zzzz
+   2738062  3380 TGSI   4: MOV OUT[1], IN[1]
+   2738062  3380 TGSI   5: MOV OUT[2].xy, IN[2].xyxx
+   2738062  3380 TGSI   6: MOV OUT[2].zw, IMM[0].xxxx
+   2738062  3380 TGSI   7: MOV OUT[3].xy, IN[3].xyxx
+   2738062  3380 TGSI   8: MOV OUT[3].zw, IMM[0].xxxx
+   2738062  3380 TGSI   9: RET
+   2738062  3380 TGSI  10: END
+   2738062  3380 TGSI end
+   2738062  3380 . CreateVertexShader
+   2738062  3380 TGSI begin
+   2738062  3380 TGSI VERT
+   2738062  3380 TGSI PROPERTY NEXT_SHADER FRAG
+   2738062  3380 TGSI DCL IN[0]
+   2738062  3380 TGSI DCL IN[1]
+   2738062  3380 TGSI DCL IN[2]
+   2738062  3380 TGSI DCL IN[3]
+   2738062  3380 TGSI DCL OUT[0], POSITION
+   2738062  3380 TGSI DCL OUT[1], GENERIC[1]
+   2738062  3380 TGSI DCL OUT[2], GENERIC[2]
+   2738062  3380 TGSI DCL OUT[3], GENERIC[3]
+   2738062  3380 TGSI DCL CONST[0][0..6]
+   2738062  3380 TGSI DCL TEMP[0]
+   2738062  3380 TGSI IMM[0] UINT32 {0, 0, 0, 0}
+   2738062  3380 TGSI IMM[1] FLT32 {    1.0000,     0.0000,     0.0000,     0.0000}
+   2738062  3380 TGSI   0: MUL TEMP[0], IN[0].xyzz, CONST[0][0]
+   2738062  3380 TGSI   1: ADD OUT[0].xy, TEMP[0].zwzz, TEMP[0].xyxx
+   2738062  3380 TGSI   2: MOV OUT[0].z, IMM[0].xxxx
+   2738062  3380 TGSI   3: MOV OUT[0].w, IN[0].zzzz
+   2738062  3380 TGSI   4: MOV OUT[1], IN[1]
+   2738062  3380 TGSI   5: MOV OUT[2].w, IMM[0].xxxx
+   2738062  3380 TGSI   6: ADD TEMP[0].x, -IN[0].zzzz, IMM[1].xxxx
+   2738062  3380 TGSI   7: MAD TEMP[0].xy, CONST[0][6].xyxx, TEMP[0].xxxx, IN[0].zzzz
+   2738062  3380 TGSI   8: MUL OUT[2].xy, TEMP[0].xxxx, IN[2].xyxx
+   2738062  3380 TGSI   9: MOV OUT[2].z, TEMP[0].xxxx
+   2738062  3380 TGSI  10: MUL OUT[3].xy, TEMP[0].yyyy, IN[3].xyxx
+   2738062  3380 TGSI  11: MOV OUT[3].z, TEMP[0].yyyy
+   2738062  3380 TGSI  12: MOV OUT[3].w, IMM[0].xxxx
+   2738062  3380 TGSI  13: RET
+   2738062  3380 TGSI  14: END
+   2738062  3380 TGSI end
+   2738078  3380 . CreateVertexShader
+   2738078  3380 TGSI begin
+   2738078  3380 TGSI VERT
+   2738078  3380 TGSI PROPERTY NEXT_SHADER FRAG
+   2738078  3380 TGSI DCL IN[0]
+   2738078  3380 TGSI DCL IN[1]
+   2738078  3380 TGSI DCL IN[2]
+   2738078  3380 TGSI DCL IN[3]
+   2738078  3380 TGSI DCL IN[4]
+   2738078  3380 TGSI DCL IN[5]
+   2738078  3380 TGSI DCL OUT[0], POSITION
+   2738078  3380 TGSI DCL OUT[1], GENERIC[1]
+   2738078  3380 TGSI DCL OUT[2], GENERIC[2]
+   2738078  3380 TGSI DCL OUT[3], GENERIC[3]
+   2738078  3380 TGSI DCL OUT[4], GENERIC[4]
+   2738078  3380 TGSI DCL CONST[0][0..6]
+   2738078  3380 TGSI DCL TEMP[0..1]
+   2738078  3380 TGSI IMM[0] UINT32 {0, 0, 0, 0}
+   2738078  3380 TGSI IMM[1] FLT32 {    1.0000,     0.0000,     0.0000,     0.0000}
+   2738078  3380 TGSI   0: MUL TEMP[0], IN[0].xyzz, CONST[0][0]
+   2738078  3380 TGSI   1: ADD OUT[0].xy, TEMP[0].zwzz, TEMP[0].xyxx
+   2738078  3380 TGSI   2: MOV OUT[0].z, IMM[0].xxxx
+   2738078  3380 TGSI   3: MOV OUT[0].w, IN[0].zzzz
+   2738078  3380 TGSI   4: MOV OUT[1], IN[1]
+   2738078  3380 TGSI   5: ADD TEMP[0].x, -IN[0].zzzz, IMM[1].xxxx
+   2738078  3380 TGSI   6: MAD TEMP[0], CONST[0][6], TEMP[0].xxxx, IN[0].zzzz
+   2738078  3380 TGSI   7: MUL TEMP[1].xy, TEMP[0].wwww, IN[5].xyxx
+   2738078  3380 TGSI   8: MOV OUT[2].w, TEMP[1].xxxx
+   2738078  3380 TGSI   9: MOV OUT[3].w, TEMP[1].yyyy
+   2738078  3380 TGSI  10: MUL OUT[2].xy, TEMP[0].xxxx, IN[2].xyxx
+   2738078  3380 TGSI  11: MOV OUT[2].z, TEMP[0].xxxx
+   2738078  3380 TGSI  12: MUL OUT[3].xy, TEMP[0].yyyy, IN[3].xyxx
+   2738078  3380 TGSI  13: MOV OUT[3].z, TEMP[0].yyyy
+   2738078  3380 TGSI  14: MUL OUT[4].xy, TEMP[0].zzzz, IN[4].xyxx
+   2738078  3380 TGSI  15: MOV OUT[4].zw, TEMP[0].zzzw
+   2738078  3380 TGSI  16: RET
+   2738078  3380 TGSI  17: END
+   2738078  3380 TGSI end
+   2738078  3380 . CreateVertexShader
+   2738078  3380 TGSI begin
+   2738078  3380 TGSI VERT
+   2738078  3380 TGSI PROPERTY NEXT_SHADER FRAG
+   2738078  3380 TGSI DCL IN[0]
+   2738078  3380 TGSI DCL IN[1]
+   2738078  3380 TGSI DCL IN[2]
+   2738078  3380 TGSI DCL IN[4]
+   2738078  3380 TGSI DCL IN[5]
+   2738078  3380 TGSI DCL IN[6]
+   2738078  3380 TGSI DCL OUT[0], POSITION
+   2738078  3380 TGSI DCL OUT[1], GENERIC[1]
+   2738078  3380 TGSI DCL OUT[2], GENERIC[2]
+   2738078  3380 TGSI DCL OUT[3], GENERIC[3]
+   2738078  3380 TGSI DCL OUT[4], GENERIC[4]
+   2738078  3380 TGSI DCL OUT[5], GENERIC[5]
+   2738078  3380 TGSI DCL OUT[6], GENERIC[6]
+   2738078  3380 TGSI DCL OUT[7], GENERIC[7]
+   2738078  3380 TGSI DCL CONST[0][0]
+   2738078  3380 TGSI DCL CONST[2][0..16]
+   2738078  3380 TGSI DCL TEMP[0..8]
+   2738078  3380 TGSI IMM[0] FLT32 {    0.0000,     1.0000,     2.0000,     0.5000}
+   2738078  3380 TGSI IMM[1] UINT32 {1065353216, 3212836864, 0, 0}
+   2738078  3380 TGSI IMM[2] FLT32 {    0.0000,     0.0000,     0.0000,     0.0000}
+   2738078  3380 TGSI   0: MUL TEMP[0], IN[0].xyzz, CONST[0][0]
+   2738078  3380 TGSI   1: ADD OUT[0].xy, TEMP[0].zwzz, TEMP[0].xyxx
+   2738078  3380 TGSI   2: FSLT TEMP[0].x, IMM[0].xxxx, IN[4].wwww
+   2738078  3380 TGSI   3: FSLT TEMP[0].y, IN[4].wwww, IMM[0].xxxx
+   2738078  3380 TGSI   4: UADD TEMP[0].x, -TEMP[0].xxxx, TEMP[0].yyyy
+   2738078  3380 TGSI   5: I2F TEMP[0].x, TEMP[0].xxxx
+   2738078  3380 TGSI   6: MUL TEMP[0].yzw, IN[4].xxyz, IMM[0].xxxy
+   2738078  3380 TGSI   7: MUL TEMP[1].xyz, IN[4].zxyz, IMM[0].xxyx
+   2738078  3380 TGSI   8: MAD TEMP[1].xyz, IN[4].xyzx, IMM[0].xxyx, -TEMP[1].zxyz
+   2738078  3380 TGSI   9: MAD TEMP[1].xyz, IN[4].wwww, IMM[0].xyxx, TEMP[1].xyzx
+   2738078  3380 TGSI  10: MUL TEMP[2].xyz, TEMP[1].xyzx, IN[4].xyzx
+   2738078  3380 TGSI  11: MAD TEMP[1].xyz, IN[4].zxyz, TEMP[1].yzxy, -TEMP[2].xyzx
+   2738078  3380 TGSI  12: MAD TEMP[1].xyz, TEMP[1].xyzx, IMM[0].zzzx, IMM[0].xxyx
+   2738078  3380 TGSI  13: MUL TEMP[2].xyz, IN[4].xyzx, IMM[0].yxxx
+   2738078  3380 TGSI  14: MAD TEMP[0].yzw, IN[4].zzxy, IMM[0].xxyx, -TEMP[0].yyzw
+   2738078  3380 TGSI  15: MAD TEMP[0].yzw, IN[4].wwww, IMM[0].xyxx, TEMP[0].yyzw
+   2738078  3380 TGSI  16: MUL TEMP[3].xyz, TEMP[0].yzwy, IN[4].zxyz
+   2738093  3380 TGSI  17: MAD TEMP[0].yzw, IN[4].yyzx, TEMP[0].zzwy, -TEMP[3].xxyz
+   2738093  3380 TGSI  18: MAD TEMP[0].yzw, TEMP[0].yyzw, IMM[0].xzzz, IMM[0].xxyx
+   2738093  3380 TGSI  19: MUL TEMP[0].xyz, TEMP[0].xxxx, TEMP[0].yzwy
+   2738093  3380 TGSI  20: MAD TEMP[2].xyz, IN[4].zxyz, IMM[0].xxyx, -TEMP[2].xyzx
+   2738093  3380 TGSI  21: MAD TEMP[2].xyz, IN[4].wwww, IMM[0].xyxx, TEMP[2].xyzx
+   2738093  3380 TGSI  22: MUL TEMP[3].xyz, TEMP[2].xyzx, IN[4].zxyz
+   2738093  3380 TGSI  23: MAD TEMP[2].xyz, IN[4].yzxy, TEMP[2].yzxy, -TEMP[3].xyzx
+   2738093  3380 TGSI  24: MAD TEMP[2].xyz, TEMP[2].xyzx, IMM[0].zzzx, IMM[0].xxyx
+   2738093  3380 TGSI  25: FSLT TEMP[0].w, IMM[0].wwww, CONST[2][16].xxxx
+   2738093  3380 TGSI  26: UIF TEMP[0].wwww :0
+   2738093  3380 TGSI  27:   MOV TEMP[3].xyz, IN[2].xyzx
+   2738093  3380 TGSI  28:   MOV TEMP[3].w, IMM[1].xxxx
+   2738093  3380 TGSI  29:   DP4 TEMP[4].x, TEMP[3], CONST[2][0]
+   2738093  3380 TGSI  30:   DP4 TEMP[4].y, TEMP[3], CONST[2][1]
+   2738093  3380 TGSI  31:   DP4 TEMP[4].z, TEMP[3], CONST[2][2]
+   2738093  3380 TGSI  32:   DP4 TEMP[0].w, TEMP[3], CONST[2][3]
+   2738093  3380 TGSI  33:   DIV OUT[4].xyz, TEMP[4].xyzx, TEMP[0].wwww
+   2738093  3380 TGSI  34:   DP3 TEMP[4].z, TEMP[1].zxyz, CONST[2][0].xyzx
+   2738093  3380 TGSI  35:   DP3 TEMP[4].x, TEMP[1].zxyz, CONST[2][1].xyzx
+   2738093  3380 TGSI  36:   DP3 TEMP[4].y, TEMP[1].zxyz, CONST[2][2].xyzx
+   2738093  3380 TGSI  37:   DP3 TEMP[5].x, TEMP[0].xyzx, CONST[2][0].xyzx
+   2738093  3380 TGSI  38:   DP3 TEMP[5].y, TEMP[0].xyzx, CONST[2][1].xyzx
+   2738093  3380 TGSI  39:   DP3 TEMP[5].z, TEMP[0].xyzx, CONST[2][2].xyzx
+   2738093  3380 TGSI  40:   DP3 TEMP[6].x, TEMP[2].xyzx, CONST[2][4].xyzx
+   2738093  3380 TGSI  41:   DP3 TEMP[6].y, TEMP[2].xyzx, CONST[2][5].xyzx
+   2738093  3380 TGSI  42:   DP3 TEMP[6].z, TEMP[2].xyzx, CONST[2][6].xyzx
+   2738093  3380 TGSI  43:   DP3 TEMP[0].w, TEMP[4].xyzx, TEMP[4].xyzx
+   2738093  3380 TGSI  44:   MOV TEMP[8], TEMP[0].wwww
+   2738093  3380 TGSI  45:   RSQ TEMP[0].w, TEMP[8].wwww
+   2738093  3380 TGSI  46:   MUL TEMP[4].xyz, TEMP[0].wwww, TEMP[4].xyzx
+   2738093  3380 TGSI  47:   DP3 TEMP[0].w, TEMP[5].xyzx, TEMP[5].xyzx
+   2738093  3380 TGSI  48:   MOV TEMP[8], TEMP[0].wwww
+   2738093  3380 TGSI  49:   RSQ TEMP[0].w, TEMP[8].wwww
+   2738093  3380 TGSI  50:   MUL TEMP[5].xyz, TEMP[0].wwww, TEMP[5].xyzx
+   2738093  3380 TGSI  51:   DP3 TEMP[0].w, TEMP[6].xyzx, TEMP[6].xyzx
+   2738093  3380 TGSI  52:   MOV TEMP[8], TEMP[0].wwww
+   2738093  3380 TGSI  53:   RSQ TEMP[0].w, TEMP[8].wwww
+   2738093  3380 TGSI  54:   MUL TEMP[6].xyz, TEMP[0].wwww, TEMP[6].xyzx
+   2738093  3380 TGSI  55:   MUL TEMP[7].xyz, TEMP[4].xyzx, TEMP[6].zxyz
+   2738093  3380 TGSI  56:   MAD TEMP[7].xyz, TEMP[6].yzxy, TEMP[4].yzxy, -TEMP[7].xyzx
+   2738093  3380 TGSI  57:   DP3 TEMP[0].w, TEMP[7].xyzx, TEMP[5].xyzx
+   2738093  3380 TGSI  58:   FSLT TEMP[0].w, TEMP[0].wwww, IMM[0].xxxx
+   2738093  3380 TGSI  59:   UCMP TEMP[0].w, TEMP[0].wwww, IMM[1].yyyy, IMM[1].xxxx
+   2738093  3380 TGSI  60:   MAD TEMP[4].xz, TEMP[4].zzxz, IMM[0].wxwx, IMM[0].wxwx
+   2738093  3380 TGSI  61:   MAX TEMP[4].xz, TEMP[4].xxzx, IMM[2].xyxy
+   2738093  3380 TGSI  62:   MIN TEMP[4].xz, TEMP[4].xxzx, IMM[0].yxyx
+   2738093  3380 TGSI  63:   FSLT TEMP[1].w, TEMP[4].yyyy, IMM[0].xxxx
+   2738093  3380 TGSI  64:   UCMP TEMP[1].w, TEMP[1].wwww, IMM[1].yyyy, IMM[1].xxxx
+   2738093  3380 TGSI  65:   MUL OUT[4].w, TEMP[1].wwww, TEMP[4].zzzz
+   2738093  3380 TGSI  66:   MUL OUT[5].w, TEMP[0].wwww, TEMP[4].xxxx
+   2738093  3380 TGSI  67:   DP4 TEMP[4].x, TEMP[3], CONST[2][8]
+   2738093  3380 TGSI  68:   DP4 TEMP[4].y, TEMP[3], CONST[2][9]
+   2738093  3380 TGSI  69:   DP4 TEMP[4].z, TEMP[3], CONST[2][10]
+   2738093  3380 TGSI  70:   DP4 TEMP[0].w, TEMP[3], CONST[2][11]
+   2738093  3380 TGSI  71:   DIV OUT[6].xyz, TEMP[4].xyzx, TEMP[0].wwww
+   2738093  3380 TGSI  72:   DP3 TEMP[3].z, TEMP[1].zxyz, CONST[2][8].xyzx
+   2738093  3380 TGSI  73:   DP3 TEMP[3].x, TEMP[1].zxyz, CONST[2][9].xyzx
+   2738093  3380 TGSI  74:   DP3 TEMP[3].y, TEMP[1].zxyz, CONST[2][10].xyzx
+   2738093  3380 TGSI  75:   DP3 TEMP[4].x, TEMP[0].xyzx, CONST[2][8].xyzx
+   2738093  3380 TGSI  76:   DP3 TEMP[4].y, TEMP[0].xyzx, CONST[2][9].xyzx
+   2738093  3380 TGSI  77:   DP3 TEMP[4].z, TEMP[0].xyzx, CONST[2][10].xyzx
+   2738093  3380 TGSI  78:   DP3 TEMP[5].x, TEMP[2].xyzx, CONST[2][12].xyzx
+   2738093  3380 TGSI  79:   DP3 TEMP[5].y, TEMP[2].xyzx, CONST[2][13].xyzx
+   2738093  3380 TGSI  80:   DP3 TEMP[5].z, TEMP[2].xyzx, CONST[2][14].xyzx
+   2738093  3380 TGSI  81:   DP3 TEMP[0].w, TEMP[3].xyzx, TEMP[3].xyzx
+   2738093  3380 TGSI  82:   MOV TEMP[8], TEMP[0].wwww
+   2738093  3380 TGSI  83:   RSQ TEMP[0].w, TEMP[8].wwww
+   2738093  3380 TGSI  84:   MUL TEMP[3].xyz, TEMP[0].wwww, TEMP[3].xyzx
+   2738093  3380 TGSI  85:   DP3 TEMP[0].w, TEMP[4].xyzx, TEMP[4].xyzx
+   2738093  3380 TGSI  86:   MOV TEMP[8], TEMP[0].wwww
+   2738093  3380 TGSI  87:   RSQ TEMP[0].w, TEMP[8].wwww
+   2738093  3380 TGSI  88:   MUL TEMP[4].xyz, TEMP[0].wwww, TEMP[4].xyzx
+   2738093  3380 TGSI  89:   DP3 TEMP[0].w, TEMP[5].xyzx, TEMP[5].xyzx
+   2738093  3380 TGSI  90:   MOV TEMP[8], TEMP[0].wwww
+   2738093  3380 TGSI  91:   RSQ TEMP[0].w, TEMP[8].wwww
+   2738093  3380 TGSI  92:   MUL TEMP[5].xyz, TEMP[0].wwww, TEMP[5].xyzx
+   2738093  3380 TGSI  93:   MUL TEMP[7].xyz, TEMP[3].xyzx, TEMP[5].zxyz
+   2738093  3380 TGSI  94:   MAD TEMP[7].xyz, TEMP[5].yzxy, TEMP[3].yzxy, -TEMP[7].xyzx
+   2738093  3380 TGSI  95:   DP3 TEMP[0].w, TEMP[7].xyzx, TEMP[4].xyzx
+   2738093  3380 TGSI  96:   FSLT TEMP[0].w, TEMP[0].wwww, IMM[0].xxxx
+   2738093  3380 TGSI  97:   UCMP TEMP[0].w, TEMP[0].wwww, IMM[1].yyyy, IMM[1].xxxx
+   2738093  3380 TGSI  98:   MAD TEMP[3].xz, TEMP[3].zzxz, IMM[0].wxwx, IMM[0].wxwx
+   2738093  3380 TGSI  99:   MAX TEMP[3].xz, TEMP[3].xxzx, IMM[2].xyxy
+   2738093  3380 TGSI 100:   MIN TEMP[3].xz, TEMP[3].xxzx, IMM[0].yxyx
+   2738093  3380 TGSI 101:   FSLT TEMP[1].w, TEMP[3].yyyy, IMM[0].xxxx
+   2738093  3380 TGSI 102:   UCMP TEMP[1].w, TEMP[1].wwww, IMM[1].yyyy, IMM[1].xxxx
+   2738093  3380 TGSI 103:   MUL OUT[6].w, TEMP[1].wwww, TEMP[3].zzzz
+   2738093  3380 TGSI 104:   MUL OUT[7].w, TEMP[0].wwww, TEMP[3].xxxx
+   2738093  3380 TGSI 105:   MOV OUT[5].xyz, TEMP[6].xyzx
+   2738093  3380 TGSI 106:   MOV OUT[7].xyz, TEMP[5].xyzx
+   2738093  3380 TGSI 107: ELSE
+   2738093  3380 TGSI 108:   MUL TEMP[3].xyz, TEMP[1].xyzx, TEMP[2].zxyz
+   2738093  3380 TGSI 109:   MAD TEMP[3].xyz, TEMP[2].yzxy, TEMP[1].yzxy, -TEMP[3].xyzx
+   2738093  3380 TGSI 110:   DP3 TEMP[0].x, TEMP[3].xyzx, TEMP[0].xyzx
+   2738093  3380 TGSI 111:   FSLT TEMP[0].x, TEMP[0].xxxx, IMM[0].xxxx
+   2738093  3380 TGSI 112:   MAD TEMP[0].yz, TEMP[1].zzxz, IMM[0].xwwx, IMM[0].xwwx
+   2738093  3380 TGSI 113:   MAX TEMP[0].yz, TEMP[0].yyzy, IMM[2].yxxy
+   2738093  3380 TGSI 114:   MIN TEMP[0].yz, TEMP[0].yyzy, IMM[0].xyyx
+   2738093  3380 TGSI 115:   FSLT TEMP[0].w, TEMP[1].yyyy, IMM[0].xxxx
+   2738093  3380 TGSI 116:   UCMP TEMP[0].xw, TEMP[0].xxxw, IMM[1].yzzy, IMM[1].xzzx
+   2738093  3380 TGSI 117:   MUL TEMP[1].w, TEMP[0].wwww, TEMP[0].zzzz
+   2738093  3380 TGSI 118:   MUL TEMP[2].w, TEMP[0].xxxx, TEMP[0].yyyy
+   2738093  3380 TGSI 119:   MOV TEMP[1].xyz, IN[2].xyzx
+   2738093  3380 TGSI 120:   MOV OUT[4], TEMP[1]
+   2738093  3380 TGSI 121:   MOV OUT[5], TEMP[2]
+   2738093  3380 TGSI 122:   MOV OUT[6], TEMP[1]
+   2738093  3380 TGSI 123:   MOV OUT[7], TEMP[2]
+   2738093  3380 TGSI 124: ENDIF
+   2738093  3380 TGSI 125: MOV OUT[0].z, IMM[1].zzzz
+   2738093  3380 TGSI 126: MOV OUT[0].w, IN[0].zzzz
+   2738093  3380 TGSI 127: MOV OUT[1], IN[1]
+   2738093  3380 TGSI 128: MOV OUT[2].xy, IN[5].xyxx
+   2738093  3380 TGSI 129: MOV OUT[2].zw, IMM[1].zzzz
+   2738093  3380 TGSI 130: MOV OUT[3].xy, IN[6].xyxx
+   2738093  3380 TGSI 131: MOV OUT[3].zw, IMM[1].zzzz
+   2738093  3380 TGSI 132: RET
+   2738093  3380 TGSI 133: END
+   2738093  3380 TGSI end
+   2738125  3380 . CreateVertexShader
+   2738125  3380 TGSI begin
+   2738125  3380 TGSI VERT
+   2738125  3380 TGSI PROPERTY NEXT_SHADER FRAG
+   2738125  3380 TGSI DCL IN[0]
+   2738125  3380 TGSI DCL IN[1]
+   2738125  3380 TGSI DCL IN[2]
+   2738125  3380 TGSI DCL IN[4]
+   2738125  3380 TGSI DCL IN[5]
+   2738125  3380 TGSI DCL IN[6]
+   2738125  3380 TGSI DCL OUT[0], POSITION
+   2738125  3380 TGSI DCL OUT[1], GENERIC[1]
+   2738125  3380 TGSI DCL OUT[2], GENERIC[2]
+   2738125  3380 TGSI DCL OUT[3], GENERIC[3]
+   2738125  3380 TGSI DCL OUT[4], GENERIC[4]
+   2738125  3380 TGSI DCL OUT[5], GENERIC[5]
+   2738125  3380 TGSI DCL OUT[6], GENERIC[6]
+   2738125  3380 TGSI DCL OUT[7], GENERIC[7]
+   2738125  3380 TGSI DCL CONST[0][0..6]
+   2738125  3380 TGSI DCL CONST[2][0..16]
+   2738125  3380 TGSI DCL TEMP[0..9]
+   2738125  3380 TGSI IMM[0] FLT32 {    1.0000,     0.0000,     2.0000,     0.5000}
+   2738125  3380 TGSI IMM[1] UINT32 {1065353216, 0, 3212836864, 0}
+   2738125  3380 TGSI IMM[2] FLT32 {    0.0000,     0.0000,     0.0000,     0.0000}
+   2738125  3380 TGSI   0: MUL TEMP[0], IN[0].xyzz, CONST[0][0]
+   2738125  3380 TGSI   1: ADD OUT[0].xy, TEMP[0].zwzz, TEMP[0].xyxx
+   2738125  3380 TGSI   2: ADD TEMP[0].x, -IN[0].zzzz, IMM[0].xxxx
+   2738125  3380 TGSI   3: MAD TEMP[0].xy, CONST[0][6].xyxx, TEMP[0].xxxx, IN[0].zzzz
+   2738125  3380 TGSI   4: MUL OUT[2].xy, TEMP[0].xxxx, IN[5].xyxx
+   2738125  3380 TGSI   5: MUL OUT[3].xy, TEMP[0].yyyy, IN[6].xyxx
+   2738125  3380 TGSI   6: FSLT TEMP[0].z, IMM[0].yyyy, IN[4].wwww
+   2738125  3380 TGSI   7: FSLT TEMP[0].w, IN[4].wwww, IMM[0].yyyy
+   2738125  3380 TGSI   8: UADD TEMP[0].z, -TEMP[0].zzzz, TEMP[0].wwww
+   2738125  3380 TGSI   9: I2F TEMP[0].z, TEMP[0].zzzz
+   2738125  3380 TGSI  10: MUL TEMP[1].xyz, IN[4].xyzx, IMM[0].yyxy
+   2738125  3380 TGSI  11: MUL TEMP[2].xyz, IN[4].zxyz, IMM[0].yyxy
+   2738125  3380 TGSI  12: MAD TEMP[2].xyz, IN[4].xyzx, IMM[0].yyxy, -TEMP[2].zxyz
+   2738125  3380 TGSI  13: MAD TEMP[2].xyz, IN[4].wwww, IMM[0].yxyy, TEMP[2].xyzx
+   2738125  3380 TGSI  14: MUL TEMP[3].xyz, TEMP[2].xyzx, IN[4].xyzx
+   2738125  3380 TGSI  15: MAD TEMP[2].xyz, IN[4].zxyz, TEMP[2].yzxy, -TEMP[3].xyzx
+   2738125  3380 TGSI  16: MAD TEMP[2].xyz, TEMP[2].xyzx, IMM[0].zzzy, IMM[0].yyxy
+   2738125  3380 TGSI  17: MUL TEMP[3].xyz, IN[4].xyzx, IMM[0].xyyy
+   2738125  3380 TGSI  18: MAD TEMP[1].xyz, IN[4].zxyz, IMM[0].yxyy, -TEMP[1].xyzx
+   2738125  3380 TGSI  19: MAD TEMP[1].xyz, IN[4].wwww, IMM[0].xyyy, TEMP[1].xyzx
+   2738125  3380 TGSI  20: MUL TEMP[4].xyz, TEMP[1].xyzx, IN[4].zxyz
+   2738125  3380 TGSI  21: MAD TEMP[1].xyz, IN[4].yzxy, TEMP[1].yzxy, -TEMP[4].xyzx
+   2738125  3380 TGSI  22: MAD TEMP[1].xyz, TEMP[1].xyzx, IMM[0].zzzy, IMM[0].yxyy
+   2738125  3380 TGSI  23: MUL TEMP[1].xyz, TEMP[0].zzzz, TEMP[1].xyzx
+   2738125  3380 TGSI  24: MAD TEMP[3].xyz, IN[4].zxyz, IMM[0].yyxy, -TEMP[3].xyzx
+   2738125  3380 TGSI  25: MAD TEMP[3].xyz, IN[4].wwww, IMM[0].yxyy, TEMP[3].xyzx
+   2738125  3380 TGSI  26: MUL TEMP[4].xyz, TEMP[3].xyzx, IN[4].zxyz
+   2738125  3380 TGSI  27: MAD TEMP[3].xyz, IN[4].yzxy, TEMP[3].yzxy, -TEMP[4].xyzx
+   2738125  3380 TGSI  28: MAD TEMP[3].xyz, TEMP[3].xyzx, IMM[0].zzzy, IMM[0].yyxy
+   2738125  3380 TGSI  29: FSLT TEMP[0].z, IMM[0].wwww, CONST[2][16].xxxx
+   2738125  3380 TGSI  30: UIF TEMP[0].zzzz :0
+   2738125  3380 TGSI  31:   MOV TEMP[4].xyz, IN[2].xyzx
+   2738125  3380 TGSI  32:   MOV TEMP[4].w, IMM[1].xxxx
+   2738125  3380 TGSI  33:   DP4 TEMP[5].x, TEMP[4], CONST[2][0]
+   2738125  3380 TGSI  34:   DP4 TEMP[5].y, TEMP[4], CONST[2][1]
+   2738125  3380 TGSI  35:   DP4 TEMP[5].z, TEMP[4], CONST[2][2]
+   2738125  3380 TGSI  36:   DP4 TEMP[0].z, TEMP[4], CONST[2][3]
+   2738125  3380 TGSI  37:   DIV OUT[4].xyz, TEMP[5].xyzx, TEMP[0].zzzz
+   2738125  3380 TGSI  38:   DP3 TEMP[5].z, TEMP[2].zxyz, CONST[2][0].xyzx
+   2738125  3380 TGSI  39:   DP3 TEMP[5].x, TEMP[2].zxyz, CONST[2][1].xyzx
+   2738125  3380 TGSI  40:   DP3 TEMP[5].y, TEMP[2].zxyz, CONST[2][2].xyzx
+   2738125  3380 TGSI  41:   DP3 TEMP[6].x, TEMP[1].xyzx, CONST[2][0].xyzx
+   2738125  3380 TGSI  42:   DP3 TEMP[6].y, TEMP[1].xyzx, CONST[2][1].xyzx
+   2738125  3380 TGSI  43:   DP3 TEMP[6].z, TEMP[1].xyzx, CONST[2][2].xyzx
+   2738125  3380 TGSI  44:   DP3 TEMP[7].x, TEMP[3].xyzx, CONST[2][4].xyzx
+   2738125  3380 TGSI  45:   DP3 TEMP[7].y, TEMP[3].xyzx, CONST[2][5].xyzx
+   2738125  3380 TGSI  46:   DP3 TEMP[7].z, TEMP[3].xyzx, CONST[2][6].xyzx
+   2738125  3380 TGSI  47:   DP3 TEMP[0].z, TEMP[5].xyzx, TEMP[5].xyzx
+   2738125  3380 TGSI  48:   MOV TEMP[9], TEMP[0].zzzz
+   2738125  3380 TGSI  49:   RSQ TEMP[0].z, TEMP[9].zzzz
+   2738125  3380 TGSI  50:   MUL TEMP[5].xyz, TEMP[0].zzzz, TEMP[5].xyzx
+   2738125  3380 TGSI  51:   DP3 TEMP[0].z, TEMP[6].xyzx, TEMP[6].xyzx
+   2738125  3380 TGSI  52:   MOV TEMP[9], TEMP[0].zzzz
+   2738125  3380 TGSI  53:   RSQ TEMP[0].z, TEMP[9].zzzz
+   2738125  3380 TGSI  54:   MUL TEMP[6].xyz, TEMP[0].zzzz, TEMP[6].xyzx
+   2738125  3380 TGSI  55:   DP3 TEMP[0].z, TEMP[7].xyzx, TEMP[7].xyzx
+   2738125  3380 TGSI  56:   MOV TEMP[9], TEMP[0].zzzz
+   2738125  3380 TGSI  57:   RSQ TEMP[0].z, TEMP[9].zzzz
+   2738125  3380 TGSI  58:   MUL TEMP[7].xyz, TEMP[0].zzzz, TEMP[7].xyzx
+   2738125  3380 TGSI  59:   MUL TEMP[8].xyz, TEMP[5].xyzx, TEMP[7].zxyz
+   2738125  3380 TGSI  60:   MAD TEMP[8].xyz, TEMP[7].yzxy, TEMP[5].yzxy, -TEMP[8].xyzx
+   2738125  3380 TGSI  61:   DP3 TEMP[0].z, TEMP[8].xyzx, TEMP[6].xyzx
+   2738125  3380 TGSI  62:   FSLT TEMP[0].z, TEMP[0].zzzz, IMM[0].yyyy
+   2738125  3380 TGSI  63:   MAD TEMP[5].xz, TEMP[5].zzxz, IMM[0].wywy, IMM[0].wywy
+   2738125  3380 TGSI  64:   MAX TEMP[5].xz, TEMP[5].xxzx, IMM[2].xyxy
+   2738125  3380 TGSI  65:   MIN TEMP[5].xz, TEMP[5].xxzx, IMM[0].xyxy
+   2738125  3380 TGSI  66:   FSLT TEMP[0].w, TEMP[5].yyyy, IMM[0].yyyy
+   2738125  3380 TGSI  67:   UCMP TEMP[0].zw, TEMP[0].zzzw, IMM[1].yyzz, IMM[1].yyxx
+   2738125  3380 TGSI  68:   MUL OUT[4].w, TEMP[0].wwww, TEMP[5].zzzz
+   2738125  3380 TGSI  69:   MUL OUT[5].w, TEMP[0].zzzz, TEMP[5].xxxx
+   2738125  3380 TGSI  70:   DP4 TEMP[5].x, TEMP[4], CONST[2][8]
+   2738125  3380 TGSI  71:   DP4 TEMP[5].y, TEMP[4], CONST[2][9]
+   2738125  3380 TGSI  72:   DP4 TEMP[5].z, TEMP[4], CONST[2][10]
+   2738125  3380 TGSI  73:   DP4 TEMP[0].z, TEMP[4], CONST[2][11]
+   2738125  3380 TGSI  74:   DIV OUT[6].xyz, TEMP[5].xyzx, TEMP[0].zzzz
+   2738125  3380 TGSI  75:   DP3 TEMP[4].z, TEMP[2].zxyz, CONST[2][8].xyzx
+   2738125  3380 TGSI  76:   DP3 TEMP[4].x, TEMP[2].zxyz, CONST[2][9].xyzx
+   2738125  3380 TGSI  77:   DP3 TEMP[4].y, TEMP[2].zxyz, CONST[2][10].xyzx
+   2738125  3380 TGSI  78:   DP3 TEMP[5].x, TEMP[1].xyzx, CONST[2][8].xyzx
+   2738125  3380 TGSI  79:   DP3 TEMP[5].y, TEMP[1].xyzx, CONST[2][9].xyzx
+   2738125  3380 TGSI  80:   DP3 TEMP[5].z, TEMP[1].xyzx, CONST[2][10].xyzx
+   2738125  3380 TGSI  81:   DP3 TEMP[6].x, TEMP[3].xyzx, CONST[2][12].xyzx
+   2738125  3380 TGSI  82:   DP3 TEMP[6].y, TEMP[3].xyzx, CONST[2][13].xyzx
+   2738125  3380 TGSI  83:   DP3 TEMP[6].z, TEMP[3].xyzx, CONST[2][14].xyzx
+   2738125  3380 TGSI  84:   DP3 TEMP[0].z, TEMP[4].xyzx, TEMP[4].xyzx
+   2738125  3380 TGSI  85:   MOV TEMP[9], TEMP[0].zzzz
+   2738125  3380 TGSI  86:   RSQ TEMP[0].z, TEMP[9].zzzz
+   2738125  3380 TGSI  87:   MUL TEMP[4].xyz, TEMP[0].zzzz, TEMP[4].xyzx
+   2738125  3380 TGSI  88:   DP3 TEMP[0].z, TEMP[5].xyzx, TEMP[5].xyzx
+   2738125  3380 TGSI  89:   MOV TEMP[9], TEMP[0].zzzz
+   2738125  3380 TGSI  90:   RSQ TEMP[0].z, TEMP[9].zzzz
+   2738125  3380 TGSI  91:   MUL TEMP[5].xyz, TEMP[0].zzzz, TEMP[5].xyzx
+   2738125  3380 TGSI  92:   DP3 TEMP[0].z, TEMP[6].xyzx, TEMP[6].xyzx
+   2738125  3380 TGSI  93:   MOV TEMP[9], TEMP[0].zzzz
+   2738125  3380 TGSI  94:   RSQ TEMP[0].z, TEMP[9].zzzz
+   2738125  3380 TGSI  95:   MUL TEMP[6].xyz, TEMP[0].zzzz, TEMP[6].xyzx
+   2738125  3380 TGSI  96:   MUL TEMP[8].xyz, TEMP[4].xyzx, TEMP[6].zxyz
+   2738125  3380 TGSI  97:   MAD TEMP[8].xyz, TEMP[6].yzxy, TEMP[4].yzxy, -TEMP[8].xyzx
+   2738125  3380 TGSI  98:   DP3 TEMP[0].z, TEMP[8].xyzx, TEMP[5].xyzx
+   2738125  3380 TGSI  99:   FSLT TEMP[0].z, TEMP[0].zzzz, IMM[0].yyyy
+   2738125  3380 TGSI 100:   MAD TEMP[4].xz, TEMP[4].zzxz, IMM[0].wywy, IMM[0].wywy
+   2738125  3380 TGSI 101:   MAX TEMP[4].xz, TEMP[4].xxzx, IMM[2].xyxy
+   2738125  3380 TGSI 102:   MIN TEMP[4].xz, TEMP[4].xxzx, IMM[0].xyxy
+   2738125  3380 TGSI 103:   FSLT TEMP[0].w, TEMP[4].yyyy, IMM[0].yyyy
+   2738125  3380 TGSI 104:   UCMP TEMP[0].zw, TEMP[0].zzzw, IMM[1].yyzz, IMM[1].yyxx
+   2738125  3380 TGSI 105:   MUL OUT[6].w, TEMP[0].wwww, TEMP[4].zzzz
+   2738125  3380 TGSI 106:   MUL OUT[7].w, TEMP[0].zzzz, TEMP[4].xxxx
+   2738125  3380 TGSI 107:   MOV OUT[5].xyz, TEMP[7].xyzx
+   2738125  3380 TGSI 108:   MOV OUT[7].xyz, TEMP[6].xyzx
+   2738125  3380 TGSI 109: ELSE
+   2738125  3380 TGSI 110:   MUL TEMP[4].xyz, TEMP[2].xyzx, TEMP[3].zxyz
+   2738125  3380 TGSI 111:   MAD TEMP[4].xyz, TEMP[3].yzxy, TEMP[2].yzxy, -TEMP[4].xyzx
+   2738125  3380 TGSI 112:   DP3 TEMP[0].z, TEMP[4].xyzx, TEMP[1].xyzx
+   2738125  3380 TGSI 113:   FSLT TEMP[0].z, TEMP[0].zzzz, IMM[0].yyyy
+   2738125  3380 TGSI 114:   MAD TEMP[1].xy, TEMP[2].zxzz, IMM[0].wwyy, IMM[0].wwyy
+   2738125  3380 TGSI 115:   MAX TEMP[1].xy, TEMP[1].xyxx, IMM[2].xxyy
+   2738125  3380 TGSI 116:   MIN TEMP[1].xy, TEMP[1].xyxx, IMM[0].xxyy
+   2738125  3380 TGSI 117:   FSLT TEMP[0].w, TEMP[2].yyyy, IMM[0].yyyy
+   2738125  3380 TGSI 118:   UCMP TEMP[0].zw, TEMP[0].zzzw, IMM[1].yyzz, IMM[1].yyxx
+   2738125  3380 TGSI 119:   MUL TEMP[2].w, TEMP[0].wwww, TEMP[1].yyyy
+   2738125  3380 TGSI 120:   MUL TEMP[3].w, TEMP[0].zzzz, TEMP[1].xxxx
+   2738125  3380 TGSI 121:   MOV TEMP[2].xyz, IN[2].xyzx
+   2738125  3380 TGSI 122:   MOV OUT[4], TEMP[2]
+   2738125  3380 TGSI 123:   MOV OUT[5], TEMP[3]
+   2738125  3380 TGSI 124:   MOV OUT[6], TEMP[2]
+   2738125  3380 TGSI 125:   MOV OUT[7], TEMP[3]
+   2738125  3380 TGSI 126: ENDIF
+   2738125  3380 TGSI 127: MOV OUT[0].z, IMM[1].yyyy
+   2738125  3380 TGSI 128: MOV OUT[0].w, IN[0].zzzz
+   2738125  3380 TGSI 129: MOV OUT[1], IN[1]
+   2738125  3380 TGSI 130: MOV OUT[2].z, TEMP[0].xxxx
+   2738125  3380 TGSI 131: MOV OUT[2].w, IMM[1].yyyy
+   2738125  3380 TGSI 132: MOV OUT[3].z, TEMP[0].yyyy
+   2738125  3380 TGSI 133: MOV OUT[3].w, IMM[1].yyyy
+   2738125  3380 TGSI 134: RET
+   2738125  3380 TGSI 135: END
+   2738125  3380 TGSI end
+   2738171  3380 . CreateVertexShader
+   2738171  3380 TGSI begin
+   2738171  3380 TGSI VERT
+   2738171  3380 TGSI PROPERTY NEXT_SHADER FRAG
+   2738171  3380 TGSI DCL IN[0]
+   2738171  3380 TGSI DCL IN[1]
+   2738171  3380 TGSI DCL IN[2]
+   2738171  3380 TGSI DCL IN[3]
+   2738171  3380 TGSI DCL IN[4]
+   2738171  3380 TGSI DCL IN[5]
+   2738171  3380 TGSI DCL IN[6]
+   2738187  3380 TGSI DCL IN[7]
+   2738187  3380 TGSI DCL IN[8]
+   2738187  3380 TGSI DCL OUT[0], POSITION
+   2738187  3380 TGSI DCL OUT[1], GENERIC[1]
+   2738187  3380 TGSI DCL OUT[2], GENERIC[2]
+   2738187  3380 TGSI DCL OUT[3], GENERIC[3]
+   2738187  3380 TGSI DCL OUT[4], GENERIC[4]
+   2738187  3380 TGSI DCL OUT[5], GENERIC[5]
+   2738187  3380 TGSI DCL OUT[6], GENERIC[6]
+   2738187  3380 TGSI DCL OUT[7], GENERIC[7]
+   2738187  3380 TGSI DCL OUT[8], GENERIC[8]
+   2738187  3380 TGSI DCL CONST[0][0..6]
+   2738187  3380 TGSI DCL CONST[2][0..16]
+   2738187  3380 TGSI DCL TEMP[0..10]
+   2738187  3380 TGSI IMM[0] FLT32 {    1.0000,     0.0000,     2.0000,     0.5000}
+   2738187  3380 TGSI IMM[1] UINT32 {1065353216, 3212836864, 0, 0}
+   2738187  3380 TGSI IMM[2] FLT32 {    0.0000,     0.0000,     0.0000,     0.0000}
+   2738187  3380 TGSI   0: MUL TEMP[0], IN[0].xyzz, CONST[0][0]
+   2738187  3380 TGSI   1: ADD OUT[0].xy, TEMP[0].zwzz, TEMP[0].xyxx
+   2738187  3380 TGSI   2: ADD TEMP[0].x, -IN[0].zzzz, IMM[0].xxxx
+   2738187  3380 TGSI   3: MAD TEMP[0], CONST[0][6], TEMP[0].xxxx, IN[0].zzzz
+   2738187  3380 TGSI   4: MUL OUT[2].xy, TEMP[0].xxxx, IN[5].xyxx
+   2738187  3380 TGSI   5: MUL OUT[3].xy, TEMP[0].yyyy, IN[6].xyxx
+   2738187  3380 TGSI   6: MUL OUT[4].xy, TEMP[0].zzzz, IN[7].xyxx
+   2738187  3380 TGSI   7: MUL TEMP[1].xy, TEMP[0].wwww, IN[8].xyxx
+   2738187  3380 TGSI   8: FSLT TEMP[1].w, IMM[0].yyyy, IN[4].wwww
+   2738187  3380 TGSI   9: FSLT TEMP[2].x, IN[4].wwww, IMM[0].yyyy
+   2738187  3380 TGSI  10: UADD TEMP[1].w, -TEMP[1].wwww, TEMP[2].xxxx
+   2738187  3380 TGSI  11: I2F TEMP[1].w, TEMP[1].wwww
+   2738187  3380 TGSI  12: MUL TEMP[2].xyz, IN[4].xyzx, IMM[0].yyxy
+   2738187  3380 TGSI  13: MUL TEMP[3].xyz, IN[4].zxyz, IMM[0].yyxy
+   2738187  3380 TGSI  14: MAD TEMP[3].xyz, IN[4].xyzx, IMM[0].yyxy, -TEMP[3].zxyz
+   2738187  3380 TGSI  15: MAD TEMP[3].xyz, IN[4].wwww, IMM[0].yxyy, TEMP[3].xyzx
+   2738187  3380 TGSI  16: MUL TEMP[4].xyz, TEMP[3].xyzx, IN[4].xyzx
+   2738187  3380 TGSI  17: MAD TEMP[3].xyz, IN[4].zxyz, TEMP[3].yzxy, -TEMP[4].xyzx
+   2738187  3380 TGSI  18: MAD TEMP[3].xyz, TEMP[3].xyzx, IMM[0].zzzy, IMM[0].yyxy
+   2738187  3380 TGSI  19: MUL TEMP[4].xyz, IN[4].xyzx, IMM[0].xyyy
+   2738187  3380 TGSI  20: MAD TEMP[2].xyz, IN[4].zxyz, IMM[0].yxyy, -TEMP[2].xyzx
+   2738187  3380 TGSI  21: MAD TEMP[2].xyz, IN[4].wwww, IMM[0].xyyy, TEMP[2].xyzx
+   2738187  3380 TGSI  22: MUL TEMP[5].xyz, TEMP[2].xyzx, IN[4].zxyz
+   2738187  3380 TGSI  23: MAD TEMP[2].xyz, IN[4].yzxy, TEMP[2].yzxy, -TEMP[5].xyzx
+   2738187  3380 TGSI  24: MAD TEMP[2].xyz, TEMP[2].xyzx, IMM[0].zzzy, IMM[0].yxyy
+   2738187  3380 TGSI  25: MUL TEMP[2].xyz, TEMP[1].wwww, TEMP[2].xyzx
+   2738187  3380 TGSI  26: MAD TEMP[4].xyz, IN[4].zxyz, IMM[0].yyxy, -TEMP[4].xyzx
+   2738187  3380 TGSI  27: MAD TEMP[4].xyz, IN[4].wwww, IMM[0].yxyy, TEMP[4].xyzx
+   2738187  3380 TGSI  28: MUL TEMP[5].xyz, TEMP[4].xyzx, IN[4].zxyz
+   2738187  3380 TGSI  29: MAD TEMP[4].xyz, IN[4].yzxy, TEMP[4].yzxy, -TEMP[5].xyzx
+   2738187  3380 TGSI  30: MAD TEMP[4].xyz, TEMP[4].xyzx, IMM[0].zzzy, IMM[0].yyxy
+   2738187  3380 TGSI  31: FSLT TEMP[1].w, IMM[0].wwww, CONST[2][16].xxxx
+   2738187  3380 TGSI  32: UIF TEMP[1].wwww :0
+   2738187  3380 TGSI  33:   MOV TEMP[5].xyz, IN[2].xyzx
+   2738187  3380 TGSI  34:   MOV TEMP[5].w, IMM[1].xxxx
+   2738187  3380 TGSI  35:   DP4 TEMP[6].x, TEMP[5], CONST[2][0]
+   2738187  3380 TGSI  36:   DP4 TEMP[6].y, TEMP[5], CONST[2][1]
+   2738187  3380 TGSI  37:   DP4 TEMP[6].z, TEMP[5], CONST[2][2]
+   2738187  3380 TGSI  38:   DP4 TEMP[1].w, TEMP[5], CONST[2][3]
+   2738187  3380 TGSI  39:   DIV OUT[5].xyz, TEMP[6].xyzx, TEMP[1].wwww
+   2738187  3380 TGSI  40:   DP3 TEMP[6].z, TEMP[3].zxyz, CONST[2][0].xyzx
+   2738187  3380 TGSI  41:   DP3 TEMP[6].x, TEMP[3].zxyz, CONST[2][1].xyzx
+   2738187  3380 TGSI  42:   DP3 TEMP[6].y, TEMP[3].zxyz, CONST[2][2].xyzx
+   2738187  3380 TGSI  43:   DP3 TEMP[7].x, TEMP[2].xyzx, CONST[2][0].xyzx
+   2738187  3380 TGSI  44:   DP3 TEMP[7].y, TEMP[2].xyzx, CONST[2][1].xyzx
+   2738187  3380 TGSI  45:   DP3 TEMP[7].z, TEMP[2].xyzx, CONST[2][2].xyzx
+   2738187  3380 TGSI  46:   DP3 TEMP[8].x, TEMP[4].xyzx, CONST[2][4].xyzx
+   2738187  3380 TGSI  47:   DP3 TEMP[8].y, TEMP[4].xyzx, CONST[2][5].xyzx
+   2738187  3380 TGSI  48:   DP3 TEMP[8].z, TEMP[4].xyzx, CONST[2][6].xyzx
+   2738187  3380 TGSI  49:   DP3 TEMP[1].w, TEMP[6].xyzx, TEMP[6].xyzx
+   2738187  3380 TGSI  50:   MOV TEMP[10], TEMP[1].wwww
+   2738187  3380 TGSI  51:   RSQ TEMP[1].w, TEMP[10].wwww
+   2738187  3380 TGSI  52:   MUL TEMP[6].xyz, TEMP[1].wwww, TEMP[6].xyzx
+   2738187  3380 TGSI  53:   DP3 TEMP[1].w, TEMP[7].xyzx, TEMP[7].xyzx
+   2738187  3380 TGSI  54:   MOV TEMP[10], TEMP[1].wwww
+   2738187  3380 TGSI  55:   RSQ TEMP[1].w, TEMP[10].wwww
+   2738187  3380 TGSI  56:   MUL TEMP[7].xyz, TEMP[1].wwww, TEMP[7].xyzx
+   2738187  3380 TGSI  57:   DP3 TEMP[1].w, TEMP[8].xyzx, TEMP[8].xyzx
+   2738187  3380 TGSI  58:   MOV TEMP[10], TEMP[1].wwww
+   2738187  3380 TGSI  59:   RSQ TEMP[1].w, TEMP[10].wwww
+   2738187  3380 TGSI  60:   MUL TEMP[8].xyz, TEMP[1].wwww, TEMP[8].xyzx
+   2738187  3380 TGSI  61:   MUL TEMP[9].xyz, TEMP[6].xyzx, TEMP[8].zxyz
+   2738187  3380 TGSI  62:   MAD TEMP[9].xyz, TEMP[8].yzxy, TEMP[6].yzxy, -TEMP[9].xyzx
+   2738187  3380 TGSI  63:   DP3 TEMP[1].w, TEMP[9].xyzx, TEMP[7].xyzx
+   2738187  3380 TGSI  64:   FSLT TEMP[1].w, TEMP[1].wwww, IMM[0].yyyy
+   2738187  3380 TGSI  65:   UCMP TEMP[1].w, TEMP[1].wwww, IMM[1].yyyy, IMM[1].xxxx
+   2738187  3380 TGSI  66:   MAD TEMP[6].xz, TEMP[6].zzxz, IMM[0].wywy, IMM[0].wywy
+   2738187  3380 TGSI  67:   MAX TEMP[6].xz, TEMP[6].xxzx, IMM[2].xyxy
+   2738187  3380 TGSI  68:   MIN TEMP[6].xz, TEMP[6].xxzx, IMM[0].xyxy
+   2738187  3380 TGSI  69:   FSLT TEMP[2].w, TEMP[6].yyyy, IMM[0].yyyy
+   2738187  3380 TGSI  70:   UCMP TEMP[2].w, TEMP[2].wwww, IMM[1].yyyy, IMM[1].xxxx
+   2738187  3380 TGSI  71:   MUL OUT[5].w, TEMP[2].wwww, TEMP[6].zzzz
+   2738187  3380 TGSI  72:   MUL OUT[6].w, TEMP[1].wwww, TEMP[6].xxxx
+   2738187  3380 TGSI  73:   DP4 TEMP[6].x, TEMP[5], CONST[2][8]
+   2738187  3380 TGSI  74:   DP4 TEMP[6].y, TEMP[5], CONST[2][9]
+   2738187  3380 TGSI  75:   DP4 TEMP[6].z, TEMP[5], CONST[2][10]
+   2738187  3380 TGSI  76:   DP4 TEMP[1].w, TEMP[5], CONST[2][11]
+   2738187  3380 TGSI  77:   DIV OUT[7].xyz, TEMP[6].xyzx, TEMP[1].wwww
+   2738187  3380 TGSI  78:   DP3 TEMP[5].z, TEMP[3].zxyz, CONST[2][8].xyzx
+   2738187  3380 TGSI  79:   DP3 TEMP[5].x, TEMP[3].zxyz, CONST[2][9].xyzx
+   2738187  3380 TGSI  80:   DP3 TEMP[5].y, TEMP[3].zxyz, CONST[2][10].xyzx
+   2738187  3380 TGSI  81:   DP3 TEMP[6].x, TEMP[2].xyzx, CONST[2][8].xyzx
+   2738187  3380 TGSI  82:   DP3 TEMP[6].y, TEMP[2].xyzx, CONST[2][9].xyzx
+   2738187  3380 TGSI  83:   DP3 TEMP[6].z, TEMP[2].xyzx, CONST[2][10].xyzx
+   2738187  3380 TGSI  84:   DP3 TEMP[7].x, TEMP[4].xyzx, CONST[2][12].xyzx
+   2738187  3380 TGSI  85:   DP3 TEMP[7].y, TEMP[4].xyzx, CONST[2][13].xyzx
+   2738187  3380 TGSI  86:   DP3 TEMP[7].z, TEMP[4].xyzx, CONST[2][14].xyzx
+   2738187  3380 TGSI  87:   DP3 TEMP[1].w, TEMP[5].xyzx, TEMP[5].xyzx
+   2738187  3380 TGSI  88:   MOV TEMP[10], TEMP[1].wwww
+   2738187  3380 TGSI  89:   RSQ TEMP[1].w, TEMP[10].wwww
+   2738187  3380 TGSI  90:   MUL TEMP[5].xyz, TEMP[1].wwww, TEMP[5].xyzx
+   2738187  3380 TGSI  91:   DP3 TEMP[1].w, TEMP[6].xyzx, TEMP[6].xyzx
+   2738187  3380 TGSI  92:   MOV TEMP[10], TEMP[1].wwww
+   2738187  3380 TGSI  93:   RSQ TEMP[1].w, TEMP[10].wwww
+   2738187  3380 TGSI  94:   MUL TEMP[6].xyz, TEMP[1].wwww, TEMP[6].xyzx
+   2738187  3380 TGSI  95:   DP3 TEMP[1].w, TEMP[7].xyzx, TEMP[7].xyzx
+   2738187  3380 TGSI  96:   MOV TEMP[10], TEMP[1].wwww
+   2738187  3380 TGSI  97:   RSQ TEMP[1].w, TEMP[10].wwww
+   2738187  3380 TGSI  98:   MUL TEMP[7].xyz, TEMP[1].wwww, TEMP[7].xyzx
+   2738187  3380 TGSI  99:   MUL TEMP[9].xyz, TEMP[5].xyzx, TEMP[7].zxyz
+   2738187  3380 TGSI 100:   MAD TEMP[9].xyz, TEMP[7].yzxy, TEMP[5].yzxy, -TEMP[9].xyzx
+   2738187  3380 TGSI 101:   DP3 TEMP[1].w, TEMP[9].xyzx, TEMP[6].xyzx
+   2738187  3380 TGSI 102:   FSLT TEMP[1].w, TEMP[1].wwww, IMM[0].yyyy
+   2738187  3380 TGSI 103:   UCMP TEMP[1].w, TEMP[1].wwww, IMM[1].yyyy, IMM[1].xxxx
+   2738187  3380 TGSI 104:   MAD TEMP[5].xz, TEMP[5].zzxz, IMM[0].wywy, IMM[0].wywy
+   2738187  3380 TGSI 105:   MAX TEMP[5].xz, TEMP[5].xxzx, IMM[2].xyxy
+   2738187  3380 TGSI 106:   MIN TEMP[5].xz, TEMP[5].xxzx, IMM[0].xyxy
+   2738187  3380 TGSI 107:   FSLT TEMP[2].w, TEMP[5].yyyy, IMM[0].yyyy
+   2738187  3380 TGSI 108:   UCMP TEMP[2].w, TEMP[2].wwww, IMM[1].yyyy, IMM[1].xxxx
+   2738187  3380 TGSI 109:   MUL OUT[7].w, TEMP[2].wwww, TEMP[5].zzzz
+   2738187  3380 TGSI 110:   MUL OUT[8].w, TEMP[1].wwww, TEMP[5].xxxx
+   2738187  3380 TGSI 111:   MOV OUT[6].xyz, TEMP[8].xyzx
+   2738187  3380 TGSI 112:   MOV OUT[8].xyz, TEMP[7].xyzx
+   2738187  3380 TGSI 113: ELSE
+   2738187  3380 TGSI 114:   MUL TEMP[5].xyz, TEMP[3].xyzx, TEMP[4].zxyz
+   2738187  3380 TGSI 115:   MAD TEMP[5].xyz, TEMP[4].yzxy, TEMP[3].yzxy, -TEMP[5].xyzx
+   2738187  3380 TGSI 116:   DP3 TEMP[1].w, TEMP[5].xyzx, TEMP[2].xyzx
+   2738187  3380 TGSI 117:   FSLT TEMP[1].w, TEMP[1].wwww, IMM[0].yyyy
+   2738187  3380 TGSI 118:   UCMP TEMP[1].w, TEMP[1].wwww, IMM[1].yyyy, IMM[1].xxxx
+   2738187  3380 TGSI 119:   MAD TEMP[2].xy, TEMP[3].zxzz, IMM[0].wwyy, IMM[0].wwyy
+   2738187  3380 TGSI 120:   MAX TEMP[2].xy, TEMP[2].xyxx, IMM[2].xxyy
+   2738187  3380 TGSI 121:   MIN TEMP[2].xy, TEMP[2].xyxx, IMM[0].xxyy
+   2738187  3380 TGSI 122:   FSLT TEMP[2].z, TEMP[3].yyyy, IMM[0].yyyy
+   2738187  3380 TGSI 123:   UCMP TEMP[2].z, TEMP[2].zzzz, IMM[1].yyyy, IMM[1].xxxx
+   2738187  3380 TGSI 124:   MUL TEMP[3].w, TEMP[2].zzzz, TEMP[2].yyyy
+   2738187  3380 TGSI 125:   MUL TEMP[4].w, TEMP[1].wwww, TEMP[2].xxxx
+   2738187  3380 TGSI 126:   MOV TEMP[3].xyz, IN[2].xyzx
+   2738187  3380 TGSI 127:   MOV OUT[5], TEMP[3]
+   2738187  3380 TGSI 128:   MOV OUT[6], TEMP[4]
+   2738187  3380 TGSI 129:   MOV OUT[7], TEMP[3]
+   2738187  3380 TGSI 130:   MOV OUT[8], TEMP[4]
+   2738187  3380 TGSI 131: ENDIF
+   2738187  3380 TGSI 132: FSLT TEMP[1].w, IMM[0].wwww, CONST[0][1].xxxx
+   2738187  3380 TGSI 133: MOV TEMP[2].xy, IN[3].xyxx
+   2738187  3380 TGSI 134: MOV TEMP[2].z, IMM[1].zzzz
+   2738187  3380 TGSI 135: MOV TEMP[1].z, TEMP[0].wwww
+   2738187  3380 TGSI 136: UCMP TEMP[1].xyz, TEMP[1].wwww, TEMP[2].xyzx, TEMP[1].xyzx
+   2738187  3380 TGSI 137: MOV OUT[0].z, IMM[1].zzzz
+   2738187  3380 TGSI 138: MOV OUT[0].w, IN[0].zzzz
+   2738187  3380 TGSI 139: MOV OUT[1], IN[1]
+   2738187  3380 TGSI 140: MOV OUT[2].z, TEMP[0].xxxx
+   2738187  3380 TGSI 141: MOV OUT[2].w, TEMP[1].xxxx
+   2738187  3380 TGSI 142: MOV OUT[3].z, TEMP[0].yyyy
+   2738187  3380 TGSI 143: MOV OUT[3].w, TEMP[1].yyyy
+   2738187  3380 TGSI 144: MOV OUT[4].z, TEMP[0].zzzz
+   2738187  3380 TGSI 145: MOV OUT[4].w, TEMP[1].zzzz
+   2738187  3380 TGSI 146: RET
+   2738187  3380 TGSI 147: END
+   2738187  3380 TGSI end
+   2738218  3380 . CreateVertexShader
+   2738218  3380 TGSI begin
+   2738218  3380 TGSI VERT
+   2738218  3380 TGSI PROPERTY NEXT_SHADER FRAG
+   2738218  3380 TGSI DCL IN[0]
+   2738218  3380 TGSI DCL IN[1]
+   2738218  3380 TGSI DCL IN[2]
+   2738218  3380 TGSI DCL IN[3]
+   2738218  3380 TGSI DCL OUT[0], POSITION
+   2738218  3380 TGSI DCL OUT[1], GENERIC[1]
+   2738218  3380 TGSI DCL OUT[2], GENERIC[2]
+   2738218  3380 TGSI DCL OUT[3], GENERIC[3]
+   2738218  3380 TGSI DCL OUT[4], GENERIC[4]
+   2738218  3380 TGSI DCL OUT[5], GENERIC[5]
+   2738218  3380 TGSI DCL OUT[6], GENERIC[6]
+   2738218  3380 TGSI DCL OUT[7], GENERIC[7]
+   2738218  3380 TGSI DCL CONST[0][0..11]
+   2738218  3380 TGSI DCL TEMP[0]
+   2738218  3380 TGSI IMM[0] UINT32 {0, 0, 0, 0}
+   2738218  3380 TGSI   0: MOV OUT[0].z, IMM[0].xxxx
+   2738218  3380 TGSI   1: MOV OUT[0].w, IN[0].zzzz
+   2738218  3380 TGSI   2: MUL TEMP[0], IN[0].xyzz, CONST[0][0]
+   2738218  3380 TGSI   3: ADD TEMP[0].xy, TEMP[0].zwzz, TEMP[0].xyxx
+   2738218  3380 TGSI   4: MOV OUT[0].xy, TEMP[0].xyxx
+   2738218  3380 TGSI   5: MOV OUT[1], IN[1]
+   2738218  3380 TGSI   6: MOV OUT[2].xy, IN[2].xyxx
+   2738218  3380 TGSI   7: MOV OUT[2].zw, IMM[0].xxxx
+   2738218  3380 TGSI   8: MOV OUT[3].xy, IN[3].xyxx
+   2738218  3380 TGSI   9: MOV OUT[3].zw, IMM[0].xxxx
+   2738218  3380 TGSI  10: DP2 OUT[4].x, TEMP[0].xyxx, CONST[0][7].xyxx
+   2738218  3380 TGSI  11: DP2 OUT[4].y, TEMP[0].xyxx, CONST[0][8].xyxx
+   2738218  3380 TGSI  12: DP2 OUT[4].z, TEMP[0].xyxx, CONST[0][9].xyxx
+   2738218  3380 TGSI  13: DP2 OUT[4].w, TEMP[0].xyxx, CONST[0][10].xyxx
+   2738218  3380 TGSI  14: MOV OUT[5].x, CONST[0][7].wwww
+   2738218  3380 TGSI  15: MOV OUT[5].y, CONST[0][8].wwww
+   2738218  3380 TGSI  16: MOV OUT[5].z, CONST[0][9].wwww
+   2738218  3380 TGSI  17: MOV OUT[5].w, CONST[0][10].wwww
+   2738218  3380 TGSI  18: MOV OUT[6], CONST[0][11]
+   2738218  3380 TGSI  19: MOV OUT[7].x, IN[0].zzzz
+   2738218  3380 TGSI  20: RET
+   2738218  3380 TGSI  21: END
+   2738218  3380 TGSI end
+   2738234  3380 . CreateVertexShader
+   2738234  3380 TGSI begin
+   2738234  3380 TGSI VERT
+   2738234  3380 TGSI PROPERTY NEXT_SHADER FRAG
+   2738234  3380 TGSI DCL IN[0]
+   2738234  3380 TGSI DCL IN[1]
+   2738234  3380 TGSI DCL IN[2]
+   2738234  3380 TGSI DCL IN[3]
+   2738234  3380 TGSI DCL OUT[0], POSITION
+   2738234  3380 TGSI DCL OUT[1], GENERIC[1]
+   2738234  3380 TGSI DCL OUT[2], GENERIC[2]
+   2738234  3380 TGSI DCL OUT[3], GENERIC[3]
+   2738234  3380 TGSI DCL OUT[4], GENERIC[4]
+   2738234  3380 TGSI DCL OUT[5], GENERIC[5]
+   2738234  3380 TGSI DCL OUT[6], GENERIC[6]
+   2738234  3380 TGSI DCL OUT[7], GENERIC[7]
+   2738234  3380 TGSI DCL CONST[0][0..11]
+   2738234  3380 TGSI DCL TEMP[0]
+   2738234  3380 TGSI IMM[0] UINT32 {0, 0, 0, 0}
+   2738234  3380 TGSI IMM[1] FLT32 {    1.0000,     0.0000,     0.0000,     0.0000}
+   2738234  3380 TGSI   0: MOV OUT[0].z, IMM[0].xxxx
+   2738234  3380 TGSI   1: MOV OUT[0].w, IN[0].zzzz
+   2738234  3380 TGSI   2: MUL TEMP[0], IN[0].xyzz, CONST[0][0]
+   2738234  3380 TGSI   3: ADD TEMP[0].xy, TEMP[0].zwzz, TEMP[0].xyxx
+   2738234  3380 TGSI   4: MOV OUT[0].xy, TEMP[0].xyxx
+   2738234  3380 TGSI   5: MOV OUT[1], IN[1]
+   2738234  3380 TGSI   6: MOV OUT[2].w, IMM[0].xxxx
+   2738234  3380 TGSI   7: ADD TEMP[0].z, -IN[0].zzzz, IMM[1].xxxx
+   2738234  3380 TGSI   8: MAD TEMP[0].zw, CONST[0][6].xxxy, TEMP[0].zzzz, IN[0].zzzz
+   2738234  3380 TGSI   9: MUL OUT[2].xy, TEMP[0].zzzz, IN[2].xyxx
+   2738234  3380 TGSI  10: MOV OUT[2].z, TEMP[0].zzzz
+   2738234  3380 TGSI  11: MUL OUT[3].xy, TEMP[0].wwww, IN[3].xyxx
+   2738234  3380 TGSI  12: MOV OUT[3].z, TEMP[0].wwww
+   2738234  3380 TGSI  13: MOV OUT[3].w, IMM[0].xxxx
+   2738234  3380 TGSI  14: DP2 OUT[4].x, TEMP[0].xyxx, CONST[0][7].xyxx
+   2738234  3380 TGSI  15: DP2 OUT[4].y, TEMP[0].xyxx, CONST[0][8].xyxx
+   2738234  3380 TGSI  16: DP2 OUT[4].z, TEMP[0].xyxx, CONST[0][9].xyxx
+   2738234  3380 TGSI  17: DP2 OUT[4].w, TEMP[0].xyxx, CONST[0][10].xyxx
+   2738234  3380 TGSI  18: MOV OUT[5].x, CONST[0][7].wwww
+   2738234  3380 TGSI  19: MOV OUT[5].y, CONST[0][8].wwww
+   2738234  3380 TGSI  20: MOV OUT[5].z, CONST[0][9].wwww
+   2738234  3380 TGSI  21: MOV OUT[5].w, CONST[0][10].wwww
+   2738234  3380 TGSI  22: MOV OUT[6], CONST[0][11]
+   2738234  3380 TGSI  23: MOV OUT[7].x, IN[0].zzzz
+   2738234  3380 TGSI  24: RET
+   2738234  3380 TGSI  25: END
+   2738234  3380 TGSI end
+   2738234  3380 . CreateVertexShader
+   2738234  3380 TGSI begin
+   2738234  3380 TGSI VERT
+   2738234  3380 TGSI PROPERTY NEXT_SHADER FRAG
+   2738234  3380 TGSI DCL IN[0]
+   2738234  3380 TGSI DCL IN[1]
+   2738234  3380 TGSI DCL IN[2]
+   2738234  3380 TGSI DCL IN[3]
+   2738234  3380 TGSI DCL IN[4]
+   2738234  3380 TGSI DCL IN[5]
+   2738234  3380 TGSI DCL IN[6]
+   2738234  3380 TGSI DCL IN[7]
+   2738234  3380 TGSI DCL OUT[0], POSITION
+   2738234  3380 TGSI DCL OUT[1], GENERIC[1]
+   2738234  3380 TGSI DCL OUT[2], GENERIC[2]
+   2738234  3380 TGSI DCL OUT[3], GENERIC[3]
+   2738234  3380 TGSI DCL CONST[0][0..5]
+   2738234  3380 TGSI DCL TEMP[0..1]
+   2738250  3380 TGSI IMM[0] UINT32 {0, 1065353216, 0, 0}
+   2738250  3380 TGSI IMM[1] FLT32 {    2.0000,     0.0000,     0.0000,     0.0000}
+   2738250  3380 TGSI   0: MOV TEMP[0].xw, IMM[0].xxxx
+   2738250  3380 TGSI   1: MOV TEMP[0].yz, IN[0].xxyx
+   2738250  3380 TGSI   2: MUL TEMP[1], TEMP[0].yzwy, IN[5].yzxy
+   2738250  3380 TGSI   3: MAD TEMP[1], IN[5].xyzx, TEMP[0].zwyz, -TEMP[1]
+   2738250  3380 TGSI   4: MAD TEMP[0], IN[5].wwww, TEMP[0], TEMP[1]
+   2738250  3380 TGSI   5: MUL TEMP[0].zw, TEMP[0].zzzw, IN[5].zzzx
+   2738250  3380 TGSI   6: MAD TEMP[0].xy, IN[5].yzyy, TEMP[0].xyxx, -TEMP[0].zwzz
+   2738250  3380 TGSI   7: MAD TEMP[0].xy, TEMP[0].xyxx, IMM[1].xxyy, IN[0].xyxx
+   2738250  3380 TGSI   8: MAD TEMP[0].xy, TEMP[0].xyxx, IN[7].xyxx, IN[4].xyxx
+   2738250  3380 TGSI   9: MOV TEMP[0].z, IN[4].zzzz
+   2738250  3380 TGSI  10: MOV TEMP[0].w, IMM[0].yyyy
+   2738250  3380 TGSI  11: DP4 TEMP[1].x, TEMP[0], CONST[0][2]
+   2738250  3380 TGSI  12: DP4 TEMP[1].y, TEMP[0], CONST[0][3]
+   2738250  3380 TGSI  13: DP4 TEMP[0].x, TEMP[0], CONST[0][5]
+   2738250  3380 TGSI  14: DIV TEMP[0].yz, TEMP[1].xxyx, TEMP[0].xxxx
+   2738250  3380 TGSI  15: MUL TEMP[1].xy, TEMP[0].xxxx, CONST[0][0].zwzz
+   2738250  3380 TGSI  16: MOV OUT[0].w, TEMP[0].xxxx
+   2738250  3380 TGSI  17: MAD OUT[0].xy, TEMP[0].yzyy, CONST[0][0].xyxx, TEMP[1].xyxx
+   2738250  3380 TGSI  18: MOV OUT[0].z, IMM[0].xxxx
+   2738250  3380 TGSI  19: MUL TEMP[0].xyz, IN[6].wwww, IN[6].xyzx
+   2738250  3380 TGSI  20: MOV TEMP[0].w, IN[6].wwww
+   2738250  3380 TGSI  21: MUL_SAT OUT[1], TEMP[0], IN[1]
+   2738250  3380 TGSI  22: MOV OUT[2].xy, IN[2].xyxx
+   2738250  3380 TGSI  23: MOV OUT[2].zw, IMM[0].xxxx
+   2738250  3380 TGSI  24: MOV OUT[3].xy, IN[3].xyxx
+   2738250  3380 TGSI  25: MOV OUT[3].zw, IMM[0].xxxx
+   2738250  3380 TGSI  26: RET
+   2738250  3380 TGSI  27: END
+   2738250  3380 TGSI end
+   2738250  3380 . CreateVertexShader
+   2738250  3380 TGSI begin
+   2738250  3380 TGSI VERT
+   2738250  3380 TGSI PROPERTY NEXT_SHADER FRAG
+   2738250  3380 TGSI DCL IN[0]
+   2738250  3380 TGSI DCL IN[1]
+   2738250  3380 TGSI DCL IN[2]
+   2738250  3380 TGSI DCL IN[3]
+   2738250  3380 TGSI DCL IN[4]
+   2738250  3380 TGSI DCL IN[5]
+   2738250  3380 TGSI DCL IN[6]
+   2738250  3380 TGSI DCL IN[7]
+   2738250  3380 TGSI DCL OUT[0], POSITION
+   2738250  3380 TGSI DCL OUT[1], GENERIC[1]
+   2738250  3380 TGSI DCL OUT[2], GENERIC[2]
+   2738250  3380 TGSI DCL OUT[3], GENERIC[3]
+   2738250  3380 TGSI DCL CONST[0][0..6]
+   2738250  3380 TGSI DCL TEMP[0..1]
+   2738250  3380 TGSI IMM[0] UINT32 {0, 1065353216, 0, 0}
+   2738250  3380 TGSI IMM[1] FLT32 {    2.0000,     0.0000,     1.0000,     0.0000}
+   2738250  3380 TGSI   0: MOV TEMP[0].xw, IMM[0].xxxx
+   2738250  3380 TGSI   1: MOV TEMP[0].yz, IN[0].xxyx
+   2738250  3380 TGSI   2: MUL TEMP[1], TEMP[0].yzwy, IN[5].yzxy
+   2738250  3380 TGSI   3: MAD TEMP[1], IN[5].xyzx, TEMP[0].zwyz, -TEMP[1]
+   2738250  3380 TGSI   4: MAD TEMP[0], IN[5].wwww, TEMP[0], TEMP[1]
+   2738250  3380 TGSI   5: MUL TEMP[0].zw, TEMP[0].zzzw, IN[5].zzzx
+   2738250  3380 TGSI   6: MAD TEMP[0].xy, IN[5].yzyy, TEMP[0].xyxx, -TEMP[0].zwzz
+   2738250  3380 TGSI   7: MAD TEMP[0].xy, TEMP[0].xyxx, IMM[1].xxyy, IN[0].xyxx
+   2738250  3380 TGSI   8: MAD TEMP[0].xy, TEMP[0].xyxx, IN[7].xyxx, IN[4].xyxx
+   2738250  3380 TGSI   9: MOV TEMP[0].z, IN[4].zzzz
+   2738250  3380 TGSI  10: MOV TEMP[0].w, IMM[0].yyyy
+   2738250  3380 TGSI  11: DP4 TEMP[1].x, TEMP[0], CONST[0][2]
+   2738250  3380 TGSI  12: DP4 TEMP[1].y, TEMP[0], CONST[0][3]
+   2738250  3380 TGSI  13: DP4 TEMP[0].x, TEMP[0], CONST[0][5]
+   2738250  3380 TGSI  14: DIV TEMP[0].yz, TEMP[1].xxyx, TEMP[0].xxxx
+   2738250  3380 TGSI  15: MUL TEMP[1].xy, TEMP[0].xxxx, CONST[0][0].zwzz
+   2738250  3380 TGSI  16: MAD OUT[0].xy, TEMP[0].yzyy, CONST[0][0].xyxx, TEMP[1].xyxx
+   2738250  3380 TGSI  17: MOV OUT[0].z, IMM[0].xxxx
+   2738250  3380 TGSI  18: MOV OUT[0].w, TEMP[0].xxxx
+   2738250  3380 TGSI  19: MUL TEMP[1].xyz, IN[6].wwww, IN[6].xyzx
+   2738250  3380 TGSI  20: MOV TEMP[1].w, IN[6].wwww
+   2738250  3380 TGSI  21: MUL_SAT OUT[1], TEMP[1], IN[1]
+   2738250  3380 TGSI  22: ADD TEMP[0].y, -TEMP[0].xxxx, IMM[1].zzzz
+   2738250  3380 TGSI  23: MAD TEMP[0].xy, CONST[0][6].xyxx, TEMP[0].yyyy, TEMP[0].xxxx
+   2738250  3380 TGSI  24: MUL OUT[2].xy, TEMP[0].xxxx, IN[2].xyxx
+   2738250  3380 TGSI  25: MOV OUT[2].z, TEMP[0].xxxx
+   2738250  3380 TGSI  26: MOV OUT[2].w, IMM[0].xxxx
+   2738250  3380 TGSI  27: MUL OUT[3].xy, TEMP[0].yyyy, IN[3].xyxx
+   2738250  3380 TGSI  28: MOV OUT[3].z, TEMP[0].yyyy
+   2738250  3380 TGSI  29: MOV OUT[3].w, IMM[0].xxxx
+   2738250  3380 TGSI  30: RET
+   2738250  3380 TGSI  31: END
+   2738250  3380 TGSI end
+   2738265  3380 . CreateVertexShader
+   2738265  3380 TGSI begin
+   2738265  3380 TGSI VERT
+   2738265  3380 TGSI PROPERTY NEXT_SHADER FRAG
+   2738265  3380 TGSI DCL IN[0]
+   2738265  3380 TGSI DCL IN[1]
+   2738265  3380 TGSI DCL IN[2]
+   2738265  3380 TGSI DCL IN[3]
+   2738265  3380 TGSI DCL IN[4]
+   2738265  3380 TGSI DCL IN[5]
+   2738265  3380 TGSI DCL IN[6]
+   2738265  3380 TGSI DCL IN[7]
+   2738265  3380 TGSI DCL IN[8]
+   2738265  3380 TGSI DCL IN[9]
+   2738265  3380 TGSI DCL OUT[0], POSITION
+   2738265  3380 TGSI DCL OUT[1], GENERIC[1]
+   2738265  3380 TGSI DCL OUT[2], GENERIC[2]
+   2738265  3380 TGSI DCL OUT[3], GENERIC[3]
+   2738265  3380 TGSI DCL OUT[4], GENERIC[4]
+   2738265  3380 TGSI DCL CONST[0][0..6]
+   2738265  3380 TGSI DCL TEMP[0..1]
+   2738265  3380 TGSI IMM[0] UINT32 {0, 1065353216, 0, 0}
+   2738265  3380 TGSI IMM[1] FLT32 {    2.0000,     0.0000,     1.0000,     0.0000}
+   2738265  3380 TGSI   0: MOV TEMP[0].xw, IMM[0].xxxx
+   2738265  3380 TGSI   1: MOV TEMP[0].yz, IN[0].xxyx
+   2738265  3380 TGSI   2: MUL TEMP[1], TEMP[0].yzwy, IN[7].yzxy
+   2738265  3380 TGSI   3: MAD TEMP[1], IN[7].xyzx, TEMP[0].zwyz, -TEMP[1]
+   2738265  3380 TGSI   4: MAD TEMP[0], IN[7].wwww, TEMP[0], TEMP[1]
+   2738265  3380 TGSI   5: MUL TEMP[0].zw, TEMP[0].zzzw, IN[7].zzzx
+   2738265  3380 TGSI   6: MAD TEMP[0].xy, IN[7].yzyy, TEMP[0].xyxx, -TEMP[0].zwzz
+   2738265  3380 TGSI   7: MAD TEMP[0].xy, TEMP[0].xyxx, IMM[1].xxyy, IN[0].xyxx
+   2738265  3380 TGSI   8: MAD TEMP[0].xy, TEMP[0].xyxx, IN[9].xyxx, IN[6].xyxx
+   2738265  3380 TGSI   9: MOV TEMP[0].z, IN[6].zzzz
+   2738265  3380 TGSI  10: MOV TEMP[0].w, IMM[0].yyyy
+   2738265  3380 TGSI  11: DP4 TEMP[1].x, TEMP[0], CONST[0][2]
+   2738265  3380 TGSI  12: DP4 TEMP[1].y, TEMP[0], CONST[0][3]
+   2738265  3380 TGSI  13: DP4 TEMP[0].x, TEMP[0], CONST[0][5]
+   2738265  3380 TGSI  14: DIV TEMP[0].yz, TEMP[1].xxyx, TEMP[0].xxxx
+   2738265  3380 TGSI  15: MUL TEMP[1].xy, TEMP[0].xxxx, CONST[0][0].zwzz
+   2738265  3380 TGSI  16: MAD OUT[0].xy, TEMP[0].yzyy, CONST[0][0].xyxx, TEMP[1].xyxx
+   2738265  3380 TGSI  17: MOV OUT[0].z, IMM[0].xxxx
+   2738265  3380 TGSI  18: MOV OUT[0].w, TEMP[0].xxxx
+   2738265  3380 TGSI  19: MUL TEMP[1].xyz, IN[8].wwww, IN[8].xyzx
+   2738265  3380 TGSI  20: MOV TEMP[1].w, IN[8].wwww
+   2738265  3380 TGSI  21: MUL_SAT OUT[1], TEMP[1], IN[1]
+   2738265  3380 TGSI  22: ADD TEMP[0].y, -TEMP[0].xxxx, IMM[1].zzzz
+   2738265  3380 TGSI  23: MAD TEMP[0], CONST[0][6], TEMP[0].yyyy, TEMP[0].xxxx
+   2738265  3380 TGSI  24: MUL OUT[2].xy, TEMP[0].xxxx, IN[2].xyxx
+   2738265  3380 TGSI  25: MOV OUT[2].z, TEMP[0].xxxx
+   2738265  3380 TGSI  26: MUL TEMP[1].xy, TEMP[0].wwww, IN[5].xyxx
+   2738265  3380 TGSI  27: MOV OUT[2].w, TEMP[1].xxxx
+   2738265  3380 TGSI  28: MOV OUT[3].w, TEMP[1].yyyy
+   2738265  3380 TGSI  29: MUL OUT[3].xy, TEMP[0].yyyy, IN[3].xyxx
+   2738265  3380 TGSI  30: MOV OUT[3].z, TEMP[0].yyyy
+   2738265  3380 TGSI  31: MUL OUT[4].xy, TEMP[0].zzzz, IN[4].xyxx
+   2738265  3380 TGSI  32: MOV OUT[4].zw, TEMP[0].zzzw
+   2738265  3380 TGSI  33: RET
+   2738265  3380 TGSI  34: END
+   2738265  3380 TGSI end
+   2738281  3380 . CreateVertexShader
+   2738281  3380 TGSI begin
+   2738281  3380 TGSI VERT
+   2738281  3380 TGSI PROPERTY NEXT_SHADER FRAG
+   2738281  3380 TGSI DCL IN[0]
+   2738281  3380 TGSI DCL IN[1]
+   2738281  3380 TGSI DCL IN[2]
+   2738281  3380 TGSI DCL IN[4]
+   2738281  3380 TGSI DCL IN[5]
+   2738281  3380 TGSI DCL IN[6]
+   2738281  3380 TGSI DCL IN[7]
+   2738281  3380 TGSI DCL IN[8]
+   2738281  3380 TGSI DCL IN[9]
+   2738281  3380 TGSI DCL IN[10]
+   2738281  3380 TGSI DCL OUT[0], POSITION
+   2738281  3380 TGSI DCL OUT[1], GENERIC[1]
+   2738281  3380 TGSI DCL OUT[2], GENERIC[2]
+   2738281  3380 TGSI DCL OUT[3], GENERIC[3]
+   2738281  3380 TGSI DCL OUT[4], GENERIC[4]
+   2738281  3380 TGSI DCL OUT[5], GENERIC[5]
+   2738281  3380 TGSI DCL OUT[6], GENERIC[6]
+   2738281  3380 TGSI DCL OUT[7], GENERIC[7]
+   2738281  3380 TGSI DCL CONST[0][0..5]
+   2738281  3380 TGSI DCL CONST[2][0..16]
+   2738281  3380 TGSI DCL TEMP[0..8]
+   2738281  3380 TGSI IMM[0] UINT32 {0, 1065353216, 3212836864, 0}
+   2738281  3380 TGSI IMM[1] FLT32 {    2.0000,     0.0000,     1.0000,     0.5000}
+   2738281  3380 TGSI IMM[2] FLT32 {    0.0000,     0.0000,     0.0000,     0.0000}
+   2738281  3380 TGSI   0: MUL TEMP[0].xyz, IN[9].wwww, IN[9].xyzx
+   2738281  3380 TGSI   1: MOV TEMP[0].w, IN[9].wwww
+   2738281  3380 TGSI   2: MUL_SAT OUT[1], TEMP[0], IN[1]
+   2738281  3380 TGSI   3: MOV TEMP[0].xw, IMM[0].xxxx
+   2738281  3380 TGSI   4: MOV TEMP[0].yz, IN[0].xxyx
+   2738281  3380 TGSI   5: MUL TEMP[1], TEMP[0].yzwy, IN[8].yzxy
+   2738281  3380 TGSI   6: MAD TEMP[1], IN[8].xyzx, TEMP[0].zwyz, -TEMP[1]
+   2738281  3380 TGSI   7: MAD TEMP[0], IN[8].wwww, TEMP[0], TEMP[1]
+   2738281  3380 TGSI   8: MUL TEMP[0].zw, TEMP[0].zzzw, IN[8].zzzx
+   2738281  3380 TGSI   9: MAD TEMP[0].xy, IN[8].yzyy, TEMP[0].xyxx, -TEMP[0].zwzz
+   2738281  3380 TGSI  10: MAD TEMP[0].xy, TEMP[0].xyxx, IMM[1].xxyy, IN[0].xyxx
+   2738281  3380 TGSI  11: MAD TEMP[0].xy, TEMP[0].xyxx, IN[10].xyxx, IN[7].xyxx
+   2738281  3380 TGSI  12: MOV TEMP[0].z, IN[7].zzzz
+   2738281  3380 TGSI  13: MOV TEMP[0].w, IMM[0].yyyy
+   2738281  3380 TGSI  14: DP4 TEMP[1].x, TEMP[0], CONST[0][2]
+   2738281  3380 TGSI  15: DP4 TEMP[1].y, TEMP[0], CONST[0][3]
+   2738281  3380 TGSI  16: DP4 TEMP[0].x, TEMP[0], CONST[0][5]
+   2738281  3380 TGSI  17: DIV TEMP[0].yz, TEMP[1].xxyx, TEMP[0].xxxx
+   2738281  3380 TGSI  18: MUL TEMP[1].xy, TEMP[0].xxxx, CONST[0][0].zwzz
+   2738281  3380 TGSI  19: MAD OUT[0].xy, TEMP[0].yzyy, CONST[0][0].xyxx, TEMP[1].xyxx
+   2738281  3380 TGSI  20: FSLT TEMP[0].y, IMM[1].yyyy, IN[4].wwww
+   2738281  3380 TGSI  21: FSLT TEMP[0].z, IN[4].wwww, IMM[1].yyyy
+   2738281  3380 TGSI  22: UADD TEMP[0].y, -TEMP[0].yyyy, TEMP[0].zzzz
+   2738281  3380 TGSI  23: I2F TEMP[0].y, TEMP[0].yyyy
+   2738281  3380 TGSI  24: MUL TEMP[1].xyz, IN[4].xyzx, IMM[1].yyzy
+   2738281  3380 TGSI  25: MUL TEMP[2].xyz, IN[4].zxyz, IMM[1].yyzy
+   2738281  3380 TGSI  26: MAD TEMP[2].xyz, IN[4].xyzx, IMM[1].yyzy, -TEMP[2].zxyz
+   2738281  3380 TGSI  27: MAD TEMP[2].xyz, IN[4].wwww, IMM[1].yzyy, TEMP[2].xyzx
+   2738281  3380 TGSI  28: MUL TEMP[3].xyz, TEMP[2].xyzx, IN[4].xyzx
+   2738281  3380 TGSI  29: MAD TEMP[2].xyz, IN[4].zxyz, TEMP[2].yzxy, -TEMP[3].xyzx
+   2738281  3380 TGSI  30: MAD TEMP[2].xyz, TEMP[2].xyzx, IMM[1].xxxy, IMM[1].yyzy
+   2738281  3380 TGSI  31: MUL TEMP[3].xyz, IN[4].xyzx, IMM[1].zyyy
+   2738281  3380 TGSI  32: MAD TEMP[1].xyz, IN[4].zxyz, IMM[1].yzyy, -TEMP[1].xyzx
+   2738281  3380 TGSI  33: MAD TEMP[1].xyz, IN[4].wwww, IMM[1].zyyy, TEMP[1].xyzx
+   2738281  3380 TGSI  34: MUL TEMP[4].xyz, TEMP[1].xyzx, IN[4].zxyz
+   2738281  3380 TGSI  35: MAD TEMP[1].xyz, IN[4].yzxy, TEMP[1].yzxy, -TEMP[4].xyzx
+   2738281  3380 TGSI  36: MAD TEMP[1].xyz, TEMP[1].xyzx, IMM[1].xxxy, IMM[1].yzyy
+   2738281  3380 TGSI  37: MUL TEMP[0].yzw, TEMP[0].yyyy, TEMP[1].xxyz
+   2738281  3380 TGSI  38: MAD TEMP[1].xyz, IN[4].zxyz, IMM[1].yyzy, -TEMP[3].xyzx
+   2738281  3380 TGSI  39: MAD TEMP[1].xyz, IN[4].wwww, IMM[1].yzyy, TEMP[1].xyzx
+   2738281  3380 TGSI  40: MUL TEMP[3].xyz, TEMP[1].xyzx, IN[4].zxyz
+   2738281  3380 TGSI  41: MAD TEMP[1].xyz, IN[4].yzxy, TEMP[1].yzxy, -TEMP[3].xyzx
+   2738281  3380 TGSI  42: MAD TEMP[1].xyz, TEMP[1].xyzx, IMM[1].xxxy, IMM[1].yyzy
+   2738281  3380 TGSI  43: FSLT TEMP[2].w, IMM[1].wwww, CONST[2][16].xxxx
+   2738281  3380 TGSI  44: UIF TEMP[2].wwww :0
+   2738281  3380 TGSI  45:   MOV TEMP[3].xyz, IN[2].xyzx
+   2738281  3380 TGSI  46:   MOV TEMP[3].w, IMM[0].yyyy
+   2738281  3380 TGSI  47:   DP4 TEMP[4].x, TEMP[3], CONST[2][0]
+   2738281  3380 TGSI  48:   DP4 TEMP[4].y, TEMP[3], CONST[2][1]
+   2738281  3380 TGSI  49:   DP4 TEMP[4].z, TEMP[3], CONST[2][2]
+   2738281  3380 TGSI  50:   DP4 TEMP[2].w, TEMP[3], CONST[2][3]
+   2738281  3380 TGSI  51:   DIV OUT[4].xyz, TEMP[4].xyzx, TEMP[2].wwww
+   2738281  3380 TGSI  52:   DP3 TEMP[4].z, TEMP[2].zxyz, CONST[2][0].xyzx
+   2738281  3380 TGSI  53:   DP3 TEMP[4].x, TEMP[2].zxyz, CONST[2][1].xyzx
+   2738281  3380 TGSI  54:   DP3 TEMP[4].y, TEMP[2].zxyz, CONST[2][2].xyzx
+   2738281  3380 TGSI  55:   DP3 TEMP[5].x, TEMP[0].yzwy, CONST[2][0].xyzx
+   2738281  3380 TGSI  56:   DP3 TEMP[5].y, TEMP[0].yzwy, CONST[2][1].xyzx
+   2738281  3380 TGSI  57:   DP3 TEMP[5].z, TEMP[0].yzwy, CONST[2][2].xyzx
+   2738281  3380 TGSI  58:   DP3 TEMP[6].x, TEMP[1].xyzx, CONST[2][4].xyzx
+   2738281  3380 TGSI  59:   DP3 TEMP[6].y, TEMP[1].xyzx, CONST[2][5].xyzx
+   2738281  3380 TGSI  60:   DP3 TEMP[6].z, TEMP[1].xyzx, CONST[2][6].xyzx
+   2738281  3380 TGSI  61:   DP3 TEMP[2].w, TEMP[4].xyzx, TEMP[4].xyzx
+   2738281  3380 TGSI  62:   MOV TEMP[8], TEMP[2].wwww
+   2738281  3380 TGSI  63:   RSQ TEMP[2].w, TEMP[8].wwww
+   2738281  3380 TGSI  64:   MUL TEMP[4].xyz, TEMP[2].wwww, TEMP[4].xyzx
+   2738281  3380 TGSI  65:   DP3 TEMP[2].w, TEMP[5].xyzx, TEMP[5].xyzx
+   2738281  3380 TGSI  66:   MOV TEMP[8], TEMP[2].wwww
+   2738281  3380 TGSI  67:   RSQ TEMP[2].w, TEMP[8].wwww
+   2738281  3380 TGSI  68:   MUL TEMP[5].xyz, TEMP[2].wwww, TEMP[5].xyzx
+   2738281  3380 TGSI  69:   DP3 TEMP[2].w, TEMP[6].xyzx, TEMP[6].xyzx
+   2738281  3380 TGSI  70:   MOV TEMP[8], TEMP[2].wwww
+   2738281  3380 TGSI  71:   RSQ TEMP[2].w, TEMP[8].wwww
+   2738281  3380 TGSI  72:   MUL TEMP[6].xyz, TEMP[2].wwww, TEMP[6].xyzx
+   2738281  3380 TGSI  73:   MUL TEMP[7].xyz, TEMP[4].xyzx, TEMP[6].zxyz
+   2738281  3380 TGSI  74:   MAD TEMP[7].xyz, TEMP[6].yzxy, TEMP[4].yzxy, -TEMP[7].xyzx
+   2738281  3380 TGSI  75:   DP3 TEMP[2].w, TEMP[7].xyzx, TEMP[5].xyzx
+   2738281  3380 TGSI  76:   FSLT TEMP[2].w, TEMP[2].wwww, IMM[1].yyyy
+   2738281  3380 TGSI  77:   UCMP TEMP[2].w, TEMP[2].wwww, IMM[0].zzzz, IMM[0].yyyy
+   2738281  3380 TGSI  78:   MAD TEMP[4].xz, TEMP[4].zzxz, IMM[1].wywy, IMM[1].wywy
+   2738281  3380 TGSI  79:   MAX TEMP[4].xz, TEMP[4].xxzx, IMM[2].xyxy
+   2738281  3380 TGSI  80:   MIN TEMP[4].xz, TEMP[4].xxzx, IMM[1].zyzy
+   2738281  3380 TGSI  81:   FSLT TEMP[4].y, TEMP[4].yyyy, IMM[1].yyyy
+   2738281  3380 TGSI  82:   UCMP TEMP[4].y, TEMP[4].yyyy, IMM[0].zzzz, IMM[0].yyyy
+   2738281  3380 TGSI  83:   MUL OUT[4].w, TEMP[4].yyyy, TEMP[4].zzzz
+   2738281  3380 TGSI  84:   MUL OUT[5].w, TEMP[2].wwww, TEMP[4].xxxx
+   2738281  3380 TGSI  85:   DP4 TEMP[4].x, TEMP[3], CONST[2][8]
+   2738281  3380 TGSI  86:   DP4 TEMP[4].y, TEMP[3], CONST[2][9]
+   2738281  3380 TGSI  87:   DP4 TEMP[4].z, TEMP[3], CONST[2][10]
+   2738281  3380 TGSI  88:   DP4 TEMP[2].w, TEMP[3], CONST[2][11]
+   2738281  3380 TGSI  89:   DIV OUT[6].xyz, TEMP[4].xyzx, TEMP[2].wwww
+   2738281  3380 TGSI  90:   DP3 TEMP[3].z, TEMP[2].zxyz, CONST[2][8].xyzx
+   2738281  3380 TGSI  91:   DP3 TEMP[3].x, TEMP[2].zxyz, CONST[2][9].xyzx
+   2738281  3380 TGSI  92:   DP3 TEMP[3].y, TEMP[2].zxyz, CONST[2][10].xyzx
+   2738281  3380 TGSI  93:   DP3 TEMP[4].x, TEMP[0].yzwy, CONST[2][8].xyzx
+   2738281  3380 TGSI  94:   DP3 TEMP[4].y, TEMP[0].yzwy, CONST[2][9].xyzx
+   2738281  3380 TGSI  95:   DP3 TEMP[4].z, TEMP[0].yzwy, CONST[2][10].xyzx
+   2738281  3380 TGSI  96:   DP3 TEMP[5].x, TEMP[1].xyzx, CONST[2][12].xyzx
+   2738281  3380 TGSI  97:   DP3 TEMP[5].y, TEMP[1].xyzx, CONST[2][13].xyzx
+   2738281  3380 TGSI  98:   DP3 TEMP[5].z, TEMP[1].xyzx, CONST[2][14].xyzx
+   2738281  3380 TGSI  99:   DP3 TEMP[2].w, TEMP[3].xyzx, TEMP[3].xyzx
+   2738281  3380 TGSI 100:   MOV TEMP[8], TEMP[2].wwww
+   2738281  3380 TGSI 101:   RSQ TEMP[2].w, TEMP[8].wwww
+   2738281  3380 TGSI 102:   MUL TEMP[3].xyz, TEMP[2].wwww, TEMP[3].xyzx
+   2738281  3380 TGSI 103:   DP3 TEMP[2].w, TEMP[4].xyzx, TEMP[4].xyzx
+   2738281  3380 TGSI 104:   MOV TEMP[8], TEMP[2].wwww
+   2738281  3380 TGSI 105:   RSQ TEMP[2].w, TEMP[8].wwww
+   2738281  3380 TGSI 106:   MUL TEMP[4].xyz, TEMP[2].wwww, TEMP[4].xyzx
+   2738281  3380 TGSI 107:   DP3 TEMP[2].w, TEMP[5].xyzx, TEMP[5].xyzx
+   2738281  3380 TGSI 108:   MOV TEMP[8], TEMP[2].wwww
+   2738281  3380 TGSI 109:   RSQ TEMP[2].w, TEMP[8].wwww
+   2738281  3380 TGSI 110:   MUL TEMP[5].xyz, TEMP[2].wwww, TEMP[5].xyzx
+   2738281  3380 TGSI 111:   MUL TEMP[7].xyz, TEMP[3].xyzx, TEMP[5].zxyz
+   2738281  3380 TGSI 112:   MAD TEMP[7].xyz, TEMP[5].yzxy, TEMP[3].yzxy, -TEMP[7].xyzx
+   2738281  3380 TGSI 113:   DP3 TEMP[2].w, TEMP[7].xyzx, TEMP[4].xyzx
+   2738281  3380 TGSI 114:   FSLT TEMP[2].w, TEMP[2].wwww, IMM[1].yyyy
+   2738281  3380 TGSI 115:   UCMP TEMP[2].w, TEMP[2].wwww, IMM[0].zzzz, IMM[0].yyyy
+   2738281  3380 TGSI 116:   MAD TEMP[3].xz, TEMP[3].zzxz, IMM[1].wywy, IMM[1].wywy
+   2738281  3380 TGSI 117:   MAX TEMP[3].xz, TEMP[3].xxzx, IMM[2].xyxy
+   2738281  3380 TGSI 118:   MIN TEMP[3].xz, TEMP[3].xxzx, IMM[1].zyzy
+   2738281  3380 TGSI 119:   FSLT TEMP[3].y, TEMP[3].yyyy, IMM[1].yyyy
+   2738281  3380 TGSI 120:   UCMP TEMP[3].y, TEMP[3].yyyy, IMM[0].zzzz, IMM[0].yyyy
+   2738281  3380 TGSI 121:   MUL OUT[6].w, TEMP[3].yyyy, TEMP[3].zzzz
+   2738281  3380 TGSI 122:   MUL OUT[7].w, TEMP[2].wwww, TEMP[3].xxxx
+   2738281  3380 TGSI 123:   MOV OUT[5].xyz, TEMP[6].xyzx
+   2738281  3380 TGSI 124:   MOV OUT[7].xyz, TEMP[5].xyzx
+   2738281  3380 TGSI 125: ELSE
+   2738281  3380 TGSI 126:   MUL TEMP[3].xyz, TEMP[2].xyzx, TEMP[1].zxyz
+   2738281  3380 TGSI 127:   MAD TEMP[3].xyz, TEMP[1].yzxy, TEMP[2].yzxy, -TEMP[3].xyzx
+   2738281  3380 TGSI 128:   DP3 TEMP[0].y, TEMP[3].xyzx, TEMP[0].yzwy
+   2738281  3380 TGSI 129:   FSLT TEMP[0].y, TEMP[0].yyyy, IMM[1].yyyy
+   2738281  3380 TGSI 130:   UCMP TEMP[0].y, TEMP[0].yyyy, IMM[0].zzzz, IMM[0].yyyy
+   2738281  3380 TGSI 131:   MAD TEMP[0].zw, TEMP[2].zzzx, IMM[1].yyww, IMM[1].yyww
+   2738281  3380 TGSI 132:   MAX TEMP[0].zw, TEMP[0].zzzw, IMM[2].yyxx
+   2738281  3380 TGSI 133:   MIN TEMP[0].zw, TEMP[0].zzzw, IMM[1].yyzz
+   2738281  3380 TGSI 134:   FSLT TEMP[2].x, TEMP[2].yyyy, IMM[1].yyyy
+   2738281  3380 TGSI 135:   UCMP TEMP[2].x, TEMP[2].xxxx, IMM[0].zzzz, IMM[0].yyyy
+   2738281  3380 TGSI 136:   MUL TEMP[2].w, TEMP[0].wwww, TEMP[2].xxxx
+   2738281  3380 TGSI 137:   MUL TEMP[1].w, TEMP[0].yyyy, TEMP[0].zzzz
+   2738281  3380 TGSI 138:   MOV TEMP[2].xyz, IN[2].xyzx
+   2738281  3380 TGSI 139:   MOV OUT[4], TEMP[2]
+   2738281  3380 TGSI 140:   MOV OUT[5], TEMP[1]
+   2738281  3380 TGSI 141:   MOV OUT[6], TEMP[2]
+   2738281  3380 TGSI 142:   MOV OUT[7], TEMP[1]
+   2738281  3380 TGSI 143: ENDIF
+   2738281  3380 TGSI 144: MOV OUT[0].z, IMM[0].xxxx
+   2738281  3380 TGSI 145: MOV OUT[0].w, TEMP[0].xxxx
+   2738281  3380 TGSI 146: MOV OUT[2].xy, IN[5].xyxx
+   2738281  3380 TGSI 147: MOV OUT[2].zw, IMM[0].xxxx
+   2738281  3380 TGSI 148: MOV OUT[3].xy, IN[6].xyxx
+   2738281  3380 TGSI 149: MOV OUT[3].zw, IMM[0].xxxx
+   2738281  3380 TGSI 150: RET
+   2738281  3380 TGSI 151: END
+   2738281  3380 TGSI end
+   2738312  3380 . CreateVertexShader
+   2738312  3380 TGSI begin
+   2738312  3380 TGSI VERT
+   2738312  3380 TGSI PROPERTY NEXT_SHADER FRAG
+   2738312  3380 TGSI DCL IN[0]
+   2738312  3380 TGSI DCL IN[1]
+   2738312  3380 TGSI DCL IN[2]
+   2738312  3380 TGSI DCL IN[4]
+   2738312  3380 TGSI DCL IN[5]
+   2738312  3380 TGSI DCL IN[6]
+   2738312  3380 TGSI DCL IN[7]
+   2738312  3380 TGSI DCL IN[8]
+   2738312  3380 TGSI DCL IN[9]
+   2738312  3380 TGSI DCL IN[10]
+   2738312  3380 TGSI DCL OUT[0], POSITION
+   2738312  3380 TGSI DCL OUT[1], GENERIC[1]
+   2738312  3380 TGSI DCL OUT[2], GENERIC[2]
+   2738312  3380 TGSI DCL OUT[3], GENERIC[3]
+   2738312  3380 TGSI DCL OUT[4], GENERIC[4]
+   2738312  3380 TGSI DCL OUT[5], GENERIC[5]
+   2738312  3380 TGSI DCL OUT[6], GENERIC[6]
+   2738312  3380 TGSI DCL OUT[7], GENERIC[7]
+   2738312  3380 TGSI DCL CONST[0][0..6]
+   2738312  3380 TGSI DCL CONST[2][0..16]
+   2738312  3380 TGSI DCL TEMP[0..9]
+   2738328  3380 TGSI IMM[0] UINT32 {0, 1065353216, 3212836864, 0}
+   2738328  3380 TGSI IMM[1] FLT32 {    2.0000,     0.0000,     1.0000,     0.5000}
+   2738328  3380 TGSI IMM[2] FLT32 {    0.0000,     0.0000,     0.0000,     0.0000}
+   2738328  3380 TGSI   0: MUL TEMP[0].xyz, IN[9].wwww, IN[9].xyzx
+   2738328  3380 TGSI   1: MOV TEMP[0].w, IN[9].wwww
+   2738328  3380 TGSI   2: MUL_SAT OUT[1], TEMP[0], IN[1]
+   2738328  3380 TGSI   3: MOV TEMP[0].xw, IMM[0].xxxx
+   2738328  3380 TGSI   4: MOV TEMP[0].yz, IN[0].xxyx
+   2738328  3380 TGSI   5: MUL TEMP[1], TEMP[0].yzwy, IN[8].yzxy
+   2738328  3380 TGSI   6: MAD TEMP[1], IN[8].xyzx, TEMP[0].zwyz, -TEMP[1]
+   2738328  3380 TGSI   7: MAD TEMP[0], IN[8].wwww, TEMP[0], TEMP[1]
+   2738328  3380 TGSI   8: MUL TEMP[0].zw, TEMP[0].zzzw, IN[8].zzzx
+   2738328  3380 TGSI   9: MAD TEMP[0].xy, IN[8].yzyy, TEMP[0].xyxx, -TEMP[0].zwzz
+   2738328  3380 TGSI  10: MAD TEMP[0].xy, TEMP[0].xyxx, IMM[1].xxyy, IN[0].xyxx
+   2738328  3380 TGSI  11: MAD TEMP[0].xy, TEMP[0].xyxx, IN[10].xyxx, IN[7].xyxx
+   2738328  3380 TGSI  12: MOV TEMP[0].z, IN[7].zzzz
+   2738328  3380 TGSI  13: MOV TEMP[0].w, IMM[0].yyyy
+   2738328  3380 TGSI  14: DP4 TEMP[1].x, TEMP[0], CONST[0][2]
+   2738328  3380 TGSI  15: DP4 TEMP[1].y, TEMP[0], CONST[0][3]
+   2738328  3380 TGSI  16: DP4 TEMP[0].x, TEMP[0], CONST[0][5]
+   2738328  3380 TGSI  17: DIV TEMP[0].yz, TEMP[1].xxyx, TEMP[0].xxxx
+   2738328  3380 TGSI  18: MUL TEMP[1].xy, TEMP[0].xxxx, CONST[0][0].zwzz
+   2738328  3380 TGSI  19: MAD OUT[0].xy, TEMP[0].yzyy, CONST[0][0].xyxx, TEMP[1].xyxx
+   2738328  3380 TGSI  20: ADD TEMP[0].y, -TEMP[0].xxxx, IMM[1].zzzz
+   2738328  3380 TGSI  21: MAD TEMP[0].yz, CONST[0][6].xxyx, TEMP[0].yyyy, TEMP[0].xxxx
+   2738328  3380 TGSI  22: MUL OUT[2].xy, TEMP[0].yyyy, IN[5].xyxx
+   2738328  3380 TGSI  23: MUL OUT[3].xy, TEMP[0].zzzz, IN[6].xyxx
+   2738328  3380 TGSI  24: FSLT TEMP[0].w, IMM[1].yyyy, IN[4].wwww
+   2738328  3380 TGSI  25: FSLT TEMP[1].x, IN[4].wwww, IMM[1].yyyy
+   2738328  3380 TGSI  26: UADD TEMP[0].w, -TEMP[0].wwww, TEMP[1].xxxx
+   2738328  3380 TGSI  27: I2F TEMP[0].w, TEMP[0].wwww
+   2738328  3380 TGSI  28: MUL TEMP[1].xyz, IN[4].xyzx, IMM[1].yyzy
+   2738328  3380 TGSI  29: MUL TEMP[2].xyz, IN[4].zxyz, IMM[1].yyzy
+   2738328  3380 TGSI  30: MAD TEMP[2].xyz, IN[4].xyzx, IMM[1].yyzy, -TEMP[2].zxyz
+   2738328  3380 TGSI  31: MAD TEMP[2].xyz, IN[4].wwww, IMM[1].yzyy, TEMP[2].xyzx
+   2738328  3380 TGSI  32: MUL TEMP[3].xyz, TEMP[2].xyzx, IN[4].xyzx
+   2738328  3380 TGSI  33: MAD TEMP[2].xyz, IN[4].zxyz, TEMP[2].yzxy, -TEMP[3].xyzx
+   2738328  3380 TGSI  34: MAD TEMP[2].xyz, TEMP[2].xyzx, IMM[1].xxxy, IMM[1].yyzy
+   2738328  3380 TGSI  35: MUL TEMP[3].xyz, IN[4].xyzx, IMM[1].zyyy
+   2738328  3380 TGSI  36: MAD TEMP[1].xyz, IN[4].zxyz, IMM[1].yzyy, -TEMP[1].xyzx
+   2738328  3380 TGSI  37: MAD TEMP[1].xyz, IN[4].wwww, IMM[1].zyyy, TEMP[1].xyzx
+   2738328  3380 TGSI  38: MUL TEMP[4].xyz, TEMP[1].xyzx, IN[4].zxyz
+   2738328  3380 TGSI  39: MAD TEMP[1].xyz, IN[4].yzxy, TEMP[1].yzxy, -TEMP[4].xyzx
+   2738328  3380 TGSI  40: MAD TEMP[1].xyz, TEMP[1].xyzx, IMM[1].xxxy, IMM[1].yzyy
+   2738328  3380 TGSI  41: MUL TEMP[1].xyz, TEMP[0].wwww, TEMP[1].xyzx
+   2738328  3380 TGSI  42: MAD TEMP[3].xyz, IN[4].zxyz, IMM[1].yyzy, -TEMP[3].xyzx
+   2738328  3380 TGSI  43: MAD TEMP[3].xyz, IN[4].wwww, IMM[1].yzyy, TEMP[3].xyzx
+   2738328  3380 TGSI  44: MUL TEMP[4].xyz, TEMP[3].xyzx, IN[4].zxyz
+   2738328  3380 TGSI  45: MAD TEMP[3].xyz, IN[4].yzxy, TEMP[3].yzxy, -TEMP[4].xyzx
+   2738328  3380 TGSI  46: MAD TEMP[3].xyz, TEMP[3].xyzx, IMM[1].xxxy, IMM[1].yyzy
+   2738328  3380 TGSI  47: FSLT TEMP[0].w, IMM[1].wwww, CONST[2][16].xxxx
+   2738328  3380 TGSI  48: UIF TEMP[0].wwww :0
+   2738328  3380 TGSI  49:   MOV TEMP[4].xyz, IN[2].xyzx
+   2738328  3380 TGSI  50:   MOV TEMP[4].w, IMM[0].yyyy
+   2738328  3380 TGSI  51:   DP4 TEMP[5].x, TEMP[4], CONST[2][0]
+   2738328  3380 TGSI  52:   DP4 TEMP[5].y, TEMP[4], CONST[2][1]
+   2738328  3380 TGSI  53:   DP4 TEMP[5].z, TEMP[4], CONST[2][2]
+   2738328  3380 TGSI  54:   DP4 TEMP[0].w, TEMP[4], CONST[2][3]
+   2738328  3380 TGSI  55:   DIV OUT[4].xyz, TEMP[5].xyzx, TEMP[0].wwww
+   2738328  3380 TGSI  56:   DP3 TEMP[5].z, TEMP[2].zxyz, CONST[2][0].xyzx
+   2738328  3380 TGSI  57:   DP3 TEMP[5].x, TEMP[2].zxyz, CONST[2][1].xyzx
+   2738328  3380 TGSI  58:   DP3 TEMP[5].y, TEMP[2].zxyz, CONST[2][2].xyzx
+   2738328  3380 TGSI  59:   DP3 TEMP[6].x, TEMP[1].xyzx, CONST[2][0].xyzx
+   2738328  3380 TGSI  60:   DP3 TEMP[6].y, TEMP[1].xyzx, CONST[2][1].xyzx
+   2738328  3380 TGSI  61:   DP3 TEMP[6].z, TEMP[1].xyzx, CONST[2][2].xyzx
+   2738328  3380 TGSI  62:   DP3 TEMP[7].x, TEMP[3].xyzx, CONST[2][4].xyzx
+   2738328  3380 TGSI  63:   DP3 TEMP[7].y, TEMP[3].xyzx, CONST[2][5].xyzx
+   2738328  3380 TGSI  64:   DP3 TEMP[7].z, TEMP[3].xyzx, CONST[2][6].xyzx
+   2738328  3380 TGSI  65:   DP3 TEMP[0].w, TEMP[5].xyzx, TEMP[5].xyzx
+   2738328  3380 TGSI  66:   MOV TEMP[9], TEMP[0].wwww
+   2738328  3380 TGSI  67:   RSQ TEMP[0].w, TEMP[9].wwww
+   2738328  3380 TGSI  68:   MUL TEMP[5].xyz, TEMP[0].wwww, TEMP[5].xyzx
+   2738328  3380 TGSI  69:   DP3 TEMP[0].w, TEMP[6].xyzx, TEMP[6].xyzx
+   2738328  3380 TGSI  70:   MOV TEMP[9], TEMP[0].wwww
+   2738328  3380 TGSI  71:   RSQ TEMP[0].w, TEMP[9].wwww
+   2738328  3380 TGSI  72:   MUL TEMP[6].xyz, TEMP[0].wwww, TEMP[6].xyzx
+   2738328  3380 TGSI  73:   DP3 TEMP[0].w, TEMP[7].xyzx, TEMP[7].xyzx
+   2738328  3380 TGSI  74:   MOV TEMP[9], TEMP[0].wwww
+   2738328  3380 TGSI  75:   RSQ TEMP[0].w, TEMP[9].wwww
+   2738328  3380 TGSI  76:   MUL TEMP[7].xyz, TEMP[0].wwww, TEMP[7].xyzx
+   2738328  3380 TGSI  77:   MUL TEMP[8].xyz, TEMP[5].xyzx, TEMP[7].zxyz
+   2738328  3380 TGSI  78:   MAD TEMP[8].xyz, TEMP[7].yzxy, TEMP[5].yzxy, -TEMP[8].xyzx
+   2738328  3380 TGSI  79:   DP3 TEMP[0].w, TEMP[8].xyzx, TEMP[6].xyzx
+   2738328  3380 TGSI  80:   FSLT TEMP[0].w, TEMP[0].wwww, IMM[1].yyyy
+   2738328  3380 TGSI  81:   UCMP TEMP[0].w, TEMP[0].wwww, IMM[0].zzzz, IMM[0].yyyy
+   2738328  3380 TGSI  82:   MAD TEMP[5].xz, TEMP[5].zzxz, IMM[1].wywy, IMM[1].wywy
+   2738328  3380 TGSI  83:   MAX TEMP[5].xz, TEMP[5].xxzx, IMM[2].xyxy
+   2738328  3380 TGSI  84:   MIN TEMP[5].xz, TEMP[5].xxzx, IMM[1].zyzy
+   2738328  3380 TGSI  85:   FSLT TEMP[1].w, TEMP[5].yyyy, IMM[1].yyyy
+   2738328  3380 TGSI  86:   UCMP TEMP[1].w, TEMP[1].wwww, IMM[0].zzzz, IMM[0].yyyy
+   2738328  3380 TGSI  87:   MUL OUT[4].w, TEMP[1].wwww, TEMP[5].zzzz
+   2738328  3380 TGSI  88:   MUL OUT[5].w, TEMP[0].wwww, TEMP[5].xxxx
+   2738328  3380 TGSI  89:   DP4 TEMP[5].x, TEMP[4], CONST[2][8]
+   2738328  3380 TGSI  90:   DP4 TEMP[5].y, TEMP[4], CONST[2][9]
+   2738328  3380 TGSI  91:   DP4 TEMP[5].z, TEMP[4], CONST[2][10]
+   2738328  3380 TGSI  92:   DP4 TEMP[0].w, TEMP[4], CONST[2][11]
+   2738328  3380 TGSI  93:   DIV OUT[6].xyz, TEMP[5].xyzx, TEMP[0].wwww
+   2738328  3380 TGSI  94:   DP3 TEMP[4].z, TEMP[2].zxyz, CONST[2][8].xyzx
+   2738328  3380 TGSI  95:   DP3 TEMP[4].x, TEMP[2].zxyz, CONST[2][9].xyzx
+   2738328  3380 TGSI  96:   DP3 TEMP[4].y, TEMP[2].zxyz, CONST[2][10].xyzx
+   2738328  3380 TGSI  97:   DP3 TEMP[5].x, TEMP[1].xyzx, CONST[2][8].xyzx
+   2738328  3380 TGSI  98:   DP3 TEMP[5].y, TEMP[1].xyzx, CONST[2][9].xyzx
+   2738328  3380 TGSI  99:   DP3 TEMP[5].z, TEMP[1].xyzx, CONST[2][10].xyzx
+   2738328  3380 TGSI 100:   DP3 TEMP[6].x, TEMP[3].xyzx, CONST[2][12].xyzx
+   2738328  3380 TGSI 101:   DP3 TEMP[6].y, TEMP[3].xyzx, CONST[2][13].xyzx
+   2738328  3380 TGSI 102:   DP3 TEMP[6].z, TEMP[3].xyzx, CONST[2][14].xyzx
+   2738328  3380 TGSI 103:   DP3 TEMP[0].w, TEMP[4].xyzx, TEMP[4].xyzx
+   2738328  3380 TGSI 104:   MOV TEMP[9], TEMP[0].wwww
+   2738328  3380 TGSI 105:   RSQ TEMP[0].w, TEMP[9].wwww
+   2738328  3380 TGSI 106:   MUL TEMP[4].xyz, TEMP[0].wwww, TEMP[4].xyzx
+   2738328  3380 TGSI 107:   DP3 TEMP[0].w, TEMP[5].xyzx, TEMP[5].xyzx
+   2738328  3380 TGSI 108:   MOV TEMP[9], TEMP[0].wwww
+   2738328  3380 TGSI 109:   RSQ TEMP[0].w, TEMP[9].wwww
+   2738328  3380 TGSI 110:   MUL TEMP[5].xyz, TEMP[0].wwww, TEMP[5].xyzx
+   2738328  3380 TGSI 111:   DP3 TEMP[0].w, TEMP[6].xyzx, TEMP[6].xyzx
+   2738328  3380 TGSI 112:   MOV TEMP[9], TEMP[0].wwww
+   2738328  3380 TGSI 113:   RSQ TEMP[0].w, TEMP[9].wwww
+   2738328  3380 TGSI 114:   MUL TEMP[6].xyz, TEMP[0].wwww, TEMP[6].xyzx
+   2738328  3380 TGSI 115:   MUL TEMP[8].xyz, TEMP[4].xyzx, TEMP[6].zxyz
+   2738328  3380 TGSI 116:   MAD TEMP[8].xyz, TEMP[6].yzxy, TEMP[4].yzxy, -TEMP[8].xyzx
+   2738328  3380 TGSI 117:   DP3 TEMP[0].w, TEMP[8].xyzx, TEMP[5].xyzx
+   2738328  3380 TGSI 118:   FSLT TEMP[0].w, TEMP[0].wwww, IMM[1].yyyy
+   2738328  3380 TGSI 119:   UCMP TEMP[0].w, TEMP[0].wwww, IMM[0].zzzz, IMM[0].yyyy
+   2738328  3380 TGSI 120:   MAD TEMP[4].xz, TEMP[4].zzxz, IMM[1].wywy, IMM[1].wywy
+   2738328  3380 TGSI 121:   MAX TEMP[4].xz, TEMP[4].xxzx, IMM[2].xyxy
+   2738328  3380 TGSI 122:   MIN TEMP[4].xz, TEMP[4].xxzx, IMM[1].zyzy
+   2738328  3380 TGSI 123:   FSLT TEMP[1].w, TEMP[4].yyyy, IMM[1].yyyy
+   2738328  3380 TGSI 124:   UCMP TEMP[1].w, TEMP[1].wwww, IMM[0].zzzz, IMM[0].yyyy
+   2738328  3380 TGSI 125:   MUL OUT[6].w, TEMP[1].wwww, TEMP[4].zzzz
+   2738328  3380 TGSI 126:   MUL OUT[7].w, TEMP[0].wwww, TEMP[4].xxxx
+   2738328  3380 TGSI 127:   MOV OUT[5].xyz, TEMP[7].xyzx
+   2738328  3380 TGSI 128:   MOV OUT[7].xyz, TEMP[6].xyzx
+   2738328  3380 TGSI 129: ELSE
+   2738328  3380 TGSI 130:   MUL TEMP[4].xyz, TEMP[2].xyzx, TEMP[3].zxyz
+   2738328  3380 TGSI 131:   MAD TEMP[4].xyz, TEMP[3].yzxy, TEMP[2].yzxy, -TEMP[4].xyzx
+   2738328  3380 TGSI 132:   DP3 TEMP[0].w, TEMP[4].xyzx, TEMP[1].xyzx
+   2738328  3380 TGSI 133:   FSLT TEMP[0].w, TEMP[0].wwww, IMM[1].yyyy
+   2738328  3380 TGSI 134:   UCMP TEMP[0].w, TEMP[0].wwww, IMM[0].zzzz, IMM[0].yyyy
+   2738328  3380 TGSI 135:   MAD TEMP[1].xy, TEMP[2].zxzz, IMM[1].wwyy, IMM[1].wwyy
+   2738328  3380 TGSI 136:   MAX TEMP[1].xy, TEMP[1].xyxx, IMM[2].xxyy
+   2738328  3380 TGSI 137:   MIN TEMP[1].xy, TEMP[1].xyxx, IMM[1].zzyy
+   2738328  3380 TGSI 138:   FSLT TEMP[1].z, TEMP[2].yyyy, IMM[1].yyyy
+   2738328  3380 TGSI 139:   UCMP TEMP[1].z, TEMP[1].zzzz, IMM[0].zzzz, IMM[0].yyyy
+   2738328  3380 TGSI 140:   MUL TEMP[2].w, TEMP[1].zzzz, TEMP[1].yyyy
+   2738328  3380 TGSI 141:   MUL TEMP[3].w, TEMP[0].wwww, TEMP[1].xxxx
+   2738328  3380 TGSI 142:   MOV TEMP[2].xyz, IN[2].xyzx
+   2738328  3380 TGSI 143:   MOV OUT[4], TEMP[2]
+   2738328  3380 TGSI 144:   MOV OUT[5], TEMP[3]
+   2738328  3380 TGSI 145:   MOV OUT[6], TEMP[2]
+   2738328  3380 TGSI 146:   MOV OUT[7], TEMP[3]
+   2738328  3380 TGSI 147: ENDIF
+   2738328  3380 TGSI 148: MOV OUT[0].z, IMM[0].xxxx
+   2738328  3380 TGSI 149: MOV OUT[0].w, TEMP[0].xxxx
+   2738328  3380 TGSI 150: MOV OUT[2].z, TEMP[0].yyyy
+   2738328  3380 TGSI 151: MOV OUT[2].w, IMM[0].xxxx
+   2738328  3380 TGSI 152: MOV OUT[3].z, TEMP[0].zzzz
+   2738328  3380 TGSI 153: MOV OUT[3].w, IMM[0].xxxx
+   2738328  3380 TGSI 154: RET
+   2738328  3380 TGSI 155: END
+   2738328  3380 TGSI end
+   2738359  3380 . CreateVertexShader
+   2738359  3380 TGSI begin
+   2738359  3380 TGSI VERT
+   2738359  3380 TGSI PROPERTY NEXT_SHADER FRAG
+   2738359  3380 TGSI DCL IN[0]
+   2738359  3380 TGSI DCL IN[1]
+   2738359  3380 TGSI DCL IN[2]
+   2738359  3380 TGSI DCL IN[3]
+   2738359  3380 TGSI DCL IN[4]
+   2738359  3380 TGSI DCL IN[5]
+   2738359  3380 TGSI DCL IN[6]
+   2738359  3380 TGSI DCL IN[7]
+   2738359  3380 TGSI DCL IN[8]
+   2738359  3380 TGSI DCL IN[9]
+   2738359  3380 TGSI DCL IN[10]
+   2738359  3380 TGSI DCL IN[11]
+   2738359  3380 TGSI DCL IN[12]
+   2738359  3380 TGSI DCL OUT[0], POSITION
+   2738359  3380 TGSI DCL OUT[1], GENERIC[1]
+   2738359  3380 TGSI DCL OUT[2], GENERIC[2]
+   2738359  3380 TGSI DCL OUT[3], GENERIC[3]
+   2738359  3380 TGSI DCL OUT[4], GENERIC[4]
+   2738359  3380 TGSI DCL OUT[5], GENERIC[5]
+   2738359  3380 TGSI DCL OUT[6], GENERIC[6]
+   2738359  3380 TGSI DCL OUT[7], GENERIC[7]
+   2738359  3380 TGSI DCL OUT[8], GENERIC[8]
+   2738359  3380 TGSI DCL CONST[0][0..6]
+   2738359  3380 TGSI DCL CONST[2][0..16]
+   2738359  3380 TGSI DCL TEMP[0..10]
+   2738359  3380 TGSI IMM[0] UINT32 {0, 1065353216, 3212836864, 0}
+   2738359  3380 TGSI IMM[1] FLT32 {    2.0000,     0.0000,     1.0000,     0.5000}
+   2738359  3380 TGSI IMM[2] FLT32 {    0.0000,     0.0000,     0.0000,     0.0000}
+   2738359  3380 TGSI   0: MUL TEMP[0].xyz, IN[11].wwww, IN[11].xyzx
+   2738359  3380 TGSI   1: MOV TEMP[0].w, IN[11].wwww
+   2738359  3380 TGSI   2: MUL_SAT OUT[1], TEMP[0], IN[1]
+   2738359  3380 TGSI   3: MOV TEMP[0].xw, IMM[0].xxxx
+   2738359  3380 TGSI   4: MOV TEMP[0].yz, IN[0].xxyx
+   2738359  3380 TGSI   5: MUL TEMP[1], TEMP[0].yzwy, IN[10].yzxy
+   2738359  3380 TGSI   6: MAD TEMP[1], IN[10].xyzx, TEMP[0].zwyz, -TEMP[1]
+   2738359  3380 TGSI   7: MAD TEMP[0], IN[10].wwww, TEMP[0], TEMP[1]
+   2738359  3380 TGSI   8: MUL TEMP[0].zw, TEMP[0].zzzw, IN[10].zzzx
+   2738359  3380 TGSI   9: MAD TEMP[0].xy, IN[10].yzyy, TEMP[0].xyxx, -TEMP[0].zwzz
+   2738359  3380 TGSI  10: MAD TEMP[0].xy, TEMP[0].xyxx, IMM[1].xxyy, IN[0].xyxx
+   2738359  3380 TGSI  11: MAD TEMP[0].xy, TEMP[0].xyxx, IN[12].xyxx, IN[9].xyxx
+   2738359  3380 TGSI  12: MOV TEMP[0].z, IN[9].zzzz
+   2738359  3380 TGSI  13: MOV TEMP[0].w, IMM[0].yyyy
+   2738359  3380 TGSI  14: DP4 TEMP[1].x, TEMP[0], CONST[0][2]
+   2738359  3380 TGSI  15: DP4 TEMP[1].y, TEMP[0], CONST[0][3]
+   2738359  3380 TGSI  16: DP4 TEMP[0].x, TEMP[0], CONST[0][5]
+   2738359  3380 TGSI  17: DIV TEMP[0].yz, TEMP[1].xxyx, TEMP[0].xxxx
+   2738359  3380 TGSI  18: MUL TEMP[1].xy, TEMP[0].xxxx, CONST[0][0].zwzz
+   2738359  3380 TGSI  19: MAD OUT[0].xy, TEMP[0].yzyy, CONST[0][0].xyxx, TEMP[1].xyxx
+   2738359  3380 TGSI  20: ADD TEMP[0].y, -TEMP[0].xxxx, IMM[1].zzzz
+   2738359  3380 TGSI  21: MAD TEMP[1], CONST[0][6], TEMP[0].yyyy, TEMP[0].xxxx
+   2738359  3380 TGSI  22: MUL OUT[2].xy, TEMP[1].xxxx, IN[5].xyxx
+   2738359  3380 TGSI  23: MUL OUT[3].xy, TEMP[1].yyyy, IN[6].xyxx
+   2738359  3380 TGSI  24: MUL OUT[4].xy, TEMP[1].zzzz, IN[7].xyxx
+   2738359  3380 TGSI  25: MUL TEMP[2].xy, TEMP[1].wwww, IN[8].xyxx
+   2738359  3380 TGSI  26: FSLT TEMP[0].y, IMM[1].yyyy, IN[4].wwww
+   2738359  3380 TGSI  27: FSLT TEMP[0].z, IN[4].wwww, IMM[1].yyyy
+   2738359  3380 TGSI  28: UADD TEMP[0].y, -TEMP[0].yyyy, TEMP[0].zzzz
+   2738359  3380 TGSI  29: I2F TEMP[0].y, TEMP[0].yyyy
+   2738359  3380 TGSI  30: MUL TEMP[3].xyz, IN[4].xyzx, IMM[1].yyzy
+   2738359  3380 TGSI  31: MUL TEMP[4].xyz, IN[4].zxyz, IMM[1].yyzy
+   2738359  3380 TGSI  32: MAD TEMP[4].xyz, IN[4].xyzx, IMM[1].yyzy, -TEMP[4].zxyz
+   2738375  3380 TGSI  33: MAD TEMP[4].xyz, IN[4].wwww, IMM[1].yzyy, TEMP[4].xyzx
+   2738375  3380 TGSI  34: MUL TEMP[5].xyz, TEMP[4].xyzx, IN[4].xyzx
+   2738375  3380 TGSI  35: MAD TEMP[4].xyz, IN[4].zxyz, TEMP[4].yzxy, -TEMP[5].xyzx
+   2738375  3380 TGSI  36: MAD TEMP[4].xyz, TEMP[4].xyzx, IMM[1].xxxy, IMM[1].yyzy
+   2738375  3380 TGSI  37: MUL TEMP[5].xyz, IN[4].xyzx, IMM[1].zyyy
+   2738375  3380 TGSI  38: MAD TEMP[3].xyz, IN[4].zxyz, IMM[1].yzyy, -TEMP[3].xyzx
+   2738375  3380 TGSI  39: MAD TEMP[3].xyz, IN[4].wwww, IMM[1].zyyy, TEMP[3].xyzx
+   2738375  3380 TGSI  40: MUL TEMP[6].xyz, TEMP[3].xyzx, IN[4].zxyz
+   2738375  3380 TGSI  41: MAD TEMP[3].xyz, IN[4].yzxy, TEMP[3].yzxy, -TEMP[6].xyzx
+   2738375  3380 TGSI  42: MAD TEMP[3].xyz, TEMP[3].xyzx, IMM[1].xxxy, IMM[1].yzyy
+   2738375  3380 TGSI  43: MUL TEMP[0].yzw, TEMP[0].yyyy, TEMP[3].xxyz
+   2738375  3380 TGSI  44: MAD TEMP[3].xyz, IN[4].zxyz, IMM[1].yyzy, -TEMP[5].xyzx
+   2738375  3380 TGSI  45: MAD TEMP[3].xyz, IN[4].wwww, IMM[1].yzyy, TEMP[3].xyzx
+   2738375  3380 TGSI  46: MUL TEMP[5].xyz, TEMP[3].xyzx, IN[4].zxyz
+   2738375  3380 TGSI  47: MAD TEMP[3].xyz, IN[4].yzxy, TEMP[3].yzxy, -TEMP[5].xyzx
+   2738375  3380 TGSI  48: MAD TEMP[3].xyz, TEMP[3].xyzx, IMM[1].xxxy, IMM[1].yyzy
+   2738375  3380 TGSI  49: FSLT TEMP[2].w, IMM[1].wwww, CONST[2][16].xxxx
+   2738375  3380 TGSI  50: UIF TEMP[2].wwww :0
+   2738375  3380 TGSI  51:   MOV TEMP[5].xyz, IN[2].xyzx
+   2738375  3380 TGSI  52:   MOV TEMP[5].w, IMM[0].yyyy
+   2738375  3380 TGSI  53:   DP4 TEMP[6].x, TEMP[5], CONST[2][0]
+   2738375  3380 TGSI  54:   DP4 TEMP[6].y, TEMP[5], CONST[2][1]
+   2738375  3380 TGSI  55:   DP4 TEMP[6].z, TEMP[5], CONST[2][2]
+   2738375  3380 TGSI  56:   DP4 TEMP[2].w, TEMP[5], CONST[2][3]
+   2738375  3380 TGSI  57:   DIV OUT[5].xyz, TEMP[6].xyzx, TEMP[2].wwww
+   2738375  3380 TGSI  58:   DP3 TEMP[6].z, TEMP[4].zxyz, CONST[2][0].xyzx
+   2738375  3380 TGSI  59:   DP3 TEMP[6].x, TEMP[4].zxyz, CONST[2][1].xyzx
+   2738375  3380 TGSI  60:   DP3 TEMP[6].y, TEMP[4].zxyz, CONST[2][2].xyzx
+   2738375  3380 TGSI  61:   DP3 TEMP[7].x, TEMP[0].yzwy, CONST[2][0].xyzx
+   2738375  3380 TGSI  62:   DP3 TEMP[7].y, TEMP[0].yzwy, CONST[2][1].xyzx
+   2738375  3380 TGSI  63:   DP3 TEMP[7].z, TEMP[0].yzwy, CONST[2][2].xyzx
+   2738375  3380 TGSI  64:   DP3 TEMP[8].x, TEMP[3].xyzx, CONST[2][4].xyzx
+   2738375  3380 TGSI  65:   DP3 TEMP[8].y, TEMP[3].xyzx, CONST[2][5].xyzx
+   2738375  3380 TGSI  66:   DP3 TEMP[8].z, TEMP[3].xyzx, CONST[2][6].xyzx
+   2738375  3380 TGSI  67:   DP3 TEMP[2].w, TEMP[6].xyzx, TEMP[6].xyzx
+   2738375  3380 TGSI  68:   MOV TEMP[10], TEMP[2].wwww
+   2738375  3380 TGSI  69:   RSQ TEMP[2].w, TEMP[10].wwww
+   2738375  3380 TGSI  70:   MUL TEMP[6].xyz, TEMP[2].wwww, TEMP[6].xyzx
+   2738375  3380 TGSI  71:   DP3 TEMP[2].w, TEMP[7].xyzx, TEMP[7].xyzx
+   2738375  3380 TGSI  72:   MOV TEMP[10], TEMP[2].wwww
+   2738375  3380 TGSI  73:   RSQ TEMP[2].w, TEMP[10].wwww
+   2738375  3380 TGSI  74:   MUL TEMP[7].xyz, TEMP[2].wwww, TEMP[7].xyzx
+   2738375  3380 TGSI  75:   DP3 TEMP[2].w, TEMP[8].xyzx, TEMP[8].xyzx
+   2738375  3380 TGSI  76:   MOV TEMP[10], TEMP[2].wwww
+   2738375  3380 TGSI  77:   RSQ TEMP[2].w, TEMP[10].wwww
+   2738375  3380 TGSI  78:   MUL TEMP[8].xyz, TEMP[2].wwww, TEMP[8].xyzx
+   2738375  3380 TGSI  79:   MUL TEMP[9].xyz, TEMP[6].xyzx, TEMP[8].zxyz
+   2738375  3380 TGSI  80:   MAD TEMP[9].xyz, TEMP[8].yzxy, TEMP[6].yzxy, -TEMP[9].xyzx
+   2738375  3380 TGSI  81:   DP3 TEMP[2].w, TEMP[9].xyzx, TEMP[7].xyzx
+   2738375  3380 TGSI  82:   FSLT TEMP[2].w, TEMP[2].wwww, IMM[1].yyyy
+   2738375  3380 TGSI  83:   UCMP TEMP[2].w, TEMP[2].wwww, IMM[0].zzzz, IMM[0].yyyy
+   2738375  3380 TGSI  84:   MAD TEMP[6].xz, TEMP[6].zzxz, IMM[1].wywy, IMM[1].wywy
+   2738375  3380 TGSI  85:   MAX TEMP[6].xz, TEMP[6].xxzx, IMM[2].xyxy
+   2738375  3380 TGSI  86:   MIN TEMP[6].xz, TEMP[6].xxzx, IMM[1].zyzy
+   2738375  3380 TGSI  87:   FSLT TEMP[4].w, TEMP[6].yyyy, IMM[1].yyyy
+   2738375  3380 TGSI  88:   UCMP TEMP[4].w, TEMP[4].wwww, IMM[0].zzzz, IMM[0].yyyy
+   2738375  3380 TGSI  89:   MUL OUT[5].w, TEMP[4].wwww, TEMP[6].zzzz
+   2738375  3380 TGSI  90:   MUL OUT[6].w, TEMP[2].wwww, TEMP[6].xxxx
+   2738375  3380 TGSI  91:   DP4 TEMP[6].x, TEMP[5], CONST[2][8]
+   2738375  3380 TGSI  92:   DP4 TEMP[6].y, TEMP[5], CONST[2][9]
+   2738375  3380 TGSI  93:   DP4 TEMP[6].z, TEMP[5], CONST[2][10]
+   2738375  3380 TGSI  94:   DP4 TEMP[2].w, TEMP[5], CONST[2][11]
+   2738375  3380 TGSI  95:   DIV OUT[7].xyz, TEMP[6].xyzx, TEMP[2].wwww
+   2738375  3380 TGSI  96:   DP3 TEMP[5].z, TEMP[4].zxyz, CONST[2][8].xyzx
+   2738375  3380 TGSI  97:   DP3 TEMP[5].x, TEMP[4].zxyz, CONST[2][9].xyzx
+   2738375  3380 TGSI  98:   DP3 TEMP[5].y, TEMP[4].zxyz, CONST[2][10].xyzx
+   2738375  3380 TGSI  99:   DP3 TEMP[6].x, TEMP[0].yzwy, CONST[2][8].xyzx
+   2738375  3380 TGSI 100:   DP3 TEMP[6].y, TEMP[0].yzwy, CONST[2][9].xyzx
+   2738375  3380 TGSI 101:   DP3 TEMP[6].z, TEMP[0].yzwy, CONST[2][10].xyzx
+   2738375  3380 TGSI 102:   DP3 TEMP[7].x, TEMP[3].xyzx, CONST[2][12].xyzx
+   2738375  3380 TGSI 103:   DP3 TEMP[7].y, TEMP[3].xyzx, CONST[2][13].xyzx
+   2738375  3380 TGSI 104:   DP3 TEMP[7].z, TEMP[3].xyzx, CONST[2][14].xyzx
+   2738375  3380 TGSI 105:   DP3 TEMP[2].w, TEMP[5].xyzx, TEMP[5].xyzx
+   2738375  3380 TGSI 106:   MOV TEMP[10], TEMP[2].wwww
+   2738375  3380 TGSI 107:   RSQ TEMP[2].w, TEMP[10].wwww
+   2738375  3380 TGSI 108:   MUL TEMP[5].xyz, TEMP[2].wwww, TEMP[5].xyzx
+   2738375  3380 TGSI 109:   DP3 TEMP[2].w, TEMP[6].xyzx, TEMP[6].xyzx
+   2738375  3380 TGSI 110:   MOV TEMP[10], TEMP[2].wwww
+   2738375  3380 TGSI 111:   RSQ TEMP[2].w, TEMP[10].wwww
+   2738375  3380 TGSI 112:   MUL TEMP[6].xyz, TEMP[2].wwww, TEMP[6].xyzx
+   2738375  3380 TGSI 113:   DP3 TEMP[2].w, TEMP[7].xyzx, TEMP[7].xyzx
+   2738375  3380 TGSI 114:   MOV TEMP[10], TEMP[2].wwww
+   2738375  3380 TGSI 115:   RSQ TEMP[2].w, TEMP[10].wwww
+   2738375  3380 TGSI 116:   MUL TEMP[7].xyz, TEMP[2].wwww, TEMP[7].xyzx
+   2738375  3380 TGSI 117:   MUL TEMP[9].xyz, TEMP[5].xyzx, TEMP[7].zxyz
+   2738375  3380 TGSI 118:   MAD TEMP[9].xyz, TEMP[7].yzxy, TEMP[5].yzxy, -TEMP[9].xyzx
+   2738375  3380 TGSI 119:   DP3 TEMP[2].w, TEMP[9].xyzx, TEMP[6].xyzx
+   2738375  3380 TGSI 120:   FSLT TEMP[2].w, TEMP[2].wwww, IMM[1].yyyy
+   2738375  3380 TGSI 121:   UCMP TEMP[2].w, TEMP[2].wwww, IMM[0].zzzz, IMM[0].yyyy
+   2738375  3380 TGSI 122:   MAD TEMP[5].xz, TEMP[5].zzxz, IMM[1].wywy, IMM[1].wywy
+   2738375  3380 TGSI 123:   MAX TEMP[5].xz, TEMP[5].xxzx, IMM[2].xyxy
+   2738375  3380 TGSI 124:   MIN TEMP[5].xz, TEMP[5].xxzx, IMM[1].zyzy
+   2738375  3380 TGSI 125:   FSLT TEMP[4].w, TEMP[5].yyyy, IMM[1].yyyy
+   2738375  3380 TGSI 126:   UCMP TEMP[4].w, TEMP[4].wwww, IMM[0].zzzz, IMM[0].yyyy
+   2738375  3380 TGSI 127:   MUL OUT[7].w, TEMP[4].wwww, TEMP[5].zzzz
+   2738375  3380 TGSI 128:   MUL OUT[8].w, TEMP[2].wwww, TEMP[5].xxxx
+   2738375  3380 TGSI 129:   MOV OUT[6].xyz, TEMP[8].xyzx
+   2738375  3380 TGSI 130:   MOV OUT[8].xyz, TEMP[7].xyzx
+   2738375  3380 TGSI 131: ELSE
+   2738375  3380 TGSI 132:   MUL TEMP[5].xyz, TEMP[4].xyzx, TEMP[3].zxyz
+   2738375  3380 TGSI 133:   MAD TEMP[5].xyz, TEMP[3].yzxy, TEMP[4].yzxy, -TEMP[5].xyzx
+   2738375  3380 TGSI 134:   DP3 TEMP[0].y, TEMP[5].xyzx, TEMP[0].yzwy
+   2738375  3380 TGSI 135:   FSLT TEMP[0].y, TEMP[0].yyyy, IMM[1].yyyy
+   2738375  3380 TGSI 136:   UCMP TEMP[0].y, TEMP[0].yyyy, IMM[0].zzzz, IMM[0].yyyy
+   2738375  3380 TGSI 137:   MAD TEMP[0].zw, TEMP[4].zzzx, IMM[1].yyww, IMM[1].yyww
+   2738375  3380 TGSI 138:   MAX TEMP[0].zw, TEMP[0].zzzw, IMM[2].yyxx
+   2738375  3380 TGSI 139:   MIN TEMP[0].zw, TEMP[0].zzzw, IMM[1].yyzz
+   2738375  3380 TGSI 140:   FSLT TEMP[2].w, TEMP[4].yyyy, IMM[1].yyyy
+   2738375  3380 TGSI 141:   UCMP TEMP[2].w, TEMP[2].wwww, IMM[0].zzzz, IMM[0].yyyy
+   2738375  3380 TGSI 142:   MUL TEMP[4].w, TEMP[0].wwww, TEMP[2].wwww
+   2738375  3380 TGSI 143:   MUL TEMP[3].w, TEMP[0].yyyy, TEMP[0].zzzz
+   2738375  3380 TGSI 144:   MOV TEMP[4].xyz, IN[2].xyzx
+   2738375  3380 TGSI 145:   MOV OUT[5], TEMP[4]
+   2738375  3380 TGSI 146:   MOV OUT[6], TEMP[3]
+   2738375  3380 TGSI 147:   MOV OUT[7], TEMP[4]
+   2738375  3380 TGSI 148:   MOV OUT[8], TEMP[3]
+   2738375  3380 TGSI 149: ENDIF
+   2738375  3380 TGSI 150: FSLT TEMP[0].y, IMM[1].wwww, CONST[0][1].xxxx
+   2738375  3380 TGSI 151: MOV TEMP[3].xy, IN[3].xyxx
+   2738375  3380 TGSI 152: MOV TEMP[3].z, IMM[0].xxxx
+   2738375  3380 TGSI 153: MOV TEMP[2].z, TEMP[1].wwww
+   2738375  3380 TGSI 154: UCMP TEMP[0].yzw, TEMP[0].yyyy, TEMP[3].xxyz, TEMP[2].xxyz
+   2738375  3380 TGSI 155: MOV OUT[0].z, IMM[0].xxxx
+   2738375  3380 TGSI 156: MOV OUT[0].w, TEMP[0].xxxx
+   2738375  3380 TGSI 157: MOV OUT[2].z, TEMP[1].xxxx
+   2738375  3380 TGSI 158: MOV OUT[2].w, TEMP[0].yyyy
+   2738375  3380 TGSI 159: MOV OUT[3].z, TEMP[1].yyyy
+   2738375  3380 TGSI 160: MOV OUT[3].w, TEMP[0].zzzz
+   2738375  3380 TGSI 161: MOV OUT[4].z, TEMP[1].zzzz
+   2738375  3380 TGSI 162: MOV OUT[4].w, TEMP[0].wwww
+   2738375  3380 TGSI 163: RET
+   2738375  3380 TGSI 164: END
+   2738375  3380 TGSI end
+   2738406  3380 . CreateVertexShader
+   2738406  3380 TGSI begin
+   2738406  3380 TGSI VERT
+   2738406  3380 TGSI PROPERTY NEXT_SHADER FRAG
+   2738406  3380 TGSI DCL IN[0]
+   2738406  3380 TGSI DCL IN[1]
+   2738406  3380 TGSI DCL IN[2]
+   2738406  3380 TGSI DCL IN[3]
+   2738406  3380 TGSI DCL IN[4]
+   2738406  3380 TGSI DCL IN[5]
+   2738406  3380 TGSI DCL IN[6]
+   2738406  3380 TGSI DCL IN[7]
+   2738406  3380 TGSI DCL OUT[0], POSITION
+   2738406  3380 TGSI DCL OUT[1], GENERIC[1]
+   2738406  3380 TGSI DCL OUT[2], GENERIC[2]
+   2738406  3380 TGSI DCL OUT[3], GENERIC[3]
+   2738406  3380 TGSI DCL OUT[4], GENERIC[4]
+   2738406  3380 TGSI DCL OUT[5], GENERIC[5]
+   2738406  3380 TGSI DCL OUT[6], GENERIC[6]
+   2738406  3380 TGSI DCL OUT[7], GENERIC[7]
+   2738406  3380 TGSI DCL CONST[0][0..11]
+   2738406  3380 TGSI DCL TEMP[0..1]
+   2738406  3380 TGSI IMM[0] UINT32 {0, 1065353216, 0, 0}
+   2738406  3380 TGSI IMM[1] FLT32 {    2.0000,     0.0000,     0.0000,     0.0000}
+   2738406  3380 TGSI   0: MOV TEMP[0].xw, IMM[0].xxxx
+   2738406  3380 TGSI   1: MOV TEMP[0].yz, IN[0].xxyx
+   2738406  3380 TGSI   2: MUL TEMP[1], TEMP[0].yzwy, IN[5].yzxy
+   2738406  3380 TGSI   3: MAD TEMP[1], IN[5].xyzx, TEMP[0].zwyz, -TEMP[1]
+   2738406  3380 TGSI   4: MAD TEMP[0], IN[5].wwww, TEMP[0], TEMP[1]
+   2738406  3380 TGSI   5: MUL TEMP[0].zw, TEMP[0].zzzw, IN[5].zzzx
+   2738406  3380 TGSI   6: MAD TEMP[0].xy, IN[5].yzyy, TEMP[0].xyxx, -TEMP[0].zwzz
+   2738406  3380 TGSI   7: MAD TEMP[0].xy, TEMP[0].xyxx, IMM[1].xxyy, IN[0].xyxx
+   2738406  3380 TGSI   8: MAD TEMP[0].xy, TEMP[0].xyxx, IN[7].xyxx, IN[4].xyxx
+   2738406  3380 TGSI   9: MOV TEMP[0].z, IN[4].zzzz
+   2738406  3380 TGSI  10: MOV TEMP[0].w, IMM[0].yyyy
+   2738406  3380 TGSI  11: DP4 TEMP[1].x, TEMP[0], CONST[0][2]
+   2738406  3380 TGSI  12: DP4 TEMP[1].y, TEMP[0], CONST[0][3]
+   2738406  3380 TGSI  13: DP4 TEMP[0].w, TEMP[0], CONST[0][5]
+   2738406  3380 TGSI  14: DIV TEMP[1].xy, TEMP[1].xyxx, TEMP[0].wwww
+   2738406  3380 TGSI  15: MUL TEMP[1].zw, TEMP[0].wwww, CONST[0][0].zzzw
+   2738406  3380 TGSI  16: MAD TEMP[0].xy, TEMP[1].xyxx, CONST[0][0].xyxx, TEMP[1].zwzz
+   2738406  3380 TGSI  17: MOV OUT[0].xyw, TEMP[0].xyxw
+   2738406  3380 TGSI  18: MOV OUT[7].x, TEMP[0].wwww
+   2738406  3380 TGSI  19: MOV OUT[0].z, IMM[0].xxxx
+   2738406  3380 TGSI  20: MUL TEMP[1].xyz, IN[6].wwww, IN[6].xyzx
+   2738406  3380 TGSI  21: MOV TEMP[1].w, IN[6].wwww
+   2738406  3380 TGSI  22: MUL_SAT OUT[1], TEMP[1], IN[1]
+   2738421  3380 TGSI  23: MOV OUT[2].xy, IN[2].xyxx
+   2738421  3380 TGSI  24: MOV OUT[2].zw, IMM[0].xxxx
+   2738421  3380 TGSI  25: MOV OUT[3].xy, IN[3].xyxx
+   2738421  3380 TGSI  26: MOV OUT[3].zw, IMM[0].xxxx
+   2738421  3380 TGSI  27: DP2 OUT[4].x, TEMP[0].xyxx, CONST[0][7].xyxx
+   2738421  3380 TGSI  28: DP2 OUT[4].y, TEMP[0].xyxx, CONST[0][8].xyxx
+   2738421  3380 TGSI  29: DP2 OUT[4].z, TEMP[0].xyxx, CONST[0][9].xyxx
+   2738421  3380 TGSI  30: DP2 OUT[4].w, TEMP[0].xyxx, CONST[0][10].xyxx
+   2738421  3380 TGSI  31: MOV OUT[5].x, CONST[0][7].wwww
+   2738421  3380 TGSI  32: MOV OUT[5].y, CONST[0][8].wwww
+   2738421  3380 TGSI  33: MOV OUT[5].z, CONST[0][9].wwww
+   2738421  3380 TGSI  34: MOV OUT[5].w, CONST[0][10].wwww
+   2738421  3380 TGSI  35: MOV OUT[6], CONST[0][11]
+   2738421  3380 TGSI  36: RET
+   2738421  3380 TGSI  37: END
+   2738421  3380 TGSI end
+   2738421  3380 . CreateVertexShader
+   2738421  3380 TGSI begin
+   2738421  3380 TGSI VERT
+   2738421  3380 TGSI PROPERTY NEXT_SHADER FRAG
+   2738421  3380 TGSI DCL IN[0]
+   2738421  3380 TGSI DCL IN[1]
+   2738421  3380 TGSI DCL IN[2]
+   2738421  3380 TGSI DCL IN[3]
+   2738421  3380 TGSI DCL IN[4]
+   2738421  3380 TGSI DCL IN[5]
+   2738421  3380 TGSI DCL IN[6]
+   2738421  3380 TGSI DCL IN[7]
+   2738421  3380 TGSI DCL OUT[0], POSITION
+   2738421  3380 TGSI DCL OUT[1], GENERIC[1]
+   2738421  3380 TGSI DCL OUT[2], GENERIC[2]
+   2738421  3380 TGSI DCL OUT[3], GENERIC[3]
+   2738421  3380 TGSI DCL OUT[4], GENERIC[4]
+   2738421  3380 TGSI DCL OUT[5], GENERIC[5]
+   2738421  3380 TGSI DCL OUT[6], GENERIC[6]
+   2738421  3380 TGSI DCL OUT[7], GENERIC[7]
+   2738421  3380 TGSI DCL CONST[0][0..11]
+   2738421  3380 TGSI DCL TEMP[0..1]
+   2738421  3380 TGSI IMM[0] UINT32 {0, 1065353216, 0, 0}
+   2738421  3380 TGSI IMM[1] FLT32 {    2.0000,     0.0000,     1.0000,     0.0000}
+   2738421  3380 TGSI   0: MOV TEMP[0].xw, IMM[0].xxxx
+   2738421  3380 TGSI   1: MOV TEMP[0].yz, IN[0].xxyx
+   2738421  3380 TGSI   2: MUL TEMP[1], TEMP[0].yzwy, IN[5].yzxy
+   2738421  3380 TGSI   3: MAD TEMP[1], IN[5].xyzx, TEMP[0].zwyz, -TEMP[1]
+   2738421  3380 TGSI   4: MAD TEMP[0], IN[5].wwww, TEMP[0], TEMP[1]
+   2738421  3380 TGSI   5: MUL TEMP[0].zw, TEMP[0].zzzw, IN[5].zzzx
+   2738421  3380 TGSI   6: MAD TEMP[0].xy, IN[5].yzyy, TEMP[0].xyxx, -TEMP[0].zwzz
+   2738421  3380 TGSI   7: MAD TEMP[0].xy, TEMP[0].xyxx, IMM[1].xxyy, IN[0].xyxx
+   2738421  3380 TGSI   8: MAD TEMP[0].xy, TEMP[0].xyxx, IN[7].xyxx, IN[4].xyxx
+   2738421  3380 TGSI   9: MOV TEMP[0].z, IN[4].zzzz
+   2738421  3380 TGSI  10: MOV TEMP[0].w, IMM[0].yyyy
+   2738421  3380 TGSI  11: DP4 TEMP[1].x, TEMP[0], CONST[0][2]
+   2738421  3380 TGSI  12: DP4 TEMP[1].y, TEMP[0], CONST[0][3]
+   2738421  3380 TGSI  13: DP4 TEMP[0].w, TEMP[0], CONST[0][5]
+   2738421  3380 TGSI  14: DIV TEMP[1].xy, TEMP[1].xyxx, TEMP[0].wwww
+   2738421  3380 TGSI  15: MUL TEMP[1].zw, TEMP[0].wwww, CONST[0][0].zzzw
+   2738421  3380 TGSI  16: MAD TEMP[0].xy, TEMP[1].xyxx, CONST[0][0].xyxx, TEMP[1].zwzz
+   2738421  3380 TGSI  17: MOV OUT[0].xyw, TEMP[0].xyxw
+   2738421  3380 TGSI  18: MOV OUT[0].z, IMM[0].xxxx
+   2738421  3380 TGSI  19: MUL TEMP[1].xyz, IN[6].wwww, IN[6].xyzx
+   2738421  3380 TGSI  20: MOV TEMP[1].w, IN[6].wwww
+   2738421  3380 TGSI  21: MUL_SAT OUT[1], TEMP[1], IN[1]
+   2738421  3380 TGSI  22: ADD TEMP[0].z, -TEMP[0].wwww, IMM[1].zzzz
+   2738421  3380 TGSI  23: MAD TEMP[1].xy, CONST[0][6].xyxx, TEMP[0].zzzz, TEMP[0].wwww
+   2738421  3380 TGSI  24: MOV OUT[7].x, TEMP[0].wwww
+   2738421  3380 TGSI  25: MUL OUT[2].xy, TEMP[1].xxxx, IN[2].xyxx
+   2738421  3380 TGSI  26: MOV OUT[2].z, TEMP[1].xxxx
+   2738421  3380 TGSI  27: MOV OUT[2].w, IMM[0].xxxx
+   2738421  3380 TGSI  28: MUL OUT[3].xy, TEMP[1].yyyy, IN[3].xyxx
+   2738421  3380 TGSI  29: MOV OUT[3].z, TEMP[1].yyyy
+   2738421  3380 TGSI  30: MOV OUT[3].w, IMM[0].xxxx
+   2738421  3380 TGSI  31: DP2 OUT[4].x, TEMP[0].xyxx, CONST[0][7].xyxx
+   2738421  3380 TGSI  32: DP2 OUT[4].y, TEMP[0].xyxx, CONST[0][8].xyxx
+   2738421  3380 TGSI  33: DP2 OUT[4].z, TEMP[0].xyxx, CONST[0][9].xyxx
+   2738421  3380 TGSI  34: DP2 OUT[4].w, TEMP[0].xyxx, CONST[0][10].xyxx
+   2738421  3380 TGSI  35: MOV OUT[5].x, CONST[0][7].wwww
+   2738421  3380 TGSI  36: MOV OUT[5].y, CONST[0][8].wwww
+   2738421  3380 TGSI  37: MOV OUT[5].z, CONST[0][9].wwww
+   2738421  3380 TGSI  38: MOV OUT[5].w, CONST[0][10].wwww
+   2738421  3380 TGSI  39: MOV OUT[6], CONST[0][11]
+   2738421  3380 TGSI  40: RET
+   2738421  3380 TGSI  41: END
+   2738421  3380 TGSI end
+
