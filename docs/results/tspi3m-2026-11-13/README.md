@@ -20,7 +20,9 @@ The wallpaper, the account picture's circle, the password box with its caret
 and the mouse pointer are right. Two things are wrong:
 
 - No text is drawn: no user name, no placeholder, no dots while typing. The
-  picture inside the circle is missing too. Not found yet.
+  picture inside the circle is missing too. Both causes were found the same
+  evening with a Direct2D test that runs over SSH (item 12 below); nobody
+  has looked at the monitor since.
 - It is slow, about 1 to 2 flips a second with the sign-in screen up and 5
   to 6 with an empty desktop. Every frame is read back from Panfrost's
   buffer and copied twice on the CPU at 2560x1440.
@@ -92,6 +94,25 @@ the way (that `OpenResource` was the first thing missing, and that
     runtime owns, `OpenResource` builds a resource on the opened allocation,
     and a shared surface is presented as it is. The kernel driver needed no
     change: one GPU address space and `OpenAllocation` were enough.
+12. **Direct2D's text and bitmaps.** `tools/windows/d2dtext.cpp` draws a
+    rectangle, an ellipse, two lines of text and a bitmap with Direct2D and
+    saves the frame, on the Mali or on WARP. On the Mali only the rectangle
+    was right ([before](d2dtext-mali-run-43389770021.png),
+    [WARP](d2dtext-warp.png)). Two causes, both in `tgsi_to_nir`:
+    - Vertex inputs were all declared float, so Bifrost converted integer
+      elements to float and the shader used the float's bits as an integer.
+      Direct2D indexes a constant buffer with such an input, one entry per
+      primitive, and found nothing past entry 0. That lost the ellipse and
+      the bitmaps.
+    - Nothing told Panfrost which sampler views are texel buffers, so a
+      pixel shader that fetches from one had no attribute array and read
+      zero. Direct2D keeps glyph coverage in a buffer. That lost the text;
+      `tools/windows/d3dparts.cpp` found it, one feature per draw.
+
+    With both fixed the Mali's frame has the same number of text pixels as
+    WARP's (2089 and 2290 for the two lines) and 72 pixels of 131072 differ
+    by more than 8, at the edge of the ellipse and in the filtered bitmap
+    ([after](d2dtext-mali-run-43394072587.png)).
 
 The commits on the branch say what was observed for each.
 
@@ -114,7 +135,9 @@ then dxgkrnl events.
 
 ## Open
 
-- Text and the account picture.
+- Text and the account picture on the sign-in screen itself: fixed in the
+  Direct2D test, `LogonUI.exe` and `dwm.exe` run on that UMD without an
+  error in their logs, and the monitor has not been looked at.
 - Speed: render into the primary instead of reading back and copying, then
   scan out the primary directly.
 - With the display asleep, `dwm.exe` closed the shared surfaces two seconds
