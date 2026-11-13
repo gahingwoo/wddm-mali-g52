@@ -4,7 +4,16 @@ A Windows (WDDM) driver for the Arm Mali-G52 GPU in the Rockchip RK3576.
 
 The Mali-G52 draws under Windows: on 2026-10-02 Mesa's Panfrost, inside the
 D3D10 software-driver DLL and talking to our own kernel driver, rendered a
-D3D11 triangle on it, byte for byte what the CPU renderer draws (M4). Windows on RK3576 boards
+D3D11 triangle on it, byte for byte what the CPU renderer draws (M4). On
+2026-11-13 the Windows 11 sign-in screen was composed on it: `dwm.exe` and
+`LogonUI.exe` render through Panfrost and the WDDM driver puts the result on
+the monitor
+([photo](docs/results/tspi3m-2026-11-13/logon-screen-on-mali-no-text.jpg),
+[what was done](docs/results/tspi3m-2026-11-13/README.md)). That is on a
+branch and far from usable: no text is drawn yet and it runs at a frame or
+two a second.
+
+Windows on RK3576 boards
 ([woa-rk3576](https://github.com/gahingwoo/woa-rk3576)) draws its desktop on the
 CPU today: there is no GPU driver, so DWM renders through WARP into the
 framebuffer the firmware leaves behind. No Windows driver for any Mali GPU
@@ -28,7 +37,7 @@ Milestones, the reasoning behind them, and the risks:
 | M2 | Mesa 26.2 (D3D10 frontend, softpipe, then Panfrost) built for Windows ARM64 in CI | **done**: builds, and falls back cleanly with no Mali device |
 | M3 | Panfrost drives the Mali on Windows through our own kernel interface; first clear | **done** 2026-10-02: Panfrost clears a render target on the Mali and reads it back ([result](docs/results/m3-mesa-windows-2026-10-02.txt); [driver alone](docs/results/m3-windows-2026-10-02.txt); [design](docs/M3.md)) |
 | M4 | First triangle | **done** 2026-10-02: the D3D11 triangle rendered by the Mali, byte-identical to softpipe ([image](docs/results/m4/first-triangle-on-mali-windows.png), [log](docs/results/m4/m4-out.txt)) |
-| M5 | WDDM 2.0 driver and hardware UMD; DWM composites on the Mali | M5.1 (display-only driver) **done** 2026-10-02 ([result](docs/results/m5.1-board-2026-10-02.md)); M5.2 step (b), a job submitted through the WDDM driver, **done** 2026-10-02 ([result](docs/results/m5.2-step-b-2026-10-02.md)); the D3D11 triangle rendered by the Mali through the WDDM driver **done** 2026-10-02 ([result](docs/results/m5.2-step-c1/README.md)), and as a hardware device with Mesa loaded by the D3D runtime as the UMD 2026-10-03 ([result](docs/results/m5.2-step-c2/README.md)); plan: [docs/M5.2-PLAN.md](docs/M5.2-PLAN.md) |
+| M5 | WDDM driver (1.3) and hardware UMD; DWM composites on the Mali | M5.1 (display-only driver) **done** 2026-10-02 ([result](docs/results/m5.1-board-2026-10-02.md)); M5.2 step (b), a job submitted through the WDDM driver, **done** 2026-10-02 ([result](docs/results/m5.2-step-b-2026-10-02.md)); the D3D11 triangle rendered by the Mali through the WDDM driver **done** 2026-10-02 ([result](docs/results/m5.2-step-c1/README.md)), and as a hardware device with Mesa loaded by the D3D runtime as the UMD 2026-10-03 ([result](docs/results/m5.2-step-c2/README.md)); step (d), DWM on the Mali in installed Windows, **first picture** 2026-11-13 on the TaishanPi 3M: the sign-in screen composed by `dwm.exe` from `LogonUI.exe`'s shared surface, flipped to the display by the WDDM driver; no text yet, about 1 to 2 frames a second, branch `umd-file-log` ([result](docs/results/tspi3m-2026-11-13/README.md)); plan: [docs/M5.2-PLAN.md](docs/M5.2-PLAN.md) |
 
 M2 onwards: [docs/M2-PLAN.md](docs/M2-PLAN.md). Mesa's D3D10 frontend is a
 software-driver interface, so M3 and M4 run D3D11 programs that ask for the
@@ -44,8 +53,11 @@ software driver; only M5 puts the desktop on the GPU.
 | Power | domain `PD_GPU`; supply `vdd_gpu_s0`, RK806 DCDC5 |
 | Clock | `CLK_GPU`, set through TF-A's SCMI service on Linux |
 
-Developed on the ArmSoM CM5-IO with firmware from
-[edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576).
+Developed on the ArmSoM CM5-IO and the LCKFB TaishanPi 3M, with firmware from
+[edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576). M1 to M5.2 step (c)
+were done on the CM5-IO; the first picture from DWM came on the TaishanPi 3M,
+which LCKFB provided. The firmware has to power the GPU and describe it in
+ACPI (`RKCP7402`); edk2-rk3576 does both on these two boards.
 
 ## License
 
