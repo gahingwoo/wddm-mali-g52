@@ -273,10 +273,11 @@ static NTSTATUS DriverCaps(const DXGKARG_QUERYADAPTERINFO *Info)
      * STATUS_GRAPHICS_INVALID_DRIVER_MODEL right after dxgkrnl read these
      * caps (WinPE runs 5-9, ETW events 24/110/250 then the failure); a full
      * driver without them was accepted. */
-#if MW_RENDER_ONLY
-#if MW_RENDER_ONLY
-    caps->PresentationCaps.SupportKernelModeCommandBuffer = 1; /* see MwRenderKm */
-#endif
+    /* This one is for the full driver and must sit outside the render-only
+     * block below. It was added inside that block (35d6adb) and so was
+     * never compiled into the full build: the 2026-10-17 result "the
+     * section-backed primary alone did not do it" (2290ca5) was measured
+     * with this cap still 0. */
     /* The shared primary lives in our only segment, an aperture, and the
      * UMD does not set UseAlternateVA; dxgkrnl then insists that "all
      * segments in the supported write segment set for a shared primary be
@@ -285,6 +286,8 @@ static NTSTATUS DriverCaps(const DXGKARG_QUERYADAPTERINFO *Info)
      * SetVidPnSourceAddress. DXGK_SEGMENTFLAGS' remarks give the way out:
      * a section-backed primary. */
     caps->MemoryManagementCaps.SectionBackedPrimary = 1;
+#if MW_RENDER_ONLY
+    caps->PresentationCaps.SupportKernelModeCommandBuffer = 1; /* see MwRenderKm */
     caps->FlipCaps.FlipOnVSyncMmIo = 1;                         /* no display: unused */
     if (FITS(size, DXGK_DRIVERCAPS, PreemptionCaps)) {
         /* Honest: a DMA buffer always runs to its end. */
