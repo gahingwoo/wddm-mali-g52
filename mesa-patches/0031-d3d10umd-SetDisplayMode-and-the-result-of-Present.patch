@@ -1,0 +1,96 @@
+diff --git a/src/gallium/frontends/d3d10umd/DxgiFns.cpp b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+index 612cb9f..651d5eb 100644
+--- a/src/gallium/frontends/d3d10umd/DxgiFns.cpp
++++ b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+@@ -75,6 +75,15 @@ _Present(DXGI_DDI_ARG_PRESENT *pPresentData)
+       pSrcResource->resource, 0, 0, pPresentData->pDXGIContext, 0, NULL);
+    d3d10_present_target(0, 0, 0);
+ 
++   /* What the runtime made of it. DXGI acts on this (a changed present mode,
++    * an occluded window); returning S_OK regardless hid every failure. */
++   if (pSrcResource->present_allocation) {
++      HRESULT hr = (HRESULT)d3d10_present_result();
++      if (hr != S_OK)
++         DebugPrintf("Present: result 0x%08lx\n", (unsigned long)hr);
++      return hr;
++   }
++
+    return S_OK;
+ }
+ 
+@@ -124,7 +133,20 @@ _GetGammaCaps( DXGI_DDI_ARG_GET_GAMMA_CONTROL_CAPS *GetCaps )
+ HRESULT APIENTRY
+ _SetDisplayMode( DXGI_DDI_ARG_SETDISPLAYMODE *SetDisplayMode )
+ {
+-   LOG_UNSUPPORTED_ENTRYPOINT();
++   LOG_ENTRYPOINT();
++
++   /*
++    * Make this swap chain surface the one on the display. On the hardware
++    * runtime that is a call back into it with the primary's allocation; it
++    * is what takes the VidPN source from the desktop's primary to the swap
++    * chain, and no flip of the chain is accepted before it has succeeded.
++    * A resource that is not one of our primaries (the software runtime, or
++    * no Panfrost) keeps the old answer.
++    */
++   Resource *pResource = CastResource(SetDisplayMode->hResource);
++
++   if (pResource && pResource->present_allocation)
++      return (HRESULT)d3d10_set_display_mode(pResource->present_allocation);
+ 
+    return S_OK;
+ }
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index 4451106..25869f4 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -167,6 +167,8 @@ extern "C" {
+ unsigned d3d10_primary_create(void *hRTResource, unsigned w, unsigned h, unsigned vidpn_source);
+ void d3d10_primary_destroy(unsigned handle);
+ void d3d10_present_target(unsigned src_allocation, unsigned dst_allocation, int set);
++long d3d10_set_display_mode(unsigned primary_allocation);
++long d3d10_present_result(void);
+ }
+ 
+ struct Resource
+diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+index 271d471..408d1ef 100644
+--- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
++++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+@@ -192,6 +192,8 @@ d3d10_bind_runtime(HANDLE hRTAdapter, HANDLE hRTDevice, const void *pKTCallbacks
+ unsigned malikm_primary_create(void *hRTResource, unsigned w, unsigned h, unsigned vidpn_source);
+ void malikm_primary_destroy(unsigned handle);
+ void malikm_present_target(unsigned src_allocation, unsigned dst_allocation, int set);
++long malikm_set_display_mode(unsigned primary_allocation);
++long malikm_present_result(void);
+ #endif
+ 
+ unsigned
+@@ -225,6 +227,27 @@ d3d10_present_target(unsigned src_allocation, unsigned dst_allocation, int set)
+ #endif
+ }
+ 
++long
++d3d10_set_display_mode(unsigned primary_allocation)
++{
++#ifdef GALLIUM_PANFROST
++   return malikm_set_display_mode(primary_allocation);
++#else
++   (void)primary_allocation;
++   return 0;
++#endif
++}
++
++long
++d3d10_present_result(void)
++{
++#ifdef GALLIUM_PANFROST
++   return malikm_present_result();
++#else
++   return 0;
++#endif
++}
++
+ struct pipe_screen *
+ d3d10_create_screen(void)
+ {

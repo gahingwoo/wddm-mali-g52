@@ -991,6 +991,48 @@ malikm_primary_destroy(unsigned handle)
    ReleaseSRWLockExclusive(&wddm_lock);
 }
 
+/*
+ * DXGI's SetDisplayMode for a primary: make the swap chain's surface the one
+ * the display shows. This is what moves a VidPN source from the desktop's
+ * shared primary to the swap chain; until it has happened dxgkrnl answers
+ * every flip of that chain with STATUS_GRAPHICS_PRESENT_MODE_CHANGED, and
+ * DXGI calls SetDisplayMode again. d3d10umd had it as a stub: dwm.exe called
+ * it 1887 times in one run, once at start and once after each failed flip.
+ * Returns the HRESULT of pfnSetDisplayModeCb.
+ */
+long
+malikm_set_display_mode(unsigned primary_allocation)
+{
+   HRESULT hr = E_FAIL;
+
+   AcquireSRWLockExclusive(&wddm_lock);
+   if (ddi.on && ddi.cb.pfnSetDisplayModeCb && primary_allocation) {
+      static volatile LONG said = 0;
+      D3DDDICB_SETDISPLAYMODE m = {0};
+
+      m.hPrimaryAllocation = primary_allocation;
+      hr = ddi.cb.pfnSetDisplayModeCb(ddi.device, &m);
+      if (InterlockedIncrement(&said) <= 20)
+         DebugPrintf("SetDisplayMode: primary 0x%x, pfnSetDisplayModeCb 0x%08lx, format attribute 0x%x\n",
+                     primary_allocation, (unsigned long)hr, (unsigned)m.PrivateDriverFormatAttribute);
+   } else {
+      DebugPrintf("SetDisplayMode: not possible (bound %d, primary 0x%x)\n", ddi.on,
+                  primary_allocation);
+   }
+   ReleaseSRWLockExclusive(&wddm_lock);
+   return hr;
+}
+
+/* The HRESULT of the last pfnPresentCb on this thread, for d3d10umd's
+ * Present to hand back to DXGI. */
+static __declspec(thread) long present_result;
+
+long
+malikm_present_result(void)
+{
+   return present_result;
+}
+
 /* What the present in progress on this thread is for: set by d3d10umd's
  * Present around the frame read-back that ends in malikm_present_d3dddi. */
 static __declspec(thread) struct {
@@ -1001,6 +1043,8 @@ static __declspec(thread) struct {
 void
 malikm_present_target(unsigned src_allocation, unsigned dst_allocation, int set)
 {
+   if (set)
+      present_result = 0;
    present_target.src = src_allocation;
    present_target.dst = dst_allocation;
    present_target.set = set;
@@ -1040,6 +1084,7 @@ malikm_present_d3dddi(const void *bgrx, unsigned w, unsigned h, void *dxgi_conte
          p.hContext = ddi.context;
          hr = ddi.dxgi->pfnPresentCb(ddi.device, &p);
       }
+      present_result = hr;
       if (InterlockedIncrement(&said) <= 20)
          DebugPrintf("present: primary 0x%x -> 0x%x, %ux%u, lock %p, pfnPresentCb 0x%08lx\n",
                      (unsigned)present_target.src, (unsigned)present_target.dst, w, h, cpu,
