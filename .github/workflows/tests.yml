@@ -6,6 +6,7 @@ on:
   push:
     paths:
       - 'tools/windows/d2dtext.cpp'
+      - 'tools/windows/d3dparts.cpp'
       - '.github/workflows/tests.yml'
   workflow_dispatch:
 
@@ -30,6 +31,10 @@ jobs:
           # The runner has no Mali; WARP shows the program itself works.
           .\out\d2dtext.exe warp out\d2dtext-warp-runner.bmp
           if ($LASTEXITCODE) { throw "d2dtext on WARP failed ($LASTEXITCODE)" }
+          cl /nologo /EHsc /O2 /MT tools\windows\d3dparts.cpp /Fe:out\d3dparts.exe
+          if ($LASTEXITCODE) { throw 'd3dparts build failed' }
+          .\out\d3dparts.exe warp
+          if ($LASTEXITCODE) { throw "d3dparts on WARP failed ($LASTEXITCODE)" }
       - uses: actions/upload-artifact@v4
         with:
           name: board-tests-arm64
