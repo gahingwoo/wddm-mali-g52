@@ -1,0 +1,28 @@
+diff --git a/src/gallium/drivers/softpipe/sp_state_shader.c b/src/gallium/drivers/softpipe/sp_state_shader.c
+index 47ef0a4..5006431 100644
+--- a/src/gallium/drivers/softpipe/sp_state_shader.c
++++ b/src/gallium/drivers/softpipe/sp_state_shader.c
+@@ -133,14 +133,21 @@ softpipe_create_shader_state(struct pipe_context *pipe,
+       shader->tokens = nir_to_tgsi(templ->ir.nir, pipe->screen);
+    } else {
+       assert(templ->type == PIPE_SHADER_IR_TGSI);
+-      /* we need to keep a local copy of the tokens */
+-      shader->tokens = tgsi_dup_tokens(templ->tokens);
++      /* we need to keep a local copy of the tokens. A geometry shader
++       * may have none: stream output without a geometry shader, which
++       * softpipe_create_gs_state and the draw path handle, but
++       * tgsi_dup_tokens(NULL) reads the header through NULL (d3d10umd's
++       * CreateGeometryShaderWithStreamOutput from vertex shader code). */
++      shader->tokens = templ->tokens ? tgsi_dup_tokens(templ->tokens) : NULL;
+    }
+ 
+    shader->type = PIPE_SHADER_IR_TGSI;
+ 
+    shader->stream_output = templ->stream_output;
+ 
++   if (!shader->tokens)
++      return;
++
+    if (debug)
+       tgsi_dump(shader->tokens, 0);
+ 
