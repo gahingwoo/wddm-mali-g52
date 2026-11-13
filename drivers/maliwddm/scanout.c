@@ -47,11 +47,14 @@
 /* IO addresses. DRAM starts at 0x40000000 on the RK3576, so the firmware
  * framebuffer, entered at its physical address, cannot be down here. */
 #define SCAN_IOVA_BASE          0x10000000u
-#define SCAN_SLOT_BYTES         0x01000000u     /* 16 MB: 2560x1440x4 is 14.7 */
-#define SCAN_SLOT_PAGES         (SCAN_SLOT_BYTES >> PAGE_SHIFT)
 #define SCAN_PT_SPAN            0x00400000u     /* one page table: 4 MB */
-#define SCAN_FB_TABLES          8               /* up to 32 MB of framebuffer */
-#define SCAN_TABLES             (1 + SCAN_FB_TABLES + MW_SCAN_SLOTS * (SCAN_SLOT_BYTES / SCAN_PT_SPAN))
+/* A slot is the framebuffer's size rounded up to whole page tables, so the
+ * mode the firmware set decides it: 8 MB at 1920x1080, 16 at 2560x1440,
+ * 36 at 3840x2160. Six of the largest end below 0x40000000. */
+#define SCAN_SLOT_BYTES         (A->ScanSlotBytes)
+#define SCAN_SLOT_PAGES         (SCAN_SLOT_BYTES >> PAGE_SHIFT)
+#define SCAN_TABLES             (A->ScanTablesTotal)
+#define SCAN_SLOT_MAX           0x04000000u     /* 64 MB */
 
 static __inline void W(MW_ADAPTER *A, ULONG Off, ULONG V)
 {
@@ -129,9 +132,13 @@ void MwScanStart(MW_ADAPTER *A)
     SIZE_T n;
 
     A->ScanReady = FALSE;
-    if (A->FbVa == NULL || fb < 0x40000000ull || fb + A->FbSize > 0x100000000ull ||
-        A->FbSize > (SIZE_T)SCAN_FB_TABLES * SCAN_PT_SPAN - SCAN_PT_SPAN)
+    if (A->FbVa == NULL || A->FbSize == 0 || fb < 0x40000000ull || fb + A->FbSize > 0x100000000ull)
         return;
+    A->ScanSlotBytes = (ULONG)((A->FbSize + SCAN_PT_SPAN - 1) & ~((SIZE_T)SCAN_PT_SPAN - 1));
+    if (A->ScanSlotBytes > SCAN_SLOT_MAX)
+        return;
+    A->ScanTablesTotal = 1 + (ULONG)(((fb + A->FbSize - 1) >> 22) - (fb >> 22) + 1) +
+                         MW_SCAN_SLOTS * (A->ScanSlotBytes / SCAN_PT_SPAN);
     hi.QuadPart = 0xFFFFFFFFll;
     n = (SIZE_T)SCAN_TABLES * PAGE_SIZE;
     A->ScanTables = MmAllocateContiguousMemorySpecifyCache(n, lo, hi, lo, MmNonCached);
@@ -150,6 +157,14 @@ void MwScanStart(MW_ADAPTER *A)
     for (int i = 0; i < MW_SCAN_SLOTS; i++)
         A->ScanSlot[i] = NULL;
     A->ScanReady = TRUE;
+    MwLog(A, L"ScanSlotBytes", A->ScanSlotBytes);
+    /* On from the start if a test asked for that (m5test scan 5). */
+    if (MwSetting(A, L"ScanOut", 0) != 0) {
+        MW_ESCAPE_SCANOUT_DATA d = {0};
+        d.Mode = 1;
+        MwScanSet(A, &d);
+        MwLog(A, L"ScanOutAtStart", d.Status);
+    }
     return;
 fail:
     MmFreeContiguousMemory(A->ScanTables);
@@ -243,12 +258,17 @@ void MwScanUnmap(MW_ADAPTER *A, MW_ALLOCATION *P)
  *   1: translation on if it is not, and flips scan out from now on
  *   0: flips are copied again; the window goes back to the framebuffer
  *   2: as 0, and translation off as well
+ *   5: as 1, and at every start from now on; 4: as 0, and not at start
  *   anything else: only report */
 NTSTATUS MwScanSet(MW_ADAPTER *A, MW_ESCAPE_SCANOUT_DATA *D)
 {
     if (!A->ScanReady) {
         D->Status = 0xFFFFFFFFu;
         return STATUS_SUCCESS;
+    }
+    if (D->Mode == 4 || D->Mode == 5) {
+        MwSetSetting(A, L"ScanOut", D->Mode == 5);
+        D->Mode = D->Mode == 5 ? 1 : 0;
     }
     ExAcquireFastMutex(&A->MmuLock);
     if (D->Mode == 1) {

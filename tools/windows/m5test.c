@@ -240,7 +240,8 @@ int main(int argc, char **argv)
     g_adapter = adapter;
     if (argc >= 2 && strcmp(argv[1], "scan") == 0) {
         /* scan 1: primaries are scanned out by the display controller;
-         * scan 0: copied again; scan 2: and its IOMMU off; scan: report. */
+         * scan 0: copied again; scan 2: and its IOMMU off; scan 5: on, now
+         * and at every start; scan 4: off, and not at start; scan: report. */
         MW_ESCAPE_SCANOUT_DATA d = {0};
         d.Code = MW_ESCAPE_SCANOUT;
         d.Mode = argc >= 3 ? (unsigned)atoi(argv[2]) : 3;

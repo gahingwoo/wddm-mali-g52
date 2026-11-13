@@ -164,7 +164,7 @@ struct _MW_ADAPTER {
     PUCHAR VopVa;
     PVOID ScanTables;
     PHYSICAL_ADDRESS ScanTablesPa;
-    ULONG ScanTablesUsed;
+    ULONG ScanTablesUsed, ScanTablesTotal, ScanSlotBytes;
     struct _MW_ALLOCATION *ScanSlot[MW_SCAN_SLOTS];
     BOOLEAN ScanReady, ScanPaging;
     volatile BOOLEAN ScanShowing;
@@ -277,6 +277,8 @@ DXGKDDI_CANCELCOMMAND MwCancelCommand;
 DXGKDDI_CONTROLINTERRUPT MwControlInterrupt;
 DXGKDDI_GETSCANLINE MwGetScanLine;
 BOOLEAN MwJobInterrupt(MW_ADAPTER *A);    /* from the ISR, at DIRQL */
+ULONG MwSetting(MW_ADAPTER *A, PCWSTR Name, ULONG Default);
+void MwSetSetting(MW_ADAPTER *A, PCWSTR Name, ULONG Value);
 void MwScanStart(MW_ADAPTER *A);
 void MwScanStop(MW_ADAPTER *A);
 void MwScanToFb(MW_ADAPTER *A);

@@ -5,6 +5,42 @@
  */
 #include "maliwddm.h"
 
+/* ---- settings: DWORDs in the device's Device Parameters key ---- */
+
+ULONG MwSetting(MW_ADAPTER *A, PCWSTR Name, ULONG Default)
+{
+    HANDLE key;
+    UNICODE_STRING name;
+    struct { KEY_VALUE_PARTIAL_INFORMATION Info; ULONG Pad; } v;
+    ULONG len, value = Default;
+
+    if (A == NULL || A->Pdo == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return Default;
+    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(A->Pdo, PLUGPLAY_REGKEY_DEVICE, KEY_READ, &key)))
+        return Default;
+    RtlInitUnicodeString(&name, Name);
+    if (NT_SUCCESS(ZwQueryValueKey(key, &name, KeyValuePartialInformation, &v, sizeof(v), &len)) &&
+        v.Info.Type == REG_DWORD && v.Info.DataLength == sizeof(ULONG))
+        value = *(ULONG UNALIGNED *)v.Info.Data;
+    ZwClose(key);
+    return value;
+}
+
+void MwSetSetting(MW_ADAPTER *A, PCWSTR Name, ULONG Value)
+{
+    HANDLE key;
+    UNICODE_STRING name;
+
+    if (A == NULL || A->Pdo == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return;
+    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(A->Pdo, PLUGPLAY_REGKEY_DEVICE, KEY_WRITE, &key)))
+        return;
+    RtlInitUnicodeString(&name, Name);
+    (void)ZwSetValueKey(key, &name, 0, REG_DWORD, &Value, sizeof(Value));
+    (void)ZwFlushKey(key);
+    ZwClose(key);
+}
+
 /* ---- trace ---- */
 
 void MwLog(MW_ADAPTER *A, PCWSTR Name, ULONG Value)
