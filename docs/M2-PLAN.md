@@ -1,5 +1,7 @@
 # Plan from M2 on
 
+> Status, 2026-11-13: carried out. M2, M3 and M4 are done; results in [results/](results/README.md). Kept as written.
+
 Written 2026-10-01, after M1. It changes the milestone order in the README:
 Mesa's D3D10 frontend turned out to be a software-driver interface, which
 gives a way to get Panfrost driving the Mali under Windows before any WDDM

@@ -1,5 +1,12 @@
 # Next time the board is on
 
+> Historical. This was the checklist for the board sessions of October 2026.
+> Steps 1 to 3 were done then and their results are in
+> [results/](results/README.md). One statement below is out of date:
+> `malidod` binds `ACPI\RKCP7403` now, not `RKCP7402`. For how a board
+> session is run today, see "How it was debugged" in
+> [results/tspi3m-2026-11-13/README.md](results/tspi3m-2026-11-13/README.md).
+
 Everything below is built by CI and waiting for hardware. In this order,
 because each step is the gate for the next. All three drivers bind the same
 device (ACPI\RKCP7402); only one can be installed at a time.

@@ -20,28 +20,40 @@ framebuffer the firmware leaves behind. No Windows driver for any Mali GPU
 exists as far as we can find; Arm and the SoC vendors ship Linux and Android
 drivers only.
 
-## Plan
-
-The user-mode half comes from Mesa: the Panfrost Gallium driver and its
-Bifrost shader compiler, under Mesa's D3D10 frontend. The kernel-mode half is
-new: first a plain driver with its own job-submission interface, finally a
-WDDM driver that also scans out the desktop.
-
-Milestones, the reasoning behind them, and the risks:
-[docs/PLAN.md](docs/PLAN.md).
+## Where it stands
 
 | | Milestone | State |
 |---|---|---|
-| M0 | Feasibility checks | done, see the plan |
-| M1 | Mali runs a job under Windows (plain KMDF driver) | **done**: [result](docs/results/m1-windows-2026-10-01.txt) |
-| M2 | Mesa 26.2 (D3D10 frontend, softpipe, then Panfrost) built for Windows ARM64 in CI | **done**: builds, and falls back cleanly with no Mali device |
-| M3 | Panfrost drives the Mali on Windows through our own kernel interface; first clear | **done** 2026-10-02: Panfrost clears a render target on the Mali and reads it back ([result](docs/results/m3-mesa-windows-2026-10-02.txt); [driver alone](docs/results/m3-windows-2026-10-02.txt); [design](docs/M3.md)) |
-| M4 | First triangle | **done** 2026-10-02: the D3D11 triangle rendered by the Mali, byte-identical to softpipe ([image](docs/results/m4/first-triangle-on-mali-windows.png), [log](docs/results/m4/m4-out.txt)) |
-| M5 | WDDM driver (1.3) and hardware UMD; DWM composites on the Mali | M5.1 (display-only driver) **done** 2026-10-02 ([result](docs/results/m5.1-board-2026-10-02.md)); M5.2 step (b), a job submitted through the WDDM driver, **done** 2026-10-02 ([result](docs/results/m5.2-step-b-2026-10-02.md)); the D3D11 triangle rendered by the Mali through the WDDM driver **done** 2026-10-02 ([result](docs/results/m5.2-step-c1/README.md)), and as a hardware device with Mesa loaded by the D3D runtime as the UMD 2026-10-03 ([result](docs/results/m5.2-step-c2/README.md)); step (d), DWM on the Mali in installed Windows, **first picture** 2026-11-13 on the TaishanPi 3M: the sign-in screen composed by `dwm.exe` from `LogonUI.exe`'s shared surface, flipped to the display by the WDDM driver; no text yet, about 1 to 2 frames a second, branch `umd-file-log` ([result](docs/results/tspi3m-2026-11-13/README.md)); plan: [docs/M5.2-PLAN.md](docs/M5.2-PLAN.md) |
+| M0 | Feasibility checks | done |
+| M1 | The Mali runs a job under Windows (plain KMDF driver) | done 2026-10-01, [result](docs/results/m1/) |
+| M2 | Mesa 26.2 (D3D10 frontend, softpipe, Panfrost) built for Windows ARM64 in CI | done |
+| M3 | Panfrost drives the Mali through our own kernel interface; first clear | done 2026-10-02, [result](docs/results/m3/) |
+| M4 | First triangle, byte-identical to the CPU renderer | done 2026-10-02, [image](docs/results/m4/first-triangle-on-mali-windows.png) |
+| M5.1 | Display-only driver drives HDMI | done 2026-10-02, [result](docs/results/m5.1/README.md) |
+| M5.2 (b) | A job submitted through the WDDM driver | done 2026-10-02, [result](docs/results/m5.2-step-b/README.md) |
+| M5.2 (c) | The triangle through the WDDM driver, Mesa loaded by the runtime as the UMD | done 2026-10-03, [result](docs/results/m5.2-step-c2/README.md) |
+| M5.2 (d) | DWM composites on the Mali in installed Windows | **first picture 2026-11-13**, [result](docs/results/tspi3m-2026-11-13/README.md); no text yet, 1 to 2 frames a second, on branch `umd-file-log` |
 
-M2 onwards: [docs/M2-PLAN.md](docs/M2-PLAN.md). Mesa's D3D10 frontend is a
-software-driver interface, so M3 and M4 run D3D11 programs that ask for the
-software driver; only M5 puts the desktop on the GPU.
+All results: [docs/results/](docs/results/README.md). All documents:
+[docs/](docs/README.md).
+
+## How it is built
+
+The user-mode half comes from Mesa: the Panfrost Gallium driver and its
+Bifrost shader compiler, under Mesa's D3D10 frontend, with the changes in
+[mesa-patches/](mesa-patches/). The kernel-mode half is new: `malikm`, a plain
+driver with its own job-submission interface, and `maliwddm`, a WDDM 1.3
+driver that also owns the display. A shim in
+[win32-compat/](win32-compat/) stands in for libdrm between Panfrost and
+either of them.
+
+Mesa's D3D10 frontend is a software-driver interface, so M3 and M4 run D3D11
+programs that ask for the software driver; only M5 puts the desktop on the
+GPU. The reasoning and the risks are in [docs/PLAN.md](docs/PLAN.md),
+[docs/M2-PLAN.md](docs/M2-PLAN.md) and
+[docs/M5.2-PLAN.md](docs/M5.2-PLAN.md).
+
+Everything is built in GitHub CI; there is no local Windows toolchain.
 
 ## Hardware
 

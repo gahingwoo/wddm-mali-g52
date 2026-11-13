@@ -127,9 +127,11 @@ then dxgkrnl events.
 
 ## Files
 
-| File | What |
+Photos of the monitor are next to this file. Everything else is in
+[logs/](logs/):
+
+| Files | What |
 |---|---|
-| `logon-screen-on-mali-no-text.jpg`, `dwm-on-mali-cursor-only.jpg`, `assert-num-viewports.jpg` | photos of the monitor |
 | `umd-*.txt`, `traces-after-sample.txt`, `dwm-trace-with-tgsi.txt`, `logonui-trace-shared-resource.txt` | UMD logs at each stage |
 | `dxgkrnl-*.txt` | decoded dxgkrnl events |
 | `m5test-after-clean-boot.txt`, `maliwddm-trace-after-clean-boot.txt`, `session1-processes.txt` | the first clean boot with the driver bound |

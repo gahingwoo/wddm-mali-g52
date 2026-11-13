@@ -1,5 +1,7 @@
 # Plan
 
+> Status, 2026-11-13: M0 to M4 done; M5 in progress, see the [README](../README.md) table. This file is the original plan and is kept as written.
+
 ## Goal
 
 Make DWM composite on the Mali-G52 so the Windows desktop on RK3576 stops

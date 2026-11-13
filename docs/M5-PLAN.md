@@ -1,5 +1,7 @@
 # M5: a WDDM driver, and DWM on the Mali
 
+> Status, 2026-11-13: superseded by [M5.2-PLAN.md](M5.2-PLAN.md) for everything after M5.1. Kept for the sources and for the questions it lists.
+
 Written 2026-10-02, before M3 has run on the board. It turns "WDDM 2.0
 driver, hardware UMD, DWM composites on the Mali" into steps, and records
 what Microsoft's documentation settles and what it leaves open. Sources at
@@ -94,7 +96,7 @@ level 10_0 on d3d10umd, which implements only the D3D10 and D3D10.1 DDIs.
 | M5.4 | Flip: primaries in the scan-out segment, `DxgkDdiSetVidPnSourceAddress` writes the VOP2 window address | a full-screen D3D11 program flips without tearing |
 | M5.5 | DWM on the Mali | the desktop composites on the GPU, measured (GPU job counters vs WARP's CPU time) |
 
-**M5.1 done on the board (2026-10-02):** `drivers/malidod` drives the HDMI output under Windows ([result](results/m5.1-board-2026-10-02.md)). It takes the firmware framebuffer, offers that one mode and presents by copying dirty rectangles, as Basic Display does; it does not touch VOP2 yet.
+**M5.1 done on the board (2026-10-02):** `drivers/malidod` drives the HDMI output under Windows ([result](results/m5.1/README.md)). It takes the firmware framebuffer, offers that one mode and presents by copying dirty rectangles, as Basic Display does; it does not touch VOP2 yet.
 
 M5.1 needs only the board's display and is worth doing early: it fails or
 succeeds independently of the GPU, and its code is the display half of M5.2.
