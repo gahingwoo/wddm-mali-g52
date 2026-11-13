@@ -1,0 +1,13 @@
+
+Device Description:         Rockchip RK3576 Mali-G52 (WDDM)
+Status:                     Started
+Driver Name:                oem9.inf
+=== dwm.exe-1152.txt (63 chars)
+     29890  1088 CreateDevice Interface 0xa0009 Version 0x177a
+
+=== LogonUI.exe-1160.txt (126 chars)
+     29890  4084 CreateDevice Interface 0xa0009 Version 0x177a
+     30218  4440 CreateDevice Interface 0xa0009 Version 0x177a
+
+
+

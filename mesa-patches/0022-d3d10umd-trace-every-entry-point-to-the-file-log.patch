@@ -1,0 +1,86 @@
+diff --git a/src/gallium/frontends/d3d10umd/Debug.cpp b/src/gallium/frontends/d3d10umd/Debug.cpp
+index 990756f..5b5dc5d 100644
+--- a/src/gallium/frontends/d3d10umd/Debug.cpp
++++ b/src/gallium/frontends/d3d10umd/Debug.cpp
+@@ -86,6 +86,34 @@ DebugPrintf(const char *format, ...)
+ }
+ 
+ 
++/*
++ * The entry-point trace. A compositor calls these thousands of times a
++ * second, so it stops after the first DEBUG_TRACE_MAX lines of a process:
++ * what matters is which calls a process makes on its way to its first
++ * frames, and where that stops.
++ */
++#define DEBUG_TRACE_MAX 40000
++
++void
++DebugTraceEntry(const char *function)
++{
++   static volatile LONG lines = 0;
++   HANDLE file = DebugLogFile();
++   char buf[160];
++   int len;
++   DWORD done;
++
++   if (file == INVALID_HANDLE_VALUE)
++      return;
++   if (InterlockedIncrement(&lines) > DEBUG_TRACE_MAX)
++      return;
++   len = snprintf(buf, sizeof buf, "%10lu %5lu . %s\n", (unsigned long)GetTickCount(),
++                  (unsigned long)GetCurrentThreadId(), function);
++   if (len > 0)
++      WriteFile(file, buf, (DWORD)(len < (int)sizeof buf ? len : (int)sizeof buf - 1), &done, NULL);
++}
++
++
+ /**
+  * Produce a human readable message from HRESULT.
+  *
+diff --git a/src/gallium/frontends/d3d10umd/Debug.h b/src/gallium/frontends/d3d10umd/Debug.h
+index efdf318..b0d72e8 100644
+--- a/src/gallium/frontends/d3d10umd/Debug.h
++++ b/src/gallium/frontends/d3d10umd/Debug.h
+@@ -60,11 +60,12 @@ AssertFail(const char *expr, const char *file, unsigned line, const char *functi
+ #endif
+ 
+ 
+-#if 0 && !defined(NDEBUG)
+-#define LOG_ENTRYPOINT() DebugPrintf("%s\n", __func__)
+-#else
+-#define LOG_ENTRYPOINT() (void)0
+-#endif
++/* Every entry point, to the file log only and only while it is on; see
++ * DebugTraceEntry. */
++void
++DebugTraceEntry(const char *function);
++
++#define LOG_ENTRYPOINT() DebugTraceEntry(__func__)
+ 
+ #define LOG_UNSUPPORTED_ENTRYPOINT() DebugPrintf("%s XXX\n", __func__)
+ 
+diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
+index e02e646..c563ab8 100644
+--- a/src/gallium/frontends/d3d10umd/Device.cpp
++++ b/src/gallium/frontends/d3d10umd/Device.cpp
+@@ -147,8 +147,11 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+    d3d10_bind_runtime(pAdapter->hRTAdapter, (HANDLE)pCreateData->hRTDevice.handle,
+                       pCreateData->pKTCallbacks, pCreateData->DXGIBaseDDI.pDXGIBaseCallbacks);
+    struct pipe_screen *screen = d3d10_create_screen();
+-   if (!screen)
++   if (!screen) {
++      DebugPrintf("CreateDevice: no screen\n");
+       return E_OUTOFMEMORY;
++   }
++   DebugPrintf("CreateDevice: screen %s\n", screen->get_name(screen));
+    struct pipe_context *pipe = screen->context_create(screen, NULL, 0);
+    pDevice->screen = screen;
+    pDevice->pipe = pipe;
+@@ -319,6 +322,7 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+       // Tell DXGI to not use the shared resource presentation path when
+       // communicating with DWM:
+       // http://msdn.microsoft.com/en-us/library/windows/hardware/ff569887(v=vs.85).aspx
++      DebugPrintf("CreateDevice: done, DXGI_STATUS_NO_REDIRECTION\n");
+       return DXGI_STATUS_NO_REDIRECTION;
+    }
+ }
