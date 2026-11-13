@@ -20,7 +20,9 @@ What does not work on that desktop:
   `SearchHost.exe` crash (four times each in the first minutes) after
   `tgsi_exec.c:1518: reg->Indirect.File == TGSI_FILE_ADDRESS`. That file is
   the TGSI interpreter, which Panfrost does not use, so these two are not
-  rendering on the Mali at all. Why not is the next thing to find.
+  rendering on the Mali at all. Found and fixed later that evening (item 14
+  below): the three shell hosts now render on the Mali and stay up. Whether
+  the Start menu, Search and the tray look right has not been looked at.
 - Parts of the taskbar: the clock and tray on the right are missing and a
   blank flyout shows near the middle.
 - The error box in the photos is not about graphics.
@@ -140,6 +142,26 @@ the way (that `OpenResource` was the first thing missing, and that
     WARP's (2089 and 2290 for the two lines) and 72 pixels of 131072 differ
     by more than 8, at the edge of the ellipse and in the filtered bitmap
     ([after](d2dtext-mali-run-43394072587.png)).
+13. **`explorer.exe` crashed inside the UMD.** `0xc0000005` at
+    `maliumd.dll+0x17e9e0`, which the build's `.pdb` resolves to
+    `pan_resource_afbcp_update`. The frontend gave an input slot with no
+    vertex buffer a user buffer of four constant floats; Panfrost takes no
+    user vertex buffers and read the pointer as a resource. Such a slot now
+    gets a real buffer of zeros.
+14. **One device per process was an assumption.** The shim between Panfrost
+    and the runtime kept one BO table, one command buffer and one set of
+    runtime callbacks per process, rebound by every `CreateDevice`.
+    `explorer.exe` makes a device per window and more (five in 17 s), shares
+    surfaces between them and destroys them; its log had
+    `panfrost_batch_submit failed: 5` 97 times. The shim now keeps that
+    state per runtime device, and each device has its own Panfrost screen.
+15. **AppContainer processes got softpipe.** The fd the shim hands Mesa in
+    place of a DRM device was `NUL`, and the shell's XAML hosts
+    (`StartMenuExperienceHost`, `SearchHost`, `ShellExperienceHost`) may not
+    open `NUL` (`errno 13, error 5`). They fell back to softpipe, whose TGSI
+    interpreter cannot index through a temporary, and failed fast. The
+    placeholder is now a pipe end where `NUL` does not open. Nothing had
+    logged the reason; the bind and screen creation steps do now.
 
 The commits on the branch say what was observed for each.
 
@@ -153,6 +175,12 @@ The commits on the branch say what was observed for each.
 - The kernel driver keeps counters and its last failing call per DDI under
   the device's `Device Parameters\maliwddm` key.
 - dxgkrnl events are decoded with `tools/etw/`.
+- A fault inside the UMD is written to the same log with its offset in the
+  DLL, the link register and the stack words that point into the DLL;
+  `llvm-symbolizer --obj=libgallium_d3d10.dll --relative-address` with the
+  `.pdb` from the same CI run turns those into functions and lines.
+- `tools/windows/d2dtext.cpp` and `d3dparts.cpp` render off screen on the
+  Mali or on WARP and check pixels, over SSH.
 - A second Windows on the same eMMC is the default boot entry while a new
   kernel driver is tried, with a one-time boot into the system under test.
 
@@ -162,6 +190,9 @@ then dxgkrnl events.
 
 ## Open
 
+- The Start menu, Search, the tray and File Explorer's toolbar: their
+  processes now render on the Mali without an error in their logs; what
+  they look like has not been checked.
 - Speed: render into the primary instead of reading back and copying, then
   scan out the primary directly.
 - With the display asleep, `dwm.exe` closed the shared surfaces two seconds
