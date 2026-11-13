@@ -930,6 +930,82 @@ wddm_idle(void)
 /* d3d10umd's log (Debug.cpp): the debugger and, when on, the file log. */
 void DebugPrintf(const char *format, ...);
 
+/*
+ * Primaries: the surfaces of a swap chain that the runtime presents itself.
+ *
+ * d3d10umd's CreateResource gets a pPrimaryDesc for them (dwm.exe makes
+ * three at 2560x1440 for its full-screen swap chain). The runtime can only
+ * present an allocation that belongs to such a resource: handing
+ * pfnPresentCb an allocation of ours that it has never been told about, as
+ * the code below did for every present, returns E_INVALIDARG there. So each
+ * primary gets an allocation made through pfnAllocateCb with the runtime's
+ * resource handle and the Primary flag.
+ *
+ * Panfrost still renders into its own buffer. A present copies the frame
+ * into the primary's allocation on the CPU and then presents or flips that.
+ */
+unsigned
+malikm_primary_create(void *hRTResource, unsigned w, unsigned h, unsigned vidpn_source)
+{
+   D3DKMT_HANDLE handle = 0;
+
+   AcquireSRWLockExclusive(&wddm_lock);
+   if (ddi.on && ddi.cb.pfnAllocateCb) {
+      MW_ALLOCATION_INFO pi = {0};
+      D3DDDI_ALLOCATIONINFO ai = {0};
+      D3DDDICB_ALLOCATE a = {0};
+      HRESULT hr;
+
+      pi.Version = MW_ABI_VERSION;
+      pi.Flags = MW_ALLOC_NOEXEC | MW_ALLOC_PRIMARY;
+      pi.Width = w;
+      pi.Height = h;
+      pi.Pitch = w * 4;
+      pi.Format = D3DDDIFMT_A8R8G8B8;
+      pi.Size = (uint64_t)w * h * 4;
+      ai.pPrivateDriverData = &pi;
+      ai.PrivateDriverDataSize = sizeof(pi);
+      ai.VidPnSourceId = vidpn_source;
+      ai.Flags.Primary = 1;
+      a.hResource = hRTResource;
+      a.NumAllocations = 1;
+      a.pAllocationInfo = &ai;
+      hr = ddi.cb.pfnAllocateCb(ddi.device, &a);
+      if (hr >= 0)
+         handle = ai.hAllocation;
+      DebugPrintf("primary: %ux%u source %u, pfnAllocateCb 0x%08lx, allocation 0x%x\n",
+                  w, h, vidpn_source, (unsigned long)hr, (unsigned)handle);
+   }
+   ReleaseSRWLockExclusive(&wddm_lock);
+   return handle;
+}
+
+void
+malikm_primary_destroy(unsigned handle)
+{
+   if (!handle)
+      return;
+   AcquireSRWLockExclusive(&wddm_lock);
+   if (ddi.on)
+      w_destroy(handle);
+   ReleaseSRWLockExclusive(&wddm_lock);
+}
+
+/* What the present in progress on this thread is for: set by d3d10umd's
+ * Present around the frame read-back that ends in malikm_present_d3dddi. */
+static __declspec(thread) struct {
+   D3DKMT_HANDLE src, dst;
+   int set;
+} present_target;
+
+void
+malikm_present_target(unsigned src_allocation, unsigned dst_allocation, int set)
+{
+   present_target.src = src_allocation;
+   present_target.dst = dst_allocation;
+   present_target.set = set;
+}
+
 /* Present for d3d10umd on the hardware runtime: Bgrx is the frame, linear
  * and top-down; it is copied into a surface of the runtime device and
  * handed to DXGI, which has maliwddm blt it (on the CPU, for now) to the
@@ -947,6 +1023,28 @@ malikm_present_d3dddi(const void *bgrx, unsigned w, unsigned h, void *dxgi_conte
       if (InterlockedIncrement(&said) <= 20)
          DebugPrintf("present: not through DXGI (bound %d, dxgi callbacks %p)\n",
                      ddi.on, (void *)ddi.dxgi);
+      goto out;
+   }
+   if (present_target.set && present_target.src) {
+      /* A primary: copy the frame into its own allocation and present that. */
+      void *cpu = w_lock(present_target.src);
+      HRESULT hr = E_FAIL;
+
+      if (cpu) {
+         DXGIDDICB_PRESENT p = {0};
+         memcpy(cpu, bgrx, (size_t)w * h * 4);
+         w_unlock(present_target.src);
+         p.hSrcAllocation = present_target.src;
+         p.hDstAllocation = present_target.dst;
+         p.pDXGIContext = dxgi_context;
+         p.hContext = ddi.context;
+         hr = ddi.dxgi->pfnPresentCb(ddi.device, &p);
+      }
+      if (InterlockedIncrement(&said) <= 20)
+         DebugPrintf("present: primary 0x%x -> 0x%x, %ux%u, lock %p, pfnPresentCb 0x%08lx\n",
+                     (unsigned)present_target.src, (unsigned)present_target.dst, w, h, cpu,
+                     (unsigned long)hr);
+      ret = hr >= 0 ? 0 : -1;
       goto out;
    }
    if (ddi.present && (ddi.present_w != w || ddi.present_h != h)) {
