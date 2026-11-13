@@ -65,6 +65,7 @@ typedef struct _MW_ESCAPE_SCANOUT_DATA {
     mw_u32 Mmu0Status, Mmu1Status;
     mw_u32 Flips, Maps, ToFbs, Mismatch, NoSlot;
     mw_u32 FbPa;
+    mw_u32 Faults, FaultAddr;           /* IOMMU page faults seen and cleared; the last address */
 } MW_ESCAPE_SCANOUT_DATA;
 
 typedef struct _MW_ESCAPE_ALLOC_INFO_DATA {

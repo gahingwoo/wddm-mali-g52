@@ -169,7 +169,7 @@ struct _MW_ADAPTER {
     BOOLEAN ScanReady, ScanPaging;
     volatile BOOLEAN ScanShowing;
     volatile LONG ScanOn;
-    ULONG ScanFlips, ScanMaps, ScanToFbs, ScanMismatch, ScanNoSlot;
+    ULONG ScanFlips, ScanMaps, ScanToFbs, ScanMismatch, ScanNoSlot, ScanFaults, ScanFaultAddr;
     PKTHREAD CopyThread;
     KEVENT CopyEvent;
     FAST_MUTEX CopyLock;

@@ -253,6 +253,7 @@ int main(int argc, char **argv)
         printf("  %u flips scanned out, %u primaries mapped, %u returns to the framebuffer, "
                "%u wrong size, %u without a slot; framebuffer at 0x%08x\n",
                d.Flips, d.Maps, d.ToFbs, d.Mismatch, d.NoSlot, d.FbPa);
+        printf("  %u IOMMU page faults cleared, the last at 0x%08x\n", d.Faults, d.FaultAddr);
         return 0;
     }
     if (argc >= 2 && strcmp(argv[1], "perf") == 0) {

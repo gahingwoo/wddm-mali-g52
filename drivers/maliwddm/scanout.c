@@ -43,6 +43,9 @@
 #define VMMU_CMD_ENABLE_STALL    2
 #define VMMU_CMD_DISABLE_STALL   3
 #define VMMU_CMD_ZAP_CACHE       4
+#define VMMU_CMD_PAGE_FAULT_DONE 5
+#define VMMU_PAGE_FAULT_ADDR    0x0C
+#define VMMU_STATUS_FAULT        0x2u
 
 /* IO addresses. DRAM starts at 0x40000000 on the RK3576, so the firmware
  * framebuffer, entered at its physical address, cannot be down here. */
@@ -243,12 +246,12 @@ void MwScanUnmap(MW_ADAPTER *A, MW_ALLOCATION *P)
     P->ScanIova = 0;
     if (A->ScanShowing)
         MwScanToFb(A);          /* whichever primary it was: be safe */
-    for (ULONG i = 0; i < SCAN_SLOT_PAGES; i++) {
-        PULONG pt = TableFor(A, iova + i * PAGE_SIZE);
-        if (pt != NULL)
-            pt[((iova >> 12) + i) & 0x3FF] = 0;
-    }
-    Zap(A);
+    /* The entries stay. The window moves at the next frame start, and
+     * until then the VOP2 is still reading this primary: with the entries
+     * cleared it faulted (IOMMU status 0x40b, seen when dwm.exe was ended
+     * a dozen times in a row). It reads at most one frame from pages that
+     * are no longer ours, and the next primary in the slot overwrites the
+     * entries. */
     for (int s = 0; s < MW_SCAN_SLOTS; s++)
         if (A->ScanSlot[s] == P)
             A->ScanSlot[s] = NULL;
@@ -306,6 +309,17 @@ NTSTATUS MwScanSet(MW_ADAPTER *A, MW_ESCAPE_SCANOUT_DATA *D)
     D->Status = (A->ScanOn ? 1u : 0) | (A->ScanPaging ? 2u : 0) | (A->ScanShowing ? 4u : 0);
     D->Mmu0Status = R(A, VOP_MMU0 + VMMU_STATUS);
     D->Mmu1Status = R(A, VOP_MMU1 + VMMU_STATUS);
+    /* A fault is reported once, with its address, and then cleared so
+     * translation goes on. */
+    for (ULONG m = VOP_MMU0; m <= VOP_MMU1; m += VOP_MMU1 - VOP_MMU0)
+        if (R(A, m + VMMU_STATUS) & VMMU_STATUS_FAULT) {
+            A->ScanFaults++;
+            A->ScanFaultAddr = R(A, m + VMMU_PAGE_FAULT_ADDR);
+            W(A, m + VMMU_COMMAND, VMMU_CMD_ZAP_CACHE);
+            W(A, m + VMMU_COMMAND, VMMU_CMD_PAGE_FAULT_DONE);
+        }
+    D->Faults = A->ScanFaults;
+    D->FaultAddr = A->ScanFaultAddr;
     D->Flips = A->ScanFlips;
     D->Maps = A->ScanMaps;
     D->ToFbs = A->ScanToFbs;
