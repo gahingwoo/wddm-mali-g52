@@ -1,26 +1,26 @@
-diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
-index 73dfc2f..747cb59 100644
---- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
-+++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
-@@ -263,3 +263,67 @@ no_screen:
- no_winsys:
-    return NULL;
- }
-+
-+
+diff --git a/src/util/mali_wassert.c b/src/util/mali_wassert.c
+new file mode 100644
+index 0000000..b9a62fd
+--- /dev/null
++++ b/src/util/mali_wassert.c
+@@ -0,0 +1,69 @@
 +/*
-+ * Assertions, without the message box.
++ * Assertions, without the message box. Windows only.
 + *
 + * The wddm-mali-g52 build passes -D_wassert=mali_wassert, so every assert()
-+ * in this DLL calls through the pointer below instead of the C runtime. The
-+ * runtime's version puts up an Abort/Retry/Ignore box and waits; inside
-+ * dwm.exe or LogonUI.exe that box sits on the secure desktop where no key
-+ * reaches it, and the process stops for good with nothing recorded.
++ * compiled with it calls through the pointer at the bottom of this file
++ * instead of the C runtime. The runtime's version puts up an
++ * Abort/Retry/Ignore box and waits; inside dwm.exe or LogonUI.exe that box
++ * sits on the secure desktop where no key reaches it, and the process stops
++ * for good with nothing recorded.
 + *
 + * This one writes the assertion to C:\mali\log\<exe>-<pid>-assert.txt (when
-+ * that directory exists) and to the debugger, and returns, which is what
-+ * Ignore does. Each site is reported the first 20 times.
++ * that directory exists), to stderr and to the debugger, and returns, which
++ * is what Ignore does. It lives in mesautil so that the build's own tools
++ * link too.
 + */
++#ifdef _WIN32
++
 +#include <windows.h>
 +#include <stdio.h>
 +
@@ -43,6 +43,7 @@ index 73dfc2f..747cb59 100644
 +   if (len >= (int)sizeof buf)
 +      len = (int)sizeof buf - 1;
 +   OutputDebugStringA(buf);
++   fputs(buf, stderr);
 +
 +   if (log == NULL) {
 +      HANDLE h = INVALID_HANDLE_VALUE;
@@ -70,3 +71,17 @@ index 73dfc2f..747cb59 100644
 +
 +/* What "__declspec(dllimport) mali_wassert" resolves to. */
 +void (__cdecl *__imp_mali_wassert)(const wchar_t *, const wchar_t *, unsigned) = mali_wassert_impl;
++
++#endif
+diff --git a/src/util/meson.build b/src/util/meson.build
+index b11f0c4..d0e0367 100644
+--- a/src/util/meson.build
++++ b/src/util/meson.build
+@@ -161,6 +161,7 @@ files_mesa_util = files(
+   'u_mm.h',
+   'u_pack_color.h',
+   'u_debug.c',
++  'mali_wassert.c',
+   'u_debug.h',
+   'u_debug_memory.c',
+   'u_cpu_detect.c',
