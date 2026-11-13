@@ -1,0 +1,99 @@
+diff --git a/src/gallium/auxiliary/nir/tgsi_to_nir.c b/src/gallium/auxiliary/nir/tgsi_to_nir.c
+index dd3c069..876561b 100644
+--- a/src/gallium/auxiliary/nir/tgsi_to_nir.c
++++ b/src/gallium/auxiliary/nir/tgsi_to_nir.c
+@@ -345,6 +345,17 @@ ttn_emit_declaration(struct ttn_compile *c)
+             } else {
+                assert(!decl->Declaration.Semantic);
+                var->data.location = VERT_ATTRIB_GENERIC0 + idx;
++               /* TGSI does not say whether a vertex input is a float or an
++                * integer; the vertex element bound at draw time does. A
++                * float type here makes a driver that converts on load (the
++                * Bifrost LD_ATTR register format) turn the integers of an
++                * SINT or UINT element into floats, and the shader then
++                * reads those bits as integers: Direct2D's vertex shaders
++                * index a constant buffer with such an input and found
++                * nothing past entry 0. An integer type has the driver load
++                * the 32 bits as the element's own format gives them. */
++               if (c->scan->processor == MESA_SHADER_VERTEX)
++                  var->type = glsl_uvec4_type();
+             }
+             var->data.index = 0;
+             var->data.interpolation =
+diff --git a/src/gallium/frontends/d3d10umd/Draw.cpp b/src/gallium/frontends/d3d10umd/Draw.cpp
+index 3bf231e..3b39f88 100644
+--- a/src/gallium/frontends/d3d10umd/Draw.cpp
++++ b/src/gallium/frontends/d3d10umd/Draw.cpp
+@@ -111,6 +111,22 @@ ResolveState(Device *pDevice)
+ }
+ 
+ 
++/* The parameters of the first draws of a process, to the file log: which
++ * draw a missing primitive was, without a debugger. */
++static void
++LogDraw(Device *pDevice, const char *what, unsigned count, unsigned instances,
++        unsigned start, int base_vertex, unsigned start_instance)
++{
++   static volatile LONG draws = 0;
++
++   if (InterlockedIncrement(&draws) > 400)
++      return;
++   DebugPrintf("  %s: primitive %u, count %u, instances %u, start %u, base vertex %d,"
++               " start instance %u\n", what, (unsigned)pDevice->primitive, count, instances,
++               start, base_vertex, start_instance);
++}
++
++
+ static struct pipe_resource *
+ create_null_index_buffer(struct pipe_context *ctx, uint num_indices,
+                          unsigned *restart_index, unsigned *index_size,
+@@ -153,6 +169,7 @@ Draw(D3D10DDI_HDEVICE hDevice,   // IN
+    LOG_ENTRYPOINT();
+ 
+    Device *pDevice = CastDevice(hDevice);
++   LogDraw(pDevice, "Draw", VertexCount, 1, StartVertexLocation, 0, 0);
+ 
+    ResolveState(pDevice);
+ 
+@@ -183,6 +200,7 @@ DrawIndexed(D3D10DDI_HDEVICE hDevice,  // IN
+    LOG_ENTRYPOINT();
+ 
+    Device *pDevice = CastDevice(hDevice);
++   LogDraw(pDevice, "DrawIndexed", IndexCount, 1, StartIndexLocation, BaseVertexLocation, 0);
+    struct pipe_draw_info info;
+    struct pipe_draw_start_count_bias draw;
+    struct pipe_resource *null_ib = NULL;
+@@ -241,6 +259,7 @@ DrawInstanced(D3D10DDI_HDEVICE hDevice,      // IN
+    LOG_ENTRYPOINT();
+ 
+    Device *pDevice = CastDevice(hDevice);
++   LogDraw(pDevice, "DrawInstanced", VertexCountPerInstance, InstanceCount, StartVertexLocation, 0, StartInstanceLocation);
+ 
+    if (!InstanceCount) {
+       return;
+@@ -280,6 +299,7 @@ DrawIndexedInstanced(D3D10DDI_HDEVICE hDevice,   // IN
+    LOG_ENTRYPOINT();
+ 
+    Device *pDevice = CastDevice(hDevice);
++   LogDraw(pDevice, "DrawIndexedInstanced", IndexCountPerInstance, InstanceCount, StartIndexLocation, BaseVertexLocation, StartInstanceLocation);
+    struct pipe_draw_info info;
+    struct pipe_draw_start_count_bias draw;
+    struct pipe_resource *null_ib = NULL;
+diff --git a/src/gallium/frontends/d3d10umd/InputAssembly.cpp b/src/gallium/frontends/d3d10umd/InputAssembly.cpp
+index d36a070..4c12840 100644
+--- a/src/gallium/frontends/d3d10umd/InputAssembly.cpp
++++ b/src/gallium/frontends/d3d10umd/InputAssembly.cpp
+@@ -284,6 +284,13 @@ CreateElementLayout(
+       ve->vertex_buffer_index = pVertexElement->InputSlot;
+       ve->src_format          = FormatTranslate(pVertexElement->Format, false);
+ 
++      DebugPrintf("  element: register %u, %s, slot %u offset %u, %s step %u\n",
++                  pVertexElement->InputRegister, FormatToName(pVertexElement->Format),
++                  pVertexElement->InputSlot, pVertexElement->AlignedByteOffset,
++                  pVertexElement->InputSlotClass == D3D10_DDI_INPUT_PER_INSTANCE_DATA ?
++                     "per instance" : "per vertex",
++                  pVertexElement->InstanceDataStepRate);
++
+       switch (pVertexElement->InputSlotClass) {
+       case D3D10_DDI_INPUT_PER_VERTEX_DATA:
+          ve->instance_divisor = 0;
