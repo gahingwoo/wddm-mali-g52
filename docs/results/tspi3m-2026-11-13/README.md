@@ -2,8 +2,9 @@
 
 Board: LCKFB TaishanPi 3M (RK3576, 4 GB), Windows 11 23H2 (22631) installed
 on the eMMC, 2560x1440 over HDMI. Firmware: edk2-rk3576 `00b82c4`, which
-powers the GPU and declares it as `ACPI\RKCP7402`. Everything here is on the
-branch `umd-file-log`; none of it is on `main`.
+powers the GPU and declares it as `ACPI\RKCP7402`. The work was done on the
+branch `umd-file-log`; `main` has it up to the state described here, and the
+branch carries on from there.
 
 ![The Windows 11 desktop](desktop-on-mali.jpg)
 

@@ -2,6 +2,12 @@
 
 A Windows (WDDM) driver for the Arm Mali-G52 GPU in the Rockchip RK3576.
 
+![The Windows 11 desktop composed on the Mali-G52](docs/results/tspi3m-2026-11-13/desktop-on-mali.jpg)
+
+*2026-11-13, LCKFB TaishanPi 3M: the Windows 11 desktop rendered and composed
+on the Mali-G52. It works at a frame or two a second and is not usable yet;
+[what was done and what is missing](docs/results/tspi3m-2026-11-13/README.md).*
+
 The Mali-G52 draws under Windows: on 2026-10-02 Mesa's Panfrost, inside the
 D3D10 software-driver DLL and talking to our own kernel driver, rendered a
 D3D11 triangle on it, byte for byte what the CPU renderer draws (M4). On
@@ -9,9 +15,9 @@ D3D11 triangle on it, byte for byte what the CPU renderer draws (M4). On
 `explorer.exe` and the rest render through Panfrost and the WDDM driver puts
 the result on the monitor
 ([photo](docs/results/tspi3m-2026-11-13/desktop-on-mali.jpg),
-[what was done](docs/results/tspi3m-2026-11-13/README.md)). That is on a
-branch and far from usable: it runs at a frame or two a second and the Start
-menu does not open.
+[what was done](docs/results/tspi3m-2026-11-13/README.md)). That is far
+from usable: it runs at a frame or two a second and the Start menu does not
+open.
 
 Windows on RK3576 boards
 ([woa-rk3576](https://github.com/gahingwoo/woa-rk3576)) draws its desktop on the
@@ -32,7 +38,7 @@ drivers only.
 | M5.1 | Display-only driver drives HDMI | done 2026-10-02, [result](docs/results/m5.1/README.md) |
 | M5.2 (b) | A job submitted through the WDDM driver | done 2026-10-02, [result](docs/results/m5.2-step-b/README.md) |
 | M5.2 (c) | The triangle through the WDDM driver, Mesa loaded by the runtime as the UMD | done 2026-10-03, [result](docs/results/m5.2-step-c2/README.md) |
-| M5.2 (d) | DWM composites on the Mali in installed Windows | **desktop on screen 2026-11-13**, [result](docs/results/tspi3m-2026-11-13/README.md); the desktop and Task Manager draw; Start menu crashes; 1 to 2 frames a second; on branch `umd-file-log` |
+| M5.2 (d) | DWM composites on the Mali in installed Windows | **desktop on screen 2026-11-13**, [result](docs/results/tspi3m-2026-11-13/README.md); the desktop and Task Manager draw; Start menu crashes; 1 to 2 frames a second |
 
 All results: [docs/results/](docs/results/README.md). All documents:
 [docs/](docs/README.md).
