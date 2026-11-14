@@ -8,6 +8,9 @@ on:
       - 'tools/windows/d2dtext.cpp'
       - 'tools/windows/d3dparts.cpp'
       - 'tools/windows/gsso.cpp'
+      - 'tools/windows/emucheck.cpp'
+      - 'tools/windows/abicheck.py'
+      - 'include/**'
       - '.github/workflows/tests.yml'
   workflow_dispatch:
 
@@ -43,4 +46,95 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: board-tests-arm64
+          path: out/
+
+  # x64 and x86 programs run under emulation on Windows on Arm, and the D3D
+  # runtime loads a different UMD into them (UserModeDriverNameWow for x86,
+  # an ARM64X file for x64). emucheck shows which one a process of each kind
+  # gets and whether it draws; abicheck shows the structs the UMD hands the
+  # 64-bit kernel driver have one layout on all three architectures.
+  emu-tests-x86-x64:
+    name: Board tests (x64, x86)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run on the runner
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvarsall.bat'
+          function VC($arch, $cmd) {
+            cmd /c "call `"$vcvars`" $arch >nul && $cmd"
+            if ($LASTEXITCODE) { throw "failed ($arch): $cmd" }
+          }
+          New-Item -ItemType Directory -Force out, gen | Out-Null
+          python tools\windows\abicheck.py . gen\abicheck.c
+          if ($LASTEXITCODE) { throw 'abicheck.py failed' }
+          # The shaders as bytecode, so the program needs no d3dcompiler_47.dll
+          # of its own architecture on the board.
+          $hlsl = "float4 vs(float2 p : POSITION) : SV_Position { return float4(p, 0, 1); }`nfloat4 ps() : SV_Target { return float4(1, 0, 0, 1); }`n"
+          Set-Content -Encoding ascii gen\emucheck.hlsl $hlsl
+          VC x64 'fxc /nologo /T vs_4_0 /E vs /Vn g_vs /Fh gen\vs.h gen\emucheck.hlsl && fxc /nologo /T ps_4_0 /E ps /Vn g_ps /Fh gen\ps.h gen\emucheck.hlsl'
+          (Get-Content gen\vs.h) + (Get-Content gen\ps.h) | Set-Content -Encoding ascii gen\emucheck_shaders.h
+          Copy-Item gen\emucheck_shaders.h out\
+          foreach ($a in @(@{ n = 'x64'; v = 'x64' }, @{ n = 'x86'; v = 'x64_x86' })) {
+            $n = $a.n
+            VC $a.v "cl /nologo /EHsc /O2 /MT /DEMUCHECK_PRECOMPILED /Igen tools\windows\emucheck.cpp /Fo:gen\emucheck-$n.obj /Fe:out\emucheck-$n.exe"
+            VC $a.v "cl /nologo /O2 /MT /Iinclude gen\abicheck.c /Fo:gen\abicheck-$n.obj /Fe:out\abicheck-$n.exe"
+            & ".\out\emucheck-$n.exe" warp
+            if ($LASTEXITCODE) { throw "emucheck-$n on WARP failed ($LASTEXITCODE)" }
+            & ".\out\abicheck-$n.exe" | Set-Content -Encoding ascii "out\abi-$n.txt"
+          }
+          if (Compare-Object (Get-Content out\abi-x64.txt) (Get-Content out\abi-x86.txt)) {
+            Compare-Object (Get-Content out\abi-x64.txt) (Get-Content out\abi-x86.txt) | Format-Table -AutoSize
+            throw 'the UMD-to-KMD structs differ between x64 and x86'
+          }
+          Write-Host "x64 and x86 agree on $((Get-Content out\abi-x64.txt).Count) sizes and offsets"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: board-tests-x86-x64
+          path: out/
+
+  emu-tests:
+    name: Board tests (ARM64, and x64 and x86 emulated)
+    needs: emu-tests-x86-x64
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: board-tests-x86-x64
+          path: out
+      - name: Build ARM64, run all three
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvarsall.bat'
+          function VC($arch, $cmd) {
+            cmd /c "call `"$vcvars`" $arch >nul && $cmd"
+            if ($LASTEXITCODE) { throw "failed ($arch): $cmd" }
+          }
+          New-Item -ItemType Directory -Force gen | Out-Null
+          python tools\windows\abicheck.py . gen\abicheck.c
+          if ($LASTEXITCODE) { throw 'abicheck.py failed' }
+          VC arm64 'cl /nologo /EHsc /O2 /MT /DEMUCHECK_PRECOMPILED /Iout tools\windows\emucheck.cpp /Fo:gen\emucheck-arm64.obj /Fe:out\emucheck-arm64.exe'
+          VC arm64 'cl /nologo /O2 /MT /Iinclude gen\abicheck.c /Fo:gen\abicheck-arm64.obj /Fe:out\abicheck-arm64.exe'
+          & .\out\abicheck-arm64.exe | Set-Content -Encoding ascii out\abi-arm64.txt
+          # The x64 and x86 builds again, here under emulation.
+          foreach ($n in 'arm64', 'x64', 'x86') {
+            Write-Host "== emucheck-$n warp"
+            & ".\out\emucheck-$n.exe" warp
+            if ($LASTEXITCODE) { throw "emucheck-$n on WARP failed ($LASTEXITCODE)" }
+          }
+          foreach ($n in 'x64', 'x86') {
+            & ".\out\abicheck-$n.exe" | Set-Content -Encoding ascii "gen\abi-$n-emulated.txt"
+            if (Compare-Object (Get-Content out\abi-arm64.txt) (Get-Content "gen\abi-$n-emulated.txt")) {
+              Compare-Object (Get-Content out\abi-arm64.txt) (Get-Content "gen\abi-$n-emulated.txt") | Format-Table -AutoSize
+              throw "the UMD-to-KMD structs differ between ARM64 and $n"
+            }
+          }
+          Write-Host "ARM64, x64 and x86 agree on $((Get-Content out\abi-arm64.txt).Count) sizes and offsets"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: board-tests-emu
           path: out/

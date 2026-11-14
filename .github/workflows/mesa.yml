@@ -13,6 +13,7 @@ on:
       - 'win32-compat/**'
       - 'include/**'
       - 'tools/windows/gsso.cpp'
+      - 'tools/windows/emucheck.cpp'
   workflow_dispatch:
 
 permissions:
@@ -372,3 +373,257 @@ jobs:
           name: mesa-d3d10umd-panfrost-arm64
           path: out/
 
+
+  panfrost-emulated:
+    # The same UMD for the processes Windows on Arm emulates: x64 (loaded
+    # through the ARM64X forwarder below) and x86 (UserModeDriverNameWow,
+    # SysWOW64). Built and smoke-tested natively on an x64 runner; Panfrost's
+    # own code then runs emulated on the board. windows-2022, as the
+    # driver build in ci.yml: its image has the WDK, whose UMD DDI headers
+    # (d3dumddi.h, d3d10umddi.h) d3d10umd needs.
+    name: d3d10umd + softpipe + Panfrost (${{ matrix.arch }})
+    needs: libpan-spirv
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            vcvars: x64
+            cflags: ''
+          - arch: x86
+            vcvars: amd64_x86
+            cflags: '-m32 /arch:SSE2 '
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: libpan-generated
+          path: libpan
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Build tools
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install meson ninja mako pyyaml packaging
+          $u = 'https://github.com/lexxmark/winflexbison/releases/download/v2.5.25/win_flex_bison-2.5.25.zip'
+          Invoke-WebRequest $u -OutFile wfb.zip
+          Expand-Archive wfb.zip -DestinationPath C:\winflexbison
+          "C:\winflexbison" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          "$pwd\ci\clc-stubs" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          "LIBPAN_PREBUILT=$pwd\libpan" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.vcvars }}
+      - name: Mesa source
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch $env:MESA_TAG $env:MESA_URL mesa
+          Copy-Item -Recurse win32-compat mesa\include\win32-compat
+          Copy-Item include\malikm_ioctl.h mesa\include\win32-compat\
+          Copy-Item include\maliwddm_abi.h mesa\include\win32-compat\
+          Get-ChildItem mesa-patches -Filter *.patch -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object {
+            Write-Host "applying $($_.Name)"
+            git -C mesa apply --whitespace=nowarn $_.FullName
+            if ($LASTEXITCODE) { throw "patch failed: $($_.Name)" }
+          }
+      - name: Configure
+        shell: pwsh
+        run: |
+          # clang-cl as on ARM64. For x86: a clang-cl.cfg next to clang-cl
+          # with -m32, which clang reads by default, so that clang-cl itself
+          # (and its --version, from which meson takes /MACHINE for lib and
+          # lld-link) targets x86; /arch:SSE2 in c_args (cl's own default; a
+          # bare -m32 is an i386 with no cmpxchg8b, whose 64-bit atomics are
+          # calls into a libatomic Windows has not got); and a cross file that
+          # says the host is x86. Tried and dropped: -m32 in the compiler list
+          # (meson passed it to rc too), clang-cl under a triple-prefixed name
+          # (meson took it for GNU clang), _CL_ (clang-cl appends it where the
+          # linker gets it), -m32 in c_args alone (lib got /MACHINE:x64). It
+          # runs on this x64 runner: no exe wrapper.
+          # The C runtime is linked in (/MT): the board has no x64 or x86
+          # vcruntime140.dll to count on, and the UMD must load without one.
+          $cc = Join-Path $env:VCINSTALLDIR 'Tools\Llvm\x64\bin\clang-cl.exe'
+          $c = $cc -replace '\\', '/'
+          if ('${{ matrix.arch }}' -eq 'x86') {
+            Set-Content -Encoding ascii (Join-Path (Split-Path $cc) 'clang-cl.cfg') '-m32'
+            $t = (& $cc --version) -join "`n"
+            if ($t -notmatch 'Target: i[3-6]86') { Write-Host $t; throw 'clang-cl.cfg was not read: clang-cl still targets 64-bit' }
+            Set-Content -Encoding ascii cross.ini ("[binaries]`nc = '$c'`ncpp = '$c'`n" +
+              "[properties]`nneeds_exe_wrapper = false`n" +
+              "[host_machine]`nsystem = 'windows'`ncpu_family = 'x86'`ncpu = 'i686'`nendian = 'little'`n")
+            Get-Content cross.ini
+            $mfile = @('--cross-file', 'cross.ini')
+          } else {
+            Set-Content -Encoding ascii native.ini "[binaries]`nc = '$c'`ncpp = '$c'`n"
+            $mfile = @('--native-file', 'native.ini')
+          }
+          & $cc --version
+          meson setup build mesa --backend=ninja @mfile `
+            -Dbuildtype=debugoptimized -Db_vscrt=mt `
+            -Dplatforms=windows `
+            '-Dgallium-drivers=softpipe,panfrost' `
+            -Dgallium-d3d10umd=true `
+            -Dmesa-clc=system `
+            '-Dvulkan-drivers=' `
+            -Dllvm=disabled `
+            -Dopengl=false -Dgles1=disabled -Dgles2=disabled `
+            -Degl=disabled -Dglx=disabled -Dgbm=disabled `
+            '-Dvideo-codecs=' -Dmicrosoft-clc=disabled -Dspirv-to-dxil=false `
+            -Dzstd=disabled -Dshader-cache=disabled -Dbuild-tests=false `
+            "-Dc_args=${{ matrix.cflags }}-DHAVE_FUNC_ATTRIBUTE_PACKED -D_wassert=mali_wassert" "-Dcpp_args=${{ matrix.cflags }}-DHAVE_FUNC_ATTRIBUTE_PACKED -D_wassert=mali_wassert"
+          if ($LASTEXITCODE) { if (Test-Path build\meson-logs\meson-log.txt) { Get-Content build\meson-logs\meson-log.txt -Tail 80 }; throw 'meson setup failed' }
+          Select-String -Path build\meson-logs\meson-log.txt -Pattern 'Host machine cpu|Build machine cpu' | ForEach-Object { $_.Line }
+      - name: Build
+        shell: pwsh
+        run: |
+          ninja -C build -k 0 2>&1 | Tee-Object build.log
+          $fail = Select-String -Path build.log -Pattern 'FAILED:' | Measure-Object
+          Write-Host "failed build steps: $($fail.Count)"
+          Select-String -Path build.log -Pattern ' error C| error LNK|fatal error|error:' | Select-Object -First 80 | ForEach-Object { $_.Line }
+          if ($fail.Count -gt 0) { throw 'build failed' }
+          $dll = (Get-ChildItem build -Recurse -Filter libgallium_d3d10.dll | Select-Object -First 1).FullName
+          dumpbin /nologo /headers $dll | Select-String 'machine' | Select-Object -First 2 | ForEach-Object { $_.Line }
+          dumpbin /nologo /exports $dll | Select-String 'OpenAdapter' | ForEach-Object { $_.Line }
+
+      - name: Smoke test (softpipe, then GALLIUM_DRIVER=panfrost)
+        shell: pwsh
+        run: |
+          $dll = (Get-ChildItem build -Recurse -Filter libgallium_d3d10.dll | Select-Object -First 1).FullName
+          if (-not $dll) { throw 'libgallium_d3d10.dll was not built' }
+          cl /nologo /EHsc /O2 /MD tests\d3d11-triangle\triangle.cpp /Fe:triangle.exe
+          if ($LASTEXITCODE) { throw 'test build failed' }
+          cl /nologo /EHsc /O2 /MT tools\windows\emucheck.cpp /Fe:emucheck.exe
+          if ($LASTEXITCODE) { throw 'emucheck build failed' }
+          .\triangle.exe $dll
+          if ($LASTEXITCODE) { throw "softpipe smoke test failed ($LASTEXITCODE)" }
+          .\emucheck.exe sw $dll
+          if ($LASTEXITCODE) { throw "emucheck on the DLL failed ($LASTEXITCODE)" }
+          $env:GALLIUM_DRIVER = 'panfrost'
+          .\triangle.exe $dll 2>&1 | Tee-Object pan.txt
+          if ($LASTEXITCODE) { throw "panfrost fallback smoke test failed ($LASTEXITCODE)" }
+          if (-not (Select-String -Path pan.txt -Pattern 'Panfrost found no Mali device' -Quiet)) { throw 'Panfrost was not tried' }
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item $dll, triangle.exe, emucheck.exe out\
+          Copy-Item (Get-ChildItem build -Recurse -Filter libgallium_d3d10.pdb | Select-Object -First 1).FullName out\ -ErrorAction SilentlyContinue
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mesa-d3d10umd-panfrost-${{ matrix.arch }}
+          path: out/
+
+      - name: Panfrost on the emulated driver (MALIKM_FAKE)
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          # As on ARM64: Panfrost compiles the shaders and builds and submits
+          # job chains to the shim's in-process stand-in for the kernel
+          # driver. Here it is the x64 or x86 Panfrost doing it, pointers of
+          # that size included; nothing executes the jobs (exit code 2 is
+          # fine, the pixels are arbitrary).
+          $env:GALLIUM_DRIVER = 'panfrost'
+          $env:MALIKM_FAKE = '2'
+          $dll = (Resolve-Path out\libgallium_d3d10.dll).Path
+          $p = Start-Process -FilePath (Resolve-Path out\triangle.exe).Path -ArgumentList "`"$dll`"" -NoNewWindow -PassThru `
+                 -RedirectStandardOutput fake.out -RedirectStandardError fake.err
+          if (-not $p.WaitForExit(300000)) { Stop-Process -Id $p.Id -Force; throw 'triangle.exe hung' }
+          $r = $p.ExitCode
+          Get-Content fake.out, fake.err -ErrorAction SilentlyContinue | Select-String -NotMatch 'ioctl|  ->' | Select-Object -Last 40
+          $all = (Get-Content fake.out, fake.err -ErrorAction SilentlyContinue) -join "`n"
+          Write-Host "triangle.exe exit code $r"
+          if ($all -match 'using softpipe') { throw 'fell back to softpipe' }
+          if ($all -notmatch 'malikm-fake: submit') { throw 'no job was submitted' }
+          if ($r -ne 0 -and $r -ne 2) { throw "triangle.exe died ($r)" }
+
+  arm64x-forwarder:
+    # maliumd.dll as an ARM64X pure forwarder (learn.microsoft.com/windows/
+    # arm/arm64x-build): no code, two export tables. An ARM64 process that
+    # loads it gets maliumd_arm64.dll in its place; an x64 process (or an
+    # ARM64EC one) is sent to maliumd_x64.dll. The D3D runtime loads the
+    # name in UserModeDriverName into both kinds of process, so the file it
+    # names must be ARM64X; the forwarder makes it one without building Mesa
+    # as ARM64EC.
+    name: maliumd.dll, ARM64X forwarder
+    needs: [panfrost, panfrost-emulated]
+    # It needs the ARM64 and the x64 DLL, not the x86 one: a failed x86
+    # build does not stop it (a missing x64 artifact fails the download).
+    if: always() && needs.panfrost.result == 'success'
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: mesa-d3d10umd-panfrost-arm64
+          path: arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: mesa-d3d10umd-panfrost-x64
+          path: x64
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: arm64
+      - name: Link the forwarder
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force fw, out | Out-Null
+          # Forward every export the DLLs have: the runtime needs
+          # OpenAdapter10 and OpenAdapter10_2 from a hardware UMD, and the
+          # D3DKMT* ones from a software one (the CI test below).
+          function Exports($dll) {
+            dumpbin /nologo /exports $dll | ForEach-Object {
+              if ($_ -match '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]{8}\s+(\S+)') { $Matches[1] }
+            }
+          }
+          $ea = @(Exports arm64\libgallium_d3d10.dll)
+          $ex = @(Exports x64\libgallium_d3d10.dll)
+          Write-Host "exports: ARM64 $($ea.Count), x64 $($ex.Count)"
+          if (-not ($ea -contains 'OpenAdapter10_2') -or -not ($ex -contains 'OpenAdapter10_2')) { throw 'OpenAdapter10_2 is not exported' }
+          ("EXPORTS`n" + (($ea | ForEach-Object { "    $_ = maliumd_arm64.$_" }) -join "`n")) | Set-Content -Encoding ascii fw\maliumd_arm64.def
+          ("EXPORTS`n" + (($ex | ForEach-Object { "    $_ = maliumd_x64.$_" }) -join "`n")) | Set-Content -Encoding ascii fw\maliumd_x64.def
+          Set-Content -Encoding ascii fw\empty.cpp ''
+          Push-Location fw
+          cl /nologo /c /Foempty_arm64.obj empty.cpp
+          if ($LASTEXITCODE) { throw 'cl (ARM64) failed' }
+          cl /nologo /c /arm64EC /Foempty_x64.obj empty.cpp
+          if ($LASTEXITCODE) { throw 'cl (ARM64EC) failed' }
+          lib /nologo /machine:x64 /def:maliumd_x64.def /out:maliumd_x64.lib
+          if ($LASTEXITCODE) { throw 'lib (x64) failed' }
+          lib /nologo /machine:arm64 /def:maliumd_arm64.def /out:maliumd_arm64.lib
+          if ($LASTEXITCODE) { throw 'lib (ARM64) failed' }
+          link /nologo /dll /noentry /machine:arm64x /defArm64Native:maliumd_arm64.def /def:maliumd_x64.def `
+            empty_arm64.obj empty_x64.obj /out:maliumd.dll maliumd_arm64.lib maliumd_x64.lib
+          if ($LASTEXITCODE) { throw 'link (ARM64X) failed' }
+          dumpbin /nologo /headers maliumd.dll | Select-String 'machine' | ForEach-Object { $_.Line }
+          Pop-Location
+          Copy-Item fw\maliumd.dll, fw\maliumd_arm64.def, fw\maliumd_x64.def out\
+          Copy-Item arm64\libgallium_d3d10.dll out\maliumd_arm64.dll
+          Copy-Item x64\libgallium_d3d10.dll out\maliumd_x64.dll
+
+      - name: Load it from an ARM64 and an x64 process
+        shell: pwsh
+        run: |
+          # A software device on the forwarder from both kinds of process:
+          # the ARM64 one must end up in maliumd_arm64.dll, the x64 one
+          # (emulated on this runner) in maliumd_x64.dll, and both draw.
+          New-Item -ItemType Directory -Force t | Out-Null
+          Copy-Item out\maliumd.dll, out\maliumd_arm64.dll, out\maliumd_x64.dll t\
+          cl /nologo /EHsc /O2 /MD tools\windows\emucheck.cpp /Fe:t\emucheck-arm64.exe
+          if ($LASTEXITCODE) { throw 'emucheck (ARM64) build failed' }
+          Copy-Item x64\emucheck.exe t\emucheck-x64.exe
+          $fwd = (Resolve-Path t\maliumd.dll).Path
+          foreach ($n in 'arm64', 'x64') {
+            Write-Host "== $n process"
+            & ".\t\emucheck-$n.exe" sw $fwd 2>&1 | Tee-Object "t\$n.txt"
+            $code = $LASTEXITCODE
+            if ($code) { throw "emucheck-$n through the forwarder failed ($code)" }
+            if (-not (Select-String -Path "t\$n.txt" -Pattern "maliumd_$n.dll" -Quiet)) { throw "the $n process did not load maliumd_$n.dll" }
+          }
+          Copy-Item t\arm64.txt, t\x64.txt out\
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maliumd-arm64x
+          path: out/
