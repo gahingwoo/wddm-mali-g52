@@ -1,0 +1,20 @@
+diff --git a/src/util/mali_wassert.c b/src/util/mali_wassert.c
+index 9636794..cdade2c 100644
+--- a/src/util/mali_wassert.c
++++ b/src/util/mali_wassert.c
+@@ -95,4 +95,15 @@ mali_log_line(const char *msg)
+ /* What "__declspec(dllimport) mali_wassert" resolves to. */
+ void (__cdecl *__imp_mali_wassert)(const wchar_t *, const wchar_t *, unsigned) = mali_wassert_impl;
+ 
++#ifndef _DLL
++/* With the static C runtime (/MT, the x64 and x86 builds for emulated
++ * processes) assert.h does not declare _wassert dllimport: the calls name
++ * the function itself, and nothing above defines that. */
++void __cdecl
++mali_wassert(const wchar_t *message, const wchar_t *file, unsigned line)
++{
++   mali_wassert_impl(message, file, line);
++}
++#endif
++
+ #endif

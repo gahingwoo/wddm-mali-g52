@@ -390,10 +390,8 @@ jobs:
         include:
           - arch: x64
             vcvars: x64
-            clang: ''
           - arch: x86
             vcvars: amd64_x86
-            clang: '-m32'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -433,17 +431,33 @@ jobs:
       - name: Configure
         shell: pwsh
         run: |
-          # clang-cl as on ARM64; for x86 the x64 clang-cl with -m32, given
-          # in a native file so meson sees an x86 compiler (and an x86 host).
+          # clang-cl as on ARM64. For x86, the same clang-cl under a name
+          # that starts with the target triple, which clang takes as its
+          # target (with -m32 in the compiler list, meson passed -m32 to rc
+          # and still took the host for x86_64), and a cross file that says
+          # the host is x86. It runs on this x64 runner, so no exe wrapper.
           # The C runtime is linked in (/MT): the board has no x64 or x86
           # vcruntime140.dll to count on, and the UMD must load without one.
-          $cc = (Join-Path $env:VCINSTALLDIR 'Tools\Llvm\x64\bin\clang-cl.exe') -replace '\\', '/'
-          $extra = '${{ matrix.clang }}'
-          $list = if ($extra) { "['$cc', '$extra']" } else { "['$cc']" }
-          Set-Content -Encoding ascii native.ini "[binaries]`nc = $list`ncpp = $list`n"
-          Get-Content native.ini
+          $cc = Join-Path $env:VCINSTALLDIR 'Tools\Llvm\x64\bin\clang-cl.exe'
+          $mfile = @()
+          if ('${{ matrix.arch }}' -eq 'x86') {
+            # Next to the original: clang finds its own headers from there.
+            $x86 = Join-Path (Split-Path $cc) 'i686-pc-windows-msvc-clang-cl.exe'
+            Copy-Item $cc $x86
+            $cc = $x86
+            $c = $cc -replace '\\', '/'
+            Set-Content -Encoding ascii cross.ini ("[binaries]`nc = '$c'`ncpp = '$c'`n" +
+              "[properties]`nneeds_exe_wrapper = false`n" +
+              "[host_machine]`nsystem = 'windows'`ncpu_family = 'x86'`ncpu = 'i686'`nendian = 'little'`n")
+            Get-Content cross.ini
+            $mfile = @('--cross-file', 'cross.ini')
+          } else {
+            $c = $cc -replace '\\', '/'
+            Set-Content -Encoding ascii native.ini "[binaries]`nc = '$c'`ncpp = '$c'`n"
+            $mfile = @('--native-file', 'native.ini')
+          }
           & $cc --version
-          meson setup build mesa --backend=ninja --native-file native.ini `
+          meson setup build mesa --backend=ninja @mfile `
             -Dbuildtype=debugoptimized -Db_vscrt=mt `
             -Dplatforms=windows `
             '-Dgallium-drivers=softpipe,panfrost' `
