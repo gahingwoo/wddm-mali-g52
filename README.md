@@ -17,8 +17,10 @@ On 2026-11-13 it ran at a frame or two a second. A day later, with the copies
 gone and the display controller reading the primary itself, the desktop keeps
 up with a dragged window: [what was measured](docs/results/tspi3m-2026-11-14/README.md),
 [how the first picture was reached](docs/results/tspi3m-2026-11-13/README.md).
-It is still a first driver: Direct3D feature level 10_0, one display mode,
-one board.
+Programs built for x64 and x86 can use it as well as ARM64 ones, and it has
+an OpenGL 3.1 driver beside the Direct3D one. It is still a first driver:
+Direct3D feature level 10_0, one display mode, one board, and a heavy
+program makes the whole desktop wait.
 
 The Mali-G52 draws under Windows: on 2026-10-02 Mesa's Panfrost, inside the
 D3D10 software-driver DLL and talking to our own kernel driver, rendered a
@@ -53,7 +55,7 @@ drivers only.
 | M5.1 | Display-only driver drives HDMI | done 2026-10-02, [result](docs/results/m5.1/README.md) |
 | M5.2 (b) | A job submitted through the WDDM driver | done 2026-10-02, [result](docs/results/m5.2-step-b/README.md) |
 | M5.2 (c) | The triangle through the WDDM driver, Mesa loaded by the runtime as the UMD | done 2026-10-03, [result](docs/results/m5.2-step-c2/README.md) |
-| M5.2 (d) | DWM composites on the Mali in installed Windows | **desktop on screen 2026-11-13**, [result](docs/results/tspi3m-2026-11-13/README.md); the desktop, the Start menu, File Explorer and Device Manager draw. Speed, memory and hitches measured and worked on 2026-11-14, [result](docs/results/tspi3m-2026-11-14/README.md) |
+| M5.2 (d) | DWM composites on the Mali in installed Windows | **desktop on screen 2026-11-13**, [result](docs/results/tspi3m-2026-11-13/README.md); the desktop, the Start menu, File Explorer and Device Manager draw. Speed, memory and hitches measured and worked on 2026-11-14, x64 and x86 programs and OpenGL added the same day, [result](docs/results/tspi3m-2026-11-14/README.md) |
 
 All results: [docs/results/](docs/results/README.md). All documents:
 [docs/](docs/README.md).
@@ -79,8 +81,8 @@ Everything is built in GitHub CI; there is no local Windows toolchain.
 ## Installing
 
 CI's `wddm-mali-g52-driver-arm64` artifact is the driver package: the INF,
-`maliwddm.sys`, the UMD (Mesa's DLL, which the INF copies to
-`System32\maliumd.dll`) and their catalog, all signed with a test
+`maliwddm.sys`, the Direct3D UMD and the OpenGL ICD (Mesa's DLLs, built for
+ARM64, x64 and x86 processes) and their catalog, all signed with a test
 certificate that comes with it. Its
 [INSTALL.txt](drivers/maliwddm/INSTALL.txt) has the steps: test signing on,
 trust the certificate, `pnputil /add-driver`. It needs the firmware below.
