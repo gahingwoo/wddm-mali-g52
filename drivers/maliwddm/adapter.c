@@ -139,6 +139,34 @@ static NTSTATUS APIENTRY MwAddDevice(IN_CONST_PDEVICE_OBJECT Pdo, OUT_PPVOID Con
     return STATUS_SUCCESS;
 }
 
+/* What Settings, dxdiag and Win32_VideoController show for an adapter comes
+ * from HardwareInformation.* in the driver's software key; nothing fills
+ * them in for a driver that does not, and they were blank. There is no
+ * dedicated memory to report: every allocation is system memory. */
+static void PublishIdentity(MW_ADAPTER *A)
+{
+    static const WCHAR chip[] = L"Arm Mali-G52 (Bifrost)";
+    static const WCHAR name[] = L"Rockchip RK3576 Mali-G52";
+    static const WCHAR dac[] = L"Rockchip VOP2, HDMI";
+    static const WCHAR bios[] = L"UEFI (edk2-rk3576)";
+    static const struct { PCWSTR Name; const WCHAR *Text; ULONG Bytes; } v[] = {
+        { L"HardwareInformation.ChipType", chip, sizeof(chip) },
+        { L"HardwareInformation.AdapterString", name, sizeof(name) },
+        { L"HardwareInformation.DacType", dac, sizeof(dac) },
+        { L"HardwareInformation.BiosString", bios, sizeof(bios) },
+    };
+    HANDLE key;
+    UNICODE_STRING n;
+
+    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(A->Pdo, PLUGPLAY_REGKEY_DRIVER, KEY_WRITE, &key)))
+        return;
+    for (ULONG i = 0; i < ARRAYSIZE(v); i++) {
+        RtlInitUnicodeString(&n, v[i].Name);
+        (void)ZwSetValueKey(key, &n, 0, REG_SZ, (PVOID)v[i].Text, v[i].Bytes);
+    }
+    ZwClose(key);
+}
+
 /* The first memory resource is the GPU's register block. */
 static NTSTATUS MapGpu(MW_ADAPTER *A)
 {
@@ -191,6 +219,7 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
         st = MkGpuInit(&a->Gpu);
     a->GpuUp = NT_SUCCESS(st);
     MwLog(a, L"GpuUp", NT_SUCCESS(st) ? 1 : (ULONG)st);
+    PublishIdentity(a);
 
     /* Render-only: no sources and no children, and the firmware framebuffer
      * stays with Basic Display, which keeps the desktop up. */
