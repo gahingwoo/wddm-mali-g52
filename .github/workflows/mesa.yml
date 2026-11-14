@@ -542,6 +542,9 @@ jobs:
     # as ARM64EC.
     name: maliumd.dll, ARM64X forwarder
     needs: [panfrost, panfrost-emulated]
+    # It needs the ARM64 and the x64 DLL, not the x86 one: a failed x86
+    # build does not stop it (a missing x64 artifact fails the download).
+    if: always() && needs.panfrost.result == 'success'
     runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@v4
