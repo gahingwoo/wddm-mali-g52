@@ -13,8 +13,12 @@ composed on the GPU.*
 | ![The desktop](docs/results/tspi3m-2026-11-13/desktop-on-mali.jpg) | ![File Explorer](docs/results/tspi3m-2026-11-13/file-explorer-on-mali.jpg) |
 | The desktop after signing in | File Explorer; its toolbar is not drawn yet |
 
-It runs at a frame or two a second and is not usable yet:
-[what was done and what is missing](docs/results/tspi3m-2026-11-13/README.md).
+On 2026-11-13 it ran at a frame or two a second. A day later, with the copies
+gone and the display controller reading the primary itself, the desktop keeps
+up with a dragged window: [what was measured](docs/results/tspi3m-2026-11-14/README.md),
+[how the first picture was reached](docs/results/tspi3m-2026-11-13/README.md).
+It is still a first driver: Direct3D feature level 10_0, one display mode,
+one board.
 
 The Mali-G52 draws under Windows: on 2026-10-02 Mesa's Panfrost, inside the
 D3D10 software-driver DLL and talking to our own kernel driver, rendered a
@@ -23,10 +27,12 @@ D3D11 triangle on it, byte for byte what the CPU renderer draws (M4). On
 `explorer.exe` and the rest render through Panfrost and the WDDM driver puts
 the result on the monitor
 ([photo](docs/results/tspi3m-2026-11-13/desktop-on-mali.jpg),
-[what was done](docs/results/tspi3m-2026-11-13/README.md)). That is far
-from usable: it runs at a frame or two a second. The Start menu, the tray and
-File Explorer came up later the same night
-([photo](docs/results/tspi3m-2026-11-13/start-menu-on-mali.jpg)).
+[what was done](docs/results/tspi3m-2026-11-13/README.md)). It ran at a
+frame or two a second that night; the Start menu, the tray and File Explorer
+came up a few hours later
+([photo](docs/results/tspi3m-2026-11-13/start-menu-on-mali.jpg)). On
+2026-11-14 the copies were removed one at a time and measured
+([result](docs/results/tspi3m-2026-11-14/README.md)).
 
 Windows on RK3576 boards
 ([woa-rk3576](https://github.com/gahingwoo/woa-rk3576)) draws its desktop on the
@@ -47,7 +53,7 @@ drivers only.
 | M5.1 | Display-only driver drives HDMI | done 2026-10-02, [result](docs/results/m5.1/README.md) |
 | M5.2 (b) | A job submitted through the WDDM driver | done 2026-10-02, [result](docs/results/m5.2-step-b/README.md) |
 | M5.2 (c) | The triangle through the WDDM driver, Mesa loaded by the runtime as the UMD | done 2026-10-03, [result](docs/results/m5.2-step-c2/README.md) |
-| M5.2 (d) | DWM composites on the Mali in installed Windows | **desktop on screen 2026-11-13**, [result](docs/results/tspi3m-2026-11-13/README.md); the desktop, the Start menu, File Explorer and Device Manager draw; 1 to 2 frames a second |
+| M5.2 (d) | DWM composites on the Mali in installed Windows | **desktop on screen 2026-11-13**, [result](docs/results/tspi3m-2026-11-13/README.md); the desktop, the Start menu, File Explorer and Device Manager draw. Speed, memory and hitches measured and worked on 2026-11-14, [result](docs/results/tspi3m-2026-11-14/README.md) |
 
 All results: [docs/results/](docs/results/README.md). All documents:
 [docs/](docs/README.md).
