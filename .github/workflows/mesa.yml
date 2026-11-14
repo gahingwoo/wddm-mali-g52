@@ -390,8 +390,10 @@ jobs:
         include:
           - arch: x64
             vcvars: x64
+            cflags: ''
           - arch: x86
             vcvars: amd64_x86
+            cflags: '-m32 /arch:SSE2 '
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -431,22 +433,19 @@ jobs:
       - name: Configure
         shell: pwsh
         run: |
-          # clang-cl as on ARM64. For x86, -m32 through _CL_, which clang-cl
-          # reads from the environment as cl does, with /arch:SSE2 as cl's
-          # default is (plain -m32 is an i386 with no cmpxchg8b, whose 64-bit
-          # atomics are calls into a libatomic Windows has not got), and a
-          # cross file that says
-          # the host is x86 (with -m32 in the compiler list, meson passed it
-          # to rc too and still took the host for x86_64; under a name that
-          # starts with the triple, meson did not know it for clang-cl). It
-          # runs on this x64 runner, so no exe wrapper.
+          # clang-cl as on ARM64. For x86: -m32 and /arch:SSE2 (cl's own
+          # default; a bare -m32 is an i386 with no cmpxchg8b, whose 64-bit
+          # atomics are calls into a libatomic Windows has not got) in c_args,
+          # and a cross file that says the host is x86. Tried and dropped:
+          # -m32 in the compiler list (meson passed it to rc too, and took
+          # the host for x86_64), clang-cl under a triple-prefixed name (meson
+          # took it for GNU clang), _CL_ (clang-cl appends it where the
+          # linker gets it). It runs on this x64 runner: no exe wrapper.
           # The C runtime is linked in (/MT): the board has no x64 or x86
           # vcruntime140.dll to count on, and the UMD must load without one.
           $cc = Join-Path $env:VCINSTALLDIR 'Tools\Llvm\x64\bin\clang-cl.exe'
           $c = $cc -replace '\\', '/'
           if ('${{ matrix.arch }}' -eq 'x86') {
-            $env:_CL_ = '-m32 /arch:SSE2'
-            "_CL_=-m32 /arch:SSE2" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
             Set-Content -Encoding ascii cross.ini ("[binaries]`nc = '$c'`ncpp = '$c'`n" +
               "[properties]`nneeds_exe_wrapper = false`n" +
               "[host_machine]`nsystem = 'windows'`ncpu_family = 'x86'`ncpu = 'i686'`nendian = 'little'`n")
@@ -469,7 +468,7 @@ jobs:
             -Degl=disabled -Dglx=disabled -Dgbm=disabled `
             '-Dvideo-codecs=' -Dmicrosoft-clc=disabled -Dspirv-to-dxil=false `
             -Dzstd=disabled -Dshader-cache=disabled -Dbuild-tests=false `
-            '-Dc_args=-DHAVE_FUNC_ATTRIBUTE_PACKED -D_wassert=mali_wassert' '-Dcpp_args=-DHAVE_FUNC_ATTRIBUTE_PACKED -D_wassert=mali_wassert'
+            "-Dc_args=${{ matrix.cflags }}-DHAVE_FUNC_ATTRIBUTE_PACKED -D_wassert=mali_wassert" "-Dcpp_args=${{ matrix.cflags }}-DHAVE_FUNC_ATTRIBUTE_PACKED -D_wassert=mali_wassert"
           if ($LASTEXITCODE) { if (Test-Path build\meson-logs\meson-log.txt) { Get-Content build\meson-logs\meson-log.txt -Tail 80 }; throw 'meson setup failed' }
           Select-String -Path build\meson-logs\meson-log.txt -Pattern 'Host machine cpu|Build machine cpu' | ForEach-Object { $_.Line }
       - name: Build
@@ -487,7 +486,6 @@ jobs:
       - name: Smoke test (softpipe, then GALLIUM_DRIVER=panfrost)
         shell: pwsh
         run: |
-          Remove-Item Env:_CL_ -ErrorAction SilentlyContinue
           $dll = (Get-ChildItem build -Recurse -Filter libgallium_d3d10.dll | Select-Object -First 1).FullName
           if (-not $dll) { throw 'libgallium_d3d10.dll was not built' }
           cl /nologo /EHsc /O2 /MD tests\d3d11-triangle\triangle.cpp /Fe:triangle.exe
