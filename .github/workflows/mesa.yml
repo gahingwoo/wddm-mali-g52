@@ -433,19 +433,25 @@ jobs:
       - name: Configure
         shell: pwsh
         run: |
-          # clang-cl as on ARM64. For x86: -m32 and /arch:SSE2 (cl's own
-          # default; a bare -m32 is an i386 with no cmpxchg8b, whose 64-bit
-          # atomics are calls into a libatomic Windows has not got) in c_args,
-          # and a cross file that says the host is x86. Tried and dropped:
-          # -m32 in the compiler list (meson passed it to rc too, and took
-          # the host for x86_64), clang-cl under a triple-prefixed name (meson
-          # took it for GNU clang), _CL_ (clang-cl appends it where the
-          # linker gets it). It runs on this x64 runner: no exe wrapper.
+          # clang-cl as on ARM64. For x86: a clang-cl.cfg next to clang-cl
+          # with -m32, which clang reads by default, so that clang-cl itself
+          # (and its --version, from which meson takes /MACHINE for lib and
+          # lld-link) targets x86; /arch:SSE2 in c_args (cl's own default; a
+          # bare -m32 is an i386 with no cmpxchg8b, whose 64-bit atomics are
+          # calls into a libatomic Windows has not got); and a cross file that
+          # says the host is x86. Tried and dropped: -m32 in the compiler list
+          # (meson passed it to rc too), clang-cl under a triple-prefixed name
+          # (meson took it for GNU clang), _CL_ (clang-cl appends it where the
+          # linker gets it), -m32 in c_args alone (lib got /MACHINE:x64). It
+          # runs on this x64 runner: no exe wrapper.
           # The C runtime is linked in (/MT): the board has no x64 or x86
           # vcruntime140.dll to count on, and the UMD must load without one.
           $cc = Join-Path $env:VCINSTALLDIR 'Tools\Llvm\x64\bin\clang-cl.exe'
           $c = $cc -replace '\\', '/'
           if ('${{ matrix.arch }}' -eq 'x86') {
+            Set-Content -Encoding ascii (Join-Path (Split-Path $cc) 'clang-cl.cfg') '-m32'
+            $t = (& $cc --version) -join "`n"
+            if ($t -notmatch 'Target: i[3-6]86') { Write-Host $t; throw 'clang-cl.cfg was not read: clang-cl still targets 64-bit' }
             Set-Content -Encoding ascii cross.ini ("[binaries]`nc = '$c'`ncpp = '$c'`n" +
               "[properties]`nneeds_exe_wrapper = false`n" +
               "[host_machine]`nsystem = 'windows'`ncpu_family = 'x86'`ncpu = 'i686'`nendian = 'little'`n")
@@ -583,9 +589,9 @@ jobs:
           if ($LASTEXITCODE) { throw 'cl (ARM64) failed' }
           cl /nologo /c /arm64EC /Foempty_x64.obj empty.cpp
           if ($LASTEXITCODE) { throw 'cl (ARM64EC) failed' }
-          link /nologo /lib /machine:x64 /def:maliumd_x64.def /out:maliumd_x64.lib
+          lib /nologo /machine:x64 /def:maliumd_x64.def /out:maliumd_x64.lib
           if ($LASTEXITCODE) { throw 'lib (x64) failed' }
-          link /nologo /lib /machine:arm64 /def:maliumd_arm64.def /out:maliumd_arm64.lib
+          lib /nologo /machine:arm64 /def:maliumd_arm64.def /out:maliumd_arm64.lib
           if ($LASTEXITCODE) { throw 'lib (ARM64) failed' }
           link /nologo /dll /noentry /machine:arm64x /defArm64Native:maliumd_arm64.def /def:maliumd_x64.def `
             empty_arm64.obj empty_x64.obj /out:maliumd.dll maliumd_arm64.lib maliumd_x64.lib
