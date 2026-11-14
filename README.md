@@ -70,6 +70,15 @@ GPU. The reasoning and the risks are in [docs/PLAN.md](docs/PLAN.md),
 
 Everything is built in GitHub CI; there is no local Windows toolchain.
 
+## Installing
+
+CI's `wddm-mali-g52-driver-arm64` artifact is the driver package: the INF,
+`maliwddm.sys`, the UMD (Mesa's DLL, which the INF copies to
+`System32\maliumd.dll`) and their catalog, all signed with a test
+certificate that comes with it. Its
+[INSTALL.txt](drivers/maliwddm/INSTALL.txt) has the steps: test signing on,
+trust the certificate, `pnputil /add-driver`. It needs the firmware below.
+
 ## Hardware
 
 | | |

@@ -1,0 +1,99 @@
+wddm-mali-g52: installing the driver package (ARM64)
+====================================================
+
+What is in this folder
+
+  driver\maliwddm.inf        the INF
+  driver\maliwddm.sys        the kernel driver (WDDM 1.3)
+  driver\maliumd_arm64.dll   the user-mode driver: Mesa d3d10umd with
+                             Panfrost. The INF copies it to
+                             C:\Windows\System32\maliumd.dll.
+  driver\maliwddm.cat        the catalog of the three files above
+  wddm-mali-g52-test.cer     the test certificate that signed the catalog,
+                             maliwddm.sys and maliumd_arm64.dll
+  symbols\                   the UMD's .pdb, for llvm-symbolizer
+
+Where it has run
+
+  The driver has only been run on the two boards named in README.md, the
+  ArmSoM CM5-IO and the LCKFB TaishanPi 3M, under Windows 11 23H2, with
+  edk2-rk3576 firmware (which powers the GPU and describes it in ACPI as
+  ACPI\RKCP7402). Without that firmware there is no device for the INF to
+  bind. This package form, with the UMD installed by the INF instead of by
+  hand, is newer than those runs.
+
+Requirements
+
+  - Windows 11 23H2 or older on ARM64. 24H2 does not run on the RK3576.
+  - Test signing on. Secure Boot has to be off for this.
+  - VCRUNTIME140.dll for ARM64 in System32. The UMD imports it and this
+    package does not install it; the Microsoft Visual C++ 2015-2022
+    Redistributable (ARM64) does.
+
+Install, from an administrator command prompt in this folder
+
+  1. Test signing (once; reboot after it):
+
+       bcdedit /set testsigning on
+
+  2. Trust the certificate. Each CI run makes a new one, so do this again
+     for every package from a different run:
+
+       certutil -addstore -f Root wddm-mali-g52-test.cer
+       certutil -addstore -f TrustedPublisher wddm-mali-g52-test.cer
+
+     With test signing on, Windows loads the driver without this step. With
+     it, Windows installs the package without asking about the publisher,
+     and dxdiag and the file properties call the files signed.
+
+  3. Install:
+
+       pnputil /add-driver driver\maliwddm.inf /install
+
+     Over an older maliwddm this is an update. If dwm.exe has the old
+     maliumd.dll loaded, setup renames it and puts the new one in place;
+     the old copy is deleted at the next restart. Reboot afterwards in
+     either case.
+
+Check
+
+  - Device Manager, Display adapters: "Rockchip RK3576 Mali-G52 (WDDM)",
+    "This device is working properly". On the Driver tab, Driver Details
+    lists maliwddm.sys and C:\Windows\System32\maliumd.dll, and Digital
+    Signer reads "wddm-mali-g52 test signing".
+  - From a prompt:
+
+       pnputil /enum-devices /class Display /drivers
+
+  - Which maliumd.dll a process has loaded, from PowerShell:
+
+       (Get-Process dwm).Modules | Where-Object ModuleName -eq maliumd.dll | Select-Object FileName
+
+Replacing only the UMD while testing
+
+  Rename the loaded file and copy the new one next to it; then end
+  LogonUI.exe and dwm.exe, and Windows starts both again:
+
+       ren C:\Windows\System32\maliumd.dll maliumd.dll.old1
+       copy libgallium_d3d10.dll C:\Windows\System32\maliumd.dll
+
+  If ren is refused (Access is denied), take the file first:
+
+       takeown /f C:\Windows\System32\maliumd.dll
+       icacls C:\Windows\System32\maliumd.dll /grant Administrators:F
+
+  Installing or reinstalling the package puts its own maliumd.dll back over
+  a hand-copied one.
+
+Remove
+
+  Find the package's oemNN.inf, then delete it:
+
+       pnputil /enum-drivers
+       pnputil /delete-driver oemNN.inf /uninstall
+
+  Windows does not delete C:\Windows\System32\maliumd.dll on uninstall;
+  delete or rename it by hand if wanted. To take the certificate out again:
+
+       certutil -delstore Root "wddm-mali-g52 test signing"
+       certutil -delstore TrustedPublisher "wddm-mali-g52 test signing"
