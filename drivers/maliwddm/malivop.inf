@@ -1,0 +1,37 @@
+;
+; malivop.inf - gives the RK3576's display controller (ACPI\RKCP7403, DSP0
+; in the edk2-rk3576 DSDT) a name and no driver.
+;
+; maliwddm, bound to the GPU, drives the VOP2 itself: it maps the VOP2's
+; registers and its IOMMU for scan-out (scanout.c). Nothing binds DSP0, so
+; Device Manager shows it as an unknown device with a problem. This INF
+; installs the null driver for it, which is what a device that needs no
+; driver of its own is given.
+;
+; SPDX-License-Identifier: GPL-2.0
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider    = %ProviderName%
+DriverVer   = 11/14/2026,1.0.0.0
+CatalogFile = malivop.cat
+PnpLockdown = 1
+
+[Manufacturer]
+%ProviderName% = Standard,NTARM64.10.0...16299
+
+[Standard.NTARM64.10.0...16299]
+%VOP.DeviceDesc% = VOP_Inst,ACPI\RKCP7403
+
+[VOP_Inst.NT]
+; nothing to copy
+
+[VOP_Inst.NT.Services]
+AddService = ,0x00000002 ; SPSVCINST_ASSOCSERVICE with no service: the null driver
+
+[Strings]
+ProviderName   = "wddm-mali-g52"
+VOP.DeviceDesc = "Rockchip RK3576 VOP2 display controller (driven by the Mali-G52 WDDM driver)"

@@ -254,6 +254,8 @@ jobs:
           $drv = 'pkg\maliwddm'
           New-Item -ItemType Directory -Force -Path $drv | Out-Null
           Copy-Item kmd\maliwddm\maliwddm.inf, kmd\maliwddm\maliwddm.sys $drv
+          # The null driver for the display controller; a catalog of its own.
+          Copy-Item drivers\maliwddm\malivop.inf $drv
           # The INF copies this to System32\maliumd.dll (see the INF for why
           # the name differs).
           Copy-Item umd\libgallium_d3d10.dll "$drv\maliumd_arm64.dll"
@@ -282,7 +284,7 @@ jobs:
           # The OS list of maliwddm.vcxproj; 24H2 (10_GE) cannot run on RK3576.
           & $i2c /driver:"$((Resolve-Path $drv).Path)" /os:10_RS3_ARM64,10_RS4_ARM64,10_RS5_ARM64,10_19H1_ARM64,10_VB_ARM64,10_CO_ARM64,10_NI_ARM64
           if ($LASTEXITCODE) { throw "inf2cat failed: $LASTEXITCODE" }
-          & $st sign /fd sha256 /f C:\t.pfx /p $pw "$drv\maliwddm.cat"
+          & $st sign /fd sha256 /f C:\t.pfx /p $pw "$drv\maliwddm.cat" "$drv\malivop.cat"
           if ($LASTEXITCODE) { throw "signtool failed: $LASTEXITCODE" }
           Remove-Item C:\t.pfx
           Get-ChildItem $drv | Format-Table Name, Length

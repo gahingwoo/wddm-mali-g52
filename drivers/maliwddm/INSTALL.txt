@@ -14,6 +14,10 @@ What is in this folder
                              ARM64 process maliumd_arm64.dll and an x64
                              process maliumd_x64.dll
   driver\maliwddm.cat        the catalog of the files above
+  driver\malivop.inf, .cat   a name and the null driver for the display
+                             controller, ACPI\RKCP7403, which maliwddm
+                             drives; optional:
+                             pnputil /add-driver driver\malivop.inf /install
   wddm-mali-g52-test.cer     the test certificate that signed the catalog
                              and each binary
   symbols\                   the UMD's .pdb, for llvm-symbolizer
