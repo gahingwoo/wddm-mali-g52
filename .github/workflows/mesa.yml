@@ -707,8 +707,10 @@ jobs:
           # -m32 and a cross file (see panfrost-emulated). The C runtime is
           # linked in (/MT) for all three: an ICD is loaded into whatever
           # program asks for OpenGL, and must not depend on a runtime DLL
-          # the board may not have. No d3d10umd here: -Dopengl=true and the
-          # WGL target are the only frontend.
+          # the board may not have; zlib, which the GL frontend links and
+          # meson builds from its wrap, goes in as a static library for the
+          # same reason (it was z-1.dll beside nothing). No d3d10umd here:
+          # -Dopengl=true and the WGL target are the only frontend.
           $cc = Join-Path $env:VCINSTALLDIR 'Tools\Llvm\${{ matrix.llvm }}\bin\clang-cl.exe'
           $c = $cc -replace '\\', '/'
           if ('${{ matrix.arch }}' -eq 'x86') {
@@ -725,7 +727,7 @@ jobs:
           }
           & $cc --version
           meson setup build mesa --backend=ninja @mfile `
-            -Dbuildtype=debugoptimized -Db_vscrt=mt `
+            -Dbuildtype=debugoptimized -Db_vscrt=mt -Dzlib:default_library=static `
             -Dplatforms=windows `
             '-Dgallium-drivers=softpipe,panfrost' `
             -Dgallium-d3d10umd=false `
@@ -753,7 +755,12 @@ jobs:
             Copy-Item $f.FullName out\
             Copy-Item ($f.FullName -replace '\.dll$', '.pdb') out\ -ErrorAction SilentlyContinue
             dumpbin /nologo /headers $f.FullName | Select-String 'machine' | Select-Object -First 1 | ForEach-Object { "${n}: $($_.Line.Trim())" }
-            dumpbin /nologo /dependents $f.FullName | Select-String '\.dll' | ForEach-Object { "  imports $($_.Line.Trim())" }
+            $imp = @(dumpbin /nologo /dependents $f.FullName | Select-String '^\s+\S+\.dll\s*$' | ForEach-Object { $_.Line.Trim() })
+            Write-Host "  imports $($imp -join ', ')"
+            # Only what every Windows has: a program loads the ICD from
+            # System32 with nothing of ours beside it.
+            $odd = @($imp | Where-Object { $_ -notmatch '^(kernel32|user32|gdi32|advapi32|ws2_32|ole32|shell32|libgallium_wgl|api-ms-win-[a-z0-9-]+)\.dll$' })
+            if ($odd.Count) { throw "$n.dll imports $($odd -join ', ')" }
           }
           $ex = dumpbin /nologo /exports out\libgallium_wgl.dll | Select-String ' Drv[A-Za-z]+' | ForEach-Object { $_.Matches[0].Value.Trim() }
           Write-Host "Drv* exports: $(@($ex).Count): $($ex -join ' ')"

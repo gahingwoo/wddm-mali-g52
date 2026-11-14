@@ -1,0 +1,32 @@
+diff --git a/src/compiler/glsl/lower_precision.cpp b/src/compiler/glsl/lower_precision.cpp
+index 1285a7f..0ba6e7a 100644
+--- a/src/compiler/glsl/lower_precision.cpp
++++ b/src/compiler/glsl/lower_precision.cpp
+@@ -25,6 +25,19 @@
+  * \file lower_precision.cpp
+  */
+ 
++/* On ARM64 the UCRT's wchar.h, which <vector> reaches, includes
++ * arm_neon.h, and that declares a global float16_t (__fp16), as ir.h does
++ * (mesa::float16_t); clang-cl rejects the second. Nothing here uses NEON:
++ * its float16_t gets another name while <vector> is read, which is before
++ * any Mesa header, so that arm_neon.h is never read again in this file. */
++#if defined(_WIN32) && (defined(_M_ARM64) || defined(_M_ARM64EC))
++#define float16_t neon_float16_t
++#include <vector>
++#undef float16_t
++#else
++#include <vector>
++#endif
++
+ #include "main/macros.h"
+ #include "main/consts_exts.h"
+ #include "pipe/p_screen.h"
+@@ -36,7 +49,6 @@
+ #include "util/half_float.h"
+ #include "util/set.h"
+ #include "util/hash_table.h"
+-#include <vector>
+ 
+ namespace {
+ 
