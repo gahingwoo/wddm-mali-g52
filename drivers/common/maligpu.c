@@ -393,6 +393,21 @@ void MkJobHardStop(MK_GPU *Gpu, ULONG Slot)
     MK_WR(Gpu, JS_SLOT(Slot) + JS_COMMAND, JS_COMMAND_HARD_STOP);
 }
 
+void MkJobSoftStop(MK_GPU *Gpu, ULONG Slot, BOOLEAN ChainFlag)
+{
+    MK_WR(Gpu, JS_SLOT(Slot) + JS_COMMAND, ChainFlag ? JS_COMMAND_SOFT_STOP_1 : JS_COMMAND_SOFT_STOP_0);
+}
+
+ULONG64 MkJobHead(MK_GPU *Gpu, ULONG Slot)
+{
+    return MK_RD(Gpu, JS_SLOT(Slot) + JS_HEAD_LO) | ((ULONG64)MK_RD(Gpu, JS_SLOT(Slot) + JS_HEAD_HI) << 32);
+}
+
+ULONG64 MkJobTail(MK_GPU *Gpu, ULONG Slot)
+{
+    return MK_RD(Gpu, JS_SLOT(Slot) + JS_TAIL_LO) | ((ULONG64)MK_RD(Gpu, JS_SLOT(Slot) + JS_TAIL_HI) << 32);
+}
+
 /* ---- interrupts ---- */
 
 /* One handler for all three lines (job, MMU, GPU): it claims whatever is

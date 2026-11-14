@@ -267,6 +267,83 @@ int main(void)
         CHECK(drm(0x77, &sb, sizeof(sb), NULL, 0) == -MK_ENOSYS, "unknown ioctl");
     }
 
+    /* Soft-stop and resume, with maligpu's job helpers and nothing else on
+     * the slots (the worker is idle and touches them only for its own jobs): a long fragment job is stopped
+     * part way, another chain runs, the first resumes from JS_TAIL and
+     * finishes, and every tile ran exactly once. maliwddm's scheduler
+     * (command.c) is not built here; this is the hardware side it uses. */
+    {
+        const ULONG tiles = 100;
+        volatile ULONG *count = cpu + 0x400 / 4;
+        ULONG bits, ignored0 = sim.stops_ignored, soft0 = sim.soft_stops, hard0 = sim.hard_stops;
+
+        memset((void *)cpu, 0, 4096);
+        cpu[4] = 1u | (9u << 1) | (1u << 16);  /* fragment, as the simulator has it */
+        cpu[8] = (ULONG)(va + 0x400);
+        cpu[9] = (ULONG)((va + 0x400) >> 32);
+        cpu[10] = tiles;
+        write_job(cpu + 0x200 / 4, va + 0x300, 0x600DF00D);
+        (void)MkJobTakeStatus(&dev.Gpu, 0);
+
+        sim_tile_budget = 10;
+        MkJobStart(&dev.Gpu, 0, va, FALSE);
+        CHECK(MkJobSlotStatus(&dev.Gpu, 0) == JS_STATUS_ACTIVE, "long job not active: 0x%x",
+              MkJobSlotStatus(&dev.Gpu, 0));
+        CHECK(MkJobTakeStatus(&dev.Gpu, 0) == 0, "long job finished early");
+        MkJobSoftStop(&dev.Gpu, 0, TRUE);      /* the other chain flag: no effect */
+        CHECK(sim.stops_ignored == ignored0 + 1 && MkJobSlotStatus(&dev.Gpu, 0) == JS_STATUS_ACTIVE,
+              "stop for the other chain flag acted (ignored %u)", sim.stops_ignored - ignored0);
+        sim_run(0, 15);
+        MkJobSoftStop(&dev.Gpu, 0, FALSE);
+        bits = MkJobTakeStatus(&dev.Gpu, 0);
+        CHECK(bits == (1u << 16), "soft-stop: job irq bits 0x%x, want the error bit", bits);
+        CHECK(MkJobSlotStatus(&dev.Gpu, 0) == JS_STATUS_STOPPED, "status 0x%x after soft-stop",
+              MkJobSlotStatus(&dev.Gpu, 0));
+        ULONG64 tail = MkJobTail(&dev.Gpu, 0);
+        CHECK(tail == va && MkJobHead(&dev.Gpu, 0) == tail, "tail 0x%llx head 0x%llx",
+              (unsigned long long)tail, (unsigned long long)MkJobHead(&dev.Gpu, 0));
+        CHECK(cpu[0] == JS_STATUS_STOPPED && cpu[1] == 25, "header status %u first incomplete %u",
+              cpu[0], cpu[1]);
+        int ran = 0;
+        for (ULONG t = 0; t < tiles; t++)
+            ran += count[t];
+        CHECK(ran == 25 && count[24] == 1 && count[25] == 0, "%d tiles ran before the stop", ran);
+
+        /* The waiting chain, with the other chain flag. */
+        MkJobStart(&dev.Gpu, 0, va + 0x200, TRUE);
+        bits = MkJobTakeStatus(&dev.Gpu, 0);
+        CHECK(bits == 1u && cpu[0x300 / 4] == 0x600DF00D, "second chain: bits 0x%x value 0x%x",
+              bits, cpu[0x300 / 4]);
+
+        /* Resume the first from its tail. */
+        sim_tile_budget = 0;
+        MkJobStart(&dev.Gpu, 0, tail, FALSE);
+        bits = MkJobTakeStatus(&dev.Gpu, 0);
+        CHECK(bits == 1u && MkJobSlotStatus(&dev.Gpu, 0) == JS_STATUS_DONE, "resume: bits 0x%x status 0x%x",
+              bits, MkJobSlotStatus(&dev.Gpu, 0));
+        int once = 0;
+        for (ULONG t = 0; t < tiles; t++)
+            once += count[t] == 1;
+        CHECK(once == (int)tiles && cpu[0] == JS_STATUS_DONE, "%d of %u tiles ran exactly once", once, tiles);
+
+        /* A stop that arrives after the chain finished does nothing. */
+        MkJobSoftStop(&dev.Gpu, 0, FALSE);
+        CHECK(MkJobTakeStatus(&dev.Gpu, 0) == 0 && sim.stops_ignored == ignored0 + 2, "late stop acted");
+
+        /* A hard stop ends the chain for good. */
+        cpu[0] = cpu[1] = 0;
+        sim_tile_budget = 5;
+        MkJobStart(&dev.Gpu, 0, va, TRUE);
+        MkJobHardStop(&dev.Gpu, 0);
+        bits = MkJobTakeStatus(&dev.Gpu, 0);
+        CHECK(bits == (1u << 16) && MkJobSlotStatus(&dev.Gpu, 0) == JS_STATUS_TERMINATED,
+              "hard stop: bits 0x%x status 0x%x", bits, MkJobSlotStatus(&dev.Gpu, 0));
+        sim_tile_budget = 0;
+        CHECK(sim.soft_stops == soft0 + 1 && sim.hard_stops == hard0 + 1 && sim.started_while_active == 0,
+              "stops %u/%u, started while active %u", sim.soft_stops - soft0, sim.hard_stops - hard0,
+              sim.started_while_active);
+    }
+
     /* The process exits with BOs, a mapping and syncobjs still open. */
     MkFileCleanup(&dev, &file);
     MkWorkerStop(&dev);

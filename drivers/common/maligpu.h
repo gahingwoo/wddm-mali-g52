@@ -72,10 +72,13 @@
 #define JOB_INT_CLEAR           0x1004
 #define JOB_INT_MASK            0x1008
 #define JOB_INT_STAT            0x100C
+#define JOB_INT_JS_STATE        0x1010
 #define JS_BASE                 0x1800
 #define JS_SLOT(n)              (JS_BASE + (n) * 0x80)
 #define JS_HEAD_LO              0x00
 #define JS_HEAD_HI              0x04
+#define JS_TAIL_LO              0x08
+#define JS_TAIL_HI              0x0C
 #define JS_COMMAND              0x20
 #define JS_STATUS               0x24
 #define JS_HEAD_NEXT_LO         0x40
@@ -84,8 +87,23 @@
 #define JS_AFFINITY_NEXT_HI     0x54
 #define JS_CONFIG_NEXT          0x58
 #define JS_COMMAND_NEXT         0x60
+#define JS_COMMAND_NOP          0x00
 #define JS_COMMAND_START        0x01
+#define JS_COMMAND_SOFT_STOP    0x02
 #define JS_COMMAND_HARD_STOP    0x03
+/* Act only if the chain on the slot was started with JOB_CHAIN_FLAG 0 (or
+ * 1), so a stop meant for a chain that has just finished cannot hit the
+ * next one (HW_FEATURE_JOBCHAIN_DISAMBIGUATION, which the G52 has). */
+#define JS_COMMAND_SOFT_STOP_0  0x04
+#define JS_COMMAND_HARD_STOP_0  0x05
+#define JS_COMMAND_SOFT_STOP_1  0x06
+#define JS_COMMAND_HARD_STOP_1  0x07
+
+/* JS_STATUS: the exception code of the chain the slot last ran. */
+#define JS_STATUS_DONE          0x01
+#define JS_STATUS_STOPPED       0x03    /* soft-stopped; resume from JS_TAIL */
+#define JS_STATUS_TERMINATED    0x04    /* hard-stopped */
+#define JS_STATUS_ACTIVE        0x08
 
 #define JS_CONFIG_START_FLUSH_CLEAN_INVALIDATE (3u << 8)
 #define JS_CONFIG_JOB_CHAIN_FLAG (1u << 11)
@@ -192,6 +210,16 @@ void MkJobStart(MK_GPU *Gpu, ULONG Slot, ULONG64 Jc, BOOLEAN ChainFlag);
 ULONG MkJobTakeStatus(MK_GPU *Gpu, ULONG Slot);
 ULONG MkJobSlotStatus(MK_GPU *Gpu, ULONG Slot);
 void MkJobHardStop(MK_GPU *Gpu, ULONG Slot);
+
+/* Soft-stop the chain on a slot if it was started with this chain flag. The
+ * chain stops at a point it can be resumed from (between jobs, or between
+ * tiles of a fragment job), raises the slot's error bit, and leaves
+ * JS_STATUS_STOPPED with JS_HEAD = JS_TAIL = the job to resume at; starting
+ * that address again continues the chain. If the chain finishes first, the
+ * slot reports done and the stop does nothing. */
+void MkJobSoftStop(MK_GPU *Gpu, ULONG Slot, BOOLEAN ChainFlag);
+ULONG64 MkJobHead(MK_GPU *Gpu, ULONG Slot);
+ULONG64 MkJobTail(MK_GPU *Gpu, ULONG Slot);
 
 /* One handler for all three lines; claims whatever is pending. */
 BOOLEAN MkIsr(MK_GPU *Gpu);
