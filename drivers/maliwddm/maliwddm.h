@@ -124,6 +124,24 @@ struct _MW_ADAPTER {
     SIZE_T FbSize;
     BOOLEAN SourceVisible, PathActive;
 
+    /* The monitor's EDID as the firmware read it (GPU0.EDID in the DSDT),
+     * EdidSize 0 when the firmware has none (display.c). */
+#define MW_EDID_MAX 512
+    UCHAR Edid[MW_EDID_MAX];
+    ULONG EdidSize;
+    /* The firmware's timing, which the target mode reports: from the
+     * EDID's detailed timing of the framebuffer's size if there is one,
+     * else made up around the framebuffer's size. */
+    ULONG TimingTotalW, TimingTotalH;
+    ULONG TimingPixelRate;
+    /* Source modes smaller than the firmware's, for the VOP2 to scale up
+     * (setting ScaledModes, off by default). SrcWidth and SrcHeight are
+     * the committed source mode: the size primaries have and the window
+     * is to scan out. Equal to Fb.Width and Fb.Height unless a smaller
+     * mode is committed. */
+    BOOLEAN ScaledModes;
+    UINT SrcWidth, SrcHeight;
+
     /* GPU. MmuLock serialises the address allocator and the page tables. */
     MK_GPU Gpu;
     FAST_MUTEX MmuLock;
