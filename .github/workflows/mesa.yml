@@ -378,10 +378,12 @@ jobs:
     # The same UMD for the processes Windows on Arm emulates: x64 (loaded
     # through the ARM64X forwarder below) and x86 (UserModeDriverNameWow,
     # SysWOW64). Built and smoke-tested natively on an x64 runner; Panfrost's
-    # own code then runs emulated on the board.
+    # own code then runs emulated on the board. windows-2022, as the
+    # driver build in ci.yml: its image has the WDK, whose UMD DDI headers
+    # (d3dumddi.h, d3d10umddi.h) d3d10umd needs.
     name: d3d10umd + softpipe + Panfrost (${{ matrix.arch }})
     needs: libpan-spirv
-    runs-on: windows-latest
+    runs-on: windows-2022
     strategy:
       fail-fast: false
       matrix:
