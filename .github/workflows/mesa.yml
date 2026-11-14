@@ -432,7 +432,10 @@ jobs:
         shell: pwsh
         run: |
           # clang-cl as on ARM64. For x86, -m32 through _CL_, which clang-cl
-          # reads from the environment as cl does, and a cross file that says
+          # reads from the environment as cl does, with /arch:SSE2 as cl's
+          # default is (plain -m32 is an i386 with no cmpxchg8b, whose 64-bit
+          # atomics are calls into a libatomic Windows has not got), and a
+          # cross file that says
           # the host is x86 (with -m32 in the compiler list, meson passed it
           # to rc too and still took the host for x86_64; under a name that
           # starts with the triple, meson did not know it for clang-cl). It
@@ -442,8 +445,8 @@ jobs:
           $cc = Join-Path $env:VCINSTALLDIR 'Tools\Llvm\x64\bin\clang-cl.exe'
           $c = $cc -replace '\\', '/'
           if ('${{ matrix.arch }}' -eq 'x86') {
-            $env:_CL_ = '-m32'
-            "_CL_=-m32" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            $env:_CL_ = '-m32 /arch:SSE2'
+            "_CL_=-m32 /arch:SSE2" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
             Set-Content -Encoding ascii cross.ini ("[binaries]`nc = '$c'`ncpp = '$c'`n" +
               "[properties]`nneeds_exe_wrapper = false`n" +
               "[host_machine]`nsystem = 'windows'`ncpu_family = 'x86'`ncpu = 'i686'`nendian = 'little'`n")
