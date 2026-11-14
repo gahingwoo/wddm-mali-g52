@@ -10,8 +10,8 @@ composed on the GPU.*
 
 | | |
 |---|---|
-| ![The desktop](docs/results/tspi3m-2026-11-13/desktop-on-mali.jpg) | ![File Explorer](docs/results/tspi3m-2026-11-13/file-explorer-on-mali.jpg) |
-| The desktop after signing in | File Explorer; its toolbar is not drawn yet |
+| ![The Start menu](docs/results/tspi3m-2026-11-13/start-menu-on-mali.jpg) | ![File Explorer](docs/results/tspi3m-2026-11-14/desktop-scanned-out.jpg) |
+| The Start menu, File Explorer and Device Manager, 2026-11-13 | A day later: the display controller reads the frame itself and no pixel is copied on the CPU |
 
 On 2026-11-13 it ran at a frame or two a second. A day later, with the copies
 gone and the display controller reading the primary itself, the desktop keeps
