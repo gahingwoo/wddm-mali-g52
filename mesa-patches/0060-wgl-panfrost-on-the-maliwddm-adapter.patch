@@ -1,0 +1,287 @@
+diff --git a/src/gallium/targets/wgl/meson.build b/src/gallium/targets/wgl/meson.build
+index 3a194b3..2959baa 100644
+--- a/src/gallium/targets/wgl/meson.build
++++ b/src/gallium/targets/wgl/meson.build
+@@ -11,6 +11,13 @@ wgl_def = custom_target(
+ )
+ 
+ gallium_wgl_name = get_option('gallium-wgl-dll-name')
++
++# Panfrost (wddm-mali-g52): the Mali through the libdrm shim in libpankmod.
++# driver_panfrost carries -DGALLIUM_PANFROST; it is empty without Panfrost.
++wgl_panfrost_deps = []
++if with_gallium_panfrost
++  wgl_panfrost_deps = [driver_panfrost, idep_xmlconfig]
++endif
+ libgallium_wgl = shared_library(
+   gallium_wgl_name,
+   ['wgl.c'],
+@@ -24,7 +31,7 @@ libgallium_wgl = shared_library(
+   ],
+   dependencies : [
+     dep_ws2_32, idep_nir, idep_mesautil, driver_swrast,
+-    driver_d3d12, driver_zink, winsys_d3d12_wgl
++    driver_d3d12, driver_zink, winsys_d3d12_wgl, wgl_panfrost_deps
+   ],
+   link_args : gallium_wgl_link_args,
+   name_prefix : '',
+diff --git a/src/gallium/targets/wgl/wgl.c b/src/gallium/targets/wgl/wgl.c
+index 75ec547..d94ca88 100644
+--- a/src/gallium/targets/wgl/wgl.c
++++ b/src/gallium/targets/wgl/wgl.c
+@@ -63,6 +63,206 @@
+ #include "zink/zink_public.h"
+ #endif
+ 
++#ifdef GALLIUM_PANFROST
++#include <io.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include "panfrost/drm/panfrost_drm_public.h"
++#include "util/driconf.h"
++#include "util/macros.h"
++#include "util/xmlconfig.h"
++#include "util/u_inlines.h"
++#include "util/format/u_format.h"
++
++/* Arm Mali through Panfrost (wddm-mali-g52). The libdrm shim in libpankmod
++ * (win32-compat/malikm_drm.c) has no runtime device in an OpenGL process:
++ * it opens the maliwddm adapter itself through the D3DKMT system calls and
++ * makes one device and context for the process. */
++int malikm_open(void);
++void glsl_type_singleton_init_or_ref(void);
++
++/* Panfrost reads its driconf options from the screen config, which the
++ * pipe-loader builds elsewhere; there is none here. */
++static const driOptionDescription wgl_pan_driconf[] = {
++#include "panfrost/driinfo_panfrost.h"
++};
++static driOptionCache wgl_pan_info, wgl_pan_cache;
++static bool use_panfrost = false;
++
++static struct pipe_screen *
++wgl_panfrost_create_screen(void)
++{
++   struct pipe_screen *screen = NULL;
++   int fd = malikm_open();
++
++   if (fd < 0) {
++      /* MALIKM_FAKE: the shim emulates the kernel driver in this process
++       * (CI, where there is no Mali). */
++      const char *fake = getenv("MALIKM_FAKE");
++      if (fake && *fake && *fake != '0')
++         fd = _open("NUL", _O_RDWR);
++   }
++   if (fd < 0) {
++      fprintf(stderr, "wgl: Panfrost found no Mali device\n");
++      return NULL;
++   }
++   struct pipe_screen_config config = {
++      .options = &wgl_pan_cache,
++      .options_info = &wgl_pan_info,
++   };
++   if (!wgl_pan_info.info) {
++      glsl_type_singleton_init_or_ref();
++      driParseOptionInfo(&wgl_pan_info, wgl_pan_driconf, ARRAY_SIZE(wgl_pan_driconf));
++   }
++   screen = panfrost_drm_screen_create(fd, &config);
++   _close(fd); /* the screen keeps its own duplicate */
++   if (!screen)
++      fprintf(stderr, "wgl: Panfrost found no Mali device (no screen on the adapter)\n");
++   return screen;
++}
++
++/* A context of our own, for a present made with no context current. */
++static SRWLOCK wgl_pan_present_lock = SRWLOCK_INIT;
++static struct pipe_context *wgl_pan_present_ctx;
++
++/*
++ * Present for Panfrost: read the colour buffer back and draw it into the
++ * window with GDI, as the software path does with its display target. The
++ * map waits for the GPU to finish the frame and resolves Panfrost's tiled or
++ * AFBC layout into a linear copy. A B8G8R8A8 or B8G8R8X8 buffer is handed
++ * to StretchDIBits as it is mapped; any other format is converted first.
++ * DWM composes the window as any GDI window. One CPU read of the frame per
++ * present.
++ */
++static void
++wgl_panfrost_present(struct pipe_screen *screen, struct pipe_context *pipe,
++                     struct pipe_resource *res, HDC hDC)
++{
++   unsigned w = res->width0, h = res->height0;
++   struct pipe_transfer *xfer = NULL;
++   bool own = false;
++
++   if (!pipe) {
++      AcquireSRWLockExclusive(&wgl_pan_present_lock);
++      if (!wgl_pan_present_ctx)
++         wgl_pan_present_ctx = screen->context_create(screen, NULL, 0);
++      pipe = wgl_pan_present_ctx;
++      own = true;
++      if (!pipe) {
++         ReleaseSRWLockExclusive(&wgl_pan_present_lock);
++         return;
++      }
++   }
++
++   const uint8_t *map = pipe_texture_map(pipe, res, 0, 0, PIPE_MAP_READ, 0, 0, w, h, &xfer);
++   if (map) {
++      const void *bits = map;
++      void *conv = NULL;
++      unsigned pitch = xfer->stride;
++
++      if ((res->format != PIPE_FORMAT_B8G8R8A8_UNORM &&
++           res->format != PIPE_FORMAT_B8G8R8X8_UNORM) || (pitch & 3)) {
++         pitch = w * 4;
++         conv = malloc((size_t)pitch * h);
++         if (conv)
++            util_format_translate(PIPE_FORMAT_B8G8R8A8_UNORM, conv, pitch, 0, 0,
++                                  res->format, map, xfer->stride, 0, 0, w, h);
++         bits = conv;
++      }
++      if (bits) {
++         BITMAPINFO bmi = {0};
++         bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
++         bmi.bmiHeader.biWidth = (LONG)(pitch / 4);
++         bmi.bmiHeader.biHeight = -(LONG)h; /* top-down */
++         bmi.bmiHeader.biPlanes = 1;
++         bmi.bmiHeader.biBitCount = 32;
++         bmi.bmiHeader.biCompression = BI_RGB;
++         StretchDIBits(hDC, 0, 0, (int)w, (int)h, 0, 0, (int)w, (int)h, bits, &bmi,
++                       DIB_RGB_COLORS, SRCCOPY);
++      }
++      free(conv);
++      pipe_texture_unmap(pipe, xfer);
++   }
++   if (own)
++      ReleaseSRWLockExclusive(&wgl_pan_present_lock);
++}
++
++/*
++ * What Panfrost and the shim call that the Direct3D UMD defines in its own
++ * frontend (d3d10umd/Debug.cpp): its log, and the slow-operation log, which
++ * is off here.
++ */
++static void
++wgl_pan_log_append(const char *buf, int len)
++{
++   static HANDLE log = NULL;
++   DWORD done;
++
++   if (log == NULL) {
++      HANDLE f = INVALID_HANDLE_VALUE;
++      if (GetFileAttributesA("C:\\mali\\log") != INVALID_FILE_ATTRIBUTES) {
++         char exe[MAX_PATH], path[MAX_PATH];
++         const char *base = exe;
++         DWORD n = GetModuleFileNameA(NULL, exe, sizeof exe);
++         exe[n < sizeof exe ? n : sizeof exe - 1] = 0;
++         for (const char *c = exe; *c; c++)
++            if (*c == '\\' || *c == '/')
++               base = c + 1;
++         snprintf(path, sizeof path, "C:\\mali\\log\\%s-%lu-gl.txt", base,
++                  (unsigned long)GetCurrentProcessId());
++         f = CreateFileA(path, FILE_APPEND_DATA,
++                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
++                         NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
++      }
++      if (InterlockedCompareExchangePointer((PVOID volatile *)&log, f, NULL) != NULL &&
++          f != INVALID_HANDLE_VALUE)
++         CloseHandle(f);
++   }
++   if (log != INVALID_HANDLE_VALUE)
++      WriteFile(log, buf, (DWORD)len, &done, NULL);
++}
++
++void
++DebugPrintf(const char *format, ...)
++{
++   char buf[2048];
++   int off, len;
++   va_list ap;
++
++   off = snprintf(buf, sizeof buf, "%10lu %5lu ", (unsigned long)GetTickCount(),
++                  (unsigned long)GetCurrentThreadId());
++   va_start(ap, format);
++   len = vsnprintf(buf + off, sizeof buf - off, format, ap);
++   va_end(ap);
++   if (len < 0)
++      return;
++   if (len > (int)(sizeof buf - off - 1))
++      len = (int)(sizeof buf - off - 1);
++   OutputDebugStringA(buf + off);
++   wgl_pan_log_append(buf, off + len);
++}
++
++uint64_t
++mali_slow_now(void)
++{
++   return 0;
++}
++
++uint64_t
++mali_slow_over(uint64_t t0)
++{
++   (void)t0;
++   return 0;
++}
++
++void
++mali_slow_log(uint64_t ticks, const char *op, const char *fmt, ...)
++{
++   (void)ticks; (void)op; (void)fmt;
++}
++#endif
++
+ #ifdef GALLIUM_LLVMPIPE
+ static bool use_llvmpipe = false;
+ #endif
+@@ -101,6 +301,13 @@ wgl_screen_create_by_name(HDC hDC, const char* driver, struct sw_winsys *winsys)
+          use_zink = true;
+    }
+ #endif
++#ifdef GALLIUM_PANFROST
++   if (strcmp(driver, "panfrost") == 0) {
++      screen = wgl_panfrost_create_screen();
++      if (screen)
++         use_panfrost = true;
++   }
++#endif
+ #ifdef GALLIUM_SOFTPIPE
+    if (strcmp(driver, "softpipe") == 0) {
+       screen = softpipe_create_screen(winsys);
+@@ -128,6 +335,9 @@ wgl_screen_create(HDC hDC)
+ #ifdef GALLIUM_ZINK
+       sw_only ? "" : "zink",
+ #endif
++#ifdef GALLIUM_PANFROST
++      sw_only ? "" : "panfrost",
++#endif
+ #if defined(GALLIUM_LLVMPIPE)
+       "llvmpipe",
+ #endif
+@@ -143,6 +353,10 @@ wgl_screen_create(HDC hDC)
+       struct pipe_screen* screen = wgl_screen_create_by_name(hDC, drivers[i], winsys);
+       if (screen) {
+          created_driver_name = drivers[i];
++#ifdef GALLIUM_PANFROST
++         /* Said once per process, so that a log shows which driver drew. */
++         fprintf(stderr, "wgl: using %s\n", drivers[i]);
++#endif
+          return screen;
+       }
+       if (i == 0 && drivers[i][0] != '\0')
+@@ -198,6 +412,13 @@ wgl_present(struct pipe_screen *screen,
+    }
+ #endif
+ 
++#ifdef GALLIUM_PANFROST
++   if (use_panfrost) {
++      wgl_panfrost_present(screen, ctx, res, hDC);
++      return;
++   }
++#endif
++
+ #ifdef GALLIUM_SOFTPIPE
+    winsys = softpipe_screen(screen)->winsys,
+    dt = softpipe_resource(res)->dt,
