@@ -52,6 +52,10 @@ maliumd_fwd.dll   = 1
 maliumd_arm64.dll = 1
 maliumd_x64.dll   = 1
 maliumd_x86.dll   = 1
+maligl_fwd.dll    = 1
+maligl_arm64.dll  = 1
+maligl_x64.dll    = 1
+maligl_x86.dll    = 1
 
 [Manufacturer]
 %ProviderName% = Standard,NTARM64.10.0...16299
@@ -76,6 +80,11 @@ maliwddm.sys
 maliumd.dll,maliumd_fwd.dll,,0x00004000
 maliumd_arm64.dll,,,0x00004000
 maliumd_x64.dll,,,0x00004000
+; The OpenGL ICD, Mesa's WGL frontend on Panfrost: a forwarder and its two
+; builds, as for the Direct3D UMD.
+maligl.dll,maligl_fwd.dll,,0x00004000
+maligl_arm64.dll,,,0x00004000
+maligl_x64.dll,,,0x00004000
 
 ; PnpLockdown = 1 keeps applications, administrators included, from changing
 ; the files this INF copies. For the UMD that would stop the rename above,
@@ -87,6 +96,7 @@ maliumd_x64.dll,,,0x00004000
 
 [MW_UmdWowFiles]
 maliumd_x86.dll,,,0x00004000
+maligl_x86.dll,,,0x00004000
 
 [MW_UmdWowFiles.security]
 "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;BU)(A;;GRGX;;;AC)(A;;GRGX;;;S-1-15-2-2)"
@@ -94,6 +104,19 @@ maliumd_x86.dll,,,0x00004000
 [MW_Settings]
 HKR,,UserModeDriverName,%REG_MULTI_SZ%,maliumd.dll,maliumd.dll,maliumd.dll,maliumd.dll
 HKR,,UserModeDriverNameWow,%REG_MULTI_SZ%,maliumd_x86.dll,maliumd_x86.dll,maliumd_x86.dll,maliumd_x86.dll
+; opengl32.dll asks the kernel for these (KMTQAITYPE_UMOPENGLINFO) and loads
+; the ICD they name; the kernel reads them when the adapter starts. Without
+; them a program gets Windows' GL 1.1 software implementation, and one that
+; calls a GL 2 entry point crashes at address 0 (GpuTest, TaishanPi 3M,
+; 2026-11-14). With them set by hand there, gltri drew on the Mali through
+; Windows' opengl32 from ARM64, x64 and x86 processes, and FurMark ran.
+; Flags 1: the ICD is told to finish before a swap.
+HKR,,OpenGLDriverName,%REG_SZ%,maligl.dll
+HKR,,OpenGLVersion,%REG_DWORD%,1
+HKR,,OpenGLFlags,%REG_DWORD%,1
+HKR,,OpenGLDriverNameWow,%REG_SZ%,maligl_x86.dll
+HKR,,OpenGLVersionWow,%REG_DWORD%,1
+HKR,,OpenGLFlagsWow,%REG_DWORD%,1
 ; Base names of the UMDs this package installs ("Installed display drivers
 ; directive", Microsoft's display driver INF documentation).
 HKR,,InstalledDisplayDrivers,%REG_MULTI_SZ%,maliumd
@@ -116,4 +139,5 @@ DiskName      = "RK3576 Mali-G52 WDDM driver"
 MW.DeviceDesc = "Rockchip RK3576 Mali-G52 (WDDM)"
 MW.SvcDesc    = "RK3576 Mali-G52 WDDM driver"
 REG_DWORD     = 0x00010001
+REG_SZ        = 0x00000000
 REG_MULTI_SZ  = 0x00010000

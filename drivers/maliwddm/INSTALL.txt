@@ -13,6 +13,10 @@ What is in this folder
                              C:\Windows\System32\maliumd.dll: it hands an
                              ARM64 process maliumd_arm64.dll and an x64
                              process maliumd_x64.dll
+  driver\maligl_*.dll        the OpenGL driver (Mesa's WGL frontend on
+                             Panfrost, OpenGL 3.1): a forwarder to System32
+                             as maligl.dll, its ARM64 and x64 builds beside
+                             it, the x86 build to SysWOW64
   driver\maliwddm.cat        the catalog of the files above
   driver\malivop.inf, .cat   a name and the null driver for the display
                              controller, ACPI\RKCP7403, which maliwddm
