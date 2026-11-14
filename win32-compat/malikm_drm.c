@@ -705,6 +705,7 @@ struct wbo {
    uint64_t size, va;
    void *cpu;
    uint64_t listed;     /* submit that last put it in the allocation list */
+   uint64_t used;       /* wseq of the last submission that named it; 0 none */
    /* The allocation of a runtime resource (a shared resource, created here
     * or opened from another process): the runtime resource and the runtime
     * device it belongs to. Such an allocation is given back through the
@@ -765,6 +766,86 @@ static struct {
    int last_unsignalled;
 } ddi;
 
+/* Which submissions are done, so that "is this BO busy" can be answered for
+ * the BO that was asked about.
+ *
+ * The first shim waited for everything the device had submitted, whatever
+ * the timeout: up to 95 ms for a 64 KB BO out of Panfrost's cache. The
+ * second kept the timeout but still answered for the whole queue, so with
+ * anything at all outstanding every BO was busy; Panfrost then makes a new
+ * BO in place of the cached one, and dwm.exe went from 422 allocations in
+ * ten minutes to 105833 in fourteen, each cache eviction costing about
+ * 40 ms (TaishanPi 3M, 2026-11-14).
+ *
+ * Each submission's completion event is kept here, in order, with its wseq.
+ * A context's submissions complete in order, so the newest event that is
+ * signalled says every submission up to its number is done. A BO is busy
+ * while the last submission that named it is newer than that. */
+#define WRING 64
+static struct wring {
+   uint64_t seq[WRING];
+   HANDLE ev[WRING];
+   uint32_t n;
+   uint64_t done;
+} wring;
+
+static void
+wring_free(void)
+{
+   for (uint32_t i = 0; i < wring.n; i++)
+      CloseHandle(wring.ev[i]);
+   memset(&wring, 0, sizeof(wring));
+}
+
+/* The submission numbered seq has this event. */
+static void
+wring_push(uint64_t seq, HANDLE ev)
+{
+   HANDLE dup = NULL;
+   if (!ev || !DuplicateHandle(GetCurrentProcess(), ev, GetCurrentProcess(), &dup, 0, FALSE,
+                               DUPLICATE_SAME_ACCESS))
+      return;
+   if (wring.n == WRING) {
+      /* Full: forget the oldest. Its submission is found done when a newer
+       * one is. */
+      CloseHandle(wring.ev[0]);
+      memmove(&wring.seq[0], &wring.seq[1], (WRING - 1) * sizeof(wring.seq[0]));
+      memmove(&wring.ev[0], &wring.ev[1], (WRING - 1) * sizeof(wring.ev[0]));
+      wring.n--;
+   }
+   wring.seq[wring.n] = seq;
+   wring.ev[wring.n] = dup;
+   wring.n++;
+}
+
+/* Move "done" up to the newest signalled event; no waiting. */
+static void
+wring_poll(void)
+{
+   for (uint32_t i = wring.n; i-- > 0;) {
+      if (WaitForSingleObject(wring.ev[i], 0) != WAIT_OBJECT_0)
+         continue;
+      wring.done = wring.seq[i];
+      for (uint32_t k = 0; k <= i; k++)
+         CloseHandle(wring.ev[k]);
+      memmove(&wring.seq[0], &wring.seq[i + 1], (wring.n - i - 1) * sizeof(wring.seq[0]));
+      memmove(&wring.ev[0], &wring.ev[i + 1], (wring.n - i - 1) * sizeof(wring.ev[0]));
+      wring.n -= i + 1;
+      return;
+   }
+}
+
+/* The event to wait on for the submission numbered seq: its own, or the
+ * next newer one there is. NULL if none is kept. */
+static HANDLE
+wring_event_for(uint64_t seq)
+{
+   for (uint32_t i = 0; i < wring.n; i++)
+      if (wring.seq[i] >= seq)
+         return wring.ev[i];
+   return NULL;
+}
+
 /* Allocations whose BO is closed but which a job submitted earlier may
  * still use. Linux's panfrost keeps a BO alive until its jobs are done,
  * and Mesa's BO cache relies on that: it closes buffers without waiting.
@@ -821,6 +902,7 @@ struct wstate {
    unsigned present_w, present_h;
    HANDLE last_event;
    int last_unsignalled;
+   struct wring ring;
 };
 
 #define WDEV_MAX 64
@@ -850,6 +932,7 @@ wsave(struct wstate *s)
    s->present = ddi.present; s->present_cpu = ddi.present_cpu;
    s->present_w = ddi.present_w; s->present_h = ddi.present_h;
    s->last_event = ddi.last_event; s->last_unsignalled = ddi.last_unsignalled;
+   s->ring = wring;
 }
 
 static void
@@ -867,6 +950,7 @@ wload(const struct wstate *s)
    ddi.present = s->present; ddi.present_cpu = s->present_cpu;
    ddi.present_w = s->present_w; ddi.present_h = s->present_h;
    ddi.last_event = s->last_event; ddi.last_unsignalled = s->last_unsignalled;
+   wring = s->ring;
 }
 
 /* Under wddm_lock. */
@@ -1592,6 +1676,7 @@ malikm_bind_d3dddi(HANDLE hRTAdapter, HANDLE hRTDevice, const void *pKTCallbacks
       free(wdead);
       if (ddi.last_event)
          CloseHandle(ddi.last_event);
+      wring_free();
       wselect(&wdevs[0]);
    }
    memset(dev, 0, sizeof(*dev));
@@ -1676,6 +1761,7 @@ malikm_unbind_d3dddi(void *hRTDevice)
       free(wdead);
       if (ddi.last_event)
          CloseHandle(ddi.last_event);
+      wring_free();
       wselect(&wdevs[0]);
       memset(dev, 0, sizeof(*dev));
    }
@@ -2095,8 +2181,32 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       return 0;
    case MALIKM_NR_PANFROST_WAIT_BO: {
       struct drm_panfrost_wait_bo *a = (void *)b;
-      if (!wddm_bo(a->handle))
+      struct wbo *bo = wddm_bo(a->handle);
+      if (!bo)
          return -MK_ENOENT;
+      if (wait_keeps_timeout() && ddi.on) {
+         /* Is the last submission that named this BO done? */
+         uint64_t slow_t0 = mali_slow_now();
+         HANDLE ev;
+         wring_poll();
+         if (bo->used <= wring.done)
+            return 0;
+         if (a->timeout_ns == 0)
+            return -MK_ETIMEDOUT;
+         ev = wring_event_for(bo->used);
+         if (ev && a->timeout_ns != MALIKM_TIMEOUT_INFINITE && a->timeout_ns < 10000000000ll) {
+            DWORD ms = (DWORD)((a->timeout_ns + 999999) / 1000000);
+            DWORD w = WaitForSingleObject(ev, ms);
+            MALI_SLOW(slow_t0, "wait-bo", "its own submission %llu, timeout %lld ns, %s",
+                      (unsigned long long)bo->used, (long long)a->timeout_ns,
+                      w == WAIT_OBJECT_0 ? "ready" : "busy");
+            if (w != WAIT_OBJECT_0)
+               return -MK_ETIMEDOUT;
+            wring_poll();
+            return 0;
+         }
+         /* No event for it, or no limit: the whole queue, as before. */
+      }
       return wddm_idle_within(a->timeout_ns, -MK_ETIMEDOUT, "wait-bo");
    }
    case MALIKM_NR_PANFROST_SUBMIT: {
@@ -2157,6 +2267,15 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
          return -MK_EIO;
       }
       wseq++;
+      /* The BOs this job names are busy until it is done. Those listed
+       * only to keep them resident are not: nothing in it touches them. */
+      for (uint32_t i = 0; i < a->bo_handle_count; i++) {
+         struct wbo *bo = wddm_bo(bos[i]);
+         if (bo)
+            bo->used = wseq;
+      }
+      if (ddi.on && !ddi.last_unsignalled)
+         wring_push(wseq, ddi.last_event);
       return 0;
    }
    case MALIKM_NR_GEM_CLOSE: {
