@@ -1255,20 +1255,23 @@ wddm_idle(const char *why)
  * has finished everything this device submitted, so each of those
  * questions can cost a whole frame of GPU time, with wddm_lock held.
  *
- * With the file C:\mali\wait-timeout present (read once per process), the
- * timeout is kept: the wait gives up when it runs out and answers Busy,
+ * The timeout is kept: the wait gives up when it runs out and answers Busy,
  * which is what Panfrost expects of the Linux kernel. The answer is still
  * for the whole queue, not for the one BO, so it says busy more often than
- * Linux would; never ready when it is not. Off by default until it has run
- * on the board. Busy is MK_ETIMEDOUT for WAIT_BO and MK_ETIME for a
- * syncobj, as Linux returns them.
+ * Linux would; never ready when it is not. Busy is MK_ETIMEDOUT for WAIT_BO
+ * and MK_ETIME for a syncobj, as Linux returns them.
+ *
+ * On the TaishanPi 3M, dwm.exe's log of slow operations had 38 waits of up
+ * to 95 ms in 605 s with the timeout ignored, most of them inside a 64 KB
+ * "Batch pool" BO taken from the cache, and none in 67 s with it kept. The
+ * file C:\mali\wait-all (read once per process) brings the old waits back.
  */
 static int
 wait_keeps_timeout(void)
 {
    static int on = -1;
    if (on < 0)
-      on = GetFileAttributesA("C:\\mali\\wait-timeout") != INVALID_FILE_ATTRIBUTES;
+      on = GetFileAttributesA("C:\\mali\\wait-all") == INVALID_FILE_ATTRIBUTES;
    return on;
 }
 

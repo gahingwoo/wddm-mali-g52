@@ -1,0 +1,20 @@
+diff --git a/src/gallium/drivers/panfrost/pan_device.c b/src/gallium/drivers/panfrost/pan_device.c
+index db019b0..6a425d0 100644
+--- a/src/gallium/drivers/panfrost/pan_device.c
++++ b/src/gallium/drivers/panfrost/pan_device.c
+@@ -103,9 +103,12 @@ panfrost_open_device(void *memctx, int fd, struct panfrost_device *dev)
+ #ifdef _WIN32
+       /* On Linux the heap grows on fault and costs what a frame uses. Under
+        * the WDDM shim it is allocated whole, once for every Direct3D device,
+-       * and a process may have five. C:\\mali\\heap-mb holds a size in MB
+-       * to try instead; too small and a frame with much geometry fails with
+-       * an out-of-memory fault in the tiler. */
++       * and a process may have five: on the TaishanPi 3M dwm.exe held
++       * 171.6 MiB of GPU memory with 128 and 119.2 with 32, and 15933 jobs
++       * of the Windows desktop ran with 32 and none failed. So 32 here.
++       * C:\\mali\\heap-mb holds another size in MB; too small and a frame
++       * with much geometry fails with an out-of-memory fault in the tiler. */
++      heap_mb = 32;
+       {
+          FILE *f = fopen("C:\\mali\\heap-mb", "r");
+          unsigned v = 0;
