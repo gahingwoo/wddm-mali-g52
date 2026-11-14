@@ -342,6 +342,32 @@ int main(int argc, char **argv)
         printf("  %u IOMMU page faults cleared, the last at 0x%08x\n", d.Faults, d.FaultAddr);
         return 0;
     }
+    if (argc >= 2 && strcmp(argv[1], "clk") == 0) {
+        /* clk: report. clk <parent> <div> [keep]: parent 0 GPLL 1188 MHz,
+         * 1 CPLL 1000 MHz; keep stores it for every start. clk forget. */
+        static const unsigned pll[2] = { 1188, 1000 };
+        MW_ESCAPE_GPUCLK_DATA d = {0};
+        d.Code = MW_ESCAPE_GPUCLK;
+        if (argc >= 3 && strcmp(argv[2], "forget") == 0)
+            d.Mode = 3;
+        else if (argc >= 4) {
+            d.Parent = (unsigned)atoi(argv[2]);
+            d.Div = (unsigned)atoi(argv[3]);
+            d.Mode = (argc >= 5 && strcmp(argv[4], "keep") == 0) ? 2 : 1;
+        }
+        st = escape(adapter, 0, &d, sizeof(d));
+        if (st < 0)
+            return fail("GPU clock escape (at most 600 MHz: GPLL from /2, CPLL from /2)", st);
+        if (d.Applied)
+            printf("GPU clock: %u MHz (%s / %u), written by this driver\n",
+                   pll[(d.Applied >> 8) & 1] / (d.Applied & 0xFF), (d.Applied >> 8) ? "CPLL" : "GPLL",
+                   d.Applied & 0xFF);
+        else
+            printf("GPU clock: as the firmware left it (198 MHz on edk2-rk3576)\n");
+        if (d.Stored)
+            printf("  at every start: %u MHz\n", pll[(d.Stored >> 8) & 1] / (d.Stored & 0xFF));
+        return 0;
+    }
     if (argc >= 2 && strcmp(argv[1], "mem") == 0)
         return mem(adapter);
     if (argc >= 2 && strcmp(argv[1], "perf") == 0) {

@@ -132,6 +132,19 @@ typedef struct _MW_ESCAPE_STATS_DATA {
  * are counted in the totals and in NoSlot. A process's entry is reused once
  * it holds nothing, so an exited process with Count 0 may be gone. */
 #define MW_ESCAPE_MEMORY        5
+#define MW_ESCAPE_GPUCLK        6
+
+/* The GPU's clock (RK3576: clk_gpu_src_pre, CRU_CLKSEL_CON165).
+ * Parent: 0 GPLL (1188 MHz), 1 CPLL (1000 MHz); Div 1 to 32.
+ * Mode: 0 report only; 1 set now; 2 set now and at every start; 3 forget
+ * the stored setting (the firmware's rate is kept from the next start). */
+typedef struct _MW_ESCAPE_GPUCLK_DATA {
+    mw_u32 Code;                        /* MW_ESCAPE_GPUCLK */
+    mw_u32 Mode;
+    mw_u32 Parent, Div;
+    mw_u32 Applied;                     /* what this driver last wrote, or 0: (Parent << 8) | Div */
+    mw_u32 Stored;                      /* the setting kept for the next start, same form, or 0 */
+} MW_ESCAPE_GPUCLK_DATA;
 #define MW_MEM_PROCS            64
 
 typedef struct _MW_MEM_PROC {

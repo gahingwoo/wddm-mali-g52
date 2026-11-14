@@ -199,6 +199,7 @@ struct _MW_ADAPTER {
     volatile BOOLEAN ScanShowing;
     volatile LONG ScanOn;
     ULONG ScanFlips, ScanMaps, ScanToFbs, ScanMismatch, ScanNoSlot, ScanFaults, ScanFaultAddr;
+    ULONG GpuClk;               /* (parent << 8) | divider last written here; 0 the firmware's */
     PKTHREAD CopyThread;
     KEVENT CopyEvent;
     FAST_MUTEX CopyLock;

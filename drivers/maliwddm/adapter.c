@@ -139,6 +139,59 @@ static NTSTATUS APIENTRY MwAddDevice(IN_CONST_PDEVICE_OBJECT Pdo, OUT_PPVOID Con
     return STATUS_SUCCESS;
 }
 
+/* The GPU's clock.
+ *
+ * The firmware leaves clk_gpu_src_pre at GPLL / 6 = 198 MHz, which is the
+ * rate the device tree assigns before Linux's devfreq takes over; the
+ * operating points start at 300 MHz and go to 950. Nothing in Windows
+ * raises it, so everything up to 2026-11-14 ran there: FurMark through the
+ * OpenGL ICD had the GPU 97% busy with jobs of up to 425 ms.
+ *
+ * CRU_CLKSEL_CON165 (0x27200594): mux in [7:5] (0 gpll, 1 cpll, 2 aupll,
+ * 3 spll), divider minus one in [4:0], write-enable mask in the top half
+ * (clk-rk3576.c, CLK_GPU_SRC_PRE). The operating points up to 600 MHz ask
+ * for 700 mV, the lowest; above that the supply has to rise, and this
+ * driver does not touch the regulator. So it takes GPLL (1188 MHz) or CPLL
+ * (1000 MHz) with a divider that keeps the result at or below 600 MHz. */
+#define MW_CRU_CLKSEL165   0x27200594u
+#define MW_GPU_MAX_HZ      600000000u
+
+static NTSTATUS GpuClkWrite(MW_ADAPTER *A, ULONG Parent, ULONG Div)
+{
+    static const ULONG pll[2] = { 1188000000u, 1000000000u };
+    PHYSICAL_ADDRESS pa;
+    PULONG reg;
+
+    if (Parent > 1 || Div < 1 || Div > 32 || pll[Parent] / Div > MW_GPU_MAX_HZ)
+        return STATUS_INVALID_PARAMETER;
+    pa.QuadPart = MW_CRU_CLKSEL165 & ~0xFFFu;
+    reg = (PULONG)MmMapIoSpaceEx(pa, PAGE_SIZE, PAGE_READWRITE | PAGE_NOCACHE);
+    if (reg == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)reg + (MW_CRU_CLKSEL165 & 0xFFFu)),
+                         (0xFFu << 16) | (Parent << 5) | (Div - 1));
+    MmUnmapIoSpace(reg, PAGE_SIZE);
+    A->GpuClk = (Parent << 8) | Div;
+    MwLog(A, L"GpuClkHz", pll[Parent] / Div);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS GpuClk(MW_ADAPTER *A, MW_ESCAPE_GPUCLK_DATA *D)
+{
+    NTSTATUS st = STATUS_SUCCESS;
+
+    if (D->Mode == 1 || D->Mode == 2) {
+        st = GpuClkWrite(A, D->Parent, D->Div);
+        if (NT_SUCCESS(st) && D->Mode == 2)
+            MwSetSetting(A, L"GpuClk", (D->Parent << 8) | D->Div);
+    } else if (D->Mode == 3) {
+        MwSetSetting(A, L"GpuClk", 0);
+    }
+    D->Applied = A->GpuClk;
+    D->Stored = MwSetting(A, L"GpuClk", 0);
+    return st;
+}
+
 /* What Settings, dxdiag and Win32_VideoController show for an adapter comes
  * from HardwareInformation.* in the driver's software key; nothing fills
  * them in for a driver that does not, and they were blank. There is no
@@ -220,6 +273,11 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
     a->GpuUp = NT_SUCCESS(st);
     MwLog(a, L"GpuUp", NT_SUCCESS(st) ? 1 : (ULONG)st);
     PublishIdentity(a);
+    {
+        ULONG clk = MwSetting(a, L"GpuClk", 0);
+        if (a->GpuUp && clk != 0)
+            (void)GpuClkWrite(a, clk >> 8, clk & 0xFF);
+    }
 
     /* Render-only: no sources and no children, and the firmware framebuffer
      * stays with Basic Display, which keeps the desktop up. */
@@ -549,6 +607,10 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
             return STATUS_INVALID_PARAMETER;
         GpuInfo(a, (MW_ESCAPE_GPU_INFO_DATA *)Esc->pPrivateDriverData);
         return STATUS_SUCCESS;
+    case MW_ESCAPE_GPUCLK:
+        if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_GPUCLK_DATA))
+            return STATUS_INVALID_PARAMETER;
+        return GpuClk(a, (MW_ESCAPE_GPUCLK_DATA *)Esc->pPrivateDriverData);
     case MW_ESCAPE_MEMORY:
         if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_MEMORY_DATA))
             return STATUS_INVALID_PARAMETER;
