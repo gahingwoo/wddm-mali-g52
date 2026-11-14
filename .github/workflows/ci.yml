@@ -31,10 +31,14 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
+          # maliwddm's INF lists the UMD, which mesa.yml builds; its catalog
+          # is made in the package job, once the DLL is next to the INF.
+          $extra = @()
+          if ($env:DRV -eq 'maliwddm') { $extra += '/p:EnableInf2cat=false' }
           msbuild drivers\$env:DRV\$env:DRV.vcxproj `
             /p:Configuration=Release /p:Platform=ARM64 `
             /p:WindowsTargetPlatformVersion=$env:WDK_VERSION `
-            /p:SignMode=Off /m /nologo /v:minimal
+            /p:SignMode=Off @extra /m /nologo /v:minimal
           if ($LASTEXITCODE -ne 0) { throw "msbuild failed" }
 
       - name: Test-sign
@@ -62,16 +66,25 @@ jobs:
             & $iv /v "$out\$env:DRV.inf"
             if ($LASTEXITCODE) { throw "infverif failed: $LASTEXITCODE" }
           } else { Write-Host 'infverif.exe not found in the WDK' }
-          & $i2c /driver:"$((Resolve-Path $out).Path)" /os:10_RS3_ARM64
-          if ($LASTEXITCODE) { throw "inf2cat failed: $LASTEXITCODE" }
-          & $st sign /fd sha256 /f C:\t.pfx /p $pw "$out\$env:DRV.sys" "$out\$env:DRV.cat"
-          if ($LASTEXITCODE) { throw "signtool failed: $LASTEXITCODE" }
+          if ($env:DRV -eq 'maliwddm') {
+            # No catalog here: the package job adds maliumd_arm64.dll, makes
+            # the catalog and signs all of it with one certificate.
+            & $st sign /fd sha256 /f C:\t.pfx /p $pw "$out\$env:DRV.sys"
+            if ($LASTEXITCODE) { throw "signtool failed: $LASTEXITCODE" }
+          } else {
+            & $i2c /driver:"$((Resolve-Path $out).Path)" /os:10_RS3_ARM64
+            if ($LASTEXITCODE) { throw "inf2cat failed: $LASTEXITCODE" }
+            & $st sign /fd sha256 /f C:\t.pfx /p $pw "$out\$env:DRV.sys" "$out\$env:DRV.cat"
+            if ($LASTEXITCODE) { throw "signtool failed: $LASTEXITCODE" }
+          }
           Get-ChildItem $out | Format-Table Name, Length
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.driver }}-arm64
+          # maliwddm-arm64 is the installable package, made by the package
+          # job; this is the kernel driver alone, with no catalog.
+          name: ${{ matrix.driver == 'maliwddm' && 'maliwddm-kmd-arm64' || format('{0}-arm64', matrix.driver) }}
           path: pkg/
           if-no-files-found: error
 
@@ -125,3 +138,213 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build and run
         run: make -C tests/malikm-host run
+
+  umd:
+    # The UMD for the package: mesa.yml's Panfrost build of the same inputs.
+    # mesa.yml runs only when those change, so the build to use is the
+    # newest one, from any commit, whose UMD inputs are the same as this
+    # commit's. When this push changed them, that is the Mesa run of this
+    # push, and this job waits for it.
+    name: find the Mesa build of this commit's UMD
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      run_id: ${{ steps.find.outputs.run_id }}
+      sha: ${{ steps.find.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Find
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ART: mesa-d3d10umd-panfrost-arm64
+        run: |
+          # What the DLL is built from (mesa.yml copies include/ and
+          # win32-compat/ into Mesa, applies mesa-patches/, puts ci/ on PATH).
+          # mesa.yml also runs on tests/**, which do not go into the DLL.
+          inputs=(.github/workflows/mesa.yml mesa-patches win32-compat include ci)
+          deadline=$(( $(date +%s) + 50 * 60 ))
+          while :; do
+            : > runs.tsv
+            for page in 1 2 3; do
+              gh api "repos/$GITHUB_REPOSITORY/actions/workflows/mesa.yml/runs?per_page=100&page=$page" \
+                --jq '.workflow_runs[] | [.id, .head_sha, .status, .head_branch] | @tsv' >> runs.tsv
+            done
+            found= pending=
+            while IFS=$'\t' read -r id sha status branch; do
+              git cat-file -e "$sha^{commit}" 2>/dev/null || continue
+              git diff --quiet "$sha" HEAD -- "${inputs[@]}" || continue
+              if [ "$status" != completed ]; then pending="$pending $id"; continue; fi
+              # The artifact, not the run's conclusion: it is uploaded only
+              # when the Panfrost job passed, whatever other jobs did.
+              n=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts?name=$ART" \
+                    --jq '[.artifacts[] | select(.expired | not)] | length' < /dev/null)
+              if [ "$n" -gt 0 ]; then found="$id $sha $branch"; break; fi
+            done < runs.tsv
+            if [ -n "$found" ]; then
+              set -- $found
+              echo "Mesa run $1 ($3, $2) built the UMD inputs of $GITHUB_SHA"
+              echo "run_id=$1" >> "$GITHUB_OUTPUT"
+              echo "sha=$2" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ -z "$pending" ]; then
+              echo "::error::no Mesa run with $ART for this commit's UMD inputs; run mesa.yml on this branch (workflow_dispatch)"
+              exit 1
+            fi
+            if [ "$(date +%s)" -gt "$deadline" ]; then
+              echo "::error::Mesa run(s)$pending still not done after 50 minutes"
+              exit 1
+            fi
+            echo "waiting for Mesa run(s)$pending"
+            sleep 60
+          done
+
+  package:
+    # maliwddm.inf + maliwddm.sys + maliumd_arm64.dll, one catalog, all
+    # signed with one test certificate that goes into the package as a .cer.
+    name: maliwddm package with its UMD (ARM64, test-signed)
+    needs: [driver, umd]
+    runs-on: windows-2022
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: maliwddm-kmd-arm64
+          path: kmd
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: mesa-d3d10umd-panfrost-arm64
+          path: umd
+          run-id: ${{ needs.umd.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Assemble and sign
+        shell: pwsh
+        run: |
+          # Same layout as the kernel driver artifact: a maliwddm folder.
+          $drv = 'pkg\maliwddm'
+          New-Item -ItemType Directory -Force -Path $drv | Out-Null
+          Copy-Item kmd\maliwddm\maliwddm.inf, kmd\maliwddm\maliwddm.sys $drv
+          # The INF copies this to System32\maliumd.dll (see the INF for why
+          # the name differs).
+          Copy-Item umd\libgallium_d3d10.dll "$drv\maliumd_arm64.dll"
+          $kits = 'C:\Program Files (x86)\Windows Kits\10'
+          $st   = Join-Path $kits "bin\$env:WDK_VERSION\x86\signtool.exe"
+          $i2c  = Join-Path $kits "bin\$env:WDK_VERSION\x86\inf2cat.exe"
+          $pw   = [guid]::NewGuid().ToString()
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=wddm-mali-g52 test signing' `
+                    -CertStoreLocation Cert:\CurrentUser\My -HashAlgorithm SHA256 -NotAfter (Get-Date).AddYears(5)
+          Export-PfxCertificate -Cert $cert -FilePath C:\t.pfx -Password (ConvertTo-SecureString $pw -Force -AsPlainText) | Out-Null
+          Export-Certificate -Cert $cert -FilePath wddm-mali-g52-test.cer | Out-Null
+          "CERT_THUMBPRINT=$($cert.Thumbprint)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "CERT_NOTAFTER=$($cert.NotAfter.ToString('yyyy-MM-dd'))" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          # Embedded signatures first, then the catalog over the signed files.
+          & $st sign /fd sha256 /f C:\t.pfx /p $pw "$drv\maliwddm.sys" "$drv\maliumd_arm64.dll"
+          if ($LASTEXITCODE) { throw "signtool failed: $LASTEXITCODE" }
+          $iv = (Get-ChildItem $kits -Recurse -Filter infverif.exe -ErrorAction SilentlyContinue |
+                   Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1).FullName
+          if ($iv) {
+            & $iv /v "$drv\maliwddm.inf"
+            if ($LASTEXITCODE) { throw "infverif failed: $LASTEXITCODE" }
+          } else { Write-Host 'infverif.exe not found in the WDK' }
+          # The OS list of maliwddm.vcxproj; 24H2 (10_GE) cannot run on RK3576.
+          & $i2c /driver:"$((Resolve-Path $drv).Path)" /os:10_RS3_ARM64,10_RS4_ARM64,10_RS5_ARM64,10_19H1_ARM64,10_VB_ARM64,10_CO_ARM64,10_NI_ARM64
+          if ($LASTEXITCODE) { throw "inf2cat failed: $LASTEXITCODE" }
+          & $st sign /fd sha256 /f C:\t.pfx /p $pw "$drv\maliwddm.cat"
+          if ($LASTEXITCODE) { throw "signtool failed: $LASTEXITCODE" }
+          Remove-Item C:\t.pfx
+          Get-ChildItem $drv | Format-Table Name, Length
+
+      - name: Verify
+        shell: pwsh
+        run: |
+          # The certificate is self-signed, so the default Authenticode
+          # policy (/pa) fails on any machine that does not trust it. The
+          # runner is thrown away after the job, so trust it here the way
+          # INSTALL.txt tells the user to, and verify with the real policy.
+          $PSNativeCommandUseErrorActionPreference = $false
+          $st  = 'C:\Program Files (x86)\Windows Kits\10\bin\' + $env:WDK_VERSION + '\x86\signtool.exe'
+          $drv = 'pkg\maliwddm'
+          $cat = "$drv\maliwddm.cat"
+          certutil -f -addstore Root wddm-mali-g52-test.cer | Out-Null
+          certutil -f -addstore TrustedPublisher wddm-mali-g52-test.cer | Out-Null
+          # 1. Each file's hash is in the catalog, and the catalog's
+          #    signature verifies.
+          foreach ($f in 'maliwddm.inf', 'maliwddm.sys', 'maliumd_arm64.dll') {
+            & $st verify /pa /q /c $cat "$drv\$f"
+            if ($LASTEXITCODE) { throw "$f is not in $cat, or the catalog does not verify" }
+            Write-Host "in the catalog: $f"
+          }
+          # 2. The check can fail: a changed INF is not in the catalog.
+          New-Item -ItemType Directory -Force bad | Out-Null
+          Copy-Item "$drv\maliwddm.inf" bad\
+          Add-Content bad\maliwddm.inf '; changed'
+          & $st verify /pa /q /c $cat bad\maliwddm.inf
+          if (-not $LASTEXITCODE) { throw 'a changed INF passed the catalog check' }
+          $global:LASTEXITCODE = 0
+          # 3. The embedded signatures of the two binaries verify.
+          & $st verify /pa /q "$drv\maliwddm.sys" "$drv\maliumd_arm64.dll"
+          if ($LASTEXITCODE) { throw 'an embedded signature does not verify' }
+          # 4. Catalog and binaries are signed by this run's certificate.
+          foreach ($f in 'maliwddm.cat', 'maliwddm.sys', 'maliumd_arm64.dll') {
+            $s = Get-AuthenticodeSignature "$drv\$f"
+            if ($s.SignerCertificate.Thumbprint -ne $env:CERT_THUMBPRINT) {
+              throw "$f is signed by $($s.SignerCertificate.Thumbprint), not $env:CERT_THUMBPRINT"
+            }
+            Write-Host "$f signed by $env:CERT_THUMBPRINT ($($s.Status))"
+          }
+          # For the log: the catalog's member list as certutil prints it.
+          certutil -dump $cat | Select-String -Pattern 'File|maliwddm|maliumd' | Select-Object -First 30
+          certutil -delstore Root $env:CERT_THUMBPRINT | Out-Null
+          certutil -delstore TrustedPublisher $env:CERT_THUMBPRINT | Out-Null
+          exit 0
+
+      - name: Release layout
+        shell: pwsh
+        env:
+          MESA_RUN: ${{ needs.umd.outputs.run_id }}
+          MESA_SHA: ${{ needs.umd.outputs.sha }}
+        run: |
+          $rel = 'rel\wddm-mali-g52-driver-arm64'
+          New-Item -ItemType Directory -Force -Path "$rel\driver", "$rel\symbols" | Out-Null
+          Copy-Item pkg\maliwddm\* "$rel\driver\"
+          Copy-Item wddm-mali-g52-test.cer $rel
+          Copy-Item wddm-mali-g52-test.cer pkg\maliwddm\
+          Copy-Item umd\libgallium_d3d10.pdb "$rel\symbols\" -ErrorAction SilentlyContinue
+          $info = @(
+            (Get-Content drivers\maliwddm\INSTALL.txt -Raw).TrimEnd(),
+            '',
+            'THIS BUILD',
+            '',
+            "  Commit:              $env:GITHUB_SHA ($env:GITHUB_REF_NAME)",
+            "  CI run:              $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID",
+            "  UMD from Mesa run:   $env:MESA_RUN (commit $env:MESA_SHA)",
+            "  Certificate:         CN=wddm-mali-g52 test signing, SHA1 $env:CERT_THUMBPRINT,",
+            "                       valid until $env:CERT_NOTAFTER; made for this CI run only",
+            ''
+          )
+          ($info -join "`r`n") | Set-Content -NoNewline -Encoding ascii "$rel\INSTALL.txt"
+          Get-ChildItem -Recurse rel | Format-Table FullName, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maliwddm-arm64
+          path: pkg/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wddm-mali-g52-driver-arm64
+          path: rel/
+          if-no-files-found: error
