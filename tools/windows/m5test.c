@@ -158,6 +158,9 @@ static void print_stats(D3DKMT_HANDLE adapter, const char *when)
         printf("  longest since start, us: flip copy %u, flip to shown %u, job %u, between vsyncs %u;"
                " %u flips came with jobs outstanding\n",
                s.FlipCopyMaxUs, s.FlipWaitMaxUs, s.JobMaxUs, s.VsyncGapMaxUs, s.FlipsWhileBusy);
+    printf("  preemption: TimeSlice %u ms, requests %u, soft-stops %u (stopped %u), resumed %u,"
+           " unexpected %u\n", s.TimeSliceMs, s.PreemptRequests, s.SoftStops, s.StopsTaken, s.Resumes,
+           s.ResumeMismatch + s.ResumeLost + s.StopBadTail + s.StopUnasked);
 }
 
 /* Ticks over a count, as microseconds each. */
@@ -215,6 +218,26 @@ static int perf(D3DKMT_HANDLE adapter, unsigned seconds)
     printf("  renders %u, submissions %u, interrupts %u, aperture maps %u, unmaps %u\n",
            b.Renders - a.Renders, b.Submits - a.Submits, b.Irqs - a.Irqs, b.Maps - a.Maps,
            b.Unmaps - a.Unmaps);
+    {
+        unsigned waits = b.WaitCount - a.WaitCount, preempts = b.PreemptRequests - a.PreemptRequests;
+        printf("  submission to start: %u submissions, %llu us each (longest since start %u);"
+               " %u arrived behind another context's chain (longest since start %u us)\n",
+               waits, each_us(b.WaitTicks - a.WaitTicks, b.PerfHz, waits), b.WaitMaxUs,
+               b.WaitOtherCount - a.WaitOtherCount, b.WaitOtherMaxUs);
+        printf("  preemption: TimeSlice %u ms; requests %u (%u idle, %u overlapping), %llu us each"
+               " to DMA_PREEMPTED (longest since start %u); submissions handed back %u\n",
+               b.TimeSliceMs, preempts, b.PreemptIdle - a.PreemptIdle, b.PreemptOverlap - a.PreemptOverlap,
+               each_us(b.PreemptTicks - a.PreemptTicks, b.PerfHz, preempts), b.PreemptMaxUs,
+               b.PreemptDropped - a.PreemptDropped);
+        printf("  soft-stops %u: stopped %u, finished first %u, slow %u; at a chain boundary %u;"
+               " resumed %u\n",
+               b.SoftStops - a.SoftStops, b.StopsTaken - a.StopsTaken, b.StopsRacedDone - a.StopsRacedDone,
+               b.StopSlow - a.StopSlow, b.StopsAtBoundary - a.StopsAtBoundary, b.Resumes - a.Resumes);
+        printf("  unexpected (each should stay 0): resume mismatch %u, resume lost %u, bad tail %u,"
+               " stopped unasked %u, jobs timed out %u\n",
+               b.ResumeMismatch - a.ResumeMismatch, b.ResumeLost - a.ResumeLost, b.StopBadTail - a.StopBadTail,
+               b.StopUnasked - a.StopUnasked, b.JobsTimedOut - a.JobsTimedOut);
+    }
     return 0;
 }
 

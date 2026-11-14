@@ -123,6 +123,30 @@ typedef struct _MW_ESCAPE_STATS_DATA {
     mw_u32 FlipCopyMaxUs, FlipWaitMaxUs, JobMaxUs, VsyncGapMaxUs;
     /* Flips that arrived while a job chain was running or queued. */
     mw_u32 FlipsWhileBusy, Reserved1;
+    /* Preemption (setting TimeSlice; 0 from a driver without it, or with
+     * it off). Counts since the driver started. */
+    mw_u32 TimeSliceMs;                 /* the setting in effect; 0 off */
+    mw_u32 PreemptRequests;             /* DxgkDdiPreemptCommand calls acted on */
+    mw_u32 PreemptIdle;                 /* of those, nothing was on the GPU: reported at once */
+    mw_u32 PreemptOverlap;              /* a request came while one was still waiting */
+    mw_u32 PreemptDropped;              /* submissions handed back to the scheduler */
+    mw_u32 SoftStops;                   /* soft-stops written */
+    mw_u32 StopsTaken;                  /* of those, the chain stopped (STOPPED, tail saved) */
+    mw_u32 StopsRacedDone;              /* of those, the chain finished first */
+    mw_u32 StopsAtBoundary;             /* preempted between chains, nothing stopped */
+    mw_u32 StopSlow;                    /* a soft-stop not taken within 100 ms */
+    mw_u32 Resumes;                     /* resubmissions recognised and continued */
+    mw_u32 ResumeMismatch;              /* a saved point whose next submission differed */
+    mw_u32 ResumeLost;                  /* a partly run submission with nowhere to save it */
+    mw_u32 StopBadTail;                 /* STOPPED with a zero tail, or tail != head */
+    mw_u32 StopUnasked;                 /* STOPPED without a stop asked for */
+    mw_u32 PreemptMaxUs;                /* request to DMA_PREEMPTED, longest */
+    mw_u64 PreemptTicks;                /* request to DMA_PREEMPTED, summed */
+    /* Submission to its first chain starting: all submissions with jobs,
+     * and those that arrived while another context's chain was running. */
+    mw_u64 WaitTicks;
+    mw_u32 WaitCount, WaitMaxUs;
+    mw_u32 WaitOtherCount, WaitOtherMaxUs;
 } MW_ESCAPE_STATS_DATA;
 
 /* GPU memory: what is allocated, what VidMm has made resident, and by which

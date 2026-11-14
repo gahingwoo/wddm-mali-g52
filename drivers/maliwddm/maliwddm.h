@@ -77,6 +77,17 @@ typedef struct _MW_DEVICE {
 
 typedef struct _MW_CONTEXT {
     MW_DEVICE *Device;
+    /* A submission of this context that was preempted part way (TimeSlice,
+     * command.c): its commands, the one to resume at and where in it. The
+     * scheduler resubmits it with a new fence; the first submission of the
+     * context after that, if it carries the same commands, continues from
+     * here instead of running again from the start. ResumeGen is the
+     * adapter's ResetGen when this was saved: a reset makes it stale. */
+    BOOLEAN ResumeValid;
+    ULONG ResumeGen;
+    ULONG ResumeCount, ResumeNext;
+    ULONG64 ResumeTail;
+    MW_COMMAND ResumeCommands[MW_MAX_COMMANDS];
 } MW_CONTEXT;
 
 /* What a DMA buffer carries, kept in its private data by Render and found
@@ -109,6 +120,14 @@ typedef struct _MW_SUBMISSION {
     ULONG FenceId;
     ULONG Count, Next;          /* commands, and the next one to start */
     MW_COMMAND Commands[MW_MAX_COMMANDS];
+    /* TimeSlice (command.c): the context it came from (NULL for paging),
+     * where the command Next is to start if it was stopped part way (0:
+     * at its Jc), when it was submitted, whether a chain of it has started,
+     * and whether it arrived while another context's chain was running. */
+    struct _MW_CONTEXT *Ctx;
+    ULONG64 ResumeTail;
+    ULONG64 SubmitTick;
+    BOOLEAN Started, BehindOther;
 } MW_SUBMISSION;
 
 struct _MW_ADAPTER {
@@ -238,6 +257,29 @@ struct _MW_ADAPTER {
     volatile LONG64 MemBytes, MemPeakBytes, MemResidentBytes;
     volatile LONG MemCount, MemResidentCount, MemCreates, MemDestroys, MemCreateFails, MemNoSlot;
     MW_MEM_SLOT MemProc[MW_MEM_PROCS];
+
+    /* Preemption (command.c), setting TimeSlice: the least a chain runs, in
+     * ms, before a preemption request soft-stops it; 0 is off and the
+     * driver behaves as before it existed. Read once, at the first of
+     * StartDevice and the DRIVERCAPS query. The rest is at interrupt level. */
+    BOOLEAN SliceRead;
+    ULONG Slice;
+    BOOLEAN PreemptPending;     /* a request waits for the hardware to stop */
+    BOOLEAN StopAsked;          /* a soft-stop was written for the running chain */
+    BOOLEAN StopSlowSeen;
+    BOOLEAN RunningFlag;        /* JOB_CHAIN_FLAG of the running chain */
+    MW_CONTEXT *RunningCtx;
+    ULONG PreemptFence;
+    ULONG ResetGen;
+    ULONG64 PreemptTick;        /* performance counter at the request */
+    ULONG64 StopAskedAt;        /* interrupt time the soft-stop was written */
+    /* Counters (MW_ESCAPE_STATS_DATA has the meanings). */
+    ULONG PreemptRequests, PreemptIdle, PreemptOverlap, PreemptDropped;
+    ULONG SoftStops, StopsTaken, StopsRacedDone, StopsAtBoundary, StopSlow;
+    ULONG Resumes, ResumeMismatch, ResumeLost, StopBadTail, StopUnasked;
+    ULONG64 PreemptTicks, PreemptMaxTicks;
+    ULONG64 WaitTicks, WaitMaxTicks, WaitOtherMaxTicks;
+    ULONG WaitCount, WaitOtherCount;
 };
 
 /* The performance counter, at any IRQL. */
@@ -329,3 +371,4 @@ void MwCommandInit(MW_ADAPTER *A);
 void MwCopyForget(MW_ADAPTER *A, struct _MW_ALLOCATION *Alloc, BOOLEAN Freed);
 void MwCommandStop(MW_ADAPTER *A);
 void MwArmPoll(MW_ADAPTER *A);
+void MwCommandSettings(MW_ADAPTER *A);

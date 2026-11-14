@@ -11,6 +11,22 @@
  * Whether dxgkrnl connects the Mali's interrupts on this ACPI device is not
  * yet known, so a timer also polls the job status while work is in flight;
  * with working interrupts it only costs latency.
+ *
+ * Preemption (setting TimeSlice, off by default). The scheduler asks for it
+ * with DxgkDdiPreemptCommand when a context of higher priority (dwm) has
+ * work; the INF's EnablePreemption 0 stops it from ever asking, so both
+ * have to be set. A request is answered with DMA_PREEMPTED once nothing of
+ * the submissions before it is on the GPU: those not started are handed
+ * back, a fragment chain that has run for at least TimeSlice ms is
+ * soft-stopped (the Job Manager stops it between tiles and JS_TAIL says
+ * where it stopped), and a vertex/tiler chain is let finish. The scheduler
+ * resubmits what was handed back with new fences. A submission that was
+ * stopped part way is remembered in its context, and its resubmission, the
+ * next submission of that context with the same commands, continues from
+ * there: running it again from the start would repeat tiler work and blend
+ * finished tiles twice. Linux panfrost resumes a soft-stopped chain the same
+ * way (panfrost_job_handle_err: job->jc = JS_TAIL), and Arm's kbase too
+ * (kbase_gpu_complete_hw).
  */
 #include "maliwddm.h"
 
@@ -19,6 +35,23 @@
 #define MW_LIST_SIZE            256     /* Panfrost submits reference many BOs */
 #define MW_JOB_TIMEOUT_MS       2000
 #define MW_POLL_MS              1
+#define MW_STOP_SLOW_MS         100     /* a soft-stop not taken by then is counted */
+#define MW_SLICE_MAX_MS         1000
+
+/* ---- settings ---- */
+
+/* TimeSlice, once: at passive level, from StartDevice or the DRIVERCAPS
+ * query, whichever comes first. Changing it takes a restart of the adapter. */
+void MwCommandSettings(MW_ADAPTER *A)
+{
+    ULONG v;
+
+    if (A->SliceRead)
+        return;
+    v = MwSetting(A, L"TimeSlice", 0);
+    A->Slice = v > MW_SLICE_MAX_MS ? MW_SLICE_MAX_MS : v;
+    A->SliceRead = TRUE;
+}
 
 /* ---- devices and contexts ---- */
 
@@ -298,8 +331,56 @@ static void NotifyCompleted(MW_ADAPTER *A, ULONG Fence)
     A->NeedDpc = TRUE;
 }
 
-/* Start the next job chain, completing every submission that has none left.
- * Called with the queue owned (interrupt level). */
+/* Fence A was submitted before fence B (fences increase, and wrap). */
+static BOOLEAN FenceBefore(ULONG A, ULONG B)
+{
+    return (LONG)(A - B) < 0;
+}
+
+/* Answer the waiting preemption request: nothing is running. Submissions
+ * from before the request go back to the scheduler, which resubmits them
+ * with new fences; one that ran part way leaves where it got to in its
+ * context. Later submissions stay queued. */
+static void FinishPreempt(MW_ADAPTER *A)
+{
+    DXGKARGCB_NOTIFY_INTERRUPT_DATA n = {0};
+
+    while (A->QCount != 0) {
+        MW_SUBMISSION *s = &A->Queue[A->QHead];
+
+        if (!FenceBefore(s->FenceId, A->PreemptFence))
+            break;
+        if (s->Next < s->Count && (s->Next != 0 || s->ResumeTail != 0)) {
+            MW_CONTEXT *c = s->Ctx;
+            if (c != NULL) {
+                c->ResumeValid = TRUE;
+                c->ResumeGen = A->ResetGen;
+                c->ResumeCount = s->Count;
+                c->ResumeNext = s->Next;
+                c->ResumeTail = s->ResumeTail;
+                RtlCopyMemory(c->ResumeCommands, s->Commands, s->Count * sizeof(MW_COMMAND));
+            } else {
+                A->ResumeLost++;
+            }
+        }
+        A->QHead = (A->QHead + 1) % MW_QUEUE_DEPTH;
+        A->QCount--;
+        A->PreemptDropped++;
+    }
+    n.InterruptType = DXGK_INTERRUPT_DMA_PREEMPTED;
+    n.DmaPreempted.PreemptionFenceId = A->PreemptFence;
+    n.DmaPreempted.LastCompletedFenceId = A->LastCompletedFence;
+    n.DmaPreempted.NodeOrdinal = 0;
+    n.DmaPreempted.EngineOrdinal = 0;
+    A->Dxgk.DxgkCbNotifyInterrupt(A->Dxgk.DeviceHandle, &n);
+    A->PreemptPending = FALSE;
+    MwTickAdd(&A->PreemptTicks, &A->PreemptMaxTicks, A->PreemptTick);
+    A->NeedDpc = TRUE;
+}
+
+/* Start the next job chain, completing every submission that has none left
+ * and answering a preemption request when nothing is running. Called with
+ * the queue owned (interrupt level). */
 static void Kick(MW_ADAPTER *A)
 {
     while (!A->Running && A->QCount != 0) {
@@ -311,18 +392,74 @@ static void Kick(MW_ADAPTER *A)
             A->QCount--;
             continue;
         }
+        if (A->PreemptPending) {
+            /* Nothing is running: answer before anything else starts. */
+            if (FenceBefore(s->FenceId, A->PreemptFence) && s->Next != 0 && s->ResumeTail == 0)
+                A->StopsAtBoundary++;
+            FinishPreempt(A);
+            continue;
+        }
         const MW_COMMAND *c = &s->Commands[s->Next++];
+        ULONG64 jc = s->ResumeTail != 0 ? s->ResumeTail : c->Jc;
+        s->ResumeTail = 0;
+        if (!s->Started) {
+            s->Started = TRUE;
+            if (s->SubmitTick != 0) {
+                A->WaitCount++;
+                MwTickAdd(&A->WaitTicks, &A->WaitMaxTicks, s->SubmitTick);
+                if (s->BehindOther) {
+                    ULONG64 ignored = 0;
+                    A->WaitOtherCount++;
+                    MwTickAdd(&ignored, &A->WaitOtherMaxTicks, s->SubmitTick);
+                }
+            }
+        }
         A->RunningSlot = c->Slot;
+        A->RunningCtx = s->Ctx;
+        A->RunningFlag = (A->ChainFlag++ & 1) != 0;
+        A->StopAsked = FALSE;
         A->Running = TRUE;
         A->JobStart = KeQueryInterruptTime();
         A->JobStartTick = MwTick();
         (void)MkJobTakeStatus(&A->Gpu, c->Slot);
         InterlockedExchange(&A->Gpu.MmuIrqStatus, 0);
-        MkJobStart(&A->Gpu, c->Slot, c->Jc, (A->ChainFlag++ & 1) != 0);
+        MkJobStart(&A->Gpu, c->Slot, jc, A->RunningFlag);
     }
+    if (!A->Running && A->PreemptPending)
+        FinishPreempt(A);
 }
 
-/* Collect the running chain's outcome. TRUE if it finished, either way. */
+/* With a preemption request waiting: soft-stop the running chain once it
+ * has run for TimeSlice ms, so a chain just started or resumed always gets
+ * that long. Vertex/tiler chains (slot 1) are short and are let finish;
+ * the request is answered at the chain boundary. */
+static void MaybeStop(MW_ADAPTER *A)
+{
+    ULONG64 now;
+
+    if (!A->PreemptPending || !A->Running)
+        return;
+    now = KeQueryInterruptTime();
+    if (A->StopAsked) {
+        if (!A->StopSlowSeen && (now - A->StopAskedAt) / 10000 > MW_STOP_SLOW_MS) {
+            A->StopSlowSeen = TRUE;
+            A->StopSlow++;
+        }
+        return;
+    }
+    if (A->RunningSlot != 0 || (now - A->JobStart) / 10000 < A->Slice)
+        return;
+    if (A->QCount == 0 || !FenceBefore(A->Queue[A->QHead].FenceId, A->PreemptFence))
+        return;
+    MkJobSoftStop(&A->Gpu, A->RunningSlot, A->RunningFlag);
+    A->StopAsked = TRUE;
+    A->StopSlowSeen = FALSE;
+    A->StopAskedAt = now;
+    A->SoftStops++;
+}
+
+/* Collect the running chain's outcome. TRUE if it finished, either way, or
+ * stopped. */
 static BOOLEAN Reap(MW_ADAPTER *A, BOOLEAN CheckTimeout)
 {
     MK_GPU *gpu = &A->Gpu;
@@ -336,7 +473,31 @@ static BOOLEAN Reap(MW_ADAPTER *A, BOOLEAN CheckTimeout)
     if (bits & (1u << (16 + slot)) || gpu->MmuIrqStatus != 0) {
         A->LastJsStatus = MkJobSlotStatus(gpu, slot);
         failed = TRUE;
+        if (A->LastJsStatus == JS_STATUS_STOPPED && gpu->MmuIrqStatus == 0) {
+            if (!A->StopAsked) {
+                A->StopUnasked++;
+            } else {
+                /* kbase (kbase_job_done): a soft-stopped chain has JS_HEAD
+                 * equal to JS_TAIL; if not, it was wrongly marked stopped
+                 * and is not to be resumed. */
+                ULONG64 tail = MkJobTail(gpu, slot), head = MkJobHead(gpu, slot);
+                if (tail == 0 || tail != head) {
+                    A->StopBadTail++;
+                } else {
+                    MW_SUBMISSION *s = &A->Queue[A->QHead];
+                    A->Running = FALSE;
+                    A->StopAsked = FALSE;
+                    MwTickAdd(&A->JobTicks, &A->JobMaxTicks, A->JobStartTick);
+                    A->StopsTaken++;
+                    s->Next--;              /* this chain again, from its tail */
+                    s->ResumeTail = tail;
+                    return TRUE;
+                }
+            }
+        }
     } else if (bits & (1u << slot)) {
+        if (A->StopAsked)
+            A->StopsRacedDone++;
         failed = FALSE;
     } else if (CheckTimeout && (KeQueryInterruptTime() - A->JobStart) / 10000 > MW_JOB_TIMEOUT_MS) {
         A->LastJsStatus = MkJobSlotStatus(gpu, slot);
@@ -348,6 +509,7 @@ static BOOLEAN Reap(MW_ADAPTER *A, BOOLEAN CheckTimeout)
     }
 
     A->Running = FALSE;
+    A->StopAsked = FALSE;
     MwTickAdd(&A->JobTicks, &A->JobMaxTicks, A->JobStartTick);
     if (!failed) {
         A->JobsDone++;
@@ -359,6 +521,7 @@ static BOOLEAN Reap(MW_ADAPTER *A, BOOLEAN CheckTimeout)
     A->LastFaultStatus = gpu->LastMmuFault;
     A->LastFaultAddress = gpu->LastFaultAddress;
     A->Queue[A->QHead].Next = A->Queue[A->QHead].Count;
+    A->Queue[A->QHead].ResumeTail = 0;
     gpu->Resets++;
     if (!MkGpuBringup(gpu))
         A->GpuUp = FALSE;
@@ -392,7 +555,29 @@ static BOOLEAN SyncSubmit(PVOID Context)
         s->Status = STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
         return FALSE;
     }
-    a->Queue[(a->QHead + a->QCount) % MW_QUEUE_DEPTH] = *s->New;
+    MW_SUBMISSION *q = &a->Queue[(a->QHead + a->QCount) % MW_QUEUE_DEPTH];
+    MW_CONTEXT *c = s->New->Ctx;
+
+    *q = *s->New;
+    q->BehindOther = a->Running && a->RunningCtx != c;
+    /* The resubmission of a submission preempted part way: the context's
+     * next one, with the same commands. Anything else and the saved point
+     * is dropped. */
+    if (c != NULL && c->ResumeValid) {
+        BOOLEAN same = c->ResumeGen == a->ResetGen && c->ResumeCount == q->Count &&
+                       c->ResumeNext < q->Count;
+        for (ULONG i = 0; same && i < q->Count; i++)
+            same = c->ResumeCommands[i].Slot == q->Commands[i].Slot &&
+                   c->ResumeCommands[i].Jc == q->Commands[i].Jc;
+        c->ResumeValid = FALSE;
+        if (same) {
+            q->Next = c->ResumeNext;
+            q->ResumeTail = c->ResumeTail;
+            a->Resumes++;
+        } else {
+            a->ResumeMismatch++;
+        }
+    }
     a->QCount++;
     a->LastSubmittedFence = s->New->FenceId;
     Kick(a);
@@ -410,11 +595,12 @@ static BOOLEAN SyncPoll(PVOID Context)
 
     if (Reap(a, TRUE))
         Kick(a);
+    MaybeStop(a);
     if (a->NeedDpc) {
         a->NeedDpc = FALSE;
         a->Dxgk.DxgkCbQueueDpc(a->Dxgk.DeviceHandle);
     }
-    return a->QCount != 0;
+    return a->QCount != 0 || a->PreemptPending;
 }
 
 static BOOLEAN Synchronize(MW_ADAPTER *A, PKSYNCHRONIZE_ROUTINE Routine, PVOID Context)
@@ -444,7 +630,7 @@ static VOID PollDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
      * not arm the timer, so look once more after letting go. */
     InterlockedExchange(&a->PollArmed, 0);
     KeMemoryBarrier();
-    if (a->QCount != 0 && InterlockedExchange(&a->PollArmed, 1) == 0)
+    if ((a->QCount != 0 || a->PreemptPending) && InterlockedExchange(&a->PollArmed, 1) == 0)
         MwArmPoll(a);
 }
 
@@ -640,6 +826,10 @@ void MwCommandStop(MW_ADAPTER *A)
     KeCancelTimer(&A->VsyncTimer);
     KeFlushQueuedDpcs();
     InterlockedExchange(&A->PollArmed, 0);
+    /* A preemption request still waiting is not answered: dxgkrnl is
+     * stopping the adapter, and a chain stopped part way belongs to a
+     * submission it already took back. */
+    A->PreemptPending = FALSE;
     if (A->CopyThread != NULL) {
         PKTHREAD t = A->CopyThread;
         A->CopyStop = TRUE;
@@ -659,6 +849,12 @@ NTSTATUS APIENTRY MwSubmitCommand(IN_CONST_HANDLE hAdapter, const DXGKARG_SUBMIT
 
     RtlZeroMemory(&sub, sizeof(sub));
     sub.FenceId = Arg->SubmissionFenceId;
+    sub.SubmitTick = MwTick();
+    /* The context: where a preempted submission leaves its resume point,
+     * and which waits were behind another context's chain. Only compared
+     * and written to with TimeSlice set. Paging submissions have none. */
+    if (!Arg->Flags.Paging)
+        sub.Ctx = (MW_CONTEXT *)Arg->hContext;
     /* A present: done here, on the CPU; the submission then carries no
      * job and completes at once. */
     if (!Arg->Flags.Paging && priv != NULL && Arg->DmaBufferPrivateDataSize >= sizeof(*priv) &&
@@ -683,11 +879,51 @@ NTSTATUS APIENTRY MwSubmitCommand(IN_CONST_HANDLE hAdapter, const DXGKARG_SUBMIT
     return sync.Status;
 }
 
+typedef struct {
+    MW_ADAPTER *A;
+    ULONG Fence;
+} MW_PREEMPT;
+
+static BOOLEAN SyncPreempt(PVOID Context)
+{
+    MW_PREEMPT *p = (MW_PREEMPT *)Context;
+    MW_ADAPTER *a = p->A;
+
+    a->PreemptRequests++;
+    if (a->PreemptPending)
+        a->PreemptOverlap++;            /* answered once, with the newer fence */
+    else
+        a->PreemptTick = MwTick();
+    if (!a->Running && a->QCount == 0)
+        a->PreemptIdle++;
+    a->PreemptPending = TRUE;
+    a->PreemptFence = p->Fence;
+    if (Reap(a, FALSE) || !a->Running)
+        Kick(a);
+    MaybeStop(a);
+    if (a->NeedDpc) {
+        a->NeedDpc = FALSE;
+        a->Dxgk.DxgkCbQueueDpc(a->Dxgk.DeviceHandle);
+    }
+    return TRUE;
+}
+
 NTSTATUS APIENTRY MwPreemptCommand(IN_CONST_HANDLE hAdapter, const DXGKARG_PREEMPTCOMMAND *Arg)
 {
-    /* Preemption is off (EnablePreemption=0 in the INF). */
-    UNREFERENCED_PARAMETER(hAdapter);
-    UNREFERENCED_PARAMETER(Arg);
+    MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
+    MW_PREEMPT p;
+
+    /* TimeSlice 0: as before, when the INF's EnablePreemption 0 meant this
+     * was never called. With EnablePreemption 1 and TimeSlice 0 the request
+     * is never answered and dxgkrnl's timeout detection resets the GPU. */
+    if (a->Slice == 0)
+        return STATUS_SUCCESS;
+    p.A = a;
+    p.Fence = Arg->PreemptionFenceId;
+    (void)Synchronize(a, SyncPreempt, &p);
+    /* The poll timer takes the stop once the slice is up. */
+    if (!a->Stopping && a->PreemptPending && InterlockedExchange(&a->PollArmed, 1) == 0)
+        MwArmPoll(a);
     return STATUS_SUCCESS;
 }
 
@@ -709,6 +945,11 @@ static BOOLEAN SyncReset(PVOID Context)
     a->Running = FALSE;
     a->QHead = a->QCount = 0;
     a->NeedDpc = FALSE;
+    /* A request waiting is part of what the reset recovers from, and a
+     * point saved in a context refers to GPU state the reset discards. */
+    a->PreemptPending = FALSE;
+    a->StopAsked = FALSE;
+    a->ResetGen++;
     if (a->Gpu.Regs != NULL) {
         a->Gpu.Resets++;
         a->GpuUp = MkGpuBringup(&a->Gpu);
@@ -736,10 +977,12 @@ NTSTATUS APIENTRY MwCollectDbgInfo(IN_CONST_HANDLE hAdapter, const DXGKARG_COLLE
     if (Arg->pBuffer != NULL && Arg->BufferSize > 0)
         (void)RtlStringCbPrintfA((NTSTRSAFE_PSTR)Arg->pBuffer, Arg->BufferSize,
                                  "maliwddm: submitted %u completed %u running %u queued %u "
-                                 "done %u failed %u timedout %u js 0x%x fault 0x%x @0x%llx",
+                                 "done %u failed %u timedout %u js 0x%x fault 0x%x @0x%llx "
+                                 "slice %u preempt %u/%u stop %u/%u",
                                  a->LastSubmittedFence, a->LastCompletedFence, a->Running, a->QCount,
                                  a->JobsDone, a->JobsFailed, a->JobsTimedOut, a->LastJsStatus,
-                                 a->LastFaultStatus, a->LastFaultAddress);
+                                 a->LastFaultStatus, a->LastFaultAddress, a->Slice, a->PreemptPending,
+                                 a->PreemptFence, a->StopAsked, a->SoftStops);
     return STATUS_SUCCESS;
 }
 

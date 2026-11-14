@@ -257,6 +257,8 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
     }
     MwLog(a, L"Build", MW_BUILD);
     MwLog(a, L"RenderOnly", MW_RENDER_ONLY);
+    MwCommandSettings(a);
+    MwLog(a, L"TimeSlice", a->Slice);
 #if !MW_RENDER_ONLY
     st = MwDisplayStart(a);
     if (!NT_SUCCESS(st))
@@ -380,7 +382,7 @@ static VOID APIENTRY MwDpcRoutine(IN_CONST_PVOID Context)
  * only if it lies inside the buffer (M5.1: the WDK's sizeof is larger). */
 #define FITS(Size, Type, Field) (FIELD_OFFSET(Type, Field) + RTL_FIELD_SIZE(Type, Field) <= (Size))
 
-static NTSTATUS DriverCaps(const DXGKARG_QUERYADAPTERINFO *Info)
+static NTSTATUS DriverCaps(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info)
 {
     DXGK_DRIVERCAPS *caps = (DXGK_DRIVERCAPS *)Info->pOutputData;
     UINT size = Info->OutputDataSize;
@@ -422,6 +424,14 @@ static NTSTATUS DriverCaps(const DXGKARG_QUERYADAPTERINFO *Info)
      * all accepted (pfnPresentCb S_OK, three primaries in rotation) and
      * neither Present nor SetVidPnSourceAddress was called for them. */
     caps->FlipCaps.FlipOnVSyncMmIo = 1;
+    /* With TimeSlice set, a running chain can be stopped part way and
+     * continued (command.c): a fragment job between tiles, a vertex or
+     * tiler chain only at its end. Without it the cap stays as it was. */
+    MwCommandSettings(A);
+    if (A->Slice != 0 && FITS(size, DXGK_DRIVERCAPS, PreemptionCaps)) {
+        caps->PreemptionCaps.GraphicsPreemptionGranularity = D3DKMDT_GRAPHICS_PREEMPTION_PRIMITIVE_BOUNDARY;
+        caps->PreemptionCaps.ComputePreemptionGranularity = D3DKMDT_COMPUTE_PREEMPTION_DISPATCH_BOUNDARY;
+    }
 #if MW_RENDER_ONLY
     caps->PresentationCaps.SupportKernelModeCommandBuffer = 1; /* see MwRenderKm */
     if (FITS(size, DXGK_DRIVERCAPS, PreemptionCaps)) {
@@ -471,7 +481,7 @@ static NTSTATUS APIENTRY MwQueryAdapterInfo(IN_CONST_HANDLE hAdapter, const DXGK
 
     switch (Info->Type) {
     case DXGKQAITYPE_DRIVERCAPS:
-        st = DriverCaps(Info);
+        st = DriverCaps(a, Info);
         break;
     case DXGKQAITYPE_QUERYSEGMENT3:
         st = MwQuerySegment(a, Info);
@@ -569,7 +579,7 @@ static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D, UINT Size)
         D->FlipCopies = A->FlipCopies;
         D->FlipCopySkips = A->FlipCopySkips;
     }
-    if (Size >= sizeof(MW_ESCAPE_STATS_DATA) && A->PerfHz != 0) {
+    if (Size >= RTL_SIZEOF_THROUGH_FIELD(MW_ESCAPE_STATS_DATA, Reserved1) && A->PerfHz != 0) {
         D->PerfHz = A->PerfHz;
         D->FlipCopyTicks = A->FlipCopyTicks;
         D->FlipWaitTicks = A->FlipWaitTicks;
@@ -581,6 +591,30 @@ static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D, UINT Size)
         D->JobMaxUs = TicksToUs(A, A->JobMaxTicks);
         D->VsyncGapMaxUs = TicksToUs(A, A->VsyncGapMaxTicks);
         D->FlipsWhileBusy = A->FlipsWhileBusy;
+    }
+    if (Size >= sizeof(MW_ESCAPE_STATS_DATA)) {
+        D->TimeSliceMs = A->Slice;
+        D->PreemptRequests = A->PreemptRequests;
+        D->PreemptIdle = A->PreemptIdle;
+        D->PreemptOverlap = A->PreemptOverlap;
+        D->PreemptDropped = A->PreemptDropped;
+        D->SoftStops = A->SoftStops;
+        D->StopsTaken = A->StopsTaken;
+        D->StopsRacedDone = A->StopsRacedDone;
+        D->StopsAtBoundary = A->StopsAtBoundary;
+        D->StopSlow = A->StopSlow;
+        D->Resumes = A->Resumes;
+        D->ResumeMismatch = A->ResumeMismatch;
+        D->ResumeLost = A->ResumeLost;
+        D->StopBadTail = A->StopBadTail;
+        D->StopUnasked = A->StopUnasked;
+        D->PreemptMaxUs = TicksToUs(A, A->PreemptMaxTicks);
+        D->PreemptTicks = A->PreemptTicks;
+        D->WaitTicks = A->WaitTicks;
+        D->WaitCount = A->WaitCount;
+        D->WaitMaxUs = TicksToUs(A, A->WaitMaxTicks);
+        D->WaitOtherCount = A->WaitOtherCount;
+        D->WaitOtherMaxUs = TicksToUs(A, A->WaitOtherMaxTicks);
     }
 }
 
@@ -659,6 +693,26 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         MwLog(a, L"T_FlipsWhileBusy", a->FlipsWhileBusy);
         MwLog(a, L"T_CopyThread", a->CopyThread != NULL);
         MwLog(a, L"T_CopyDeferred", a->CopyDeferred);
+        MwLog(a, L"T_TimeSlice", a->Slice);
+        MwLog(a, L"T_PreemptRequests", a->PreemptRequests);
+        MwLog(a, L"T_PreemptIdle", a->PreemptIdle);
+        MwLog(a, L"T_PreemptOverlap", a->PreemptOverlap);
+        MwLog(a, L"T_PreemptDropped", a->PreemptDropped);
+        MwLog(a, L"T_PreemptUsAvg", TicksEachUs(a, a->PreemptTicks, a->PreemptRequests));
+        MwLog(a, L"T_PreemptUsMax", TicksToUs(a, a->PreemptMaxTicks));
+        MwLog(a, L"T_SoftStops", a->SoftStops);
+        MwLog(a, L"T_StopsTaken", a->StopsTaken);
+        MwLog(a, L"T_StopsRacedDone", a->StopsRacedDone);
+        MwLog(a, L"T_StopsAtBoundary", a->StopsAtBoundary);
+        MwLog(a, L"T_StopSlow", a->StopSlow);
+        MwLog(a, L"T_Resumes", a->Resumes);
+        MwLog(a, L"T_ResumeMismatch", a->ResumeMismatch);
+        MwLog(a, L"T_ResumeLost", a->ResumeLost);
+        MwLog(a, L"T_StopBadTail", a->StopBadTail);
+        MwLog(a, L"T_StopUnasked", a->StopUnasked);
+        MwLog(a, L"T_WaitUsAvg", TicksEachUs(a, a->WaitTicks, a->WaitCount));
+        MwLog(a, L"T_WaitUsMax", TicksToUs(a, a->WaitMaxTicks));
+        MwLog(a, L"T_WaitOtherUsMax", TicksToUs(a, a->WaitOtherMaxTicks));
         return STATUS_SUCCESS;
     default:
         MwLog(a, L"EscapeUnknownCode", code);
