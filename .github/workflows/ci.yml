@@ -232,9 +232,10 @@ jobs:
       - name: Assemble and sign
         shell: pwsh
         run: |
-          $drv = 'drv'
+          # Same layout as the kernel driver artifact: a maliwddm folder.
+          $drv = 'pkg\maliwddm'
           New-Item -ItemType Directory -Force -Path $drv | Out-Null
-          Copy-Item kmd\maliwddm.inf, kmd\maliwddm.sys $drv
+          Copy-Item kmd\maliwddm\maliwddm.inf, kmd\maliwddm\maliwddm.sys $drv
           # The INF copies this to System32\maliumd.dll (see the INF for why
           # the name differs).
           Copy-Item umd\libgallium_d3d10.dll "$drv\maliumd_arm64.dll"
@@ -274,7 +275,7 @@ jobs:
           # INSTALL.txt tells the user to, and verify with the real policy.
           $PSNativeCommandUseErrorActionPreference = $false
           $st  = 'C:\Program Files (x86)\Windows Kits\10\bin\' + $env:WDK_VERSION + '\x86\signtool.exe'
-          $drv = 'drv'
+          $drv = 'pkg\maliwddm'
           $cat = "$drv\maliwddm.cat"
           certutil -f -addstore Root wddm-mali-g52-test.cer | Out-Null
           certutil -f -addstore TrustedPublisher wddm-mali-g52-test.cer | Out-Null
@@ -317,9 +318,9 @@ jobs:
         run: |
           $rel = 'rel\wddm-mali-g52-driver-arm64'
           New-Item -ItemType Directory -Force -Path "$rel\driver", "$rel\symbols" | Out-Null
-          Copy-Item drv\* "$rel\driver\"
+          Copy-Item pkg\maliwddm\* "$rel\driver\"
           Copy-Item wddm-mali-g52-test.cer $rel
-          Copy-Item wddm-mali-g52-test.cer drv\
+          Copy-Item wddm-mali-g52-test.cer pkg\maliwddm\
           Copy-Item umd\libgallium_d3d10.pdb "$rel\symbols\" -ErrorAction SilentlyContinue
           $info = @(
             (Get-Content drivers\maliwddm\INSTALL.txt -Raw).TrimEnd(),
@@ -339,7 +340,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: maliwddm-arm64
-          path: drv/
+          path: pkg/
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
