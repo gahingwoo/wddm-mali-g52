@@ -16,7 +16,7 @@ and images it rests on.
 | [m5.2-step-c2/](m5.2-step-c2/README.md) | 2026-10-03 | CM5-IO, WinPE | The triangle as a hardware device, Mesa loaded by the runtime as the UMD |
 | [m5.2-pe-whea-2026-10-03/](m5.2-pe-whea-2026-10-03/README.md) | 2026-10-03 and 2026-10-17 | CM5-IO, WinPE | A shutdown crash traced to USB, and the job-fault fix |
 | [tspi3m-2026-11-13/](tspi3m-2026-11-13/README.md) | 2026-11-13 | TaishanPi 3M | Step (d): the sign-in screen and the desktop composed on the Mali |
-| [tspi3m-2026-11-14/](tspi3m-2026-11-14/README.md) | 2026-11-14 | TaishanPi 3M | Speed, memory and hitches measured; scan-out by the VOP2; two bugs |
+| [tspi3m-2026-11-14/](tspi3m-2026-11-14/README.md) | 2026-11-14 | TaishanPi 3M | Speed, memory and hitches measured; scan-out by the VOP2; x64 and x86 programs; OpenGL; the GPU's clock |
 
 File names inside the older folders still carry their milestone prefix
 (`m5.2-pe-run15-PASS.txt` and so on), because commit messages and the
