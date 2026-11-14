@@ -56,7 +56,18 @@ typedef struct _MW_ALLOCATION {
     /* A primary the display controller can read: its IO address while it
      * is mapped (scanout.c), else 0. */
     ULONG ScanIova;
+    /* memory.c's accounting: the per-process entry (index + 1, 0 none)
+     * and whether the allocation is counted as resident. */
+    ULONG MemSlot;
+    BOOLEAN MemResident;
 } MW_ALLOCATION;
+
+/* One process's GPU memory (memory.c). Pid 0 is a free entry. */
+typedef struct _MW_MEM_SLOT {
+    volatile LONG64 Pid;
+    volatile LONG64 Bytes, ResidentBytes, PeakBytes;
+    volatile LONG Count, ResidentCount, Creates;
+} MW_MEM_SLOT;
 
 typedef struct _MW_ADAPTER MW_ADAPTER;
 
@@ -201,6 +212,13 @@ struct _MW_ADAPTER {
     ULONG64 FlipCopyMaxTicks, FlipWaitMaxTicks, JobMaxTicks, VsyncGapMaxTicks;
     ULONG64 JobStartTick, FlipTick, LastVsyncTick;
     ULONG FlipsWhileBusy;
+
+    /* GPU memory, in bytes and by process (memory.c, MW_ESCAPE_MEMORY).
+     * Updated with interlocked operations only: zero is the initial
+     * state, and nothing has to be set up in AddDevice. */
+    volatile LONG64 MemBytes, MemPeakBytes, MemResidentBytes;
+    volatile LONG MemCount, MemResidentCount, MemCreates, MemDestroys, MemCreateFails, MemNoSlot;
+    MW_MEM_SLOT MemProc[MW_MEM_PROCS];
 };
 
 /* The performance counter, at any IRQL. */
@@ -253,6 +271,7 @@ DXGKDDI_CLOSEALLOCATION MwCloseAllocation;
 DXGKDDI_BUILDPAGINGBUFFER MwBuildPagingBuffer;
 NTSTATUS MwQuerySegment(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info);
 NTSTATUS MwEscapeAllocInfo(MW_ADAPTER *A, const DXGKARG_ESCAPE *Esc, MW_ESCAPE_ALLOC_INFO_DATA *D);
+void MwEscapeMemory(MW_ADAPTER *A, MW_ESCAPE_MEMORY_DATA *D);
 
 /* command.c: devices, contexts, render, submission, fences */
 DXGKDDI_CREATEDEVICE MwCreateDevice;

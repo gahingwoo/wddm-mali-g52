@@ -14,9 +14,13 @@
  * dxcore, so a static gdi32 import never even loaded there
  * (STATUS_DLL_NOT_FOUND in every PE run).
  *
+ * m5test perf [seconds], m5test scan [mode] and m5test mem (GPU memory by
+ * process) only ask the driver; nothing is submitted.
+ *
  * Build: cl /W4 /I include tools\windows\m5test.c
  */
 #include <windows.h>
+#include <psapi.h>
 #include <winternl.h>
 #include <d3dkmthk.h>
 #include <stdio.h>
@@ -214,6 +218,88 @@ static int perf(D3DKMT_HANDLE adapter, unsigned seconds)
     return 0;
 }
 
+static double mib(unsigned long long bytes)
+{
+    return (double)bytes / (1024.0 * 1024.0);
+}
+
+/* m5test mem: GPU memory as maliwddm counts it, by the process that
+ * created it, next to what Windows says each process uses. GPU bytes are
+ * allocations in the aperture segment; their pages are system memory, and
+ * they count in a process's working set only where its UMD has them mapped
+ * (Panfrost keeps a CPU view of every BO it has touched). Run elevated to
+ * see the working sets of dwm.exe and the others. */
+static int mem(D3DKMT_HANDLE adapter)
+{
+    static MW_ESCAPE_MEMORY_DATA d;
+    MW_MEM_PROC *p[MW_MEM_PROCS];
+    NTSTATUS st;
+    unsigned n;
+
+    memset(&d, 0, sizeof(d));
+    d.Code = MW_ESCAPE_MEMORY;
+    st = escape(adapter, 0, &d, sizeof(d));
+    if (st < 0) {
+        printf("mem: escape 0x%08lx (a maliwddm.sys without MW_ESCAPE_MEMORY?)\n", (unsigned long)st);
+        return 2;
+    }
+    printf("GPU memory: %.1f MiB in %u allocations (most ever %.1f MiB), %.1f MiB resident in %u;"
+           " segment %.0f MiB\n", mib(d.Bytes), d.Count, mib(d.PeakBytes), mib(d.ResidentBytes),
+           d.ResidentCount, mib(d.SegmentSize));
+    printf("  %u created, %u destroyed, %u refused; %u made by a process with no entry left\n",
+           d.Creates, d.Destroys, d.CreateFails, d.NoSlot);
+
+    n = d.Procs <= MW_MEM_PROCS ? d.Procs : MW_MEM_PROCS;
+    for (unsigned i = 0; i < n; i++)
+        p[i] = &d.Proc[i];
+    for (unsigned i = 1; i < n; i++) {         /* most bytes first */
+        MW_MEM_PROC *t = p[i];
+        unsigned j = i;
+        while (j > 0 && p[j - 1]->Bytes < t->Bytes) {
+            p[j] = p[j - 1];
+            j--;
+        }
+        p[j] = t;
+    }
+    printf("\n  %6s %-28s %9s %6s %9s %9s %8s | %9s %9s\n", "pid", "process", "GPU MiB", "allocs",
+           "resident", "peak MiB", "created", "WS MiB", "priv MiB");
+    for (unsigned i = 0; i < n; i++) {
+        char name[MAX_PATH] = "?";
+        const char *base = name;
+        double ws = -1, priv = -1;
+        HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, p[i]->Pid);
+
+        if (h == NULL)
+            h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, p[i]->Pid);
+        if (h != NULL) {
+            DWORD len = sizeof(name);
+            PROCESS_MEMORY_COUNTERS_EX pmc;
+            if (QueryFullProcessImageNameA(h, 0, name, &len)) {
+                for (const char *c = name; *c; c++)
+                    if (*c == '\\')
+                        base = c + 1;
+            }
+            memset(&pmc, 0, sizeof(pmc));
+            if (GetProcessMemoryInfo(h, (PROCESS_MEMORY_COUNTERS *)&pmc, sizeof(pmc))) {
+                ws = mib(pmc.WorkingSetSize);
+                priv = mib(pmc.PrivateUsage);
+            }
+            CloseHandle(h);
+        } else if (p[i]->Pid == 4) {
+            base = "System";
+        } else {
+            base = p[i]->Count ? "(cannot open)" : "(gone)";
+        }
+        printf("  %6u %-28.28s %9.1f %6u %9.1f %9.1f %8u |", p[i]->Pid, base, mib(p[i]->Bytes),
+               p[i]->Count, mib(p[i]->ResidentBytes), mib(p[i]->PeakBytes), p[i]->Creates);
+        if (ws >= 0)
+            printf(" %9.1f %9.1f\n", ws, priv);
+        else
+            printf(" %9s %9s\n", "-", "-");
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     D3DKMT_HANDLE adapter;
@@ -256,6 +342,8 @@ int main(int argc, char **argv)
         printf("  %u IOMMU page faults cleared, the last at 0x%08x\n", d.Faults, d.FaultAddr);
         return 0;
     }
+    if (argc >= 2 && strcmp(argv[1], "mem") == 0)
+        return mem(adapter);
     if (argc >= 2 && strcmp(argv[1], "perf") == 0) {
         int seconds = argc >= 3 ? atoi(argv[2]) : 5;
         return perf(adapter, seconds > 0 && seconds <= 600 ? (unsigned)seconds : 5);

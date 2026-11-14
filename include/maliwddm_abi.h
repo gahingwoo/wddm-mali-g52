@@ -124,3 +124,33 @@ typedef struct _MW_ESCAPE_STATS_DATA {
     /* Flips that arrived while a job chain was running or queued. */
     mw_u32 FlipsWhileBusy, Reserved1;
 } MW_ESCAPE_STATS_DATA;
+
+/* GPU memory: what is allocated, what VidMm has made resident, and by which
+ * process (m5test mem). A process is the one that was current when the
+ * allocation was created: for a UMD's allocations, the process the UMD is
+ * loaded in. Up to MW_MEM_PROCS processes; allocations made by any others
+ * are counted in the totals and in NoSlot. A process's entry is reused once
+ * it holds nothing, so an exited process with Count 0 may be gone. */
+#define MW_ESCAPE_MEMORY        5
+#define MW_MEM_PROCS            64
+
+typedef struct _MW_MEM_PROC {
+    mw_u32 Pid;
+    mw_u32 Count;                       /* allocations it holds now */
+    mw_u32 Creates;                     /* allocations it has made */
+    mw_u32 ResidentCount;
+    mw_u64 Bytes;                       /* bytes it holds now */
+    mw_u64 ResidentBytes;               /* of those, mapped for the GPU now */
+    mw_u64 PeakBytes;
+} MW_MEM_PROC;
+
+typedef struct _MW_ESCAPE_MEMORY_DATA {
+    mw_u32 Code;                        /* MW_ESCAPE_MEMORY */
+    mw_u32 Procs;                       /* out: entries of Proc in use */
+    mw_u64 Bytes, PeakBytes;            /* allocated now, and the most ever */
+    mw_u64 ResidentBytes;               /* mapped at their GPU address now */
+    mw_u64 SegmentSize;                 /* the aperture segment's size */
+    mw_u32 Count, ResidentCount;
+    mw_u32 Creates, Destroys, CreateFails, NoSlot;
+    MW_MEM_PROC Proc[MW_MEM_PROCS];
+} MW_ESCAPE_MEMORY_DATA;

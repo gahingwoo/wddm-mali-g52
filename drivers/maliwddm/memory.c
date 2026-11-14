@@ -46,6 +46,143 @@ NTSTATUS MwQuerySegment(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info)
     return STATUS_SUCCESS;
 }
 
+/* ---- accounting: bytes allocated and resident, by process ----
+ *
+ * The process is the one current in DxgkDdiCreateAllocation. For an
+ * allocation a UMD asks for (pfnAllocateCb, D3DKMTCreateAllocation) that is
+ * the UMD's process: dxgkrnl calls the DDI on the calling thread. For one
+ * dxgkrnl makes on its own behalf it may be another process, or System.
+ * The entry is kept in the allocation, so a destroy made in another
+ * process's context (a process's teardown, a worker thread) gives the
+ * bytes back to the right one.
+ *
+ * Interlocked operations only, no lock: two threads that claim an entry for
+ * a new process at the same moment get different entries, and an entry is
+ * reused only once it holds nothing. A reuse racing with a create of the
+ * process that is leaving can count that one allocation against the new
+ * process; it is a counter, not a resource. */
+
+static void MemMax(volatile LONG64 *Max, LONG64 Value)
+{
+    LONG64 old = *Max;
+    while (Value > old) {
+        LONG64 seen = InterlockedCompareExchange64(Max, Value, old);
+        if (seen == old)
+            break;
+        old = seen;
+    }
+}
+
+static ULONG MemSlotFor(MW_ADAPTER *A, LONG64 Pid)
+{
+    ULONG i;
+
+    for (i = 0; i < MW_MEM_PROCS; i++)
+        if (A->MemProc[i].Pid == Pid)
+            return i + 1;
+    for (i = 0; i < MW_MEM_PROCS; i++)
+        if (A->MemProc[i].Pid == 0 && InterlockedCompareExchange64(&A->MemProc[i].Pid, Pid, 0) == 0)
+            return i + 1;
+    /* Full: take an entry that holds nothing (a process that has gone). */
+    for (i = 0; i < MW_MEM_PROCS; i++) {
+        MW_MEM_SLOT *e = &A->MemProc[i];
+        LONG64 old = e->Pid;
+        if (e->Count == 0 && e->Bytes == 0 && old != Pid &&
+            InterlockedCompareExchange64(&e->Pid, Pid, old) == old) {
+            InterlockedExchange64(&e->PeakBytes, 0);
+            InterlockedExchange(&e->Creates, 0);
+            return i + 1;
+        }
+    }
+    return 0;
+}
+
+static void MemCreated(MW_ADAPTER *A, MW_ALLOCATION *Alloc)
+{
+    LONG64 pid = (LONG64)(ULONG_PTR)PsGetCurrentProcessId();
+    LONG64 size = (LONG64)Alloc->Size;
+
+    MemMax(&A->MemPeakBytes, InterlockedAdd64(&A->MemBytes, size));
+    InterlockedIncrement(&A->MemCount);
+    InterlockedIncrement(&A->MemCreates);
+    Alloc->MemSlot = MemSlotFor(A, pid);
+    if (Alloc->MemSlot == 0) {
+        InterlockedIncrement(&A->MemNoSlot);
+        return;
+    }
+    MW_MEM_SLOT *e = &A->MemProc[Alloc->MemSlot - 1];
+    MemMax(&e->PeakBytes, InterlockedAdd64(&e->Bytes, size));
+    InterlockedIncrement(&e->Count);
+    InterlockedIncrement(&e->Creates);
+}
+
+/* Resident: VidMm has mapped it (MAP_APERTURE_SEGMENT) and it is at its GPU
+ * address; counted once, whatever the number of map calls. */
+static void MemResident(MW_ADAPTER *A, MW_ALLOCATION *Alloc, BOOLEAN Resident)
+{
+    LONG64 size = (LONG64)Alloc->Size;
+
+    if (Alloc->MemResident == Resident)
+        return;
+    Alloc->MemResident = Resident;
+    if (!Resident)
+        size = -size;
+    InterlockedAdd64(&A->MemResidentBytes, size);
+    InterlockedAdd(&A->MemResidentCount, Resident ? 1 : -1);
+    if (Alloc->MemSlot != 0) {
+        MW_MEM_SLOT *e = &A->MemProc[Alloc->MemSlot - 1];
+        InterlockedAdd64(&e->ResidentBytes, size);
+        InterlockedAdd(&e->ResidentCount, Resident ? 1 : -1);
+    }
+}
+
+static void MemDestroyed(MW_ADAPTER *A, MW_ALLOCATION *Alloc)
+{
+    LONG64 size = (LONG64)Alloc->Size;
+
+    MemResident(A, Alloc, FALSE);
+    InterlockedAdd64(&A->MemBytes, -size);
+    InterlockedDecrement(&A->MemCount);
+    InterlockedIncrement(&A->MemDestroys);
+    if (Alloc->MemSlot != 0) {
+        MW_MEM_SLOT *e = &A->MemProc[Alloc->MemSlot - 1];
+        InterlockedAdd64(&e->Bytes, -size);
+        InterlockedDecrement(&e->Count);
+    }
+    Alloc->MemSlot = 0;
+}
+
+void MwEscapeMemory(MW_ADAPTER *A, MW_ESCAPE_MEMORY_DATA *D)
+{
+    ULONG n = 0;
+
+    D->Bytes = (mw_u64)A->MemBytes;
+    D->PeakBytes = (mw_u64)A->MemPeakBytes;
+    D->ResidentBytes = (mw_u64)A->MemResidentBytes;
+    D->SegmentSize = MW_SEGMENT_SIZE;
+    D->Count = (mw_u32)A->MemCount;
+    D->ResidentCount = (mw_u32)A->MemResidentCount;
+    D->Creates = (mw_u32)A->MemCreates;
+    D->Destroys = (mw_u32)A->MemDestroys;
+    D->CreateFails = (mw_u32)A->MemCreateFails;
+    D->NoSlot = (mw_u32)A->MemNoSlot;
+    for (ULONG i = 0; i < MW_MEM_PROCS; i++) {
+        const MW_MEM_SLOT *e = &A->MemProc[i];
+        MW_MEM_PROC *o;
+        if (e->Pid == 0)
+            continue;
+        o = &D->Proc[n++];
+        o->Pid = (mw_u32)e->Pid;
+        o->Count = (mw_u32)e->Count;
+        o->Creates = (mw_u32)e->Creates;
+        o->ResidentCount = (mw_u32)e->ResidentCount;
+        o->Bytes = (mw_u64)e->Bytes;
+        o->ResidentBytes = (mw_u64)e->ResidentBytes;
+        o->PeakBytes = (mw_u64)e->PeakBytes;
+    }
+    D->Procs = n;
+}
+
 /* ---- allocations ---- */
 
 static NTSTATUS NewAllocation(MW_ADAPTER *A, const MW_ALLOCATION_INFO *In, DXGK_ALLOCATIONINFO *Out)
@@ -73,9 +210,11 @@ static NTSTATUS NewAllocation(MW_ADAPTER *A, const MW_ALLOCATION_INFO *In, DXGK_
     ExReleaseFastMutex(&A->MmuLock);
     if (!ok && A->GpuUp) {
         ExFreePoolWithTag(alloc, MW_TAG);
+        InterlockedIncrement(&A->MemCreateFails);
         return STATUS_GRAPHICS_NO_VIDEO_MEMORY;
     }
 
+    MemCreated(A, alloc);
     A->Allocations++;
     A->LastAllocVa = alloc->GpuVa;
     Out->hAllocation = alloc;
@@ -98,6 +237,7 @@ static NTSTATUS NewAllocation(MW_ADAPTER *A, const MW_ALLOCATION_INFO *In, DXGK_
 
 static void FreeAllocation(MW_ADAPTER *A, MW_ALLOCATION *Alloc)
 {
+    MemDestroyed(A, Alloc);
     MwCopyForget(A, Alloc, TRUE);
     ExAcquireFastMutex(&A->MmuLock);
     MwScanUnmap(A, Alloc);
@@ -259,6 +399,7 @@ NTSTATUS APIENTRY MwBuildPagingBuffer(IN_CONST_HANDLE hAdapter, DXGKARG_BUILDPAG
         ExAcquireFastMutex(&a->MmuLock);
         st = MkMmuMapPages(&a->Gpu, alloc->GpuVa, pfn, pages, (alloc->Flags & MW_ALLOC_NOEXEC) != 0);
         alloc->Mapped = NT_SUCCESS(st);
+        MemResident(a, alloc, alloc->Mapped);
         alloc->Mdl = Arg->MapApertureSegment.pMdl;
         alloc->MdlPage = (ULONG)Arg->MapApertureSegment.MdlOffset;
         if (alloc->Mapped)
@@ -282,6 +423,7 @@ NTSTATUS APIENTRY MwBuildPagingBuffer(IN_CONST_HANDLE hAdapter, DXGKARG_BUILDPAG
         if (alloc->Mapped)
             MkMmuUnmapPages(&a->Gpu, alloc->GpuVa, alloc->Pages);
         alloc->Mapped = FALSE;
+        MemResident(a, alloc, FALSE);
         ExReleaseFastMutex(&a->MmuLock);
         MwCopyForget(a, alloc, FALSE);
         return STATUS_SUCCESS;
