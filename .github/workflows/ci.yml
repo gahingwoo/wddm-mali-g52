@@ -162,7 +162,9 @@ jobs:
         id: find
         env:
           GH_TOKEN: ${{ github.token }}
-          ART: mesa-d3d10umd-panfrost-arm64
+          # The forwarder's artifact: it is built last, from the ARM64 and
+          # x64 builds of the run, so a run that has it has those too.
+          ART: maliumd-arm64x
         run: |
           # What the DLL is built from (mesa.yml copies include/ and
           # win32-compat/ into Mesa, applies mesa-patches/, puts ci/ on PATH).
@@ -229,6 +231,22 @@ jobs:
           run-id: ${{ needs.umd.outputs.run_id }}
           github-token: ${{ github.token }}
 
+      # The forwarder with the x64 build, and the x86 build, of that same
+      # Mesa run.
+      - uses: actions/download-artifact@v4
+        with:
+          name: maliumd-arm64x
+          path: a64x
+          run-id: ${{ needs.umd.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: mesa-d3d10umd-panfrost-x86
+          path: x86
+          run-id: ${{ needs.umd.outputs.run_id }}
+          github-token: ${{ github.token }}
+
       - name: Assemble and sign
         shell: pwsh
         run: |
@@ -239,6 +257,9 @@ jobs:
           # The INF copies this to System32\maliumd.dll (see the INF for why
           # the name differs).
           Copy-Item umd\libgallium_d3d10.dll "$drv\maliumd_arm64.dll"
+          Copy-Item a64x\maliumd.dll "$drv\maliumd_fwd.dll"
+          Copy-Item a64x\maliumd_x64.dll "$drv\maliumd_x64.dll"
+          Copy-Item x86\libgallium_d3d10.dll "$drv\maliumd_x86.dll"
           $kits = 'C:\Program Files (x86)\Windows Kits\10'
           $st   = Join-Path $kits "bin\$env:WDK_VERSION\x86\signtool.exe"
           $i2c  = Join-Path $kits "bin\$env:WDK_VERSION\x86\inf2cat.exe"
@@ -250,7 +271,7 @@ jobs:
           "CERT_THUMBPRINT=$($cert.Thumbprint)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "CERT_NOTAFTER=$($cert.NotAfter.ToString('yyyy-MM-dd'))" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           # Embedded signatures first, then the catalog over the signed files.
-          & $st sign /fd sha256 /f C:\t.pfx /p $pw "$drv\maliwddm.sys" "$drv\maliumd_arm64.dll"
+          & $st sign /fd sha256 /f C:\t.pfx /p $pw "$drv\maliwddm.sys" "$drv\maliumd_arm64.dll" "$drv\maliumd_fwd.dll" "$drv\maliumd_x64.dll" "$drv\maliumd_x86.dll"
           if ($LASTEXITCODE) { throw "signtool failed: $LASTEXITCODE" }
           $iv = (Get-ChildItem $kits -Recurse -Filter infverif.exe -ErrorAction SilentlyContinue |
                    Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1).FullName
@@ -281,7 +302,7 @@ jobs:
           certutil -f -addstore TrustedPublisher wddm-mali-g52-test.cer | Out-Null
           # 1. Each file's hash is in the catalog, and the catalog's
           #    signature verifies.
-          foreach ($f in 'maliwddm.inf', 'maliwddm.sys', 'maliumd_arm64.dll') {
+          foreach ($f in 'maliwddm.inf', 'maliwddm.sys', 'maliumd_arm64.dll', 'maliumd_fwd.dll', 'maliumd_x64.dll', 'maliumd_x86.dll') {
             & $st verify /pa /q /c $cat "$drv\$f"
             if ($LASTEXITCODE) { throw "$f is not in $cat, or the catalog does not verify" }
             Write-Host "in the catalog: $f"
@@ -294,10 +315,10 @@ jobs:
           if (-not $LASTEXITCODE) { throw 'a changed INF passed the catalog check' }
           $global:LASTEXITCODE = 0
           # 3. The embedded signatures of the two binaries verify.
-          & $st verify /pa /q "$drv\maliwddm.sys" "$drv\maliumd_arm64.dll"
+          & $st verify /pa /q "$drv\maliwddm.sys" "$drv\maliumd_arm64.dll" "$drv\maliumd_fwd.dll" "$drv\maliumd_x64.dll" "$drv\maliumd_x86.dll"
           if ($LASTEXITCODE) { throw 'an embedded signature does not verify' }
           # 4. Catalog and binaries are signed by this run's certificate.
-          foreach ($f in 'maliwddm.cat', 'maliwddm.sys', 'maliumd_arm64.dll') {
+          foreach ($f in 'maliwddm.cat', 'maliwddm.sys', 'maliumd_arm64.dll', 'maliumd_fwd.dll', 'maliumd_x64.dll', 'maliumd_x86.dll') {
             $s = Get-AuthenticodeSignature "$drv\$f"
             if ($s.SignerCertificate.Thumbprint -ne $env:CERT_THUMBPRINT) {
               throw "$f is signed by $($s.SignerCertificate.Thumbprint), not $env:CERT_THUMBPRINT"

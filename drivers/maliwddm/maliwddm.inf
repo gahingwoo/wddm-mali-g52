@@ -4,20 +4,27 @@
 ; the edk2-rk3576 CM5-IO DSDT), the device m1probe and malikm bind:
 ; only one of them can be installed at a time.
 ;
-; The user-mode driver is maliumd.dll: Mesa's d3d10umd with Panfrost
-; (libgallium_d3d10.dll from mesa.yml). CI puts it in the package as
-; maliumd_arm64.dll and this INF copies it to System32\maliumd.dll; a full
-; WDDM adapter with no loadable UMD fails with code 43 (board runs 1-3,
-; viogpu3d's PR 943 thread). Steps (a)/(b) named WARP (d3d10warp.dll)
-; instead. Preemption is turned off system-wide, as viogpu3d does: the
-; driver never preempts a DMA buffer.
+; The user-mode driver is Mesa's d3d10umd with Panfrost (mesa.yml), built
+; three times, because a process loads a UMD of its own kind:
+;   System32\maliumd_arm64.dll  ARM64 processes, dwm.exe among them
+;   System32\maliumd_x64.dll    x64 processes, which run emulated
+;   SysWOW64\maliumd_x86.dll    x86 processes, likewise
+; System32\maliumd.dll, the name in UserModeDriverName, is an ARM64X
+; forwarder: an ARM64 process that loads it gets maliumd_arm64.dll and an
+; x64 process gets maliumd_x64.dll. Without it an x64 process cannot load
+; the UMD at all, and without UserModeDriverNameWow an x86 process is given
+; no name to load (D3D11CreateDevice 0x887A0004 for both on the TaishanPi
+; 3M, 2026-11-14, and a triangle on the Mali from all three with these
+; files in place).
 ;
-; Why the UMD goes to System32 under another name than the one it has in
-; the package: a UMD is often replaced on the board by renaming
-; System32\maliumd.dll and copying a new one beside it. The driver store
-; holds every file a package copies, so if it held a maliumd.dll the runtime
-; could load that one instead of System32's. It holds maliumd_arm64.dll, so
-; the name in UserModeDriverName exists in System32 only.
+; A full WDDM adapter with no loadable UMD fails with code 43 (board runs
+; 1-3, viogpu3d's PR 943 thread). Preemption is turned off system-wide, as
+; viogpu3d does: the driver never preempts a DMA buffer.
+;
+; To try another ARM64 UMD on a board without reinstalling: rename
+; System32\maliumd_arm64.dll and copy the new one beside it. The forwarder
+; is in the package as maliumd_fwd.dll so that the driver store holds no
+; maliumd.dll of its own.
 ;
 ; SPDX-License-Identifier: GPL-2.0
 ;
@@ -34,13 +41,17 @@ PnpLockdown = 1
 [DestinationDirs]
 DefaultDestDir = 13
 MW_UmdFiles    = 11 ; System32
+MW_UmdWowFiles = 10,SysWOW64
 
 [SourceDisksNames]
 1 = %DiskName%,,,""
 
 [SourceDisksFiles]
 maliwddm.sys      = 1
+maliumd_fwd.dll   = 1
 maliumd_arm64.dll = 1
+maliumd_x64.dll   = 1
+maliumd_x86.dll   = 1
 
 [Manufacturer]
 %ProviderName% = Standard,NTARM64.10.0...16299
@@ -50,7 +61,7 @@ maliumd_arm64.dll = 1
 
 [MW_Inst]
 FeatureScore = F9
-CopyFiles = MW_CopyFiles, MW_UmdFiles
+CopyFiles = MW_CopyFiles, MW_UmdFiles, MW_UmdWowFiles
 AddReg = MW_Settings
 
 [MW_CopyFiles]
@@ -62,7 +73,9 @@ maliwddm.sys
 ; after the update load the new UMD without a reboot. Without the flag an
 ; in-use file is only replaced at the next restart.
 [MW_UmdFiles]
-maliumd.dll,maliumd_arm64.dll,,0x00004000
+maliumd.dll,maliumd_fwd.dll,,0x00004000
+maliumd_arm64.dll,,,0x00004000
+maliumd_x64.dll,,,0x00004000
 
 ; PnpLockdown = 1 keeps applications, administrators included, from changing
 ; the files this INF copies. For the UMD that would stop the rename above,
@@ -72,12 +85,15 @@ maliumd.dll,maliumd_arm64.dll,,0x00004000
 [MW_UmdFiles.security]
 "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;BU)(A;;GRGX;;;AC)(A;;GRGX;;;S-1-15-2-2)"
 
-; A 32-bit (WoW64) or x64 UMD would go here: its file in SourceDisksFiles,
-; its own file-list section in CopyFiles and DestinationDirs, and
-; UserModeDriverNameWow next to UserModeDriverName. Nothing builds one yet.
+[MW_UmdWowFiles]
+maliumd_x86.dll,,,0x00004000
+
+[MW_UmdWowFiles.security]
+"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;BU)(A;;GRGX;;;AC)(A;;GRGX;;;S-1-15-2-2)"
 
 [MW_Settings]
 HKR,,UserModeDriverName,%REG_MULTI_SZ%,maliumd.dll,maliumd.dll,maliumd.dll,maliumd.dll
+HKR,,UserModeDriverNameWow,%REG_MULTI_SZ%,maliumd_x86.dll,maliumd_x86.dll,maliumd_x86.dll,maliumd_x86.dll
 ; Base names of the UMDs this package installs ("Installed display drivers
 ; directive", Microsoft's display driver INF documentation).
 HKR,,InstalledDisplayDrivers,%REG_MULTI_SZ%,maliumd
