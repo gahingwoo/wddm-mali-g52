@@ -1,51 +1,235 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * maliwddm's display: malidod's, which drives the HDMI output under
- * Windows (M5.1). One HDMI child, the firmware's framebuffer and mode,
- * identity transforms, unspecified target frequencies. Flips land in
- * MwSetVidPnSourceAddress; for now it records the address and the
- * framebuffer is written by presents (step d).
+ * Windows (M5.1). One HDMI child with the monitor's EDID if the firmware
+ * left it in the DSDT, the firmware's framebuffer and timing, identity
+ * transforms (and, with ScaledModes, smaller source modes stretched to the
+ * firmware's). Flips land in MwSetVidPnSourceAddress, which records them;
+ * scanout.c or the flip copy in command.c puts them on the screen.
  */
 #include "maliwddm.h"
+#include <acpiioct.h>
+
+#ifndef DISPLAY_ADAPTER_HW_ID
+#define DISPLAY_ADAPTER_HW_ID 0xFFFFFFFFu
+#endif
 
 static UINT BytesPerPixel(D3DDDIFORMAT F)
 {
     return (F == D3DDDIFMT_A8R8G8B8 || F == D3DDDIFMT_X8R8G8B8) ? 4 : 0;
 }
 
-static void FillSourceMode(MW_ADAPTER *Dev, D3DKMDT_VIDPN_SOURCE_MODE *M)
+/* ---- source modes ----
+ *
+ * The firmware's mode is the only timing there is: the HDMI link is never
+ * retimed from Windows. With ScaledModes set the driver also offers
+ * smaller source modes of the same shape, for the VOP2's window scaler to
+ * stretch to the firmware's size. They are offered only when scan-out is
+ * set up: the copy to the framebuffer cannot scale, and would put a small
+ * picture in the top left corner. Scan-out does not scale yet either
+ * (scanout.c refuses a primary of another size and it is copied), so for
+ * now the setting is for trying the VidPN side alone. */
+
+static const struct { USHORT W, H; } Ladder[] = {
+    { 3840, 2160 }, { 3200, 1800 }, { 2560, 1600 }, { 2560, 1440 }, { 1920, 1200 },
+    { 1920, 1080 }, { 1680, 1050 }, { 1600, 1200 }, { 1600, 900 },  { 1440, 900 },
+    { 1280, 1024 }, { 1280, 800 },  { 1280, 720 },  { 1024, 768 },  { 800, 600 },
+};
+
+/* Mode Index of the source modes: 0 is the firmware's, then the ladder
+ * sizes that are smaller, exactly the same shape (so "stretched" keeps
+ * the aspect ratio) and no more than 8 times smaller in either direction
+ * (the Esmart window's limit in mainline rockchip_vop2_reg.c). FALSE when
+ * there is no such mode. */
+static BOOLEAN SourceModeSize(MW_ADAPTER *Dev, ULONG Index, UINT *W, UINT *H)
+{
+    UINT fw = Dev->Fb.Width, fh = Dev->Fb.Height;
+
+    if (Index == 0) {
+        *W = fw;
+        *H = fh;
+        return TRUE;
+    }
+    if (!Dev->ScaledModes)
+        return FALSE;
+    for (ULONG i = 0; i < ARRAYSIZE(Ladder); i++) {
+        UINT w = Ladder[i].W, h = Ladder[i].H;
+        if (w >= fw || h >= fh || (ULONG64)w * fh != (ULONG64)h * fw || w * 8 < fw || h * 8 < fh)
+            continue;
+        if (--Index == 0) {
+            *W = w;
+            *H = h;
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static BOOLEAN IsSourceModeSize(MW_ADAPTER *Dev, UINT W, UINT H)
+{
+    UINT w, h;
+
+    for (ULONG i = 0; SourceModeSize(Dev, i, &w, &h); i++)
+        if (w == W && h == H)
+            return TRUE;
+    return FALSE;
+}
+
+static void FillSourceMode(MW_ADAPTER *Dev, D3DKMDT_VIDPN_SOURCE_MODE *M, UINT W, UINT H)
 {
     M->Type = D3DKMDT_RMT_GRAPHICS;
-    M->Format.Graphics.PrimSurfSize.cx = Dev->Fb.Width;
-    M->Format.Graphics.PrimSurfSize.cy = Dev->Fb.Height;
+    M->Format.Graphics.PrimSurfSize.cx = W;
+    M->Format.Graphics.PrimSurfSize.cy = H;
     M->Format.Graphics.VisibleRegionSize = M->Format.Graphics.PrimSurfSize;
-    M->Format.Graphics.Stride = Dev->Fb.Pitch;
+    M->Format.Graphics.Stride = (W == Dev->Fb.Width) ? Dev->Fb.Pitch : W * 4;
     M->Format.Graphics.PixelFormat = D3DDDIFMT_A8R8G8B8;
     M->Format.Graphics.ColorBasis = D3DKMDT_CB_SRGB;
     M->Format.Graphics.PixelValueAccessMode = D3DKMDT_PVAM_DIRECT;
 }
 
-/* A real 60 Hz timing. The firmware sets 1920x1080 with the CEA-861
- * timing (VIC 16: 2200x1125 total, 148.5 MHz); +280/+45 blanking gives
- * exactly that, and something plausible for other sizes. A full WDDM
- * driver may not leave the frequencies unspecified the way a display-only
- * one does: board run 4 got STATUS_GRAPHICS_INVALID_FREQUENCY from
- * pfnAddMode for the target mode, and Windows stopped at boot. */
+/* The firmware's timing. A full WDDM driver may not leave the frequencies
+ * unspecified the way a display-only one does: board run 4 got
+ * STATUS_GRAPHICS_INVALID_FREQUENCY from pfnAddMode for the target mode,
+ * and Windows stopped at boot. TimingFromEdid or TimingMadeUp sets it. */
 static void FillSignal(MW_ADAPTER *Dev, D3DKMDT_VIDEO_SIGNAL_INFO *S)
 {
-    UINT totalW = Dev->Fb.Width + 280, totalH = Dev->Fb.Height + 45;
+    UINT totalW = Dev->TimingTotalW, totalH = Dev->TimingTotalH;
 
     S->VideoStandard = D3DKMDT_VSS_OTHER;
     S->TotalSize.cx = totalW;
     S->TotalSize.cy = totalH;
     S->ActiveSize.cx = Dev->Fb.Width;
     S->ActiveSize.cy = Dev->Fb.Height;
-    S->PixelRate = (SIZE_T)totalW * totalH * 60;
-    S->HSyncFreq.Numerator = (UINT)S->PixelRate;
+    S->PixelRate = Dev->TimingPixelRate;
+    S->HSyncFreq.Numerator = Dev->TimingPixelRate;
     S->HSyncFreq.Denominator = totalW;
-    S->VSyncFreq.Numerator = (UINT)S->PixelRate;
+    S->VSyncFreq.Numerator = Dev->TimingPixelRate;
     S->VSyncFreq.Denominator = totalW * totalH;
     S->ScanLineOrdering = D3DDDI_VSSLO_PROGRESSIVE;
+}
+
+/* 60 Hz with +280/+45 blanking: for 1920x1080 that is exactly the CEA-861
+ * timing (VIC 16: 2200x1125 total, 148.5 MHz), and something plausible
+ * for other sizes. What there was before the EDID. */
+static void TimingMadeUp(MW_ADAPTER *Dev)
+{
+    Dev->TimingTotalW = Dev->Fb.Width + 280;
+    Dev->TimingTotalH = Dev->Fb.Height + 45;
+    Dev->TimingPixelRate = Dev->TimingTotalW * Dev->TimingTotalH * 60;
+}
+
+/* The first progressive detailed timing in the base block whose active
+ * size is the framebuffer's. The firmware's native mode is the monitor's
+ * preferred timing, which is the first detailed timing, so this is the
+ * timing on the wire unless the firmware was set to a preset of the same
+ * size (then only the refresh rate Windows shows would be off). With it
+ * the target mode is one of the EDID's own modes, not a second, made-up
+ * mode of the same size next to it. */
+static BOOLEAN TimingFromEdid(MW_ADAPTER *Dev)
+{
+    for (ULONG off = 54; off + 18 <= 126; off += 18) {
+        const UCHAR *d = Dev->Edid + off;
+        ULONG clk = d[0] | (ULONG)d[1] << 8;            /* 10 kHz units; 0: not a timing */
+        UINT ha = d[2] | (UINT)(d[4] & 0xF0) << 4, hb = d[3] | (UINT)(d[4] & 0x0F) << 8;
+        UINT va = d[5] | (UINT)(d[7] & 0xF0) << 4, vb = d[6] | (UINT)(d[7] & 0x0F) << 8;
+
+        if (clk == 0 || (d[17] & 0x80) || ha != Dev->Fb.Width || va != Dev->Fb.Height || hb == 0 || vb == 0)
+            continue;
+        Dev->TimingTotalW = ha + hb;
+        Dev->TimingTotalH = va + vb;
+        Dev->TimingPixelRate = clk * 10000;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+/* ---- the EDID, from the firmware ----
+ *
+ * The VOP2's HDMI DDC is not ours to drive, but the firmware read the
+ * EDID over it at boot and leaves the bytes in the DSDT: GPU0.EDID returns
+ * a 512-byte buffer, the EDID then zeros (edk2-rk3576, Gpu.asl). Firmware
+ * from before that has no such method; firmware that read no EDID returns
+ * zeros. Either way EdidSize stays 0 and the monitor is what it was
+ * before: no descriptor, one made-up mode. */
+
+/* The base block's header and checksum; the extensions it announces, as
+ * far as the buffer has them and they are not zero (the firmware zeroes
+ * the buffer after the EDID). Their checksums are the firmware's to have
+ * checked: it lets a CEA-861 block with a wrong one through, as Linux
+ * does, for KVM switches that edit the block and do not fix it. */
+static ULONG EdidLength(const UCHAR *E, ULONG Len)
+{
+    static const UCHAR header[8] = { 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00 };
+    UCHAR sum = 0;
+    ULONG blocks, have;
+
+    if (Len < 128 || RtlCompareMemory(E, header, sizeof(header)) != sizeof(header))
+        return 0;
+    for (ULONG i = 0; i < 128; i++)
+        sum = (UCHAR)(sum + E[i]);
+    if (sum != 0)
+        return 0;
+    blocks = 1 + (ULONG)E[126];
+    have = min(Len, MW_EDID_MAX) / 128;
+    for (ULONG b = 1; b < min(blocks, have); b++) {
+        BOOLEAN zero = TRUE;
+        for (ULONG i = 0; i < 128 && zero; i++)
+            zero = E[b * 128 + i] == 0;
+        if (zero)
+            return b * 128;
+    }
+    return min(blocks, have) * 128;
+}
+
+static NTSTATUS EvalEdid(MW_ADAPTER *A, ULONG Signature, PACPI_EVAL_OUTPUT_BUFFER Out, ULONG OutSize)
+{
+    ACPI_EVAL_INPUT_BUFFER_COMPLEX in;
+
+    RtlZeroMemory(&in, sizeof(in));
+    in.Signature = Signature;
+    in.MethodNameAsUlong = (ULONG)'DIDE';       /* "EDID" */
+    in.Size = 0;
+    in.ArgumentCount = 0;
+    RtlZeroMemory(Out, OutSize);
+    return A->Dxgk.DxgkCbEvalAcpiMethod(A->Dxgk.DeviceHandle, DISPLAY_ADAPTER_HW_ID, &in,
+                                        sizeof(in), Out, OutSize);
+}
+
+/* PASSIVE_LEVEL, from StartDevice. Registry trace: EdidEval (the status of
+ * the evaluation), EdidBytes, EdidTiming (1: the target mode is the EDID's
+ * detailed timing, 0: made up). */
+static void ReadEdid(MW_ADAPTER *A)
+{
+    const ULONG head = (ULONG)FIELD_OFFSET(ACPI_EVAL_OUTPUT_BUFFER, Argument) +
+                       (ULONG)FIELD_OFFSET(ACPI_METHOD_ARGUMENT, Data);
+    const ULONG outSize = head + MW_EDID_MAX + 64;
+    PACPI_EVAL_OUTPUT_BUFFER out;
+    NTSTATUS st;
+
+    A->EdidSize = 0;
+    out = (PACPI_EVAL_OUTPUT_BUFFER)ExAllocatePool2(POOL_FLAG_PAGED, outSize, MW_TAG);
+    if (out == NULL)
+        return;
+    /* dxgkrnl's documentation asks a driver with children to say
+     * DXGK_ACPI_PASS_ARGS_TO_CHILDREN; this method has no arguments, and
+     * the plain signature is tried if that is refused. */
+#ifdef DXGK_ACPI_PASS_ARGS_TO_CHILDREN
+    st = EvalEdid(A, DXGK_ACPI_PASS_ARGS_TO_CHILDREN, out, outSize);
+    if (!NT_SUCCESS(st) && st != STATUS_OBJECT_NAME_NOT_FOUND)
+#endif
+        st = EvalEdid(A, ACPI_EVAL_INPUT_BUFFER_COMPLEX_SIGNATURE, out, outSize);
+    MwLog(A, L"EdidEval", (ULONG)st);
+    if (NT_SUCCESS(st) && out->Signature == ACPI_EVAL_OUTPUT_BUFFER_SIGNATURE && out->Count >= 1 &&
+        out->Argument[0].Type == ACPI_METHOD_ARGUMENT_BUFFER &&
+        head + (ULONG)out->Argument[0].DataLength <= outSize) {
+        ULONG len = EdidLength(out->Argument[0].Data, out->Argument[0].DataLength);
+        if (len != 0) {
+            RtlCopyMemory(A->Edid, out->Argument[0].Data, len);
+            A->EdidSize = len;
+        }
+    }
+    ExFreePoolWithTag(out, MW_TAG);
+    MwLog(A, L"EdidBytes", A->EdidSize);
 }
 
 /* ---- PnP ---- */
@@ -64,6 +248,16 @@ NTSTATUS MwDisplayStart(MW_ADAPTER *A)
         return STATUS_UNSUCCESSFUL;
     MwLog(A, L"FbWidth", A->Fb.Width);
     MwLog(A, L"FbHeight", A->Fb.Height);
+    A->SrcWidth = A->Fb.Width;
+    A->SrcHeight = A->Fb.Height;
+    ReadEdid(A);
+    {
+        BOOLEAN fromEdid = A->EdidSize != 0 && TimingFromEdid(A);
+        if (!fromEdid)
+            TimingMadeUp(A);
+        MwLog(A, L"EdidTiming", fromEdid);
+    }
+    MwLog(A, L"TimingPixelRate", A->TimingPixelRate);
     A->FbSize = (SIZE_T)A->Fb.Pitch * A->Fb.Height;
     pa = A->Fb.PhysicAddress;
     A->FbVa = (PUCHAR)MmMapIoSpaceEx(pa, A->FbSize, PAGE_READWRITE | PAGE_WRITECOMBINE);
@@ -72,6 +266,15 @@ NTSTATUS MwDisplayStart(MW_ADAPTER *A)
     A->SourceVisible = TRUE;
     A->PathActive = TRUE;
     MwScanStart(A);
+    /* Only with scan-out set up: see SourceModeSize. */
+    A->ScaledModes = MwSetting(A, L"ScaledModes", 0) != 0 && A->ScanReady;
+    {
+        UINT w, h;
+        ULONG n = 0;
+        while (SourceModeSize(A, n, &w, &h))
+            n++;
+        MwLog(A, L"SourceModes", n);
+    }
     return STATUS_SUCCESS;
 }
 
@@ -98,7 +301,8 @@ NTSTATUS APIENTRY MwStopDeviceAndReleasePostDisplayOwnership(IN_CONST_PVOID Mini
 }
 
 
-/* ---- the monitor: one HDMI output, always connected, no EDID read ---- */
+/* ---- the monitor: one HDMI output, always connected, its EDID from the
+ * firmware when the firmware has one ---- */
 
 NTSTATUS APIENTRY MwQueryChildRelations(IN_CONST_PVOID MiniportDeviceContext,
                                PDXGK_CHILD_DESCRIPTOR ChildRelations, ULONG ChildRelationsSize)
@@ -141,19 +345,33 @@ NTSTATUS APIENTRY MwQueryChildStatus(IN_CONST_PVOID MiniportDeviceContext, INOUT
     }
 }
 
-/* The firmware's EDID is not at hand here: Windows falls back to the modes
- * RecommendMonitorModes adds. */
+/* The EDID by offset and length: dxgkrnl asks for the base block, then
+ * monitor.sys for whatever it wants of it, an extension block at a time.
+ * Without one Windows falls back to the modes RecommendMonitorModes adds,
+ * and the monitor is "Generic Non-PnP Monitor". */
 NTSTATUS APIENTRY MwQueryDeviceDescriptor(IN_CONST_PVOID MiniportDeviceContext, IN_ULONG ChildUid,
                                  INOUT_PDXGK_DEVICE_DESCRIPTOR DeviceDescriptor)
 {
-    UNREFERENCED_PARAMETER(MiniportDeviceContext);
-    UNREFERENCED_PARAMETER(ChildUid);
-    UNREFERENCED_PARAMETER(DeviceDescriptor);
-    return STATUS_MONITOR_NO_DESCRIPTOR;
+    MW_ADAPTER *dev = (MW_ADAPTER *)MiniportDeviceContext;
+    ULONG off, len, n;
+
+    if (ChildUid != 0 || dev->EdidSize == 0)
+        return STATUS_MONITOR_NO_DESCRIPTOR;
+    off = DeviceDescriptor->DescriptorOffset;
+    len = DeviceDescriptor->DescriptorLength;
+    if (off >= dev->EdidSize)
+        return STATUS_MONITOR_NO_MORE_DESCRIPTOR_DATA;
+    if (DeviceDescriptor->DescriptorBuffer == NULL || len == 0)
+        return STATUS_INVALID_PARAMETER;
+    n = min(len, dev->EdidSize - off);
+    RtlCopyMemory(DeviceDescriptor->DescriptorBuffer, dev->Edid + off, n);
+    if (n < len)        /* never more than DescriptorLength */
+        RtlZeroMemory((PUCHAR)DeviceDescriptor->DescriptorBuffer + n, len - n);
+    return STATUS_SUCCESS;
 }
 
 
-/* ---- VidPN: one source, one target, one mode, identity everything ---- */
+/* ---- VidPN: one source, one target, the firmware's timing on the target ---- */
 
 NTSTATUS APIENTRY MwIsSupportedVidPn(IN_CONST_HANDLE hAdapter, DXGKARG_ISSUPPORTEDVIDPN *Arg)
 {
@@ -176,12 +394,12 @@ NTSTATUS APIENTRY MwIsSupportedVidPn(IN_CONST_HANDLE hAdapter, DXGKARG_ISSUPPORT
     if (!NT_SUCCESS(st))
         return st;
     st = setIf->pfnAcquirePinnedModeInfo(set, &pinned);
-    /* Supported if nothing is pinned yet, or what is pinned is our mode. */
+    /* Supported if nothing is pinned yet, or what is pinned is one of ours. */
     if (NT_SUCCESS(st)) {
         Arg->IsVidPnSupported = pinned == NULL ||
             (pinned->Type == D3DKMDT_RMT_GRAPHICS &&
-             pinned->Format.Graphics.PrimSurfSize.cx == dev->Fb.Width &&
-             pinned->Format.Graphics.PrimSurfSize.cy == dev->Fb.Height);
+             IsSourceModeSize(dev, pinned->Format.Graphics.PrimSurfSize.cx,
+                              pinned->Format.Graphics.PrimSurfSize.cy));
         if (pinned != NULL)
             setIf->pfnReleaseModeInfo(set, pinned);
     }
@@ -197,7 +415,9 @@ NTSTATUS APIENTRY MwRecommendFunctionalVidPn(IN_CONST_HANDLE hAdapter,
     return STATUS_GRAPHICS_NO_RECOMMENDED_FUNCTIONAL_VIDPN;
 }
 
-/* Give the source and target of a path our mode if nothing is pinned. */
+/* Give the source and target of a path our modes if nothing is pinned:
+ * the firmware's, and with ScaledModes the smaller ones (SourceModeSize).
+ * The target has only the firmware's, whatever the source. */
 static NTSTATUS AddSourceMode(MW_ADAPTER *Dev, const DXGK_VIDPN_INTERFACE *VidPn, D3DKMDT_HVIDPN H,
                               D3DDDI_VIDEO_PRESENT_SOURCE_ID Src)
 {
@@ -206,6 +426,7 @@ static NTSTATUS AddSourceMode(MW_ADAPTER *Dev, const DXGK_VIDPN_INTERFACE *VidPn
     const D3DKMDT_VIDPN_SOURCE_MODE *pinned = NULL;
     D3DKMDT_VIDPN_SOURCE_MODE *mode;
     NTSTATUS st;
+    UINT w, h;
 
     st = VidPn->pfnAcquireSourceModeSet(H, Src, &set, &setIf);
     if (!NT_SUCCESS(st))
@@ -220,12 +441,20 @@ static NTSTATUS AddSourceMode(MW_ADAPTER *Dev, const DXGK_VIDPN_INTERFACE *VidPn
     st = VidPn->pfnCreateNewSourceModeSet(H, Src, &set, &setIf);
     if (!NT_SUCCESS(st))
         return st;
-    st = setIf->pfnCreateNewModeInfo(set, &mode);
-    if (NT_SUCCESS(st)) {
-        FillSourceMode(Dev, mode);
-        st = setIf->pfnAddMode(set, mode);
+    for (ULONG i = 0; NT_SUCCESS(st) && SourceModeSize(Dev, i, &w, &h); i++) {
+        st = setIf->pfnCreateNewModeInfo(set, &mode);
         if (!NT_SUCCESS(st))
+            break;
+        FillSourceMode(Dev, mode, w, h);
+        st = setIf->pfnAddMode(set, mode);
+        if (!NT_SUCCESS(st)) {
             setIf->pfnReleaseModeInfo(set, mode);
+            /* A scaled mode refused is that mode gone, not the set. */
+            if (i != 0) {
+                MwLog(Dev, L"Fail_AddScaledMode", (ULONG)st);
+                st = STATUS_SUCCESS;
+            }
+        }
     }
     if (NT_SUCCESS(st))
         st = VidPn->pfnAssignSourceModeSet(H, Src, set);
@@ -272,6 +501,29 @@ static NTSTATUS AddTargetMode(MW_ADAPTER *Dev, const DXGK_VIDPN_INTERFACE *VidPn
     return st;
 }
 
+/* The size of the source mode pinned on a source, if one is. */
+static BOOLEAN PinnedSourceSize(const DXGK_VIDPN_INTERFACE *VidPn, D3DKMDT_HVIDPN H,
+                                D3DDDI_VIDEO_PRESENT_SOURCE_ID Src, UINT *W, UINT *H2)
+{
+    D3DKMDT_HVIDPNSOURCEMODESET set;
+    const DXGK_VIDPNSOURCEMODESET_INTERFACE *setIf;
+    const D3DKMDT_VIDPN_SOURCE_MODE *pinned = NULL;
+    BOOLEAN found = FALSE;
+
+    if (!NT_SUCCESS(VidPn->pfnAcquireSourceModeSet(H, Src, &set, &setIf)))
+        return FALSE;
+    if (NT_SUCCESS(setIf->pfnAcquirePinnedModeInfo(set, &pinned)) && pinned != NULL) {
+        if (pinned->Type == D3DKMDT_RMT_GRAPHICS) {
+            *W = pinned->Format.Graphics.PrimSurfSize.cx;
+            *H2 = pinned->Format.Graphics.PrimSurfSize.cy;
+            found = TRUE;
+        }
+        setIf->pfnReleaseModeInfo(set, pinned);
+    }
+    VidPn->pfnReleaseSourceModeSet(H, set);
+    return found;
+}
+
 NTSTATUS APIENTRY MwEnumVidPnCofuncModality(IN_CONST_HANDLE hAdapter,
                                             const DXGKARG_ENUMVIDPNCOFUNCMODALITY *Arg)
 {
@@ -312,15 +564,28 @@ NTSTATUS APIENTRY MwEnumVidPnCofuncModality(IN_CONST_HANDLE hAdapter,
                 MwLog(dev, L"Fail_AddTargetMode", (ULONG)r);
         }
 
-        /* Identity scaling and rotation, and nothing else. */
+        /* Identity rotation. Identity scaling for the firmware's mode; a
+         * smaller source mode is stretched to it (the same shape, so this
+         * keeps the aspect ratio). Before a source mode is pinned both are
+         * possible. */
         if (NT_SUCCESS(r) && !xfPivot &&
             (path->ContentTransformation.Scaling == D3DKMDT_VPPS_UNPINNED ||
              path->ContentTransformation.Rotation == D3DKMDT_VPPR_UNPINNED)) {
             D3DKMDT_VIDPN_PRESENT_PATH upd = *path;
             if (upd.ContentTransformation.Scaling == D3DKMDT_VPPS_UNPINNED) {
+                UINT w = dev->Fb.Width, h = dev->Fb.Height;
+                BOOLEAN pinned = dev->ScaledModes &&
+                    PinnedSourceSize(vidpn, Arg->hConstrainingVidPn, path->VidPnSourceId, &w, &h);
                 RtlZeroMemory(&upd.ContentTransformation.ScalingSupport,
                               sizeof(upd.ContentTransformation.ScalingSupport));
-                upd.ContentTransformation.ScalingSupport.Identity = 1;
+                if (!dev->ScaledModes || (pinned && w == dev->Fb.Width && h == dev->Fb.Height)) {
+                    upd.ContentTransformation.ScalingSupport.Identity = 1;
+                } else if (pinned) {
+                    upd.ContentTransformation.ScalingSupport.Stretched = 1;
+                } else {
+                    upd.ContentTransformation.ScalingSupport.Identity = 1;
+                    upd.ContentTransformation.ScalingSupport.Stretched = 1;
+                }
             }
             if (upd.ContentTransformation.Rotation == D3DKMDT_VPPR_UNPINNED) {
                 RtlZeroMemory(&upd.ContentTransformation.RotationSupport,
@@ -374,13 +639,21 @@ NTSTATUS APIENTRY MwCommitVidPn(IN_CONST_HANDLE hAdapter, const DXGKARG_COMMITVI
     }
     st = setIf->pfnAcquirePinnedModeInfo(set, &pinned);
     if (NT_SUCCESS(st) && pinned != NULL) {
-        BOOLEAN ours = pinned->Type == D3DKMDT_RMT_GRAPHICS &&
-                       pinned->Format.Graphics.PrimSurfSize.cx == dev->Fb.Width &&
-                       pinned->Format.Graphics.PrimSurfSize.cy == dev->Fb.Height;
+        UINT w = pinned->Format.Graphics.PrimSurfSize.cx, h = pinned->Format.Graphics.PrimSurfSize.cy;
+        BOOLEAN ours = pinned->Type == D3DKMDT_RMT_GRAPHICS && IsSourceModeSize(dev, w, h);
         setIf->pfnReleaseModeInfo(set, pinned);
         st = ours ? STATUS_SUCCESS : STATUS_GRAPHICS_INVALID_VIDPN;
         dev->PathActive = ours;
         if (ours) dev->CommitsPinned++; else dev->CommitsNotOurs++;
+        /* What primaries will now be, and what scan-out is to stretch to
+         * the firmware's size. The window itself changes at the first flip
+         * to a primary of this size; until then it shows what it did. */
+        if (ours && (w != dev->SrcWidth || h != dev->SrcHeight)) {
+            dev->SrcWidth = w;
+            dev->SrcHeight = h;
+            MwLog(dev, L"CommitSourceWidth", w);
+            MwLog(dev, L"CommitSourceHeight", h);
+        }
     } else if (NT_SUCCESS(st)) {
         /* Nothing pinned: the source is being turned off. AcquirePinnedModeInfo
          * says so with an informational status (0x401E0307), which is not
