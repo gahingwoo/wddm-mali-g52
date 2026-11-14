@@ -27,6 +27,7 @@
 #include <string.h>
 
 #include "util/os_time.h"
+#include "util/mali_slow.h"
 #include "drm-uapi/drm.h"
 #include "drm-uapi/panfrost_drm.h"
 #include "malikm_ioctl.h"
@@ -733,6 +734,16 @@ static uint64_t wseq;
 static int wddm = -1;
 static SRWLOCK wddm_lock = SRWLOCK_INIT;
 
+/* wddm_lock, timed: a long wait here is another thread's wait for the GPU
+ * or the runtime, made inside the lock. */
+static void
+wlock(const char *who)
+{
+   uint64_t slow_t0 = mali_slow_now();
+   AcquireSRWLockExclusive(&wddm_lock);
+   MALI_SLOW(slow_t0, "shim-lock", "waited for it in %s", who);
+}
+
 /* Inside a hardware UMD (maliumd.dll, d3d10umd), the runtime's device and
  * its kernel callbacks replace the D3DKMT calls: the buffers then are the
  * runtime device's allocations, which Present needs. malikm_bind_d3dddi()
@@ -1188,12 +1199,17 @@ wdead_flush(void)
    wdead_n = 0;
 }
 
-/* Everything submitted so far is done (one in-order queue in the KMD). */
+/* Everything submitted so far is done (one in-order queue in the KMD).
+ * Why is for the slow-operation log: which caller waited. The wait is made
+ * with wddm_lock held, so every other thread of the process that calls into
+ * the shim waits as long (shim-lock in the log). */
 static int
-wddm_idle(void)
+wddm_idle(const char *why)
 {
    int ret = 0;
    unsigned long long t0 = malikm_perf_now();
+   uint64_t slow_t0 = mali_slow_now();
+   uint32_t slow_dead = wdead_n;
 
    if (ddi.on) {
       if (ddi.last_event && WaitForSingleObject(ddi.last_event, 10000) != WAIT_OBJECT_0)
@@ -1206,8 +1222,14 @@ wddm_idle(void)
       ret = kmt.WaitForIdle(&w) >= 0 ? 0 : -MK_EIO;
    }
    malikm_perf_add(7 /* gpu-wait */, t0);
-   if (ret == 0)
+   MALI_SLOW(slow_t0, "gpu-idle", "for %s, %s, %s", why,
+             ddi.on ? (ddi.last_unsignalled ? "polled the KMD" : "on the last event")
+                    : "WaitForIdle", ret ? "timed out" : "idle");
+   if (ret == 0) {
+      uint64_t dead_t0 = mali_slow_now();
       wdead_flush();
+      MALI_SLOW(dead_t0, "destroy-closed", "%u allocations", slow_dead);
+   }
    if (ret == 0 && trace_on()) {
       /* A job that failed since the last wait, with the BO trace above it
        * that says which buffer its fault address belongs to. */
@@ -1221,6 +1243,63 @@ wddm_idle(void)
          failed_seen = st.JobsFailed;
       }
    }
+   return ret;
+}
+
+/*
+ * WAIT_BO and SYNCOBJ_WAIT carry a timeout, relative by now. Panfrost asks
+ * with a timeout of 0 whether a buffer is busy: panfrost_bo_cache_fetch
+ * before reusing a cached BO, and panfrost_ptr_map before deciding to give
+ * a WRITE_DISCARD map a fresh buffer instead of waiting. Both expect an
+ * answer at once. wddm_idle ignores the timeout and waits until the GPU
+ * has finished everything this device submitted, so each of those
+ * questions can cost a whole frame of GPU time, with wddm_lock held.
+ *
+ * With the file C:\mali\wait-timeout present (read once per process), the
+ * timeout is kept: the wait gives up when it runs out and answers Busy,
+ * which is what Panfrost expects of the Linux kernel. The answer is still
+ * for the whole queue, not for the one BO, so it says busy more often than
+ * Linux would; never ready when it is not. Off by default until it has run
+ * on the board. Busy is MK_ETIMEDOUT for WAIT_BO and MK_ETIME for a
+ * syncobj, as Linux returns them.
+ */
+static int
+wait_keeps_timeout(void)
+{
+   static int on = -1;
+   if (on < 0)
+      on = GetFileAttributesA("C:\\mali\\wait-timeout") != INVALID_FILE_ATTRIBUTES;
+   return on;
+}
+
+static int
+wddm_idle_within(int64_t timeout_ns, int busy, const char *why)
+{
+   uint64_t slow_t0 = mali_slow_now();
+   int ret;
+
+   if (!wait_keeps_timeout() || !ddi.on || timeout_ns == MALIKM_TIMEOUT_INFINITE ||
+       timeout_ns >= 10000000000ll) {
+      ret = wddm_idle(why);
+   } else if (!ddi.last_event && !ddi.last_unsignalled) {
+      ret = wddm_idle(why);            /* nothing submitted: returns at once */
+   } else if (ddi.last_unsignalled) {
+      /* No event to wait on: one look at the KMD's fences, or the poll. */
+      MW_ESCAPE_STATS_DATA st = {0};
+      st.Code = MW_ESCAPE_STATS;
+      if (timeout_ns > 0)
+         ret = wddm_idle(why);
+      else if (w_escape(&st, sizeof(st)) >= 0 &&
+               st.LastCompletedFence == st.LastSubmittedFence && !st.Queued && !st.Running)
+         ret = wddm_idle(why);
+      else
+         ret = busy;
+   } else {
+      DWORD ms = (DWORD)((timeout_ns + 999999) / 1000000);
+      ret = WaitForSingleObject(ddi.last_event, ms) == WAIT_OBJECT_0 ? wddm_idle(why) : busy;
+   }
+   MALI_SLOW(slow_t0, why, "timeout %lld ns%s, %s", (long long)timeout_ns,
+             wait_keeps_timeout() ? "" : " (not kept)", ret == busy ? "busy" : ret ? "error" : "ready");
    return ret;
 }
 
@@ -1244,7 +1323,7 @@ malikm_primary_create(void *hRTDevice, void *hRTResource, unsigned w, unsigned h
 {
    D3DKMT_HANDLE handle = 0;
 
-   AcquireSRWLockExclusive(&wddm_lock);
+   wlock(__func__);
    if (wselect_rt(hRTDevice) && ddi.on && ddi.cb.pfnAllocateCb) {
       MW_ALLOCATION_INFO pi = {0};
       D3DDDI_ALLOCATIONINFO ai = {0};
@@ -1280,9 +1359,12 @@ malikm_primary_destroy(void *hRTDevice, unsigned handle)
 {
    if (!handle)
       return;
-   AcquireSRWLockExclusive(&wddm_lock);
-   if (wselect_rt(hRTDevice) && ddi.on)
+   wlock(__func__);
+   if (wselect_rt(hRTDevice) && ddi.on) {
+      uint64_t slow_t0 = mali_slow_now();
       w_destroy(handle);
+      MALI_SLOW(slow_t0, "primary-destroy", "pfnDeallocateCb 0x%x", handle);
+   }
    ReleaseSRWLockExclusive(&wddm_lock);
 }
 
@@ -1300,7 +1382,7 @@ malikm_set_display_mode(void *hRTDevice, unsigned primary_allocation)
 {
    HRESULT hr = E_FAIL;
 
-   AcquireSRWLockExclusive(&wddm_lock);
+   wlock(__func__);
    if (wselect_rt(hRTDevice) && ddi.on && ddi.cb.pfnSetDisplayModeCb && primary_allocation) {
       static volatile LONG said = 0;
       D3DDDICB_SETDISPLAYMODE m = {0};
@@ -1357,7 +1439,7 @@ malikm_present_allocation(void *hRTDevice, unsigned src_allocation, unsigned dst
    static volatile LONG said = 0;
    HRESULT hr = E_FAIL;
 
-   AcquireSRWLockExclusive(&wddm_lock);
+   wlock(__func__);
    if (wselect_rt(hRTDevice) && ddi.on && ddi.dxgi && ddi.dxgi->pfnPresentCb && src_allocation) {
       DXGIDDICB_PRESENT p = {0};
       p.hSrcAllocation = src_allocation;
@@ -1365,8 +1447,11 @@ malikm_present_allocation(void *hRTDevice, unsigned src_allocation, unsigned dst
       p.pDXGIContext = dxgi_context;
       p.hContext = ddi.context;
       unsigned long long t0 = malikm_perf_now();
+      uint64_t slow_t0 = mali_slow_now();
       hr = ddi.dxgi->pfnPresentCb(ddi.device, &p);
       malikm_perf_add(4 /* present-cb */, t0);
+      MALI_SLOW(slow_t0, "present-cb", "pfnPresentCb 0x%x -> 0x%x, 0x%08lx", src_allocation,
+                dst_allocation, (unsigned long)hr);
    }
    if (InterlockedIncrement(&said) <= 40 || hr < 0)
       DebugPrintf("present: shared allocation 0x%x -> 0x%x, pfnPresentCb 0x%08lx\n",
@@ -1387,7 +1472,7 @@ malikm_present_d3dddi(const void *bgrx, unsigned w, unsigned h, void *dxgi_conte
 
    static volatile LONG said = 0;
 
-   AcquireSRWLockExclusive(&wddm_lock);
+   wlock(__func__);
    if (!present_target.set || !wselect_rt(present_target.device) || !ddi.on || !ddi.dxgi ||
        !ddi.dxgi->pfnPresentCb) {
       if (InterlockedIncrement(&said) <= 20)
@@ -1481,7 +1566,7 @@ malikm_bind_d3dddi(HANDLE hRTAdapter, HANDLE hRTDevice, const void *pKTCallbacks
       DebugPrintf("bind: the runtime's callbacks are incomplete (%p)\n", (void *)cb);
       return -1;
    }
-   AcquireSRWLockExclusive(&wddm_lock);
+   wlock(__func__);
    /* This device's own set of state: a free one, or the one a destroyed
     * device with the same handle left behind. */
    struct wdev *dev = NULL;
@@ -1573,7 +1658,7 @@ malikm_bind_done(void)
 void
 malikm_unbind_d3dddi(void *hRTDevice)
 {
-   AcquireSRWLockExclusive(&wddm_lock);
+   wlock(__func__);
    for (int i = 1; i < WDEV_MAX; i++) {
       struct wdev *dev = &wdevs[i];
       if (!dev->used || dev->rt_device != (HANDLE)hRTDevice)
@@ -1607,7 +1692,7 @@ wddm_bo_is_resource(int fd, uint32_t handle)
 {
    int ret;
 
-   AcquireSRWLockExclusive(&wddm_lock);
+   wlock(__func__);
    wselect_fd(fd);
    struct wbo *bo = wddm_bo(handle);
    ret = bo && bo->rt_resource && !bo->released;
@@ -1713,7 +1798,7 @@ malikm_primary_begin_create(void *hRTDevice, void *hRTResource, unsigned w, unsi
 void
 malikm_primary_rebind(void *hRTDevice, unsigned allocation, void *hRTResource)
 {
-   AcquireSRWLockExclusive(&wddm_lock);
+   wlock(__func__);
    if (wselect_rt(hRTDevice)) {
       for (uint32_t i = 0; i < wbo_cap; i++) {
          if (wbo[i].h == allocation && wbo[i].primary && !wbo[i].released)
@@ -1730,9 +1815,9 @@ malikm_wait_idle(void *hRTDevice)
 {
    int ret = -1;
 
-   AcquireSRWLockExclusive(&wddm_lock);
+   wlock(__func__);
    if (wselect_rt(hRTDevice) && ddi.on)
-      ret = wddm_idle();
+      ret = wddm_idle("present-wait");
    ReleaseSRWLockExclusive(&wddm_lock);
    return ret;
 }
@@ -1761,7 +1846,7 @@ malikm_shared_destroy(void *hRTDevice, void *hRTResource)
 {
    if (!hRTResource)
       return;
-   AcquireSRWLockExclusive(&wddm_lock);
+   wlock(__func__);
    if (wselect_rt(hRTDevice) && ddi.on && ddi.cb.pfnDeallocateCb) {
       D3DDDICB_DEALLOCATE d = {0};
       unsigned held = 0;
@@ -1769,7 +1854,8 @@ malikm_shared_destroy(void *hRTDevice, void *hRTResource)
       int idle;
 
       /* Nothing submitted may still be running on it. */
-      idle = wddm_idle();
+      uint64_t slow_t0 = mali_slow_now();
+      idle = wddm_idle("shared-destroy");
       for (uint32_t i = 0; i < wbo_cap; i++) {
          struct wbo *bo = &wbo[i];
          if (!bo->h || bo->rt_resource != hRTResource || bo->rt_device != (HANDLE)hRTDevice)
@@ -1783,11 +1869,23 @@ malikm_shared_destroy(void *hRTDevice, void *hRTResource)
       }
       d.hResource = hRTResource;
       hr = ddi.cb.pfnDeallocateCb((HANDLE)hRTDevice, &d);
+      MALI_SLOW(slow_t0, "shared-destroy", "resource %p, %u buffer(s) held, pfnDeallocateCb 0x%08lx",
+                hRTResource, held, (unsigned long)hr);
       DebugPrintf("shared destroy: resource %p device %p, idle %d, %u buffer(s) still held,"
                   " pfnDeallocateCb 0x%08lx\n", hRTResource, hRTDevice, idle, held,
                   (unsigned long)hr);
    }
    ReleaseSRWLockExclusive(&wddm_lock);
+}
+
+/* BOs this device holds, for the slow-operation log. Under wddm_lock. */
+static unsigned
+wbo_live(void)
+{
+   unsigned n = 0;
+   for (uint32_t i = 0; i < wbo_cap; i++)
+      n += wbo[i].h != 0;
+   return n;
 }
 
 static int
@@ -1814,6 +1912,7 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       MW_ESCAPE_ALLOC_INFO_DATA where = {0};
       int shared = ddi.on && !shared_next.done ? shared_next.mode : 0;
       unsigned long long t0 = malikm_perf_now();
+      uint64_t slow_t0 = mali_slow_now();
 
       /* The primary's buffer holds all its rows; anything smaller made
        * first is something else. */
@@ -1960,6 +2059,10 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       a->handle = h;
       a->offset = where.GpuVa;
       malikm_perf_add(9 /* bo-create */, t0);
+      MALI_SLOW(slow_t0, "bo-create", "%llu bytes, %s, %u live BOs on this device",
+                (unsigned long long)sz,
+                shared == SHARED_CREATE ? "shared" : shared == SHARED_OPEN ? "opened" :
+                shared == SHARED_PRIMARY ? "primary" : "plain", wbo_live());
       /* Where every BO lives, so a GPU fault address can be traced back to
        * the buffer it fell in (the 0x4002c3 faults at a fixed VA). */
       if (trace_on())
@@ -1987,10 +2090,12 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
    case MALIKM_NR_PANFROST_MADVISE:
       ((struct drm_panfrost_madvise *)b)->retained = 1;
       return 0;
-   case MALIKM_NR_PANFROST_WAIT_BO:
-      if (!wddm_bo(((struct drm_panfrost_wait_bo *)b)->handle))
+   case MALIKM_NR_PANFROST_WAIT_BO: {
+      struct drm_panfrost_wait_bo *a = (void *)b;
+      if (!wddm_bo(a->handle))
          return -MK_ENOENT;
-      return wddm_idle();
+      return wddm_idle_within(a->timeout_ns, -MK_ETIMEDOUT, "wait-bo");
+   }
    case MALIKM_NR_PANFROST_SUBMIT: {
       struct drm_panfrost_submit *a = (void *)b;
       const uint32_t *bos = (const uint32_t *)(b + a->bo_handles);
@@ -2037,7 +2142,12 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       c->Type = MW_CMD_JOB;
       c->Slot = (a->requirements & PANFROST_JD_REQ_FS) ? 0 : 1;
       c->Jc = a->jc;
+      unsigned slow_slot = c->Slot;
+      uint64_t slow_t0 = mali_slow_now();
       NTSTATUS st = w_render(sizeof(*c), n);
+      /* c is the old command buffer now; the runtime has handed out a new one. */
+      MALI_SLOW(slow_t0, "submit", "pfnRenderCb, %s chain, %u BOs named, %u listed",
+                slow_slot ? "vertex/tiler" : "fragment", named, n);
       if (st < 0) {
          if (trace_on())
             fprintf(stderr, "malikm-wddm: Render failed 0x%08lx\n", (unsigned long)st);
@@ -2053,8 +2163,12 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       if (trace_on())
          fprintf(stderr, "malikm-wddm: close bo %u va 0x%llx\n",
                  ((struct drm_gem_close *)b)->handle, (unsigned long long)bo->va);
-      if (bo->cpu)
+      if (bo->cpu) {
+         uint64_t slow_t0 = mali_slow_now();
          w_unlock(bo->h);
+         MALI_SLOW(slow_t0, "bo-unmap", "pfnUnlockCb at close, %llu bytes",
+                   (unsigned long long)bo->size);
+      }
       if (bo->rt_resource) {
          /* A runtime resource's allocation goes back through the resource,
           * in malikm_shared_destroy. */
@@ -2066,7 +2180,7 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
          uint32_t cap = wdead_cap ? wdead_cap * 2 : WDEAD_FLUSH;
          D3DKMT_HANDLE *n = realloc(wdead, cap * sizeof(*n));
          if (!n) {
-            wddm_idle();
+            wddm_idle("bo-close, no memory");
             w_destroy(bo->h);
             memset(bo, 0, sizeof(*bo));
             return 0;
@@ -2077,7 +2191,7 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       wdead[wdead_n++] = bo->h;
       memset(bo, 0, sizeof(*bo));
       if (wdead_n >= WDEAD_FLUSH)
-         wddm_idle();
+         wddm_idle("64 closed BOs");
       return 0;
    }
    case MALIKM_NR_SYNCOBJ_CREATE: {
@@ -2085,9 +2199,11 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       ((struct drm_syncobj_create *)b)->handle = next++;
       return 0;
    }
-   case MALIKM_NR_SYNCOBJ_WAIT:
-      ((struct drm_syncobj_wait *)b)->first_signaled = 0;
-      return wddm_idle();
+   case MALIKM_NR_SYNCOBJ_WAIT: {
+      struct drm_syncobj_wait *a = (void *)b;
+      a->first_signaled = 0;
+      return wddm_idle_within(a->timeout_nsec, -MK_ETIME, "syncobj-wait");
+   }
    case MALIKM_NR_SYNCOBJ_DESTROY:
    case MALIKM_NR_SYNCOBJ_RESET:
    case MALIKM_NR_SYNCOBJ_SIGNAL:
@@ -2109,7 +2225,12 @@ wddm_ioctl(int fd, DWORD code, void *buf, DWORD len)
    MALIKM_DRM_HEADER *h = buf;
    (void)len;
 
+   /* One lock for the whole process: a thread waiting for the GPU inside
+    * it holds up every other thread's allocations, maps and submissions. */
+   uint64_t slow_t0 = mali_slow_now();
    AcquireSRWLockExclusive(&wddm_lock);
+   MALI_SLOW(slow_t0, "shim-lock", "waited for it, ioctl 0x%lx nr 0x%x", (unsigned long)code,
+             code == IOCTL_MALIKM_DRM ? h->Nr : 0);
    wselect_fd(fd);
    switch (code) {
    case IOCTL_MALIKM_VERSION: {
@@ -2127,8 +2248,12 @@ wddm_ioctl(int fd, DWORD code, void *buf, DWORD len)
       struct wbo *bo = wddm_bo(MALIKM_MMAP_HANDLE(m->Offset));
       h->Result = -MK_EINVAL;
       if (bo && !bo->released && m->Size <= bo->size) {
-         if (!bo->cpu)
+         if (!bo->cpu) {
+            uint64_t lock_t0 = mali_slow_now();
             bo->cpu = w_lock(bo->h);
+            MALI_SLOW(lock_t0, "bo-map", "pfnLockCb, %llu bytes, %s", (unsigned long long)bo->size,
+                      bo->cpu ? "mapped" : "failed");
+         }
          if (bo->cpu) {
             m->Address = (uint64_t)(uintptr_t)bo->cpu;
             h->Result = 0;

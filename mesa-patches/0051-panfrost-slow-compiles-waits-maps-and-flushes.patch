@@ -1,0 +1,330 @@
+diff --git a/src/gallium/drivers/panfrost/pan_bo.c b/src/gallium/drivers/panfrost/pan_bo.c
+index d0ce95c..a560712 100644
+--- a/src/gallium/drivers/panfrost/pan_bo.c
++++ b/src/gallium/drivers/panfrost/pan_bo.c
+@@ -19,6 +19,7 @@
+ 
+ #include "util/u_inlines.h"
+ #include "util/u_math.h"
++#include "util/mali_slow.h"
+ 
+ /* This file implements a userspace BO cache. Allocating and freeing
+  * GPU-visible buffers is very expensive, and even the extra kernel roundtrips
+@@ -155,7 +156,17 @@ panfrost_bo_wait(struct panfrost_bo *bo, int64_t timeout_ns, bool wait_readers)
+          return true;
+    }
+ 
+-   if (pan_kmod_bo_wait(bo->kmod_bo, timeout_ns, !wait_readers)) {
++   uint64_t slow_t0 = mali_slow_now();
++   bool ready = pan_kmod_bo_wait(bo->kmod_bo, timeout_ns, !wait_readers);
++
++   /* A timeout of 0 asks whether the BO is busy; a slow one of those is a
++    * wait nobody asked for. */
++   MALI_SLOW(slow_t0, "bo-wait", "\"%s\", %zu bytes, timeout %s, %s, %s",
++             bo->label ? bo->label : "", panfrost_bo_size(bo),
++             timeout_ns == 0 ? "0" : timeout_ns == INT64_MAX ? "none" : "finite",
++             wait_readers ? "readers too" : "writers", ready ? "ready" : "busy");
++
++   if (ready) {
+       /* Set gpu_access to 0 so that the next call to bo_wait()
+        * doesn't have to call the WAIT_BO ioctl.
+        */
+@@ -234,6 +245,9 @@ static void
+ panfrost_bo_cache_evict_stale_bos(struct panfrost_device *dev)
+ {
+    struct timespec time;
++   uint64_t slow_t0 = mali_slow_now();
++   unsigned slow_freed = 0;
++   size_t slow_bytes = 0;
+ 
+    clock_gettime(CLOCK_MONOTONIC, &time);
+    list_for_each_entry_safe(struct panfrost_bo, entry, &dev->bo_cache.lru,
+@@ -251,8 +265,11 @@ panfrost_bo_cache_evict_stale_bos(struct panfrost_device *dev)
+ 
+       list_del(&entry->bucket_link);
+       list_del(&entry->lru_link);
++      slow_freed++;
++      slow_bytes += panfrost_bo_size(entry);
+       panfrost_bo_free(entry);
+    }
++   MALI_SLOW(slow_t0, "bo-cache-evict", "%u stale BOs, %zu bytes", slow_freed, slow_bytes);
+ }
+ 
+ /* Tries to add a BO to the cache. Returns if it was
+@@ -384,12 +401,23 @@ panfrost_bo_create(struct panfrost_device *dev, size_t size, uint32_t flags,
+     * cache. But if there's no nothing suitable, we should flush the cache
+     * to make space for the new allocation.
+     */
++   /* Which way the BO came, for the slow-operation log: 1 from the cache,
++    * 2 allocated, 3 from the cache after waiting, 4 allocated after
++    * emptying the cache. */
++   uint64_t slow_t0 = mali_slow_now();
++   int slow_path = 1;
++
+    bo = panfrost_bo_cache_fetch(dev, size, flags, label, true);
+-   if (!bo)
++   if (!bo) {
++      slow_path = 2;
+       bo = panfrost_bo_alloc(dev, size, flags, label);
+-   if (!bo)
++   }
++   if (!bo) {
++      slow_path = 3;
+       bo = panfrost_bo_cache_fetch(dev, size, flags, label, false);
++   }
+    if (!bo) {
++      slow_path = 4;
+       panfrost_bo_cache_evict_all(dev);
+       bo = panfrost_bo_alloc(dev, size, flags, label);
+    }
+@@ -407,6 +435,9 @@ panfrost_bo_create(struct panfrost_device *dev, size_t size, uint32_t flags,
+          return NULL;
+       }
+    }
++   MALI_SLOW(slow_t0, "pan-bo-create", "\"%s\", %zu bytes, flags 0x%x, %s", label, size,
++             flags, slow_path == 1 ? "from the cache" : slow_path == 2 ? "allocated" :
++             slow_path == 3 ? "from the cache after a wait" : "allocated after emptying the cache");
+ 
+    p_atomic_set(&bo->refcnt, 1);
+ 
+diff --git a/src/gallium/drivers/panfrost/pan_job.c b/src/gallium/drivers/panfrost/pan_job.c
+index bfe1f9d..c603755 100644
+--- a/src/gallium/drivers/panfrost/pan_job.c
++++ b/src/gallium/drivers/panfrost/pan_job.c
+@@ -13,6 +13,7 @@
+ #include "util/rounding.h"
+ #include "util/u_framebuffer.h"
+ #include "util/u_pack_color.h"
++#include "util/mali_slow.h"
+ #include "pan_bo.h"
+ #include "pan_context.h"
+ #include "pan_trace.h"
+@@ -688,6 +689,12 @@ panfrost_batch_submit(struct panfrost_context *ctx,
+    bool has_frag = panfrost_has_fragment_job(batch);
+    int ret;
+ 
++   /* Building the job chains and submitting them, and the cleanup after,
++    * which drops the batch's references to its BOs. */
++   uint64_t slow_t0 = mali_slow_now();
++   unsigned slow_draws = batch->draw_count, slow_compute = batch->compute_count;
++   unsigned slow_bos = batch->num_bos;
++
+    /* Nothing to do! */
+    if (!has_frag && batch->compute_count == 0 && !batch->has_time_query)
+       goto out;
+@@ -747,6 +754,8 @@ panfrost_batch_submit(struct panfrost_context *ctx,
+ 
+ out:
+    panfrost_batch_cleanup(ctx, batch);
++   MALI_SLOW(slow_t0, "batch-submit", "%u draws, %u compute, fragment %d, %u BO slots",
++             slow_draws, slow_compute, has_frag, slow_bos);
+ }
+ 
+ /* Submit all batches */
+@@ -758,16 +767,22 @@ panfrost_flush_all_batches(struct panfrost_context *ctx, const char *reason)
+    PAN_TRACE_SCOPE(PAN_TRACE_GL_JOB, "%s reason=\"%s\"", __func__, reason);
+    perf_debug(ctx, "Flushing everything due to: %s", reason);
+ 
++   uint64_t slow_t0 = mali_slow_now();
++   unsigned slow_batches = 0;
+    struct panfrost_batch *batch = panfrost_get_batch_for_fbo(ctx);
+    if (!batch)
+       return;
+ 
+    panfrost_batch_submit(ctx, batch);
++   slow_batches++;
+ 
+    for (unsigned i = 0; i < PAN_MAX_BATCHES; i++) {
+-      if (ctx->batches.slots[i].seqnum)
++      if (ctx->batches.slots[i].seqnum) {
+          panfrost_batch_submit(ctx, &ctx->batches.slots[i]);
++         slow_batches++;
++      }
+    }
++   MALI_SLOW(slow_t0, "flush-all", "%u batches, reason \"%s\"", slow_batches, reason);
+ 
+    if (pan_device(ctx->base.screen)->arch >= 10)
+       u_trace_context_process(&ctx->trace_context, false);
+@@ -783,8 +798,10 @@ panfrost_flush_writer(struct panfrost_context *ctx,
+    struct hash_entry *entry = _mesa_hash_table_search(ctx->writers, rsrc);
+ 
+    if (entry) {
++      uint64_t slow_t0 = mali_slow_now();
+       perf_debug(ctx, "Flushing writer due to: %s", reason);
+       panfrost_batch_submit(ctx, entry->data);
++      MALI_SLOW(slow_t0, "flush-writer", "reason \"%s\"", reason);
+       if (pan_device(ctx->base.screen)->arch >= 10)
+          u_trace_context_process(&ctx->trace_context, false);
+    }
+@@ -798,7 +815,8 @@ panfrost_flush_batches_accessing_rsrc(struct panfrost_context *ctx,
+    assert(reason);
+    PAN_TRACE_SCOPE(PAN_TRACE_GL_JOB, "%s reason=\"%s\"", __func__, reason);
+ 
+-   unsigned i;
++   uint64_t slow_t0 = mali_slow_now();
++   unsigned i, slow_batches = 0;
+    foreach_batch(ctx, i) {
+       struct panfrost_batch *batch = &ctx->batches.slots[i];
+ 
+@@ -807,7 +825,9 @@ panfrost_flush_batches_accessing_rsrc(struct panfrost_context *ctx,
+ 
+       perf_debug(ctx, "Flushing user due to: %s", reason);
+       panfrost_batch_submit(ctx, batch);
++      slow_batches++;
+    }
++   MALI_SLOW(slow_t0, "flush-users", "%u batches, reason \"%s\"", slow_batches, reason);
+    if (pan_device(ctx->base.screen)->arch >= 10)
+       u_trace_context_process(&ctx->trace_context, false);
+ }
+diff --git a/src/gallium/drivers/panfrost/pan_resource.c b/src/gallium/drivers/panfrost/pan_resource.c
+index caa6379..1c22a6a 100644
+--- a/src/gallium/drivers/panfrost/pan_resource.c
++++ b/src/gallium/drivers/panfrost/pan_resource.c
+@@ -35,6 +35,7 @@
+ #include "util/u_transfer.h"
+ #include "util/u_transfer_helper.h"
+ #include "util/streaming-load-memcpy.h"
++#include "util/mali_slow.h"
+ 
+ #include "decode.h"
+ #include "pan_afbc.h"
+@@ -1571,7 +1572,7 @@ panfrost_can_discard(struct pipe_resource *resource, const struct pipe_box *box,
+ }
+ 
+ static void *
+-panfrost_ptr_map(struct pipe_context *pctx, struct pipe_resource *resource,
++panfrost_ptr_map_body(struct pipe_context *pctx, struct pipe_resource *resource,
+                  unsigned level,
+                  unsigned usage, /* a combination of PIPE_MAP_x */
+                  const struct pipe_box *box,
+@@ -2329,7 +2330,7 @@ pan_resource_afbcp_update(struct panfrost_context *ctx,
+ }
+ 
+ static void
+-panfrost_ptr_unmap(struct pipe_context *pctx, struct pipe_transfer *transfer)
++panfrost_ptr_unmap_body(struct pipe_context *pctx, struct pipe_transfer *transfer)
+ {
+    PAN_TRACE_FUNC(PAN_TRACE_GL_RESOURCE);
+ 
+@@ -2572,6 +2573,41 @@ panfrost_resource_get_stencil(struct pipe_resource *prsrc)
+    return &pan_resource(prsrc)->separate_stencil->base;
+ }
+ 
++/* Maps and unmaps, for the slow-operation log: a map can wait for the GPU,
++ * allocate a shadow buffer or blit to a staging one; an unmap of a tiled or
++ * staged resource copies back. The detail is the resource's size and the
++ * box's, the level and the PIPE_MAP_* flags. */
++static void *
++panfrost_ptr_map(struct pipe_context *pctx, struct pipe_resource *resource,
++                 unsigned level, unsigned usage, const struct pipe_box *box,
++                 struct pipe_transfer **out_transfer)
++{
++   uint64_t slow_t0 = mali_slow_now();
++   void *map = panfrost_ptr_map_body(pctx, resource, level, usage, box, out_transfer);
++
++   MALI_SLOW(slow_t0, "transfer-map",
++             "%ux%u %s, box %dx%dx%d, level %u, usage 0x%x, modifier 0x%llx",
++             resource->width0, resource->height0,
++             resource->target == PIPE_BUFFER ? "buffer" : "texture",
++             box->width, box->height, box->depth, level, usage,
++             (unsigned long long)pan_resource(resource)->modifier);
++   return map;
++}
++
++static void
++panfrost_ptr_unmap(struct pipe_context *pctx, struct pipe_transfer *transfer)
++{
++   uint64_t slow_t0 = mali_slow_now();
++   struct pipe_resource *resource = transfer->resource;
++   unsigned w = resource ? resource->width0 : 0, h = resource ? resource->height0 : 0;
++   unsigned usage = transfer->usage;
++   struct pipe_box box = transfer->box;
++
++   panfrost_ptr_unmap_body(pctx, transfer);
++   MALI_SLOW(slow_t0, "transfer-unmap", "%ux%u, box %dx%dx%d, usage 0x%x",
++             w, h, box.width, box.height, box.depth, usage);
++}
++
+ static const struct u_transfer_vtbl transfer_vtbl = {
+    .resource_create = panfrost_resource_create,
+    .resource_destroy = panfrost_resource_destroy,
+diff --git a/src/gallium/drivers/panfrost/pan_shader.c b/src/gallium/drivers/panfrost/pan_shader.c
+index 920be21..970a271 100644
+--- a/src/gallium/drivers/panfrost/pan_shader.c
++++ b/src/gallium/drivers/panfrost/pan_shader.c
+@@ -20,6 +20,9 @@
+ #include "pan_trace.h"
+ #include "compiler/bifrost/bifrost_compile.h"
+ #include "shader_enums.h"
++#include "util/hash_table.h"
++#include "util/mali_slow.h"
++#include "tgsi/tgsi_parse.h"
+ 
+ static struct panfrost_uncompiled_shader *
+ panfrost_alloc_shader(const nir_shader *nir)
+@@ -263,8 +266,22 @@ panfrost_shader_get(struct pipe_screen *pscreen,
+                         state->key.fs.vs_varying_layout.known != 0;
+       const struct pan_varying_layout *varying_layout =
+          use_layout ? &uncompiled->vs_varying_layout : NULL;
++      uint64_t slow_t0 = mali_slow_now();
+       panfrost_shader_compile(screen, uncompiled->nir, dbg, varying_layout,
+                               &state->key, req_local_mem, &res);
++      /* A variant compiled on the CPU, at draw time unless it is the
++       * default one. The hash is of the binary, which is the same for the
++       * same shader and key in every process; "variant" counts the ones
++       * this shader had before. */
++      MALI_SLOW(slow_t0, "shader-compile",
++                "%s, %u bytes, binary hash 0x%08x, key hash 0x%08x, variant %d, shader %p",
++                mesa_shader_stage_name(uncompiled->nir->info.stage),
++                (unsigned)res.binary.size,
++                (unsigned)_mesa_hash_data(res.binary.data, res.binary.size),
++                (unsigned)_mesa_hash_data(&state->key, sizeof(state->key)),
++                (int)util_dynarray_num_elements(&uncompiled->variants,
++                                                struct panfrost_compiled_shader) - 1,
++                (void *)uncompiled);
+ 
+       panfrost_disk_cache_store(screen->disk_cache, uncompiled, &state->key,
+                                 &res);
+@@ -497,14 +514,18 @@ panfrost_default_shader_key(struct panfrost_uncompiled_shader *so)
+ }
+ 
+ static void *
+-panfrost_create_shader_state(struct pipe_context *pctx,
+-                             const struct pipe_shader_state *cso)
++panfrost_create_shader_state_body(struct pipe_context *pctx,
++                                  const struct pipe_shader_state *cso)
+ {
+    PAN_TRACE_FUNC(PAN_TRACE_GL_SHADER);
+ 
++   uint64_t slow_t0 = mali_slow_now();
+    nir_shader *nir = (cso->type == PIPE_SHADER_IR_TGSI)
+                         ? tgsi_to_nir(cso->tokens, pctx->screen, false)
+                         : cso->ir.nir;
++   MALI_SLOW(slow_t0, "tgsi-to-nir", "%s, %u tokens",
++             mesa_shader_stage_name(nir->info.stage),
++             cso->type == PIPE_SHADER_IR_TGSI ? tgsi_num_tokens(cso->tokens) : 0);
+ 
+    struct panfrost_uncompiled_shader *so = panfrost_alloc_shader(nir);
+ 
+@@ -632,6 +653,21 @@ panfrost_create_shader_state(struct pipe_context *pctx,
+    return so;
+ }
+ 
++/* All of a shader's creation: translation, lowering, and the default
++ * variant when it is compiled now, for the slow-operation log. */
++static void *
++panfrost_create_shader_state(struct pipe_context *pctx,
++                             const struct pipe_shader_state *cso)
++{
++   uint64_t slow_t0 = mali_slow_now();
++   struct panfrost_uncompiled_shader *so =
++      panfrost_create_shader_state_body(pctx, cso);
++
++   MALI_SLOW(slow_t0, "shader-create", "%s, shader %p",
++             so ? mesa_shader_stage_name(so->nir->info.stage) : "none", (void *)so);
++   return so;
++}
++
+ static void
+ panfrost_delete_shader_state(struct pipe_context *pctx, void *so)
+ {

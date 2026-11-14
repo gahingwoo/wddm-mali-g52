@@ -1,0 +1,463 @@
+diff --git a/src/gallium/frontends/d3d10umd/Debug.cpp b/src/gallium/frontends/d3d10umd/Debug.cpp
+index 9d83427..0412327 100644
+--- a/src/gallium/frontends/d3d10umd/Debug.cpp
++++ b/src/gallium/frontends/d3d10umd/Debug.cpp
+@@ -1,4 +1,5 @@
+ #include "Debug.h"
++#include "util/mali_slow.h"
+ 
+ #include <stdarg.h>
+ #include <stdio.h>
+@@ -188,6 +189,170 @@ DebugPrintf(const char *format, ...)
+ }
+ 
+ 
++/*
++ * The slow-operation log (util/mali_slow.h): one line for each operation
++ * that took longer than a threshold, in C:\mali\slow\<exe>-<pid>.txt.
++ *
++ * It is a file of its own so that it does not depend on the entry-point
++ * log: that one stops after DEBUG_TRACE_MAX lines and is usually off. The
++ * directory and the threshold are looked at again every SLOW_RECHECK_MS,
++ * so the log can be turned on and off under a running dwm.exe: create or
++ * remove C:\mali\slow, or put a file named "off" in it. A process in an
++ * AppContainer cannot create the file unless the directory's ACL lets it;
++ * it then logs nothing and says nothing.
++ *
++ * When nothing is slow the cost is a GetTickCount64 and a
++ * QueryPerformanceCounter at the start of an operation and one more
++ * QueryPerformanceCounter at its end.
++ */
++#define SLOW_DEFAULT_MS 20
++#define SLOW_RECHECK_MS 10000
++
++static volatile LONG64 slow_limit = -1;       /* ticks; -1 unread, 0 off */
++static volatile LONG64 slow_checked;          /* GetTickCount64 of the last look */
++static volatile LONG slow_checking;
++static LONG64 slow_hz;
++static HANDLE slow_file = INVALID_HANDLE_VALUE;
++static volatile LONG slow_open_tries;
++
++static unsigned
++SlowReadMs(void)
++{
++   HANDLE f = CreateFileA("C:\\mali\\slow-ms", GENERIC_READ,
++                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
++                          NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
++   char buf[32];
++   DWORD got = 0;
++   unsigned ms = 0;
++
++   if (f == INVALID_HANDLE_VALUE)
++      return SLOW_DEFAULT_MS;
++   if (!ReadFile(f, buf, sizeof buf - 1, &got, NULL))
++      got = 0;
++   CloseHandle(f);
++   buf[got] = 0;
++   for (const char *c = buf; *c >= '0' && *c <= '9' && ms < 100000; c++)
++      ms = ms * 10 + (unsigned)(*c - '0');
++   return ms ? ms : SLOW_DEFAULT_MS;
++}
++
++static void
++SlowCheck(ULONGLONG now_ms)
++{
++   if (InterlockedCompareExchange(&slow_checking, 1, 0) != 0)
++      return;
++   if (!slow_hz) {
++      LARGE_INTEGER hz;
++      QueryPerformanceFrequency(&hz);
++      slow_hz = hz.QuadPart;
++   }
++   LONG64 limit = 0;
++   if (GetFileAttributesA("C:\\mali\\slow") != INVALID_FILE_ATTRIBUTES &&
++       GetFileAttributesA("C:\\mali\\slow\\off") == INVALID_FILE_ATTRIBUTES)
++      limit = (LONG64)SlowReadMs() * slow_hz / 1000;
++   InterlockedExchange64(&slow_limit, limit);
++   InterlockedExchange64(&slow_checked, (LONG64)now_ms);
++   InterlockedExchange(&slow_checking, 0);
++}
++
++extern "C" uint64_t
++mali_slow_now(void)
++{
++   ULONGLONG ms = GetTickCount64();
++   LARGE_INTEGER t;
++
++   if (slow_limit < 0 || ms - (ULONGLONG)slow_checked >= SLOW_RECHECK_MS)
++      SlowCheck(ms);
++   if (slow_limit <= 0)
++      return 0;
++   QueryPerformanceCounter(&t);
++   return (uint64_t)t.QuadPart;
++}
++
++extern "C" uint64_t
++mali_slow_over(uint64_t t0)
++{
++   LARGE_INTEGER t;
++   LONG64 limit = slow_limit;
++
++   if (!t0 || limit <= 0)
++      return 0;
++   QueryPerformanceCounter(&t);
++   uint64_t d = (uint64_t)t.QuadPart - t0;
++   return d >= (uint64_t)limit ? d : 0;
++}
++
++static HANDLE
++SlowFile(void)
++{
++   static volatile LONG opening = 0;
++
++   if (slow_file != INVALID_HANDLE_VALUE)
++      return slow_file;
++   /* A few tries, not one: the first slow operation may be on a thread
++    * that cannot create files (see DebugLogFile). */
++   if (slow_open_tries > 20 || InterlockedCompareExchange(&opening, 1, 0) != 0)
++      return INVALID_HANDLE_VALUE;
++   InterlockedIncrement(&slow_open_tries);
++
++   char exe[MAX_PATH], path[MAX_PATH];
++   const char *base = exe;
++   DWORD n = GetModuleFileNameA(NULL, exe, sizeof exe);
++   exe[n < sizeof exe ? n : sizeof exe - 1] = 0;
++   for (const char *c = exe; *c; c++)
++      if (*c == '\\' || *c == '/')
++         base = c + 1;
++   snprintf(path, sizeof path, "C:\\mali\\slow\\%s-%lu.txt", base,
++            (unsigned long)GetCurrentProcessId());
++   HANDLE f = CreateFileA(path, FILE_APPEND_DATA,
++                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
++                          NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
++   if (f != INVALID_HANDLE_VALUE) {
++      char head[160];
++      DWORD done;
++      int len = snprintf(head, sizeof head,
++                         "%10lu %5lu slow-log on: over %lld us, counter %lld Hz\n",
++                         (unsigned long)GetTickCount(), (unsigned long)GetCurrentThreadId(),
++                         (long long)(slow_limit * 1000000 / (slow_hz ? slow_hz : 1)),
++                         (long long)slow_hz);
++      if (len > 0)
++         WriteFile(f, head, (DWORD)len, &done, NULL);
++      slow_file = f;
++   }
++   InterlockedExchange(&opening, 0);
++   return slow_file;
++}
++
++extern "C" void
++mali_slow_log(uint64_t ticks, const char *op, const char *fmt, ...)
++{
++   char buf[512];
++   HANDLE file = SlowFile();
++   unsigned long long us = slow_hz ? ticks * 1000000ull / (uint64_t)slow_hz : 0;
++   DWORD done;
++   int off, len;
++
++   if (file == INVALID_HANDLE_VALUE)
++      return;
++   /* tick-count ms, thread, operation, milliseconds with three decimals */
++   off = snprintf(buf, sizeof buf, "%10lu %5lu %-16s %6llu.%03llu ms ",
++                  (unsigned long)GetTickCount(), (unsigned long)GetCurrentThreadId(),
++                  op, us / 1000, us % 1000);
++   if (off < 0 || off >= (int)sizeof buf - 2)
++      return;
++   va_list ap;
++   va_start(ap, fmt);
++   len = vsnprintf(buf + off, sizeof buf - off - 1, fmt, ap);
++   va_end(ap);
++   if (len < 0)
++      len = 0;
++   if (len > (int)sizeof buf - off - 2)
++      len = (int)sizeof buf - off - 2;
++   buf[off + len] = '\n';
++   WriteFile(file, buf, (DWORD)(off + len + 1), &done, NULL);
++}
++
++
+ /*
+  * The entry-point trace. A compositor calls these thousands of times a
+  * second, so it stops after the first DEBUG_TRACE_MAX lines of a process:
+diff --git a/src/gallium/frontends/d3d10umd/DxgiFns.cpp b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+index 9aaf663..72b6d12 100644
+--- a/src/gallium/frontends/d3d10umd/DxgiFns.cpp
++++ b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+@@ -39,6 +39,7 @@
+ #include "Debug.h"
+ 
+ #include "util/format/u_format.h"
++#include "util/mali_slow.h"
+ 
+ 
+ /*
+@@ -58,6 +59,11 @@ _Present(DXGI_DDI_ARG_PRESENT *pPresentData)
+ 
+    LOG_ENTRYPOINT();
+ 
++   MaliSlowScope slow("present");
++   slow.fmt = "flags 0x%llx, interval %llu";
++   slow.a = pPresentData->Flags.Value;
++   slow.b = pPresentData->FlipInterval;
++
+    struct Device *device = CastDevice(pPresentData->hDevice);
+    Resource *pSrcResource = CastResource(pPresentData->hSurfaceToPresent);
+ 
+@@ -361,6 +367,10 @@ _RotateResourceIdentities( DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *RotateResour
+ {
+    LOG_ENTRYPOINT();
+ 
++   MaliSlowScope slow("rotate");
++   slow.fmt = "%llu resources";
++   slow.a = RotateResourceIdentities->Resources;
++
+    if (RotateResourceIdentities->Resources <= 1) {
+       return S_OK;
+    }
+diff --git a/src/gallium/frontends/d3d10umd/Resource.cpp b/src/gallium/frontends/d3d10umd/Resource.cpp
+index 5421a9f..aeedcb1 100644
+--- a/src/gallium/frontends/d3d10umd/Resource.cpp
++++ b/src/gallium/frontends/d3d10umd/Resource.cpp
+@@ -41,11 +41,29 @@
+ #include "util/u_math.h"
+ #include "util/u_rect.h"
+ #include "util/u_surface.h"
++#include "util/mali_slow.h"
+ #include "frontend/winsys_handle.h"
+ 
+ #include <io.h>
+ 
+ 
++/* The slow-operation log's detail for an entry point on a resource: its
++ * size, and a third number of the caller's. */
++static void
++SlowResource(MaliSlowScope &slow, D3D10DDI_HRESOURCE hResource, const char *fmt,
++             unsigned long long c)
++{
++   Resource *pResource = CastResource(hResource);
++
++   slow.fmt = fmt;
++   if (pResource && pResource->resource) {
++      slow.a = pResource->resource->width0;
++      slow.b = pResource->resource->height0;
++   }
++   slow.c = c;
++}
++
++
+ /*
+  * What the process that opens a shared resource needs to build the same
+  * pipe_resource on the creator's allocation. It travels through the runtime
+@@ -317,6 +335,11 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+                D3D10DDI_HRTRESOURCE hRTResource)                        // IN
+ {
+    LOG_ENTRYPOINT();
++   MaliSlowScope slow("create-resource");
++   slow.fmt = "%llux%llu, DXGI format %llu";
++   slow.a = pCreateResource->pMipInfoList[0].TexelWidth;
++   slow.b = pCreateResource->pMipInfoList[0].TexelHeight;
++   slow.c = (unsigned long long)pCreateResource->Format;
+ 
+    /* Every resource, not only the shared and primary ones: what a process
+     * creates on its way to a first frame is the question. */
+@@ -791,6 +814,9 @@ DestroyResource(D3D10DDI_HDEVICE hDevice,       // IN
+                 D3D10DDI_HRESOURCE hResource)   // IN
+ {
+    LOG_ENTRYPOINT();
++   MaliSlowScope slow("destroy-resource");
++   SlowResource(slow, hResource, "%llux%llu, %llu subresources",
++                CastResource(hResource)->NumSubResources);
+ 
+    struct pipe_context *pipe = CastPipeContext(hDevice);
+    Resource *pResource = CastResource(hResource);
+@@ -888,6 +914,8 @@ ResourceMap(D3D10DDI_HDEVICE hDevice,                                // IN
+             __out D3D10DDI_MAPPED_SUBRESOURCE *pMappedSubResource)   // OUT
+ {
+    LOG_ENTRYPOINT();
++   MaliSlowScope slow("map");
++   SlowResource(slow, hResource, "%llux%llu, D3D10_DDI_MAP %llu", (unsigned long long)DDIMap);
+ 
+    struct pipe_context *pipe = CastPipeContext(hDevice);
+    Resource *pResource = CastResource(hResource);
+@@ -972,6 +1000,8 @@ ResourceUnmap(D3D10DDI_HDEVICE hDevice,      // IN
+               UINT SubResource)              // IN
+ {
+    LOG_ENTRYPOINT();
++   MaliSlowScope slow("unmap");
++   SlowResource(slow, hResource, "%llux%llu, subresource %llu", SubResource);
+ 
+    struct pipe_context *pipe = CastPipeContext(hDevice);
+    Resource *pResource = CastResource(hResource);
+@@ -1061,6 +1091,8 @@ ResourceCopy(D3D10DDI_HDEVICE hDevice,          // IN
+              D3D10DDI_HRESOURCE hSrcResource)   // IN
+ {
+    LOG_ENTRYPOINT();
++   MaliSlowScope slow("copy-resource");
++   SlowResource(slow, hDstResource, "%llux%llu", 0);
+ 
+    Device *pDevice = CastDevice(hDevice);
+    if (!CheckPredicate(pDevice)) {
+@@ -1135,6 +1167,8 @@ ResourceCopyRegion(D3D10DDI_HDEVICE hDevice,                // IN
+                    __in_opt const D3D10_DDI_BOX *pSrcBox)   // IN (optional)
+ {
+    LOG_ENTRYPOINT();
++   MaliSlowScope slow("copy-region");
++   SlowResource(slow, hDstResource, "into %llux%llu, subresource %llu", DstSubResource);
+ 
+    Device *pDevice = CastDevice(hDevice);
+    if (!CheckPredicate(pDevice)) {
+@@ -1276,6 +1310,8 @@ ResourceUpdateSubResourceUP(D3D10DDI_HDEVICE hDevice,                // IN
+                             UINT DepthPitch)                         // IN
+ {
+    LOG_ENTRYPOINT();
++   MaliSlowScope slow("update-subres");
++   SlowResource(slow, hDstResource, "into %llux%llu, subresource %llu", DstSubResource);
+ 
+    Device *pDevice = CastDevice(hDevice);
+    if (!CheckPredicate(pDevice)) {
+diff --git a/src/gallium/frontends/d3d10umd/Shader.cpp b/src/gallium/frontends/d3d10umd/Shader.cpp
+index ad5b58f..194a00a 100644
+--- a/src/gallium/frontends/d3d10umd/Shader.cpp
++++ b/src/gallium/frontends/d3d10umd/Shader.cpp
+@@ -43,6 +43,26 @@
+ #include "util/u_gen_mipmap.h"
+ #include "util/u_sampler.h"
+ #include "util/format/u_format.h"
++#include "util/hash_table.h"
++#include "util/mali_slow.h"
++
++
++/*
++ * DXBC to TGSI, timed for the slow-operation log. The detail is the
++ * program type of the version token (0 pixel, 1 vertex, 2 geometry), the
++ * length in dwords and a hash of the DXBC, which is the same for the same
++ * shader in every process.
++ */
++static const struct tgsi_token *
++TimedTranslate(const unsigned *code, unsigned *output_mapping)
++{
++   uint64_t t0 = mali_slow_now();
++   const struct tgsi_token *tokens = Shader_tgsi_translate(code, output_mapping);
++
++   MALI_SLOW(t0, "dxbc-to-tgsi", "type %u, %u dwords, dxbc hash 0x%08x",
++             code[0] >> 16, code[1], (unsigned)_mesa_hash_data(code, (size_t)code[1] * 4));
++   return tokens;
++}
+ 
+ 
+ /*
+@@ -573,7 +593,7 @@ CreateVertexShader(D3D10DDI_HDEVICE hDevice,                                  //
+    pShader->output_resolved = true;
+ 
+    memset(&pShader->state, 0, sizeof pShader->state);
+-   pShader->state.tokens = Shader_tgsi_translate(pCode, pShader->output_mapping);
++   pShader->state.tokens = TimedTranslate(pCode, pShader->output_mapping);
+ 
+    pShader->handle = pipe->create_vs_state(pipe, &pShader->state);
+ 
+@@ -712,7 +732,7 @@ CreateGeometryShader(D3D10DDI_HDEVICE hDevice,                                //
+    pShader->output_resolved = true;
+ 
+    memset(&pShader->state, 0, sizeof pShader->state);
+-   pShader->state.tokens = Shader_tgsi_translate(pShaderCode, pShader->output_mapping);
++   pShader->state.tokens = TimedTranslate(pShaderCode, pShader->output_mapping);
+ 
+    pShader->handle = pipe->create_gs_state(pipe, &pShader->state);
+ }
+@@ -898,7 +918,7 @@ CreateGeometryShaderWithStreamOutput(
+ 
+    memset(&pShader->state, 0, sizeof pShader->state);
+    if (pData->pShaderCode) {
+-      pShader->state.tokens = Shader_tgsi_translate(pData->pShaderCode,
++      pShader->state.tokens = TimedTranslate(pData->pShaderCode,
+                                                     pShader->output_mapping);
+    }
+    pShader->output_resolved = (pShader->state.tokens != NULL);
+@@ -1063,7 +1083,7 @@ CreatePixelShader(D3D10DDI_HDEVICE hDevice,                                // IN
+    pShader->output_resolved = true;
+ 
+    memset(&pShader->state, 0, sizeof pShader->state);
+-   pShader->state.tokens = Shader_tgsi_translate(pShaderCode,
++   pShader->state.tokens = TimedTranslate(pShaderCode,
+                                                  pShader->output_mapping);
+ 
+    pShader->handle = pipe->create_fs_state(pipe, &pShader->state);
+diff --git a/src/util/mali_slow.h b/src/util/mali_slow.h
+new file mode 100644
+index 0000000..e60b46b
+--- /dev/null
++++ b/src/util/mali_slow.h
+@@ -0,0 +1,73 @@
++/*
++ * The slow-operation log of the Windows Mali UMD (maliumd.dll).
++ *
++ * An operation that may take long (a shader compile, a buffer allocation, a
++ * submission, a wait, a map, a present) is timed with one pair of
++ * performance-counter reads. Only when it took longer than the threshold is
++ * a line formatted and written, to C:\mali\slow\<exe>-<pid>.txt, a file of
++ * its own, apart from the entry-point log in C:\mali\log. Nothing is timed
++ * and nothing is written while the directory C:\mali\slow does not exist.
++ * The threshold is 20 ms, or the number of milliseconds in C:\mali\slow-ms.
++ *
++ *    uint64_t t0 = mali_slow_now();
++ *    ... the operation ...
++ *    MALI_SLOW(t0, "bo-create", "%llu bytes", size);
++ *
++ * The arguments after the name are evaluated only when the operation was
++ * slow. The implementation is in the d3d10umd frontend (Debug.cpp); off
++ * Windows everything here is empty.
++ */
++#ifndef MALI_SLOW_H
++#define MALI_SLOW_H
++
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#ifdef _WIN32
++
++/* Now, in performance-counter ticks; 0 while the log is off. */
++uint64_t mali_slow_now(void);
++
++/* The ticks since T0 when that is over the threshold, else 0. */
++uint64_t mali_slow_over(uint64_t t0);
++
++/* One line: Op took Ticks, and the detail. */
++void mali_slow_log(uint64_t ticks, const char *op, const char *fmt, ...);
++
++#define MALI_SLOW(t0, op, ...)                                    \
++   do {                                                           \
++      uint64_t mali_slow_ticks_ = mali_slow_over(t0);             \
++      if (mali_slow_ticks_)                                       \
++         mali_slow_log(mali_slow_ticks_, (op), __VA_ARGS__);      \
++   } while (0)
++
++#else
++
++static inline uint64_t mali_slow_now(void) { return 0; }
++#define MALI_SLOW(t0, op, ...) do { (void)(t0); } while (0)
++
++#endif
++
++#ifdef __cplusplus
++}
++
++#ifdef _WIN32
++/* For a function with several returns: the line is written when the scope
++ * ends. Fmt and up to three numbers may be set at any point before. */
++struct MaliSlowScope {
++   const char *op;
++   uint64_t t0;
++   const char *fmt;
++   unsigned long long a, b, c;
++
++   explicit MaliSlowScope(const char *name)
++      : op(name), t0(mali_slow_now()), fmt(""), a(0), b(0), c(0) {}
++   ~MaliSlowScope() { MALI_SLOW(t0, op, fmt, a, b, c); }
++};
++#endif
++#endif
++
++#endif /* MALI_SLOW_H */

@@ -141,3 +141,63 @@ geometry shader, with or without stream output, returns `E_OUTOFMEMORY`;
 the stream-output queries read zero; `DrawAuto` draws nothing; an ordinary
 draw is right; the device is not removed; 0 FAIL. Before these patches
 each of the creates called a NULL function pointer.
+
+## Hitches: the slow-operation log, 2026-11-14
+
+Not yet run on the board. The desktop stalls for a moment now and then;
+the per-present averages above cannot say which operation stalls. The
+UMD (patches 0050, 0051 and `win32-compat/malikm_drm.c`) times the
+operations that can, and writes one line for each that takes longer than
+a threshold.
+
+To use it, on the board:
+
+    mkdir C:\mali\slow
+    echo 20 > C:\mali\slow-ms        (optional; 20 ms is the default)
+
+Each process that has the UMD loaded writes `C:\mali\slow\<exe>-<pid>.txt`.
+A running `dwm.exe` notices the directory within 10 s; no restart is
+needed. A file named `off` in the directory, or removing it, turns the
+log off again (the file stays open in a running process). A process in an
+AppContainer (the Start menu, Search) logs only if the directory's ACL
+lets it create files:
+`icacls C:\mali\slow /grant "ALL APPLICATION PACKAGES:(OI)(CI)M"`.
+
+A line:
+
+    1234567  4321 shader-compile     31.402 ms fragment, 1184 bytes, binary hash 0x1c2d3e4f, key hash 0x9a8b7c6d, variant 1, shader 000001F2A3B4C5D0
+
+is GetTickCount (the same clock as the entry-point log), the thread, the
+operation, how long it took, and a detail. Operations nest: a `present`
+line can come after the `flush-all`, `batch-submit`, `submit` and
+`gpu-idle` lines that were inside it, each with its own time.
+
+| Operation | Where | What it covers |
+|---|---|---|
+| `dxbc-to-tgsi` | frontend | DXBC to TGSI; type 0 pixel, 1 vertex, 2 geometry; the DXBC hash is the same in every process |
+| `tgsi-to-nir`, `shader-create` | Panfrost | creating a shader CSO; `shader-create` includes the default variant when it is compiled then |
+| `shader-compile` | Panfrost | one variant compiled on the CPU; variant 0 is the default, a higher one was compiled at a bind or draw |
+| `create-resource`, `destroy-resource`, `map`, `unmap`, `copy-resource`, `copy-region`, `update-subres`, `present`, `rotate` | frontend | the DDI entry points |
+| `transfer-map`, `transfer-unmap` | Panfrost | every map, including those inside a copy (`resource_copy_region` is a CPU copy here) |
+| `pan-bo-create` | Panfrost | a BO, with where it came from: the cache, a new allocation, the cache after a wait |
+| `bo-wait` | Panfrost | a wait for one BO, with its label and the timeout asked for: `timeout 0` is a busy check |
+| `bo-cache-evict` | Panfrost | BOs older than 2 s freed from the BO cache |
+| `batch-submit`, `flush-all`, `flush-writer`, `flush-users` | Panfrost | building and submitting job chains; the flushes carry Panfrost's reason |
+| `bo-create`, `bo-map`, `bo-unmap` | shim | `pfnAllocateCb` with the address escape, `pfnLockCb`, `pfnUnlockCb` |
+| `submit` | shim | `pfnRenderCb`, with how many BOs were listed |
+| `gpu-idle`, `wait-bo`, `syncobj-wait`, `destroy-closed` | shim | a wait for the GPU and why; destroying closed allocations after it |
+| `shim-lock` | shim | a wait for the shim's one lock, which another thread holds while it waits for the GPU |
+| `present-cb`, `shared-destroy`, `primary-destroy` | shim | the runtime calls of a present and of a shared surface's release |
+
+`C:\mali\wait-timeout` (read once per process): the shim keeps the
+timeout of WAIT_BO and of syncobj waits instead of waiting for the GPU to
+go idle. Panfrost asks with a timeout of 0 whether a buffer is busy before
+it reuses a cached BO and before it gives a WRITE_DISCARD map a fresh
+buffer; without the file each of those questions waits for everything
+the device submitted. Off by default until it has run on the board; with
+the log on, `wait-bo ... timeout 0 ns (not kept)` lines say how much the
+questions cost.
+
+`m5test mem` lists the GPU memory maliwddm has allocated, in total and by
+the process that created it, with how much of it is resident, next to the
+working set and private bytes Windows reports for each process.
