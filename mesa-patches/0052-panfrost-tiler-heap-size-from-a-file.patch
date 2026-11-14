@@ -1,0 +1,39 @@
+diff --git a/src/gallium/drivers/panfrost/pan_device.c b/src/gallium/drivers/panfrost/pan_device.c
+index 962f8a0..db019b0 100644
+--- a/src/gallium/drivers/panfrost/pan_device.c
++++ b/src/gallium/drivers/panfrost/pan_device.c
+@@ -3,6 +3,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include <stdio.h>
+ #include <xf86drm.h>
+ 
+ #include "drm-uapi/panfrost_drm.h"
+@@ -98,8 +99,25 @@ panfrost_open_device(void *memctx, int fd, struct panfrost_device *dev)
+     */
+ 
+    if (dev->arch < 10) {
++      size_t heap_mb = 128;
++#ifdef _WIN32
++      /* On Linux the heap grows on fault and costs what a frame uses. Under
++       * the WDDM shim it is allocated whole, once for every Direct3D device,
++       * and a process may have five. C:\\mali\\heap-mb holds a size in MB
++       * to try instead; too small and a frame with much geometry fails with
++       * an out-of-memory fault in the tiler. */
++      {
++         FILE *f = fopen("C:\\mali\\heap-mb", "r");
++         unsigned v = 0;
++         if (f) {
++            if (fscanf(f, "%u", &v) == 1 && v >= 2 && v <= 1024)
++               heap_mb = v;
++            fclose(f);
++         }
++      }
++#endif
+       dev->tiler_heap = panfrost_bo_create(
+-         dev, 128 * 1024 * 1024, PAN_BO_INVISIBLE | PAN_BO_GROWABLE, "Tiler heap");
++         dev, heap_mb * 1024 * 1024, PAN_BO_INVISIBLE | PAN_BO_GROWABLE, "Tiler heap");
+       if (!dev->tiler_heap)
+          goto err_free_kmod_dev;
+    }
