@@ -201,3 +201,28 @@ questions cost.
 `m5test mem` lists the GPU memory maliwddm has allocated, in total and by
 the process that created it, with how much of it is resident, next to the
 working set and private bytes Windows reports for each process.
+
+## The GPU's clock, 2026-11-14
+
+The firmware leaves the GPU at GPLL / 6 = 198 MHz, the rate the device tree
+assigns before Linux's devfreq raises it; the operating points run from 300
+to 950 MHz. Nothing in Windows raised it, so every figure above this section
+was taken at 198 MHz.
+
+`m5test clk <parent> <div> [keep]` sets it (parent 0 GPLL 1188 MHz, 1 CPLL
+1000 MHz; at most 600 MHz, the highest operating point that asks for the
+lowest supply voltage, because the driver does not touch the regulator).
+
+GpuTest 0.7.0 FurMark through the OpenGL ICD, 1024x640 windowed, 60 s, one
+run each:
+
+| Clock | Score | Frames a second |
+|---|---|---|
+| 198 MHz | 106 | 1 |
+| 594 MHz | 285 | 4 |
+
+At 198 MHz the GPU was 97% busy with single jobs of up to 425 ms; at 594 MHz
+the longest job in the run was 144 ms. 27784 jobs since that boot, none
+failed. The Direct2D frame is byte for byte the same at 198, 396, 500 and
+594 MHz. The supply voltage was not measured.
+
