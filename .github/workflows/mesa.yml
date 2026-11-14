@@ -431,28 +431,25 @@ jobs:
       - name: Configure
         shell: pwsh
         run: |
-          # clang-cl as on ARM64. For x86, the same clang-cl under a name
-          # that starts with the target triple, which clang takes as its
-          # target (with -m32 in the compiler list, meson passed -m32 to rc
-          # and still took the host for x86_64), and a cross file that says
-          # the host is x86. It runs on this x64 runner, so no exe wrapper.
+          # clang-cl as on ARM64. For x86, -m32 through _CL_, which clang-cl
+          # reads from the environment as cl does, and a cross file that says
+          # the host is x86 (with -m32 in the compiler list, meson passed it
+          # to rc too and still took the host for x86_64; under a name that
+          # starts with the triple, meson did not know it for clang-cl). It
+          # runs on this x64 runner, so no exe wrapper.
           # The C runtime is linked in (/MT): the board has no x64 or x86
           # vcruntime140.dll to count on, and the UMD must load without one.
           $cc = Join-Path $env:VCINSTALLDIR 'Tools\Llvm\x64\bin\clang-cl.exe'
-          $mfile = @()
+          $c = $cc -replace '\\', '/'
           if ('${{ matrix.arch }}' -eq 'x86') {
-            # Next to the original: clang finds its own headers from there.
-            $x86 = Join-Path (Split-Path $cc) 'i686-pc-windows-msvc-clang-cl.exe'
-            Copy-Item $cc $x86
-            $cc = $x86
-            $c = $cc -replace '\\', '/'
+            $env:_CL_ = '-m32'
+            "_CL_=-m32" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
             Set-Content -Encoding ascii cross.ini ("[binaries]`nc = '$c'`ncpp = '$c'`n" +
               "[properties]`nneeds_exe_wrapper = false`n" +
               "[host_machine]`nsystem = 'windows'`ncpu_family = 'x86'`ncpu = 'i686'`nendian = 'little'`n")
             Get-Content cross.ini
             $mfile = @('--cross-file', 'cross.ini')
           } else {
-            $c = $cc -replace '\\', '/'
             Set-Content -Encoding ascii native.ini "[binaries]`nc = '$c'`ncpp = '$c'`n"
             $mfile = @('--native-file', 'native.ini')
           }
@@ -487,6 +484,7 @@ jobs:
       - name: Smoke test (softpipe, then GALLIUM_DRIVER=panfrost)
         shell: pwsh
         run: |
+          Remove-Item Env:_CL_ -ErrorAction SilentlyContinue
           $dll = (Get-ChildItem build -Recurse -Filter libgallium_d3d10.dll | Select-Object -First 1).FullName
           if (-not $dll) { throw 'libgallium_d3d10.dll was not built' }
           cl /nologo /EHsc /O2 /MD tests\d3d11-triangle\triangle.cpp /Fe:triangle.exe
