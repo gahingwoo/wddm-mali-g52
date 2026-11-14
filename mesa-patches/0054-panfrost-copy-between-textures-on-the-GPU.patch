@@ -1,0 +1,106 @@
+diff --git a/src/gallium/drivers/panfrost/pan_blit.c b/src/gallium/drivers/panfrost/pan_blit.c
+index 3ec8933..7f8f2eb 100644
+--- a/src/gallium/drivers/panfrost/pan_blit.c
++++ b/src/gallium/drivers/panfrost/pan_blit.c
+@@ -99,3 +99,64 @@ panfrost_blit(struct pipe_context *pipe, const struct pipe_blit_info *info)
+    panfrost_blit_no_afbc_legalization(pipe, info);
+    panfrost_flush_all_batches(ctx, "Blit");
+ }
++
++#ifdef _WIN32
++#include <windows.h>
++#include "util/u_surface.h"
++
++/* A copy between two textures, on the GPU.
++ *
++ * Panfrost's resource_copy_region is util_resource_copy_region: it maps
++ * both resources and copies on the CPU, and a map waits for the GPU. Under
++ * the Direct3D frontend dwm.exe copies between surfaces all the time
++ * (CopySubresourceRegion), and at 2560x1440 the log of slow operations on
++ * the TaishanPi 3M had these at 22 to 26 ms each, the largest thing left
++ * over 20 ms once the waits were fixed.
++ *
++ * The blitter copies through views in the linear format of each resource,
++ * so nothing is converted. What it cannot do (buffers, multisampled or
++ * compressed resources, a copy within one level of one resource) stays on
++ * the CPU. The file C:\mali\copy-cpu puts everything back there.
++ */
++static bool
++pan_copy_on_gpu(void)
++{
++   static int on = -1;
++   if (on < 0)
++      on = GetFileAttributesA("C:\\mali\\copy-cpu") == INVALID_FILE_ATTRIBUTES;
++   return on;
++}
++
++void
++panfrost_resource_copy_region(struct pipe_context *pipe,
++                              struct pipe_resource *dst, unsigned dst_level,
++                              unsigned dstx, unsigned dsty, unsigned dstz,
++                              struct pipe_resource *src, unsigned src_level,
++                              const struct pipe_box *src_box)
++{
++   struct panfrost_context *ctx = pan_context(pipe);
++
++   if (!pan_copy_on_gpu() || dst->target == PIPE_BUFFER ||
++       src->target == PIPE_BUFFER || dst->nr_samples > 1 ||
++       src->nr_samples > 1 || (dst == src && dst_level == src_level) ||
++       util_format_is_compressed(dst->format) ||
++       util_format_is_compressed(src->format) ||
++       !util_blitter_is_copy_supported(ctx->blitter, dst, src)) {
++      util_resource_copy_region(pipe, dst, dst_level, dstx, dsty, dstz, src,
++                                src_level, src_box);
++      return;
++   }
++
++   pan_legalize_format(ctx, pan_resource(src), util_format_linear(src->format),
++                       false, false);
++   pan_legalize_format(ctx, pan_resource(dst), util_format_linear(dst->format),
++                       true, false);
++
++   panfrost_flush_all_batches(ctx, "Copy");
++   panfrost_blitter_save(ctx, PAN_RENDER_BLIT);
++   util_blitter_copy_texture(ctx->blitter, dst, dst_level, dstx, dsty, dstz,
++                             src, src_level, src_box);
++   panfrost_flush_all_batches(ctx, "Copy");
++}
++#endif
++
+diff --git a/src/gallium/drivers/panfrost/pan_resource.c b/src/gallium/drivers/panfrost/pan_resource.c
+index 1c22a6a..394ba09 100644
+--- a/src/gallium/drivers/panfrost/pan_resource.c
++++ b/src/gallium/drivers/panfrost/pan_resource.c
+@@ -2648,7 +2648,11 @@ panfrost_resource_context_init(struct pipe_context *pctx)
+    pctx->buffer_unmap = u_transfer_helper_transfer_unmap;
+    pctx->texture_map = u_transfer_helper_transfer_map;
+    pctx->texture_unmap = u_transfer_helper_transfer_unmap;
++#ifdef _WIN32
++   pctx->resource_copy_region = panfrost_resource_copy_region;
++#else
+    pctx->resource_copy_region = util_resource_copy_region;
++#endif
+    pctx->blit = panfrost_blit;
+    pctx->generate_mipmap = panfrost_generate_mipmap;
+    pctx->flush_resource = panfrost_flush_resource;
+diff --git a/src/gallium/drivers/panfrost/pan_resource.h b/src/gallium/drivers/panfrost/pan_resource.h
+index bfd3343..0e2f8fd 100644
+--- a/src/gallium/drivers/panfrost/pan_resource.h
++++ b/src/gallium/drivers/panfrost/pan_resource.h
+@@ -175,6 +175,16 @@ void panfrost_blitter_save(struct panfrost_context *ctx,
+ void panfrost_blit(struct pipe_context *pipe,
+                    const struct pipe_blit_info *info);
+ 
++#ifdef _WIN32
++void panfrost_resource_copy_region(struct pipe_context *pipe,
++                                   struct pipe_resource *dst,
++                                   unsigned dst_level, unsigned dstx,
++                                   unsigned dsty, unsigned dstz,
++                                   struct pipe_resource *src,
++                                   unsigned src_level,
++                                   const struct pipe_box *src_box);
++#endif
++
+ void panfrost_resource_set_damage_region(struct pipe_screen *screen,
+                                          struct pipe_resource *res,
+                                          unsigned int nrects,
