@@ -138,6 +138,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build and run
         run: make -C tests/malikm-host run
+      - name: maliwddm's rotation against the Basic Display Driver sample's
+        run: make -C tests/rotate-host run
 
   umd:
     # The UMD for the package: mesa.yml's Panfrost build of the same inputs.

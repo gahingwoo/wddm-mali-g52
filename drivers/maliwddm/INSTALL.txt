@@ -82,6 +82,29 @@ Check
 
        (Get-Process dwm).Modules | Where-Object ModuleName -eq maliumd.dll | Select-Object FileName
 
+Display orientation
+
+  Settings > System > Display > Display orientation offers Landscape,
+  Portrait and both flipped forms; a monitor comes up as it did before,
+  unrotated. On the TaishanPi 3M's 800x1280 panel, unrotated is portrait
+  and landscape is 1280x800. DWM draws the turned desktop itself and the
+  display controller shows it as before, so turning costs nothing in the
+  usual case; the driver turns a picture on the CPU only when Windows hands
+  it one that is not turned. Windows keeps a choice it cannot confirm for
+  15 seconds and then goes back to the previous one. To go back by hand,
+  use Settings, or with no usable picture delete the saved layouts from
+  an administrator prompt and reboot:
+
+       reg delete HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Configuration /f
+
+  If a 180 degree turn shows the picture unturned, the driver can turn it
+  itself (a DWORD in the device's Device Parameters key, then reboot):
+
+       reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters" /v RotateFlips /t REG_DWORD /d 1 /f
+
+  m5test perf writes T_Rotation (degrees), T_RotFlipCopies and
+  T_RotPresents (frames the driver turned) to Device Parameters\maliwddm.
+
 Replacing only the UMD while testing
 
   Rename the loaded file and copy the new one next to it; then end

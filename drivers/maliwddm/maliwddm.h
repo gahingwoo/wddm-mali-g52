@@ -15,6 +15,7 @@
 #include <ntstrsafe.h>
 #include "../common/maligpu.h"
 #include "maliwddm_abi.h"
+#include "rotate.h"
 
 #define MW_TAG                  'dwlM'
 #define MW_SEGMENT_ID           1           /* the aperture segment */
@@ -102,6 +103,7 @@ typedef struct _MW_CONTEXT {
 typedef struct _MW_PRESENT_OP {
     ULONG Kind;
     ULONG Color;
+    ULONG Rotate;               /* degrees to rotate into the framebuffer (rotate.h), 0 none */
     MW_ALLOCATION *Src, *Dst;
     RECT SrcRect, DstRect;
     ULONG NumRects;             /* 0: DstRect alone */
@@ -160,6 +162,16 @@ struct _MW_ADAPTER {
      * mode is committed. */
     BOOLEAN ScaledModes;
     UINT SrcWidth, SrcHeight;
+    /* The committed path's content rotation in degrees, counter-clockwise:
+     * 0, 90, 180 or 270 (display.c). The source mode and the primaries keep
+     * the panel's own size whatever it is; DWM draws its desktop already
+     * rotated into them, and the driver rotates only what Windows hands it
+     * unrotated (MwFlipDegrees, a Rotate present, the bugcheck screen).
+     * RotateFlips (setting, off): a flip at 180 degrees is to be rotated by
+     * the driver too, for the case that DWM turns out not to do it. */
+    volatile ULONG RotDeg;
+    BOOLEAN RotateFlips;
+    ULONG RotFlipCopies, RotPresents;
 
     /* GPU. MmuLock serialises the address allocator and the page tables. */
     MK_GPU Gpu;
@@ -364,6 +376,7 @@ void MwScanStop(MW_ADAPTER *A);
 void MwScanToFb(MW_ADAPTER *A);
 BOOLEAN MwScanUsable(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
 BOOLEAN MwScanFlip(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
+UINT MwFlipDegrees(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
 void MwScanMap(MW_ADAPTER *A, struct _MW_ALLOCATION *P, PPFN_NUMBER Pfn, ULONG Pages);
 void MwScanUnmap(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
 NTSTATUS MwScanSet(MW_ADAPTER *A, MW_ESCAPE_SCANOUT_DATA *D);
