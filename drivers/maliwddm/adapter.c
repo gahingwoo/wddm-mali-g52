@@ -678,6 +678,12 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         MwLog(a, L"T_FlipCopySkips", a->FlipCopySkips);
         MwLog(a, L"T_PresentFlips", a->PresentFlips);
         MwLog(a, L"T_Presents", a->Presents);
+        /* Rotation (display.c): the path's degrees, and how many flips and
+         * presents the driver itself turned on the CPU. At 90 or 270 with
+         * T_RotFlipCopies 0, DWM did the turning. */
+        MwLog(a, L"T_Rotation", a->RotDeg);
+        MwLog(a, L"T_RotFlipCopies", a->RotFlipCopies);
+        MwLog(a, L"T_RotPresents", a->RotPresents);
         /* Averages since the driver started, in microseconds; m5test perf
          * gives them for an interval. */
         MwLog(a, L"T_FlipCopyUsAvg", TicksEachUs(a, a->FlipCopyTicks, a->FlipCopies));

@@ -189,6 +189,11 @@ NTSTATUS APIENTRY MwPresent(IN_CONST_HANDLE hContext, DXGKARG_PRESENT *Arg)
         MW_PRESENT_OP *op = &priv->Present;
         op->Kind = Arg->Flags.ColorFill ? MW_PRESENT_FILL : MW_PRESENT_BLT;
         op->Color = Arg->Color;
+        /* Rotate: the source is the desktop as Windows sees it and the
+         * driver turns it for the path ("Supporting Rotation in a Display
+         * Miniport Driver"; only when the flag is set, whatever the path).
+         * Only a present into the framebuffer is turned (DoPresent). */
+        op->Rotate = Arg->Flags.Rotate ? a->RotDeg : 0;
         /* A present's allocation list has fixed slots; an unused one has
          * no allocation. */
         op->Src = (MW_ALLOCATION *)Arg->pAllocationList[DXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation;
@@ -241,12 +246,18 @@ static void DoPresent(MW_ADAPTER *A, const MW_PRESENT_OP *Op)
     LONG dstW, dstH, dstPitch, srcPitch = 0, srcW = 0, srcH = 0;
     ULONG n = Op->NumRects ? Op->NumRects : 1;
     ULONG64 t0 = MwTick(), longest = 0;
+    UINT rot = 0;
 
     if (Op->Dst != NULL && (Op->Dst->Flags & MW_ALLOC_PRIMARY) && A->FbVa != NULL) {
+        UINT lw, lh;
         MwScanToFb(A);          /* a blt goes to the framebuffer: show it */
         dst = A->FbVa;
-        dstW = (LONG)A->Fb.Width;
-        dstH = (LONG)A->Fb.Height;
+        /* Rotated, the rectangles are the desktop's and are clipped to its
+         * size; MwRotCopy puts them in the framebuffer. */
+        rot = Op->Rotate;
+        MwRotLogicalSize(rot, A->Fb.Width, A->Fb.Height, &lw, &lh);
+        dstW = (LONG)lw;
+        dstH = (LONG)lh;
         dstPitch = (LONG)A->Fb.Pitch;
     } else {
         dst = AllocationVa(Op->Dst);
@@ -283,6 +294,24 @@ static void DoPresent(MW_ADAPTER *A, const MW_PRESENT_OP *Op)
         }
         if (r.right <= r.left || r.bottom <= r.top)
             continue;
+        if (rot != 0) {
+            MW_ROT_RECT l;
+            l.Left = r.left;
+            l.Top = r.top;
+            l.Right = r.right;
+            l.Bottom = r.bottom;
+            if (Op->Kind == MW_PRESENT_BLT) {
+                MwRotCopy(rot, dst, dstPitch, A->Fb.Width, A->Fb.Height, src, srcPitch, dx, dy, &l);
+            } else {
+                MW_ROT_RECT f = MwRotRect(rot, A->Fb.Width, A->Fb.Height, &l);
+                for (LONG y = f.Top; y < f.Bottom; y++) {
+                    ULONG *d = (ULONG *)(dst + (SIZE_T)y * dstPitch) + f.Left;
+                    for (LONG x = 0; x < f.Right - f.Left; x++)
+                        d[x] = Op->Color;
+                }
+            }
+            continue;
+        }
         for (LONG y = r.top; y < r.bottom; y++) {
             ULONG *d = (ULONG *)(dst + (SIZE_T)y * dstPitch) + r.left;
             if (Op->Kind == MW_PRESENT_BLT) {
@@ -298,6 +327,8 @@ static void DoPresent(MW_ADAPTER *A, const MW_PRESENT_OP *Op)
         A->PresentBlts++;
     else
         A->PresentFills++;
+    if (rot != 0)
+        A->RotPresents++;
     MwTickAdd(&A->PresentBltTicks, &longest, t0);
 }
 
@@ -656,6 +687,29 @@ static BOOLEAN SyncVsync(PVOID Context)
     return TRUE;
 }
 
+/* How far the flip copy has to turn a primary, in degrees (rotate.h).
+ *
+ * dxgkrnl creates primaries with the panel's own, non-rotated dimensions,
+ * and DWM draws its desktop into them already rotated: such a flip is
+ * shown as it is, scanned out or copied, at 0 degrees, as before rotation
+ * existed. A primary of the rotated size (the panel's width and height
+ * exchanged) cannot be the panel's picture as it stands: it is the desktop
+ * the right way up, and on a 90 or 270 degree path it is turned here. At
+ * 180 degrees the size says nothing, so the RotateFlips setting decides:
+ * off (the default) trusts DWM to have turned it.
+ *
+ * Any IRQL; reads only. */
+UINT MwFlipDegrees(MW_ADAPTER *A, MW_ALLOCATION *P)
+{
+    UINT deg = A->RotDeg;
+
+    if (deg == 0 || P == NULL)
+        return 0;
+    if (deg == 90 || deg == 270)
+        return (P->Width == A->Fb.Height && P->Height == A->Fb.Width && P->Width != P->Height) ? deg : 0;
+    return (A->RotateFlips && P->Width == A->Fb.Width && P->Height == A->Fb.Height) ? deg : 0;
+}
+
 /* The primary just made current, to the framebuffer: there is no scanout
  * engine pointed at our allocations, so a flip is a CPU copy. Only when the
  * primary changes, not on every vsync. */
@@ -675,6 +729,26 @@ static void ShowPrimary(MW_ADAPTER *A, MW_ALLOCATION *P)
         return;
     }
     src += (SIZE_T)P->MdlPage << PAGE_SHIFT;
+    {
+        UINT deg = MwFlipDegrees(A, P);
+        if (deg != 0) {
+            MW_ROT_RECT l;
+            ULONG rp = P->Pitch ? P->Pitch : P->Width * 4;
+            l.Left = 0;
+            l.Top = 0;
+            l.Right = (long)P->Width;
+            l.Bottom = (long)P->Height;
+            if (rp < P->Width * 4 || (SIZE_T)rp * P->Height > P->Size) {
+                A->FlipCopySkips++;
+                return;
+            }
+            MwRotCopy(deg, A->FbVa, (long)A->Fb.Pitch, A->Fb.Width, A->Fb.Height, src, (long)rp, 0, 0, &l);
+            A->RotFlipCopies++;
+            A->FlipCopies++;
+            MwTickAdd(&A->FlipCopyTicks, &A->FlipCopyMaxTicks, t0);
+            return;
+        }
+    }
     w = min(P->Width ? P->Width : A->Fb.Width, A->Fb.Width);
     h = min(P->Height ? P->Height : A->Fb.Height, A->Fb.Height);
     pitch = P->Pitch ? P->Pitch : w * 4;

@@ -185,10 +185,12 @@ void MwScanToFb(MW_ADAPTER *A)
     A->ScanToFbs++;
 }
 
-/* Would a flip to this allocation be scanned out? */
+/* Would a flip to this allocation be scanned out? Not if the driver has to
+ * turn it (MwFlipDegrees): the window cannot rotate, and the copy does. */
 BOOLEAN MwScanUsable(MW_ADAPTER *A, MW_ALLOCATION *P)
 {
-    return A->ScanOn && A->ScanPaging && P != NULL && P->ScanIova != 0 && P->Mapped;
+    return A->ScanOn && A->ScanPaging && P != NULL && P->ScanIova != 0 && P->Mapped &&
+           MwFlipDegrees(A, P) == 0;
 }
 
 /* A flip: point the window at the primary. Called at the level

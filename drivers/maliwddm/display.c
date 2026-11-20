@@ -3,8 +3,9 @@
  * maliwddm's display: malidod's, which drives the HDMI output under
  * Windows (M5.1). One HDMI child with the monitor's EDID if the firmware
  * left it in the DSDT, the firmware's framebuffer and timing, identity
- * transforms (and, with ScaledModes, smaller source modes stretched to the
- * firmware's). Flips land in MwSetVidPnSourceAddress, which records them;
+ * scaling (and, with ScaledModes, smaller source modes stretched to the
+ * firmware's), rotation by 0, 90, 180 or 270 degrees (see "rotation"
+ * below). Flips land in MwSetVidPnSourceAddress, which records them;
  * scanout.c or the flip copy in command.c puts them on the screen.
  */
 #include "maliwddm.h"
@@ -17,6 +18,72 @@
 static UINT BytesPerPixel(D3DDDIFORMAT F)
 {
     return (F == D3DDDIFMT_A8R8G8B8 || F == D3DDDIFMT_X8R8G8B8) ? 4 : 0;
+}
+
+/* ---- rotation ----
+ *
+ * Offered on the path: identity, 90, 180 and 270 degrees (the Basic
+ * Display Driver sample offers identity and 90 the same way:
+ * Windows-driver-samples, video/KMDOD/bdd_dmm.cxx). Windows picks
+ * one in Settings > Display > Display orientation; identity stays the
+ * default, so an HDMI monitor and the panel come up as they did.
+ *
+ * The source mode is the panel's size at every rotation and dxgkrnl
+ * creates the shared primary with those non-rotated dimensions ("Supporting
+ * Rotation in a Display Miniport Driver", learn.microsoft.com). DWM draws
+ * the desktop rotated into it ("the Desktop Window Manager (DWM) rotates
+ * its content in advance", same page, primary clone path), so its flips
+ * scan out or are copied as before, at no cost. The driver rotates only
+ * where Windows gives it a picture that is not rotated: a present with the
+ * Rotate flag (command.c), a primary of the rotated size (MwFlipDegrees)
+ * and the bugcheck screen (below). */
+
+/* Degrees for a path's rotation; ~0u for one that is not set or not ours. */
+static UINT PathDegrees(D3DKMDT_VIDPN_PRESENT_PATH_ROTATION R)
+{
+    switch (R) {
+    case D3DKMDT_VPPR_IDENTITY:  return 0;
+    case D3DKMDT_VPPR_ROTATE90:  return 90;
+    case D3DKMDT_VPPR_ROTATE180: return 180;
+    case D3DKMDT_VPPR_ROTATE270: return 270;
+    default:                     return ~0u;
+    }
+}
+
+/* The rotation of the path from our source in a VidPN, ~0u if there is no
+ * such path or it has none. */
+static UINT VidPnDegrees(const DXGK_VIDPN_INTERFACE *VidPn, D3DKMDT_HVIDPN H,
+                         D3DDDI_VIDEO_PRESENT_SOURCE_ID Src)
+{
+    D3DKMDT_HVIDPNTOPOLOGY topo;
+    const DXGK_VIDPNTOPOLOGY_INTERFACE *topoIf;
+    const D3DKMDT_VIDPN_PRESENT_PATH *path = NULL, *next;
+    NTSTATUS st;
+
+    if (!NT_SUCCESS(VidPn->pfnGetTopology(H, &topo, &topoIf)))
+        return ~0u;
+    st = topoIf->pfnAcquireFirstPathInfo(topo, &path);
+    while (st == STATUS_SUCCESS && path != NULL) {
+        if (path->VidPnSourceId == Src) {
+            UINT deg = PathDegrees(path->ContentTransformation.Rotation);
+            topoIf->pfnReleasePathInfo(topo, path);
+            return deg;
+        }
+        st = topoIf->pfnAcquireNextPathInfo(topo, path, &next);
+        topoIf->pfnReleasePathInfo(topo, path);
+        path = next;
+    }
+    return ~0u;
+}
+
+static void SetRotation(MW_ADAPTER *A, UINT Deg, PCWSTR Why)
+{
+    if (Deg == ~0u)
+        return;
+    if (Deg != A->RotDeg) {
+        InterlockedExchange((volatile LONG *)&A->RotDeg, (LONG)Deg);
+        MwLog(A, Why, Deg);
+    }
 }
 
 /* ---- source modes ----
@@ -250,6 +317,8 @@ NTSTATUS MwDisplayStart(MW_ADAPTER *A)
     MwLog(A, L"FbHeight", A->Fb.Height);
     A->SrcWidth = A->Fb.Width;
     A->SrcHeight = A->Fb.Height;
+    A->RotDeg = 0;
+    A->RotateFlips = MwSetting(A, L"RotateFlips", 0) != 0;
     ReadEdid(A);
     {
         BOOLEAN fromEdid = A->EdidSize != 0 && TimingFromEdid(A);
@@ -564,10 +633,10 @@ NTSTATUS APIENTRY MwEnumVidPnCofuncModality(IN_CONST_HANDLE hAdapter,
                 MwLog(dev, L"Fail_AddTargetMode", (ULONG)r);
         }
 
-        /* Identity rotation. Identity scaling for the firmware's mode; a
-         * smaller source mode is stretched to it (the same shape, so this
-         * keeps the aspect ratio). Before a source mode is pinned both are
-         * possible. */
+        /* Rotation by 0, 90, 180 or 270 degrees (see the top of this file).
+         * Identity scaling for the firmware's mode; a smaller source mode
+         * is stretched to it (the same shape, so this keeps the aspect
+         * ratio). Before a source mode is pinned both are possible. */
         if (NT_SUCCESS(r) && !xfPivot &&
             (path->ContentTransformation.Scaling == D3DKMDT_VPPS_UNPINNED ||
              path->ContentTransformation.Rotation == D3DKMDT_VPPR_UNPINNED)) {
@@ -591,6 +660,13 @@ NTSTATUS APIENTRY MwEnumVidPnCofuncModality(IN_CONST_HANDLE hAdapter,
                 RtlZeroMemory(&upd.ContentTransformation.RotationSupport,
                               sizeof(upd.ContentTransformation.RotationSupport));
                 upd.ContentTransformation.RotationSupport.Identity = 1;
+                upd.ContentTransformation.RotationSupport.Rotate90 = 1;
+                upd.ContentTransformation.RotationSupport.Rotate180 = 1;
+                upd.ContentTransformation.RotationSupport.Rotate270 = 1;
+                /* No Offset bits: they belong to path-independent rotation,
+                 * an interface version (WDDM1_3_PATH_INDEPENDENT_ROTATION)
+                 * after the WDDM1_3 this driver registers, and there is one
+                 * path, never a clone. Identity alone has run without them. */
             }
             r = topoIf->pfnUpdatePathSupportInfo(topo, &upd);
         }
@@ -654,6 +730,11 @@ NTSTATUS APIENTRY MwCommitVidPn(IN_CONST_HANDLE hAdapter, const DXGKARG_COMMITVI
             MwLog(dev, L"CommitSourceWidth", w);
             MwLog(dev, L"CommitSourceHeight", h);
         }
+        /* The path's rotation: the driver must always take it here, and
+         * at UpdateActiveVidPnPresentPath for a smooth rotation (WDDM 1.2,
+         * "Optimized screen rotation support"). */
+        if (ours)
+            SetRotation(dev, VidPnDegrees(vidpn, Arg->hFunctionalVidPn, 0), L"CommitRotation");
     } else if (NT_SUCCESS(st)) {
         /* Nothing pinned: the source is being turned off. AcquirePinnedModeInfo
          * says so with an informational status (0x401E0307), which is not
@@ -669,11 +750,25 @@ NTSTATUS APIENTRY MwCommitVidPn(IN_CONST_HANDLE hAdapter, const DXGKARG_COMMITVI
     return st;
 }
 
+/* A smooth rotation (SupportSmoothRotation, adapter.c) comes here, not
+ * through a commit: the mode stays and only the path's rotation changes. A
+ * rotation that is not one of ours is refused; anything else on the path
+ * (scaling, gamma) is accepted as before. */
 NTSTATUS APIENTRY MwUpdateActiveVidPnPresentPath(IN_CONST_HANDLE hAdapter,
                                                  const DXGKARG_UPDATEACTIVEVIDPNPRESENTPATH *Arg)
 {
-    UNREFERENCED_PARAMETER(hAdapter);
-    UNREFERENCED_PARAMETER(Arg);
+    MW_ADAPTER *dev = (MW_ADAPTER *)hAdapter;
+    D3DKMDT_VIDPN_PRESENT_PATH_ROTATION r = Arg->VidPnPresentPathInfo.ContentTransformation.Rotation;
+    UINT deg = PathDegrees(r);
+
+    if (Arg->VidPnPresentPathInfo.VidPnSourceId != 0)
+        return STATUS_SUCCESS;
+    if (deg == ~0u && r != D3DKMDT_VPPR_UNINITIALIZED && r != D3DKMDT_VPPR_NOTSPECIFIED &&
+        r != D3DKMDT_VPPR_UNPINNED) {
+        MwLog(dev, L"Fail_UpdatePathRotation", (ULONG)r);
+        return STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
+    }
+    SetRotation(dev, deg, L"UpdatePathRotation");
     return STATUS_SUCCESS;
 }
 
@@ -702,11 +797,23 @@ NTSTATUS APIENTRY MwRecommendMonitorModes(IN_CONST_HANDLE hAdapter,
     return STATUS_SUCCESS;
 }
 
+/* A rotated path is rotated by DWM on the GPU or by this driver on the CPU,
+ * never by the display controller: DriverRotation says so, as the Basic
+ * Display Driver sample does (bdd.cxx). An unrotated path reports what it
+ * always did. */
 NTSTATUS APIENTRY MwQueryVidPnHWCapability(IN_CONST_HANDLE hAdapter,
                                            DXGKARG_QUERYVIDPNHWCAPABILITY *Arg)
 {
-    UNREFERENCED_PARAMETER(hAdapter);
+    MW_ADAPTER *dev = (MW_ADAPTER *)hAdapter;
+    const DXGK_VIDPN_INTERFACE *vidpn;
+    UINT deg = ~0u;
+
     RtlZeroMemory(&Arg->VidPnHWCaps, sizeof(Arg->VidPnHWCaps));
+    if (Arg->hFunctionalVidPn != 0 &&
+        NT_SUCCESS(dev->Dxgk.DxgkCbQueryVidPnInterface(Arg->hFunctionalVidPn, DXGK_VIDPN_INTERFACE_VERSION_V1, &vidpn)))
+        deg = VidPnDegrees(vidpn, Arg->hFunctionalVidPn, Arg->SourceId);
+    if (deg != ~0u && deg != 0)
+        Arg->VidPnHWCaps.DriverRotation = 1;
     return STATUS_SUCCESS;
 }
 
@@ -724,8 +831,9 @@ NTSTATUS APIENTRY MwSystemDisplayEnable(IN_CONST_PVOID MiniportDeviceContext,
     if (dev->FbVa == NULL)
         return STATUS_UNSUCCESSFUL;
     MwScanToFb(dev);            /* the bugcheck screen is drawn in the framebuffer */
-    *Width = dev->Fb.Width;
-    *Height = dev->Fb.Height;
+    /* Rotated, the screen is the size Windows sees (bdd.cxx does the same),
+     * and SystemDisplayWrite turns it. */
+    MwRotLogicalSize(dev->RotDeg, dev->Fb.Width, dev->Fb.Height, Width, Height);
     *ColorFormat = dev->Fb.ColorFormat;
     return STATUS_SUCCESS;
 }
@@ -735,8 +843,23 @@ VOID APIENTRY MwSystemDisplayWrite(IN_CONST_PVOID MiniportDeviceContext, IN_CONS
                           UINT PositionX, UINT PositionY)
 {
     MW_ADAPTER *dev = (MW_ADAPTER *)MiniportDeviceContext;
+    UINT deg = dev->RotDeg;
     if (dev->FbVa == NULL)
         return;
+    if (deg != 0) {
+        UINT lw, lh;
+        MW_ROT_RECT l;
+        MwRotLogicalSize(deg, dev->Fb.Width, dev->Fb.Height, &lw, &lh);
+        if (PositionX >= lw || PositionY >= lh)
+            return;
+        l.Left = (long)PositionX;
+        l.Top = (long)PositionY;
+        l.Right = (long)min(PositionX + SourceWidth, lw);
+        l.Bottom = (long)min(PositionY + SourceHeight, lh);
+        MwRotCopy(deg, dev->FbVa, (long)dev->Fb.Pitch, dev->Fb.Width, dev->Fb.Height,
+                  (const unsigned char *)Source, (long)SourceStride, -(long)PositionX, -(long)PositionY, &l);
+        return;
+    }
     for (UINT y = 0; y < SourceHeight && PositionY + y < dev->Fb.Height; y++) {
         UINT w = min(SourceWidth, dev->Fb.Width > PositionX ? dev->Fb.Width - PositionX : 0);
         RtlCopyMemory(dev->FbVa + (SIZE_T)(PositionY + y) * dev->Fb.Pitch + (SIZE_T)PositionX * 4,
