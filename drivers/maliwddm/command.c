@@ -745,6 +745,7 @@ static void ShowPrimary(MW_ADAPTER *A, MW_ALLOCATION *P)
             MwRotCopy(deg, A->FbVa, (long)A->Fb.Pitch, A->Fb.Width, A->Fb.Height, src, (long)rp, 0, 0, &l);
             A->RotFlipCopies++;
             A->FlipCopies++;
+            A->LastPath = 3;
             MwTickAdd(&A->FlipCopyTicks, &A->FlipCopyMaxTicks, t0);
             return;
         }
@@ -755,6 +756,7 @@ static void ShowPrimary(MW_ADAPTER *A, MW_ALLOCATION *P)
     for (ULONG y = 0; y < h; y++)
         RtlCopyMemory(A->FbVa + (SIZE_T)y * A->Fb.Pitch, src + (SIZE_T)y * pitch, (SIZE_T)w * 4);
     A->FlipCopies++;
+    A->LastPath = 2;
     MwTickAdd(&A->FlipCopyTicks, &A->FlipCopyMaxTicks, t0);
 }
 
@@ -799,12 +801,29 @@ static VOID VsyncDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
             ULONG64 flipped = a->FlipTick;
             ShowPrimary(a, p);
             a->ShownAlloc = p;
+            a->ShownFlipTick = flipped;
             a->ShownSeq = seq;
             /* How long the flip waited for this vsync, copy included. */
             if (flipped != 0)
                 MwTickAdd(&a->FlipWaitTicks, &a->FlipWaitMaxTicks, flipped);
         }
     }
+    /* Flip to the vsync that reports it, either path: for a scanned-out
+     * flip the wait for the tick, for a copied one the copy as well. */
+    {
+        LONG shown = a->ShownSeq;
+        if (shown != a->ReportedSeq) {
+            ULONG64 ft = a->ShownFlipTick;
+            a->ReportedSeq = shown;
+            if (ft != 0) {
+                MwTickAdd(&a->FlipShowTicks, &a->FlipShowMaxTicks, ft);
+                a->FlipShows++;
+            }
+        }
+    }
+    /* An IOMMU fault turns scan-out off (scanout.c); look every 8th tick. */
+    if ((a->Vsyncs & 7) == 0)
+        MwScanCheck(a);
     a->Vsyncs++;
     if (Synchronize(a, SyncVsync, a))
         a->Dxgk.DxgkCbQueueDpc(a->Dxgk.DeviceHandle);
@@ -838,12 +857,14 @@ static VOID CopyThread(PVOID Context)
                  * switch is put right here. */
                 if (!a->ScanShowing)
                     MwScanFlip(a, p);
+                a->LastPath = 1;
             } else if (p != NULL && a->SourceVisible && !a->Stopping) {
                 ShowPrimary(a, p);
                 MwScanToFb(a);
             }
             a->ShownAlloc = p;
             a->ShownAddr = addr;
+            a->ShownFlipTick = flipped;
             a->ShownSeq = seq;
             if (flipped != 0)
                 MwTickAdd(&a->FlipWaitTicks, &a->FlipWaitMaxTicks, flipped);

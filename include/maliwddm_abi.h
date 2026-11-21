@@ -57,7 +57,9 @@ typedef struct _MW_COMMAND {
 
 /* Scan-out of primaries by the display controller, on and off.
  * Mode: 1 on, 0 off (flips are copied), 2 off and the IOMMU off too,
- * 3 only report. */
+ * 3 only report; 5 on and the ScanOut setting 1, 4 off and the setting 0.
+ * The setting decides the state at every start; without it scan-out is on
+ * (it was off before 2026-11-21). */
 typedef struct _MW_ESCAPE_SCANOUT_DATA {
     mw_u32 Code;                        /* MW_ESCAPE_SCANOUT */
     mw_u32 Mode;
@@ -147,6 +149,27 @@ typedef struct _MW_ESCAPE_STATS_DATA {
     mw_u64 WaitTicks;
     mw_u32 WaitCount, WaitMaxUs;
     mw_u32 WaitOtherCount, WaitOtherMaxUs;
+    /* How flips reach the screen (0 from a driver without these). A flip
+     * is scanned out (the VOP2 is pointed at the primary, no pixel is
+     * copied) or left to the copy thread, which copies it into the
+     * firmware framebuffer, turned if it has to be. */
+    mw_u32 ScanState;                   /* 1 on, 2 translating, 4 a primary shown, 8 set up, 16 ScanOut setting on */
+    mw_u32 FlipsScanned;                /* flips scanned out at SetVidPnSourceAddress: copies avoided */
+    mw_u32 FlipsRotCopied;              /* of FlipCopies, those turned on the CPU */
+    mw_u32 WhyScanOff;                  /* flips not scanned out: scan-out off or not translating */
+    mw_u32 WhyNotMapped;                /* ... the primary has no VOP2 address (size, slot, not resident) */
+    mw_u32 WhyRotated;                  /* ... the driver has to turn it (a primary of the turned size) */
+    mw_u32 WhyInvisible;                /* ... the source was invisible (display off) */
+    mw_u32 ScanAutoOff;                 /* times an IOMMU fault turned scan-out off */
+    mw_u32 ScanFaults, ScanFaultAddr;   /* IOMMU faults seen, the last address */
+    mw_u32 FlipIntervals, FlipIntervalMaxUs;    /* gaps between flips: their count, the longest */
+    mw_u32 FlipShows, FlipShowMaxUs;    /* flips a vsync reported shown; flip to that vsync, longest */
+    mw_u32 FlipCallMaxUs;               /* the longest SetVidPnSourceAddress */
+    mw_u32 LastPath;                    /* the last flip shown: 1 scanned out, 2 copied, 3 copied and turned */
+    mw_u64 FlipIntervalTicks;           /* between flips, summed: with FlipIntervals, the flip rate */
+    mw_u64 FlipShowTicks;               /* flip to the vsync that reported it, summed, either path */
+    mw_u64 FlipCallTicks;               /* inside SetVidPnSourceAddress, summed over Flips */
+    mw_u64 CopyBytesAvoided;            /* bytes the scanned-out flips did not copy */
 } MW_ESCAPE_STATS_DATA;
 
 /* GPU memory: what is allocated, what VidMm has made resident, and by which

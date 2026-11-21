@@ -687,9 +687,21 @@ NTSTATUS APIENTRY MwSetVidPnSourceVisibility(IN_CONST_HANDLE hAdapter,
     MW_ADAPTER *dev = (MW_ADAPTER *)hAdapter;
     dev->SourceVisible = Arg->Visible;
     if (Arg->Visible) dev->VisibleOn++; else dev->VisibleOff++;
-    /* Invisible means blank: clear the framebuffer once. */
-    if (!Arg->Visible && dev->FbVa != NULL)
+    /* Invisible means blank: clear the framebuffer once, and show it if
+     * the window was on a primary. */
+    if (!Arg->Visible && dev->FbVa != NULL) {
         RtlZeroMemory(dev->FbVa, dev->FbSize);
+        MwScanToFb(dev);
+    }
+    /* Visible again: the current primary back on the screen if it is
+     * scanned out (flips made meanwhile were not). Under CopyLock, which
+     * keeps the primary from being freed under it. PASSIVE_LEVEL. */
+    if (Arg->Visible) {
+        ExAcquireFastMutex(&dev->CopyLock);
+        if (MwScanUsable(dev, dev->ScanAlloc))
+            MwScanFlip(dev, dev->ScanAlloc);
+        ExReleaseFastMutex(&dev->CopyLock);
+    }
     return STATUS_SUCCESS;
 }
 
@@ -868,31 +880,60 @@ VOID APIENTRY MwSystemDisplayWrite(IN_CONST_PVOID MiniportDeviceContext, IN_CONS
 }
 
 
-/* Called at interrupt level for a flip: only record it. The next emulated
- * vsync copies the pixels and reports the flip done (command.c). */
+/* Called at interrupt level for a flip. Scanned out, it is two register
+ * writes here and nothing else (scanout.c); otherwise it is only recorded,
+ * and the copy thread copies the pixels before the next emulated vsync
+ * reports the flip done (command.c). Which way it went, and why, is
+ * counted for the stats escape. */
 NTSTATUS APIENTRY MwSetVidPnSourceAddress(IN_CONST_HANDLE hAdapter, const DXGKARG_SETVIDPNSOURCEADDRESS *Arg)
 {
     MW_ADAPTER *dev = (MW_ADAPTER *)hAdapter;
+    MW_ALLOCATION *p = (MW_ALLOCATION *)Arg->hAllocation;
+    ULONG64 t0 = MwTick();
 
     if (Arg->VidPnSourceId != 0)
         return STATUS_INVALID_PARAMETER;
+    /* The gap since the previous flip: with FlipIntervals, the flip rate. */
+    if (dev->FlipTick != 0) {
+        ULONG64 gap = t0 - dev->FlipTick;
+        dev->FlipIntervalTicks += gap;
+        if (gap > dev->FlipIntervalMaxTicks)
+            dev->FlipIntervalMaxTicks = gap;
+        dev->FlipIntervals++;
+    }
     dev->ScanAddr = Arg->PrimaryAddress;
-    dev->ScanAlloc = (MW_ALLOCATION *)Arg->hAllocation;
+    dev->ScanAlloc = p;
     dev->Flips++;
-    dev->FlipTick = MwTick();
+    dev->FlipTick = t0;
     if (dev->QCount != 0)
         dev->FlipsWhileBusy++;
     {
         LONG seq = InterlockedIncrement(&dev->FlipSeq);
-        /* Scanned out: nothing to copy, and the flip is as good as shown. */
-        if (MwScanFlip(dev, dev->ScanAlloc)) {
+        /* Scanned out: nothing to copy, and the flip is as good as shown.
+         * Not while the source is invisible: the screen is to stay blank
+         * (MwSetVidPnSourceVisibility puts the flip on it again). */
+        ULONG why = dev->SourceVisible ? MwScanWhy(dev, p) : 0;
+        if (!dev->SourceVisible) {
+            dev->WhyInvisible++;
+        } else if (why == 0 && MwScanFlip(dev, p)) {
             dev->ShownAddr = Arg->PrimaryAddress;
+            dev->ShownFlipTick = t0;
             dev->ShownSeq = seq;
+            dev->FlipsScanned++;
+            dev->LastPath = 1;
+            dev->CopyBytesAvoided += (ULONG64)(p->Pitch ? p->Pitch : p->Width * 4) * p->Height;
+        } else if (why == MW_SCAN_WHY_OFF) {
+            dev->WhyScanOff++;
+        } else if (why == MW_SCAN_WHY_ROTATED) {
+            dev->WhyRotated++;
+        } else {
+            dev->WhyNotMapped++;
         }
     }
     if (Arg->hAllocation == NULL) dev->FlipsNullAlloc++;
     if (!dev->SourceVisible) dev->FlipsInvisible++;
     dev->LastFlipFlags = Arg->Flags.Value;
     dev->LastFlipContexts = Arg->ContextCount;
+    MwTickAdd(&dev->FlipCallTicks, &dev->FlipCallMaxTicks, t0);
     return STATUS_SUCCESS;
 }

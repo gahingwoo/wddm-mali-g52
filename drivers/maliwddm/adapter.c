@@ -332,13 +332,19 @@ static NTSTATUS APIENTRY MwDispatchIoRequest(IN_CONST_PVOID Context, IN_ULONG So
     return STATUS_NOT_SUPPORTED;
 }
 
+/* The adapter itself (not the monitor) leaving D0 for a shutdown, a
+ * restart or sleep: scan-out off and the IOMMU no longer translating, so
+ * the firmware, the bugcheck screen or the next driver finds the VOP2
+ * reading the framebuffer at its physical address (scanout.c). */
 static NTSTATUS APIENTRY MwSetPowerState(IN_CONST_PVOID Context, IN_ULONG Uid,
                                          IN_DEVICE_POWER_STATE State, IN_POWER_ACTION Action)
 {
-    UNREFERENCED_PARAMETER(Context);
-    UNREFERENCED_PARAMETER(Uid);
-    UNREFERENCED_PARAMETER(State);
+    MW_ADAPTER *a = (MW_ADAPTER *)Context;
     UNREFERENCED_PARAMETER(Action);
+    if (Uid == DISPLAY_ADAPTER_HW_ID && a != NULL) {
+        MwScanPower(a, State == PowerDeviceD0);
+        MwLog(a, L"AdapterPowerState", (ULONG)State);
+    }
     return STATUS_SUCCESS;
 }
 
@@ -536,6 +542,13 @@ static ULONG TicksEachUs(const MW_ADAPTER *A, ULONG64 Ticks, ULONG Count)
     return Count != 0 ? TicksToUs(A, Ticks / Count) : 0;
 }
 
+/* MW_ESCAPE_STATS_DATA.ScanState. */
+static ULONG ScanState(const MW_ADAPTER *A)
+{
+    return (A->ScanOn ? 1u : 0) | (A->ScanPaging ? 2u : 0) | (A->ScanShowing ? 4u : 0) |
+           (A->ScanReady ? 8u : 0) | (A->ScanSetting ? 16u : 0);
+}
+
 static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D, UINT Size)
 {
     D->GpuUp = A->GpuUp;
@@ -592,7 +605,7 @@ static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D, UINT Size)
         D->VsyncGapMaxUs = TicksToUs(A, A->VsyncGapMaxTicks);
         D->FlipsWhileBusy = A->FlipsWhileBusy;
     }
-    if (Size >= sizeof(MW_ESCAPE_STATS_DATA)) {
+    if (Size >= RTL_SIZEOF_THROUGH_FIELD(MW_ESCAPE_STATS_DATA, WaitOtherMaxUs)) {
         D->TimeSliceMs = A->Slice;
         D->PreemptRequests = A->PreemptRequests;
         D->PreemptIdle = A->PreemptIdle;
@@ -615,6 +628,28 @@ static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D, UINT Size)
         D->WaitMaxUs = TicksToUs(A, A->WaitMaxTicks);
         D->WaitOtherCount = A->WaitOtherCount;
         D->WaitOtherMaxUs = TicksToUs(A, A->WaitOtherMaxTicks);
+    }
+    if (Size >= sizeof(MW_ESCAPE_STATS_DATA)) {
+        D->ScanState = ScanState(A);
+        D->FlipsScanned = A->FlipsScanned;
+        D->FlipsRotCopied = A->RotFlipCopies;
+        D->WhyScanOff = A->WhyScanOff;
+        D->WhyNotMapped = A->WhyNotMapped;
+        D->WhyRotated = A->WhyRotated;
+        D->WhyInvisible = A->WhyInvisible;
+        D->ScanAutoOff = A->ScanAutoOff;
+        D->ScanFaults = A->ScanFaults;
+        D->ScanFaultAddr = A->ScanFaultAddr;
+        D->FlipIntervals = A->FlipIntervals;
+        D->FlipIntervalMaxUs = TicksToUs(A, A->FlipIntervalMaxTicks);
+        D->FlipShows = A->FlipShows;
+        D->FlipShowMaxUs = TicksToUs(A, A->FlipShowMaxTicks);
+        D->FlipCallMaxUs = TicksToUs(A, A->FlipCallMaxTicks);
+        D->LastPath = A->LastPath;
+        D->FlipIntervalTicks = A->FlipIntervalTicks;
+        D->FlipShowTicks = A->FlipShowTicks;
+        D->FlipCallTicks = A->FlipCallTicks;
+        D->CopyBytesAvoided = A->CopyBytesAvoided;
     }
 }
 
@@ -719,6 +754,46 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         MwLog(a, L"T_WaitUsAvg", TicksEachUs(a, a->WaitTicks, a->WaitCount));
         MwLog(a, L"T_WaitUsMax", TicksToUs(a, a->WaitMaxTicks));
         MwLog(a, L"T_WaitOtherUsMax", TicksToUs(a, a->WaitOtherMaxTicks));
+        /* How flips reach the screen (scanout.c, display.c). T_PresentPath
+         * is the last flip shown: 1 scanned out by the VOP2, 2 copied, 3
+         * copied and turned. T_FlipsScanned are the copies avoided; each
+         * T_CopyWhy* counts flips that were left to the copy, by reason.
+         * T_ScanState: 1 on, 2 translating, 4 a primary shown, 8 set up,
+         * 16 the ScanOut setting on. */
+        MwLog(a, L"T_PresentPath", a->LastPath);
+        MwLog(a, L"T_ScanState", ScanState(a));
+        MwLog(a, L"T_FlipsScanned", a->FlipsScanned);
+        MwLog(a, L"T_CopiesAvoided", a->FlipsScanned);
+        MwLog(a, L"T_CopyMBAvoided", (ULONG)(a->CopyBytesAvoided >> 20));
+        MwLog(a, L"T_CopyWhyScanOff", a->WhyScanOff);
+        MwLog(a, L"T_CopyWhyNotMapped", a->WhyNotMapped);
+        MwLog(a, L"T_CopyWhyRotated", a->WhyRotated);
+        MwLog(a, L"T_CopyWhyInvisible", a->WhyInvisible);
+        MwLog(a, L"T_ScanFlips", a->ScanFlips);
+        MwLog(a, L"T_ScanMaps", a->ScanMaps);
+        MwLog(a, L"T_ScanMismatch", a->ScanMismatch);
+        MwLog(a, L"T_ScanNoSlot", a->ScanNoSlot);
+        MwLog(a, L"T_ScanToFbs", a->ScanToFbs);
+        MwLog(a, L"T_ScanFaults", a->ScanFaults);
+        MwLog(a, L"T_ScanFaultAddr", a->ScanFaultAddr);
+        MwLog(a, L"T_ScanAutoOff", a->ScanAutoOff);
+        MwLog(a, L"T_ScanLastRefusedW", a->ScanLastW);
+        MwLog(a, L"T_ScanLastRefusedH", a->ScanLastH);
+        MwLog(a, L"T_ScanLastRefusedPitch", a->ScanLastPitch);
+        MwLog(a, L"T_FbWidth", a->Fb.Width);
+        MwLog(a, L"T_FbHeight", a->Fb.Height);
+        MwLog(a, L"T_FbPitch", a->Fb.Pitch);
+        /* Per flip: the time between flips (1000000 / it is the flip rate),
+         * flip to the vsync that reported it shown, and the driver's own
+         * time in SetVidPnSourceAddress; T_FlipCopyMsTotal is all the CPU
+         * time the copies took since the start. */
+        MwLog(a, L"T_FlipIntervalUsAvg", TicksEachUs(a, a->FlipIntervalTicks, a->FlipIntervals));
+        MwLog(a, L"T_FlipIntervalUsMax", TicksToUs(a, a->FlipIntervalMaxTicks));
+        MwLog(a, L"T_FlipShowUsAvg", TicksEachUs(a, a->FlipShowTicks, a->FlipShows));
+        MwLog(a, L"T_FlipShowUsMax", TicksToUs(a, a->FlipShowMaxTicks));
+        MwLog(a, L"T_FlipCallUsAvg", TicksEachUs(a, a->FlipCallTicks, a->Flips));
+        MwLog(a, L"T_FlipCallUsMax", TicksToUs(a, a->FlipCallMaxTicks));
+        MwLog(a, L"T_FlipCopyMsTotal", TicksToUs(a, a->FlipCopyTicks) / 1000);
         return STATUS_SUCCESS;
     default:
         MwLog(a, L"EscapeUnknownCode", code);

@@ -114,9 +114,11 @@ model alone (`drivers/maliwddm/scanout.c`).
   (`0x000`, value `0x00018001` for VP0). The VOP2's own registers are
   written and never read; on this SoC reading them has cost the HDMI signal
   before. The IOMMU's registers (`0x27D07E00`, `0x27D07F00`) are read.
-- It is off after every boot. `m5test scan 1` turns it on, `m5test scan 0`
-  goes back to the copy, `m5test scan 2` also turns translation off, and
-  `m5test scan` reports.
+- It was off after every boot until 2026-11-21. Since then it is on from
+  the start unless the `ScanOut` setting is 0 (`drivers/maliwddm/INSTALL.txt`
+  has the commands). `m5test scan 1` turns it on, `m5test scan 0` goes back
+  to the copy, `m5test scan 2` also turns translation off, and `m5test scan`
+  reports.
 
 Measured when it was first turned on: both IOMMU instances report paging
 enabled (status `0x19`), four primaries had been entered, none refused for
@@ -133,6 +135,45 @@ Not done:
 - Display off and on, a mode change, sleep, and the bugcheck screen have
   not been tried with it on.
 - Only the TaishanPi 3M at 2560x1440, the firmware's mode.
+
+## The panel and rotation, 2026-11-21
+
+On the TaishanPi 3M's 800x1280 DSI panel, turned to landscape, the stats
+escape read `T_FlipCopyUsAvg` 24881: every flip was copied, about 25 ms a
+frame, and YouTube in Edge stuttered. Scan-out was simply not on (it
+needed `m5test scan 5`, and `INSTALL.txt` never said so). Rotation does
+not stand in its way:
+
+- The source mode, and so every shared primary, keeps the panel's size
+  at every rotation; DWM draws the desktop turned into it. Such a primary
+  is the panel's picture as it stands and the window shows it unchanged.
+- The VOP2 cannot turn a picture by 90 or 270 degrees on the RK3576. In
+  mainline `rockchip_vop2_reg.c` (`rk3576_vop_win_data`) the Esmart
+  windows offer `DRM_MODE_REFLECT_Y` only and the Cluster windows
+  `REFLECT_X | REFLECT_Y`; unlike the RK3588 there is no AFBC 90/270 in
+  the list. Only a primary of the turned size (1280x800 here) would need
+  turning, and Windows makes none while the source mode is the panel's;
+  such a flip is still copied and turned on the CPU and counted
+  (`T_CopyWhyRotated`, `T_RotFlipCopies`).
+- The RK3576 has two RGA2E 2D engines (vendor `rk3576.dtsi`,
+  `rga@27920000`), but mainline describes neither and the firmware powers
+  neither; a GPU or RGA turn is only worth doing if those counters turn
+  out not to be 0.
+
+Changed on branch `present-fast`, not yet run on a board:
+
+- Scan-out is on from the start; `ScanOut` = 0 turns it off.
+- An IOMMU fault while a primary is shown turns it off and puts the window
+  back on the framebuffer (`MwScanCheck`, every 8th vsync).
+- The adapter leaving D0 turns translation off first, so a restart or the
+  bugcheck screen finds the VOP2 reading physical addresses.
+- While the source is invisible (display off) the window shows the
+  cleared framebuffer, not the last primary; the primary comes back when
+  the source is visible again.
+- The stats escape counts, per flip, which way it went and why
+  (`T_PresentPath`, `T_FlipsScanned`, `T_CopyWhy*`), the time between
+  flips, flip to the vsync that showed it, the time in
+  `SetVidPnSourceAddress`, and all the CPU time the copies took.
 
 ## Also run that day
 
