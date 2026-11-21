@@ -64,6 +64,8 @@ void MwLog(MW_ADAPTER *A, PCWSTR Name, ULONG Value)
         /* To disk now: a bugcheck loses registry writes still in memory,
          * and the last value before one is the one that matters. */
         (void)ZwFlushKey(sub);
+        /* In probe mode, again under Probe<version> (probe.c). */
+        MwProbeMirror(sub, &name, Value);
         ZwClose(sub);
     }
     ZwClose(key);
@@ -137,6 +139,8 @@ static NTSTATUS APIENTRY MwAddDevice(IN_CONST_PDEVICE_OBJECT Pdo, OUT_PPVOID Con
     a->Gpu.Log = MwLogHook;
     a->Gpu.LogOwner = a;
     MwCommandInit(a);
+    /* The probe's watchdog, from here so a hang in StartDevice is seen. */
+    MwProbeStart(a);
     *Context = a;
     return STATUS_SUCCESS;
 }
@@ -266,6 +270,9 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
     MwLog(a, L"DdiInterface", MwDdiInterface);
     MwLog(a, L"WddmProbe", MwWddmProbe);
     MwLog(a, L"WddmProbeResult", MwWddmProbeResult);
+    /* The LUID the "GPU Engine" counters name this adapter by (luid_0x...). */
+    MwLog(a, L"AdapterLuidLow", StartInfo->AdapterLuid.LowPart);
+    MwLog(a, L"AdapterLuidHigh", (ULONG)StartInfo->AdapterLuid.HighPart);
     MwCommandSettings(a);
     MwLog(a, L"TimeSlice", a->Slice);
 #if !MW_RENDER_ONLY
@@ -338,6 +345,7 @@ static NTSTATUS APIENTRY MwStopDevice(IN_CONST_PVOID Context)
 
 static NTSTATUS APIENTRY MwRemoveDevice(IN_CONST_PVOID Context)
 {
+    MwProbeStop((MW_ADAPTER *)Context);
     ExFreePoolWithTag(Context, MW_TAG);
     return STATUS_SUCCESS;
 }
@@ -383,25 +391,42 @@ static VOID APIENTRY MwUnload(VOID)
 /* The brightness interface, for an internal panel only (backlight.c). */
 static NTSTATUS APIENTRY MwQueryInterface(IN_CONST_PVOID Context, IN_PQUERY_INTERFACE Qi)
 {
-    return MwBacklightQueryInterface((MW_ADAPTER *)Context, Qi);
+    NTSTATUS st = MwBacklightQueryInterface((MW_ADAPTER *)Context, Qi);
+    /* Which interface was asked for and refused (P1: a 2.0 boot logged
+     * Fail_QueryInterface 0xc00000bb, of an unknown interface). */
+    if (!NT_SUCCESS(st) && Qi != NULL && Qi->InterfaceType != NULL) {
+        MwLog((MW_ADAPTER *)Context, L"QI_RefusedData1", Qi->InterfaceType->Data1);
+        MwLog((MW_ADAPTER *)Context, L"QI_RefusedVersion", Qi->Version);
+    }
+    return st;
 }
 
 /* ---- interrupts ---- */
 
+/* Counted for the probe's watchdog (probe.c), at any IRQL. */
+static MW_DDI_SLOT S_Interrupt = { L"Interrupt" };
+static MW_DDI_SLOT S_Dpc = { L"Dpc" };
+
 static BOOLEAN APIENTRY MwInterruptRoutine(IN_CONST_PVOID Context, IN_ULONG MessageNumber)
 {
     MW_ADAPTER *a = (MW_ADAPTER *)Context;
+    BOOLEAN ours = FALSE;
     UNREFERENCED_PARAMETER(MessageNumber);
-    if (!a->GpuUp || !MkIsr(&a->Gpu))
-        return FALSE;
-    (void)MwJobInterrupt(a);
-    return TRUE;
+    MwDdiEnter(&S_Interrupt);
+    if (a->GpuUp && MkIsr(&a->Gpu)) {
+        (void)MwJobInterrupt(a);
+        ours = TRUE;
+    }
+    (void)MwDdiExit(&S_Interrupt, STATUS_SUCCESS);
+    return ours;
 }
 
 static VOID APIENTRY MwDpcRoutine(IN_CONST_PVOID Context)
 {
     MW_ADAPTER *a = (MW_ADAPTER *)Context;
+    MwDdiEnter(&S_Dpc);
     a->Dxgk.DxgkCbNotifyDpc(a->Dxgk.DeviceHandle);
+    (void)MwDdiExit(&S_Dpc, STATUS_SUCCESS);
 }
 
 /* ---- adapter information ---- */
@@ -982,12 +1007,18 @@ static NTSTATUS APIENTRY MwSetPointerShape(IN_CONST_HANDLE hAdapter, const DXGKA
  * OpenAllocation as if its hDevice were the adapter: an out-of-bounds pool
  * write and a device pointer passed to IoOpenDeviceRegistryKey as a PDO,
  * from a system call -- SYSTEM_SERVICE_EXCEPTION. */
+/* Each wrapper also counts its calls in memory for the probe's watchdog
+ * (probe.c): enters, exits and the last enter, at any IRQL. */
 #define TRACE_WITH(Name, Proto, Args, AdapterExpr)                             \
+    static MW_DDI_SLOT S_##Name = { L"" MW_W(#Name) };                         \
     static NTSTATUS APIENTRY T_##Name Proto                                    \
     {                                                                          \
         MW_ADAPTER *a_ = (AdapterExpr);                                        \
+        NTSTATUS st_;                                                          \
+        MwDdiEnter(&S_##Name);                                                 \
         MwEnter(a_, L"Enter_" MW_W(#Name));                                    \
-        return MwRet(a_, L"Fail_" MW_W(#Name), Mw##Name Args);                 \
+        st_ = MwRet(a_, L"Fail_" MW_W(#Name), Mw##Name Args);                  \
+        return MwDdiExit(&S_##Name, st_);                                      \
     }
 #define TRACE_ADAPTER(Name, Proto, Args) TRACE_WITH(Name, Proto, Args, (MW_ADAPTER *)hAdapter)
 #define TRACE_DEVICE(Name, Proto, Args) TRACE_WITH(Name, Proto, Args, ((MW_DEVICE *)hDevice)->Adapter)
@@ -1041,6 +1072,10 @@ TRACE_ADAPTER(QueryCurrentFence, (IN_CONST_HANDLE hAdapter, DXGKARG_QUERYCURRENT
 TRACE_ADAPTER(CollectDbgInfo, (IN_CONST_HANDLE hAdapter, const DXGKARG_COLLECTDBGINFO *a), (hAdapter, a))
 TRACE_ADAPTER(CancelCommand, (IN_CONST_HANDLE hAdapter, const DXGKARG_CANCELCOMMAND *a), (hAdapter, a))
 TRACE_ADAPTER(PreemptCommand, (IN_CONST_HANDLE hAdapter, const DXGKARG_PREEMPTCOMMAND *a), (hAdapter, a))
+TRACE_ADAPTER(GetNodeMetadata, (IN_CONST_HANDLE hAdapter, UINT n, DXGKARG_GETNODEMETADATA *a), (hAdapter, n, a))
+TRACE_ADAPTER(QueryDependentEngineGroup, (IN_CONST_HANDLE hAdapter, DXGKARG_QUERYDEPENDENTENGINEGROUP *a), (hAdapter, a))
+TRACE_CONTEXT(StartDevice, (IN_CONST_PVOID Context, IN_PDXGK_START_INFO s, IN_PDXGKRNL_INTERFACE d, OUT_PULONG n, OUT_PULONG c),
+              (Context, s, d, n, c))
 
 NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
@@ -1050,7 +1085,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     MwVersionInit(RegistryPath);
     init.Version = MwDdiInterface;
     init.DxgkDdiAddDevice = MwAddDevice;
-    init.DxgkDdiStartDevice = MwStartDevice;
+    init.DxgkDdiStartDevice = T_StartDevice;
     init.DxgkDdiStopDevice = T_StopDevice;
     init.DxgkDdiRemoveDevice = MwRemoveDevice;
     init.DxgkDdiDispatchIoRequest = T_DispatchIoRequest;
@@ -1088,10 +1123,10 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     init.DxgkDdiResetFromTimeout = T_ResetFromTimeout;
     init.DxgkDdiRestartFromTimeout = T_RestartFromTimeout;
     init.DxgkDdiCollectDbgInfo = T_CollectDbgInfo;
-    init.DxgkDdiGetNodeMetadata = MwGetNodeMetadata;
+    init.DxgkDdiGetNodeMetadata = T_GetNodeMetadata;
     init.DxgkDdiResetEngine = T_ResetEngine;
     init.DxgkDdiQueryEngineStatus = T_QueryEngineStatus;
-    init.DxgkDdiQueryDependentEngineGroup = MwQueryDependentEngineGroup;
+    init.DxgkDdiQueryDependentEngineGroup = T_QueryDependentEngineGroup;
     init.DxgkDdiCancelCommand = T_CancelCommand;
     init.DxgkDdiControlInterrupt = T_ControlInterrupt;
     init.DxgkDdiGetScanLine = T_GetScanLine;

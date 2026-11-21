@@ -27,5 +27,29 @@ void MwVersionRendered(void);
 DXGKDDI_COLLECTDIAGNOSTICINFO MwCollectDiagnosticInfo;
 NTSTATUS MwQueryPhysicalAdapterCaps(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info);
 
+/* version.c: the probe's other settings (Services\maliwddm\Parameters). */
+extern ULONG MwProbeWatchdog;           /* ProbeWatchdog: the watchdog on 1.3 too */
+extern ULONG MwProbeUart;               /* ProbeUart: watchdog lines on the debug UART */
+extern ULONG64 MwProbeUartBase;         /* ProbeUartBase: default UART0, 0x2AD40000 */
+extern ULONG MwProbeNotifyResidencyOk;  /* ProbeNotifyResidencyOk: 1 (default) answers
+                                         * NOTIFY_RESIDENCY with success; 0 refuses it */
+
+/* probe.c: breadcrumbs that survive a hang. One slot per DDI wrapper. */
+typedef struct _MW_DDI_SLOT {
+    PCWSTR Name;
+    volatile LONG Registered;
+    volatile LONG Enters, Exits, Fails;
+    volatile LONG LastEnterSeq;
+    volatile LONG LastStatus;
+    volatile LONG64 LastEnterTick;
+} MW_DDI_SLOT;
+
+void MwDdiEnter(MW_DDI_SLOT *S);
+NTSTATUS MwDdiExit(MW_DDI_SLOT *S, NTSTATUS St);
+void MwProbePagingOp(ULONG Op, BOOLEAN Refused);
+void MwProbeMirror(HANDLE Sub, PUNICODE_STRING Name, ULONG Value);
+void MwProbeStart(MW_ADAPTER *A);
+void MwProbeStop(MW_ADAPTER *A);
+
 /* memory.c */
 NTSTATUS MwQuerySegment4(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info);

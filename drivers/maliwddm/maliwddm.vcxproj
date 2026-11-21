@@ -66,6 +66,7 @@
     <ClCompile Include="hdmi.c" />
     <ClCompile Include="hpd.c" />
     <ClCompile Include="version.c" />
+    <ClCompile Include="probe.c" />
     <ClCompile Include="..\common\maligpu.c" />
   </ItemGroup>
 

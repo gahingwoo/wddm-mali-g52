@@ -70,6 +70,11 @@ ULONG MwDdiInterface = DXGKDDI_INTERFACE_VERSION_WDDM1_3;
 ULONG MwWddmProbe;              /* the armed value, 0 when nothing is armed */
 ULONG MwWddmProbeResult;        /* see MW_PROBE_* in maliwddm.h */
 
+ULONG MwProbeWatchdog;
+ULONG MwProbeUart;
+ULONG64 MwProbeUartBase = 0x2AD40000ULL;
+ULONG MwProbeNotifyResidencyOk = 1;
+
 static volatile LONG ProbeRenders;
 static volatile LONG ProbeConfirmed;
 
@@ -152,6 +157,12 @@ void MwVersionInit(PUNICODE_STRING RegistryPath)
         MwWddmProbeResult = MW_PROBE_NO_KEY;
         return;
     }
+
+    /* The probe's instruments (probe.c); read whatever the version. */
+    MwProbeWatchdog = ParamRead(L"ProbeWatchdog", 0);
+    MwProbeUart = ParamRead(L"ProbeUart", 0);
+    MwProbeUartBase = ParamRead(L"ProbeUartBase", (ULONG)MwProbeUartBase);
+    MwProbeNotifyResidencyOk = ParamRead(L"ProbeNotifyResidencyOk", 1);
 
     want = ParamRead(L"WddmProbe", 0);
     if (want == 0 || want == DXGKDDI_WDDMv1_3) {
