@@ -7,8 +7,17 @@ a board. It builds on [FEASIBILITY-D3D11-WDDM2.md](FEASIBILITY-D3D11-WDDM2.md)
 (2026-11-13) and does not repeat that report's D3D11 feature-level analysis;
 where the two disagree, this one says so and why.
 
-This is the study only. The implementation plan in section 10 is a proposal
-for approval; no driver code changes with this document.
+> Status, 2026-11-21: the plan was approved the same day, going straight to
+> WDDM 2.x with GpuMmu (the user: "I want to see this driver in Task
+> Manager"). Implementation is on branch `wddm2`; section 12 is the progress
+> log and section 13 is what the KMD expects of the UMD at each phase.
+> Ownership: the KMD side (VA model, page tables, paging and residency,
+> monitored fences, contexts, version reporting, Task Manager) is on
+> `wddm2`; the UMD (D3D11.1, the `D3DWDDM2_0` interface, the video DDI) is
+> on the present-path branch. P5 and P6 wait until `present-fast` is in
+> `next`.
+
+The study below is kept as written.
 
 Line numbers below are those of `next`. On `main` and `umd-file-log` the
 same two lines are `adapter.c:263` (`caps->WDDMVersion = DXGKDDI_WDDMv1_3`)
@@ -717,7 +726,7 @@ only if dxgkrnl accepts it with no further code, and say in the README that
 it adds nothing. Do not report a version whose mandatory DDIs would be stubs
 returning success: dxgkrnl and apps may then use them.
 
-## 10. Phased plan (for approval)
+## 10. Phased plan (approved 2026-11-21)
 
 Each step is small, ends with a board measurement, and leaves the 1.3 driver
 working. The rig (ETW plus `dxgk-decode.py`, `m5test`, the registry
@@ -746,6 +755,11 @@ Order relative to (c):
 - P5 waits for the D3D11.1 UMD. Option (c) needs no WDDM change and should
   not wait for any of this.
 
+As carried out: P1 (the probe) runs first, because it needs no new design
+and its answers shape P2; P0's host tests come with P2's code. After each
+phase there is a CI build and a board test, and no phase starts more than
+one ahead of the last one tested on the board.
+
 ## 11. Interaction with work in flight
 
 - **`present-fast` (the present path and UMD copies, off `next`).** This plan
@@ -766,7 +780,167 @@ Order relative to (c):
   Build its DDI tables so the `D3DWDDM2_0DDI` additions slot in, and keep its
   memory calls behind the shim so only the backend changes for 2.x.
 
-## 12. Sources, and what I could not verify
+## 12. Progress log
+
+### P1, the probe: built, not yet run on a board
+
+What it is (`drivers/maliwddm/version.c`, `wddm2.h`, a few lines in
+`adapter.c`, `memory.c`, `command.c`):
+
+- `HKLM\SYSTEM\CurrentControlSet\Services\maliwddm\Parameters\WddmProbe`
+  (DWORD) selects the reported version: `0x2000` (2.0), `0x2100` (2.1) up to
+  `0x2900`, `0x3000`, `0x3100`. Without it the driver is WDDM 1.3 exactly as
+  before. The same DRIVERCAPS, the same DDI table, and no new QAI is asked of
+  a 1.3 driver.
+- With it, `DXGK_DRIVERCAPS::WDDMVersion` and the
+  `DXGKDDI_INTERFACE_VERSION` passed to `DxgkInitialize` both change. The
+  memory model stays WDDM 1.x physical mode: one aperture segment,
+  allocation and patch lists, `VirtualAddressingSupported` 0.
+- New answers that only a 2.x driver is asked for:
+  - `QUERYSEGMENT4` (11): the same aperture segment;
+  - `PHYSICALADAPTERCAPS` (15): one node, which is also the paging node, no
+    GpuMmu yet;
+  - `DxgkDdiCollectDiagnosticInfo`, registered only at 2.6 and above, where
+    it is mandatory.
+- Every QAI dxgkrnl asks is still recorded as `QAI_<n>` with its status, so
+  a QAI a 2.x driver is expected to answer shows up as `0xc00000bb` against
+  its number.
+- One-shot fallback. DriverEntry writes `WddmProbeArmed`. The 300th Render
+  call (DWM drawing) clears it and writes `WddmProbeConfirmed`. A boot that
+  finds the probe still armed deletes `WddmProbe`, writes
+  `WddmProbeFellBack` and starts as 1.3. `WddmProbeKeep = 1` turns the
+  arming off.
+- `tools/windows/wddm-probe.cmd` (in the release package): `set <v>`, `keep
+  <v>`, `check` and `off`. `set` also arms a boot-time DxgKrnl ETW
+  AutoLogger to `C:\mali\probe\boot.etl`, because StartDevice's event 494
+  happens before anyone can log on.
+
+The board test is in section 13.3.
+
+## 13. What the KMD expects of the UMD, phase by phase
+
+This is the contract between `wddm2` (KMD) and the UMD branch. Where a
+structure is named but not yet in `include/maliwddm_abi.h`, it is added by
+the phase that first needs it, at the end of that header under a "WDDM 2.x"
+heading, so the two branches do not edit the same lines.
+
+### 13.1 P1 (probe) to P3: nothing changes for the UMD
+
+- Same D3D10 DDI and the same physical-mode callbacks as today:
+  - `pfnAllocateCb` with `MW_ALLOCATION_INFO` private data, and the VA from
+    `MW_ESCAPE_ALLOC_INFO`;
+  - `pfnLockCb`;
+  - `pfnRenderCb` with `MW_COMMAND`s and the allocation list;
+  - `pfnPresentCb`.
+- The UMD must not depend on the reported WDDM version. On a 2.x adapter
+  the runtime may pass a larger `D3DDDI_DEVICECALLBACKS`. Only the fields
+  used today are used until P5.
+- From P2 the KMD has both a physical path (today's, on Mali AS0) and a
+  virtual path (AS1 to AS7). The node takes both kinds of context, which the
+  docs allow. Physical-mode clients (today's UMD, the GL ICD) keep working
+  unchanged. Only `m5test virt` uses the virtual path in P2 and P3.
+
+### 13.2 From P4 (GL ICD) and P5 (D3D UMD): the virtual-mode contract
+
+1. **Context.** `D3DKMTCreateContextVirtual` (GL) or
+   `pfnCreateContextVirtualCb` (D3D), node 0, engine affinity 1. Private data:
+   `MW_VCONTEXT_CREATE { Magic, AbiVersion }`, added in P2. The KMD answers
+   with the DMA buffer private data size.
+2. **Allocations.** As today: `pfnAllocateCb` or
+   `D3DKMTCreateAllocation`, with `MW_ALLOCATION_INFO` (size, `MW_ALLOC_*`
+   flags). In virtual mode the KMD reserves no VA and `MW_ESCAPE_ALLOC_INFO`
+   returns `STATUS_NOT_SUPPORTED`.
+3. **GPU VAs.** `pfnMapGpuVirtualAddressCb` or `D3DKMTMapGpuVirtualAddress`:
+   - Keep VAs in `[0x2000000, 0x100000000)` (32 MB to 4 GB), Panfrost's
+     range on Linux, until Panfrost is shown to cope with higher addresses.
+     The hardware limit is 2^35.
+   - Executable allocations (no `MW_ALLOC_NOEXEC`) must not cross a 16 MB
+     boundary, because the shader PC's high bits are fixed: Linux panfrost's
+     `panfrost_drm_mm_color_adjust`, and `MK_EXEC_WINDOW` here. Reserve a
+     16 MB-aligned window with `pfnReserveGpuVirtualAddressCb` and map
+     executable allocations inside it at addresses the UMD picks.
+   - Non-executable ones may let VidMm pick (`BaseAddress` 0, the min and
+     max above).
+   - Every map returns a paging fence value. Wait for it, on the GPU with
+     `pfnWaitForSynchronizationObjectFromGpuCb` on the context, or on the
+     CPU, before the first submission that uses the range.
+4. **Residency.** `pfnMakeResidentCb` right after creating an allocation,
+   the Panfrost model, and wait on its paging fence. Evict only on the
+   runtime's trim (`pfnTrimResidencySet`) or under budget. A submission that
+   touches a non-resident or unmapped VA faults, and only that context is
+   lost from P3 on.
+5. **Submission.** `pfnSubmitCommandCb` or `D3DKMTSubmitCommand`:
+   - `Commands` = the GPU VA of a small per-context command allocation (4 KB,
+     mapped like any other). The KMD never reads it.
+   - The work goes in the private data: `MW_VSUBMIT { Magic, Count,
+     MW_COMMAND[Count] }`, the same `MW_COMMAND` as today (`Type =
+     MW_CMD_JOB`, `Slot` 0 fragment or 1 vertex/tiler/compute, `Jc` = the
+     first job header's GPU VA).
+   - There are no allocation or patch lists and no "every live BO" list.
+6. **Fences.** Monitored fences:
+   - create with `pfnCreateSynchronizationObject2Cb` (type monitored fence);
+   - after each submit, `pfnSignalSynchronizationObjectFromGpuCb` on the
+     context with the next value;
+   - CPU waits with `pfnWaitForSynchronizationObjectFromCpuCb`.
+
+   The KMD writes the value when the submission's chains are done (P3).
+   Per-BO busy tracking in the UMD replaces today's "wait for the device to
+   go idle" (PERF.md, `wait-timeout`).
+7. **CPU access.** `pfnLock2Cb` or `D3DKMTLock2`, persistent maps allowed.
+   VidMm adds no implicit synchronisation in this model, so the UMD waits on
+   its own fences before reading GPU output.
+8. **Primaries and shared surfaces (P5, P6).** Created as today, with the
+   runtime's resource handle and `MW_ALLOC_PRIMARY`. The KMD puts them in
+   the aperture segment (`AccessedPhysically`) for scan-out. Each process
+   that opens a shared allocation maps it into its own VA space; there is no
+   global VA any more.
+9. **Unchanged:** `MW_ESCAPE_GPU_INFO`, `MW_ESCAPE_STATS`, the other
+   escapes, node 0.
+
+### 13.3 P1 board test
+
+Install the `wddm-mali-g52-driver-arm64` package of the CI run for the
+`wddm2` commit as usual (`INSTALL.txt`) and reboot once on 1.3. First, the
+baseline: run `wddm-probe check` with no probe set, and keep that output.
+Expect `WddmVersion 0x1300`, `DdiInterface 0x4002`, dxdiag "WDDM 1.3", and
+no GPU engine counters.
+
+Then, for each version in order 2000, 2100, 2600, 3000, 3100 (bisect
+2200 to 2500 if 2600 fails where 2100 passed):
+
+1. `wddm-probe set <v>`, reboot.
+2. Watch the boot: desktop, or black, or a bugcheck. If black: RDP, or
+   power off and on. The next boot falls back to 1.3 by itself.
+3. `wddm-probe check`. The output answers:
+   - **Accepted?** `WddmProbeConfirmed = <v>` (not `WddmProbeFellBack`),
+     device status "Started" (no problem code 43), and `Started 1`,
+     `WddmVersion <v>` in the trace.
+   - **What dxgkrnl said:** `boot-<time>.etl`, decoded on Linux with
+     `tools/etw/dxgk-decode.py`. Event 494's status and any "Driver
+     reports ... but" text. Also the `QAI_<n>` lines with `0xc00000bb`.
+   - **The driver model DirectX sees:** dxdiag "Driver Model: WDDM <v>",
+     feature levels, DDI version.
+   - **The current UMD loaded:** section 5 lists `maliumd.dll` in `dwm.exe`.
+   - **The Task Manager data:** section 6 shows `GPU Engine` instances with
+     `engtype_3D`, and a non-zero 3D utilisation while a window is dragged
+     during the 3 samples.
+4. By eye, with a photo:
+   - Task Manager, Performance: a GPU entry named "Rockchip RK3576 Mali-G52
+     (WDDM)" with a 3D graph that moves when a window is dragged.
+   - Details: dwm.exe with GPU use.
+   - The Start menu and File Explorer.
+   - Edge opens and scrolls a page; `edge://gpu` shows D3D11 on the Mali
+     (save the page).
+5. Send `C:\mali\probe\` back.
+
+`wddm-probe off` and a reboot return the board to 1.3.
+
+What would stop the ladder: a refusal at 2.0. The event 494 text then says
+which cap or DDI dxgkrnl wanted, and that is the next build. A pass at 2.0
+with no Task Manager GPU page would mean the page needs virtual addressing,
+which P2 brings. Either result is useful.
+
+## 14. Sources, and what I could not verify
 
 **Read from source:**
 
