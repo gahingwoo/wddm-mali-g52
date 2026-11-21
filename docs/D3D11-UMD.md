@@ -130,10 +130,10 @@ person-weeks WDDM2.md gives option (c), decode excluded.
   shaders with signatures, `CheckFormatSupport`, `CalcPrivate*Size`), and
   the 11.0 stages (hull, domain, compute, UAVs, deferred contexts) as
   entries that set `E_NOTIMPL`; at 10_0 the runtime does not call them.
-- `GetCaps`: threading caps with no deferred-context support, the 10_0
+- `GetCaps`: threading caps with no deferred-context support, the 10_1
   feature level, the formats as today.
-- Test: `d3dprobe` shows the Mali at 10_1 as after U0, `ID3D11Device1` still
-  no. The UMD log (`C:\mali\log`) says it opened the 11.0 interface.
+- Test: `d3dprobe` shows the Mali at 10_1 as after U0, and "D3D11.1 DDI
+  seen" still 0 0. The UMD log (`C:\mali\log`) says it opened the 11.0 interface.
   dwm, the desktop, FurMark through the GL ICD, `gsso.exe hw` and the
   triangle tests behave as on the previous package. `UmdDdi` 101 restores
   the old interface.
