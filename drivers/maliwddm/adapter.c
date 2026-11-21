@@ -269,6 +269,8 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
     MwLog(a, L"DdiInterface", MwDdiInterface);
     MwLog(a, L"WddmProbe", MwWddmProbe);
     MwLog(a, L"WddmProbeResult", MwWddmProbeResult);
+    MwLog(a, L"Wddm2Shape", MwWddmProbe != 0 ? MwWddm2Shape : 0xFFFFFFFF);
+    MwLog(a, L"Nodes", MwNodeCount());
     /* The LUID the "GPU Engine" counters name this adapter by (luid_0x...). */
     MwLog(a, L"AdapterLuidLow", StartInfo->AdapterLuid.LowPart);
     MwLog(a, L"AdapterLuidHigh", (ULONG)StartInfo->AdapterLuid.HighPart);
@@ -486,6 +488,8 @@ static NTSTATUS DriverCaps(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info)
         caps->SupportNonVGA = TRUE;
     if (FITS(size, DXGK_DRIVERCAPS, SupportSmoothRotation))
         caps->SupportSmoothRotation = TRUE;
+    /* WddmProbe only: the copy node, and GpuMmu in shape 1 (wddm2x.c). */
+    Mw2xDriverCaps(A, caps, size);
     return STATUS_SUCCESS;
 }
 
@@ -531,6 +535,19 @@ static NTSTATUS APIENTRY MwQueryAdapterInfo(IN_CONST_HANDLE hAdapter, const DXGK
         break;
     case DXGKQAITYPE_PHYSICALADAPTERCAPS:   /* WDDM 2.x only */
         st = MwQueryPhysicalAdapterCaps(a, Info);
+        break;
+    case DXGKQAITYPE_GPUMMUCAPS:            /* Wddm2Shape 1 only */
+        st = MwQueryGpuMmuCaps(Info);
+        break;
+    case DXGKQAITYPE_PAGETABLELEVELDESC:    /* Wddm2Shape 1 only */
+        st = MwQueryPageTableLevelDesc(Info);
+        break;
+    case DXGKQAITYPE_HARDWARERESERVEDRANGES:
+    case DXGKQAITYPE_WDDMDEVICECAPS:        /* WDDM 3.x only, before StartDevice */
+    case DXGKQAITYPE_PHYSICAL_MEMORY_CAPS:
+    case DXGKQAITYPE_IOMMU_CAPS:
+    case DXGKQAITYPE_HARDWARERESERVEDRANGES2:
+        st = MwWddmProbe != 0 ? MwQuery3xCaps(Info) : STATUS_NOT_SUPPORTED;
         break;
     case DXGKQAITYPE_HISTORYBUFFERPRECISION:
         /* WDDM 1.3 (Windows 8.1) asks this of every 1.3 driver. Answering
@@ -869,6 +886,16 @@ TRACE_ADAPTER(CancelCommand, (IN_CONST_HANDLE hAdapter, const DXGKARG_CANCELCOMM
 TRACE_ADAPTER(PreemptCommand, (IN_CONST_HANDLE hAdapter, const DXGKARG_PREEMPTCOMMAND *a), (hAdapter, a))
 TRACE_ADAPTER(GetNodeMetadata, (IN_CONST_HANDLE hAdapter, UINT n, DXGKARG_GETNODEMETADATA *a), (hAdapter, n, a))
 TRACE_ADAPTER(QueryDependentEngineGroup, (IN_CONST_HANDLE hAdapter, DXGKARG_QUERYDEPENDENTENGINEGROUP *a), (hAdapter, a))
+TRACE_ADAPTER(CreateProcess, (IN_CONST_HANDLE hAdapter, DXGKARG_CREATEPROCESS *a), (hAdapter, a))
+TRACE_ADAPTER(DestroyProcess, (IN_CONST_HANDLE hAdapter, IN_CONST_HANDLE p), (hAdapter, p))
+TRACE_ADAPTER(SubmitCommandVirtual, (IN_CONST_HANDLE hAdapter, const DXGKARG_SUBMITCOMMANDVIRTUAL *a), (hAdapter, a))
+static MW_DDI_SLOT S_SetRootPageTable = { L"SetRootPageTable" };
+static VOID APIENTRY T_SetRootPageTable(IN_CONST_HANDLE hAdapter, const DXGKARG_SETROOTPAGETABLE *a)
+{
+    MwDdiEnter(&S_SetRootPageTable);
+    MwSetRootPageTable(hAdapter, a);
+    (void)MwDdiExit(&S_SetRootPageTable, STATUS_SUCCESS);
+}
 TRACE_CONTEXT(StartDevice, (IN_CONST_PVOID Context, IN_PDXGK_START_INFO s, IN_PDXGKRNL_INTERFACE d, OUT_PULONG n, OUT_PULONG c),
               (Context, s, d, n, c))
 
@@ -944,6 +971,15 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
      * the same as before. */
     if (MwDdiInterface >= DXGKDDI_INTERFACE_VERSION_WDDM2_6)
         init.DxgkDdiCollectDiagnosticInfo = MwCollectDiagnosticInfo;
+    /* GpuMmu (Wddm2Shape 1, wddm2x.c). Left NULL otherwise: a DDI in the
+     * table is itself a claim. */
+    if (MwGpuMmu()) {
+        init.DxgkDdiCreateProcess = T_CreateProcess;
+        init.DxgkDdiDestroyProcess = T_DestroyProcess;
+        init.DxgkDdiSetRootPageTable = T_SetRootPageTable;
+        init.DxgkDdiGetRootPageTableSize = MwGetRootPageTableSize;
+        init.DxgkDdiSubmitCommandVirtual = T_SubmitCommandVirtual;
+    }
 
     return DxgkInitialize(DriverObject, RegistryPath, &init);
 }

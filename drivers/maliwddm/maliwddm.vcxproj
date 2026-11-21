@@ -65,6 +65,7 @@
     <ClCompile Include="backlight.c" />
     <ClCompile Include="version.c" />
     <ClCompile Include="probe.c" />
+    <ClCompile Include="wddm2x.c" />
     <ClCompile Include="..\common\maligpu.c" />
   </ItemGroup>
 

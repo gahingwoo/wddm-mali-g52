@@ -31,6 +31,7 @@
 #define MW_DDI_MAX          96
 #define MW_WD_PERIOD_MS     1000
 #define MW_WD_STUCK_MS      2000
+#define MW_WD_COUNTERS      20
 #define MW_WD_EVERY_S_LATE  10      /* after the first 5 min, write every 10 s
                                      * unless something changed */
 
@@ -187,7 +188,7 @@ typedef struct {
     LONG Enters[MW_DDI_MAX];
     LONG Fails[MW_DDI_MAX];
     LONG Pg[MW_PG_MAX], PgRefused[MW_PG_MAX];
-    ULONG Counters[12];
+    ULONG Counters[MW_WD_COUNTERS];
     ULONG WorstMs;
     BOOLEAN WasStuck;
 } MW_WATCHDOG;
@@ -209,7 +210,7 @@ static void WatchdogTick(MW_WATCHDOG *W, ULONG Seconds)
     BOOLEAN changed = FALSE, stuck = FALSE, write;
     LONG n = SlotCount < MW_DDI_MAX ? SlotCount : MW_DDI_MAX;
     MW_DDI_SLOT *last = LastSlot;
-    ULONG counters[12];
+    ULONG counters[MW_WD_COUNTERS];
     size_t used = 0;
 
     if (A->PerfHz == 0) {
@@ -256,15 +257,21 @@ static void WatchdogTick(MW_WATCHDOG *W, ULONG Seconds)
     counters[9] = A->Presents;
     counters[10] = (ULONG)Seq;
     counters[11] = A->GpuUp;
+    /* wddm2x.c: copy-node submits and fence, processes, root page tables
+     * set, virtual submits (all, node 0), PTEs written, page-table updates
+     * refused. */
+    Mw2xCounters(&counters[12], 8);
     if (RtlCompareMemory(counters, W->Counters, sizeof(counters)) != sizeof(counters))
         changed = TRUE;
 
     write = Seconds <= 300 || (Seconds % MW_WD_EVERY_S_LATE) == 0 || changed || stuck != W->WasStuck;
     if (write && NT_SUCCESS(OpenForWatchdog(A, &key))) {
-        static const PCWSTR cname[12] = {
+        static const PCWSTR cname[MW_WD_COUNTERS] = {
             L"Wd_Renders", L"Wd_Submits", L"Wd_LastSubmittedFence", L"Wd_LastCompletedFence",
             L"Wd_Irqs", L"Wd_JobsDone", L"Wd_JobsFailed", L"Wd_Vsyncs", L"Wd_Flips",
             L"Wd_Presents", L"Wd_Seq", L"Wd_GpuUp",
+            L"Wd_CopySubmits", L"Wd_CopyFence", L"Wd_Processes", L"Wd_RootSets",
+            L"Wd_VirtSubmits", L"Wd_VirtSubmits3d", L"Wd_PteWrites", L"Wd_PtRefused",
         };
         WCHAR lastText[160];
 
@@ -278,7 +285,7 @@ static void WatchdogTick(MW_WATCHDOG *W, ULONG Seconds)
         if (stuck && W->WorstMs != 0 && changed)
             PutString(key, L"Wd_WorstStuck", text);
         PutDword(key, L"Wd_WorstStuckMs", W->WorstMs);
-        for (ULONG i = 0; i < 12; i++)
+        for (ULONG i = 0; i < MW_WD_COUNTERS; i++)
             if (counters[i] != W->Counters[i] || Seconds == 1)
                 PutDword(key, cname[i], counters[i]);
         for (LONG i = 0; i < n; i++) {

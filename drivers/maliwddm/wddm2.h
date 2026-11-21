@@ -31,8 +31,6 @@ NTSTATUS MwQueryPhysicalAdapterCaps(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINF
 extern ULONG MwProbeWatchdog;           /* ProbeWatchdog: the watchdog on 1.3 too */
 extern ULONG MwProbeUart;               /* ProbeUart: watchdog lines on the debug UART */
 extern ULONG64 MwProbeUartBase;         /* ProbeUartBase: default UART0, 0x2AD40000 */
-extern ULONG MwProbeNotifyResidencyOk;  /* ProbeNotifyResidencyOk: 1 (default) answers
-                                         * NOTIFY_RESIDENCY with success; 0 refuses it */
 
 /* probe.c: breadcrumbs that survive a hang. One slot per DDI wrapper. */
 typedef struct _MW_DDI_SLOT {
@@ -50,6 +48,36 @@ void MwProbePagingOp(ULONG Op, BOOLEAN Refused);
 void MwProbeMirror(HANDLE Sub, PUNICODE_STRING Name, ULONG Value);
 void MwProbeStart(MW_ADAPTER *A);
 void MwProbeStop(MW_ADAPTER *A);
+
+/* wddm2x.c: the 2.x shapes (Services\maliwddm\Parameters\Wddm2Shape). */
+#define MW_SHAPE_PHYSICAL   0   /* physical mode, a copy node as the paging node */
+#define MW_SHAPE_GPUMMU     1   /* the same and GpuMmu (VA caps, page tables) */
+extern ULONG MwWddm2Shape;
+extern ULONG MwGpuMmuPtSegment;         /* GpuMmuPtSegment: segment of the page tables (default 1) */
+extern ULONG MwPagingMarker;            /* PagingMarker: 8 bytes into a paging DMA buffer (default 1) */
+
+#define MW_COPY_NODE            1
+#define MW_GPUMMU_LEVELS        4
+#define MW_GPUMMU_INDEX_BITS    9
+#define MW_GPUVA_INTERNAL_START 0x100000000ULL          /* 4 GB */
+#define MW_GPUVA_INTERNAL_END   0x7FFFFFFFFULL          /* 2^35 - 1 */
+
+ULONG MwNodeCount(void);
+BOOLEAN MwGpuMmu(void);
+NTSTATUS MwCopyNodeSubmit(MW_ADAPTER *A, ULONG Fence);
+ULONG MwCopyNodeFence(void);
+void Mw2xDriverCaps(MW_ADAPTER *A, DXGK_DRIVERCAPS *Caps, UINT Size);
+NTSTATUS MwQueryGpuMmuCaps(const DXGKARG_QUERYADAPTERINFO *Info);
+NTSTATUS MwQueryPageTableLevelDesc(const DXGKARG_QUERYADAPTERINFO *Info);
+NTSTATUS MwQuery3xCaps(const DXGKARG_QUERYADAPTERINFO *Info);
+DXGKDDI_CREATEPROCESS MwCreateProcess;
+DXGKDDI_DESTROYPROCESS MwDestroyProcess;
+DXGKDDI_SETROOTPAGETABLE MwSetRootPageTable;
+DXGKDDI_GETROOTPAGETABLESIZE MwGetRootPageTableSize;
+DXGKDDI_SUBMITCOMMANDVIRTUAL MwSubmitCommandVirtual;
+BOOLEAN Mw2xPagingOp(MW_ADAPTER *A, DXGKARG_BUILDPAGINGBUFFER *Arg);
+NTSTATUS Mw2xPagingFill(DXGKARG_BUILDPAGINGBUFFER *Arg);
+void Mw2xCounters(ULONG *Out, ULONG Count);
 
 /* memory.c */
 NTSTATUS MwQuerySegment4(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info);
