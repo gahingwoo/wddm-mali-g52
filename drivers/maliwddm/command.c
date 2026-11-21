@@ -29,6 +29,7 @@
  * (kbase_gpu_complete_hw).
  */
 #include "maliwddm.h"
+#include "wddm2.h"
 
 #define MW_DMA_MAGIC            0x4D57444Du /* 'MWDM' in the private data */
 #define MW_DMA_BUFFER_SIZE      (16 * 1024)
@@ -150,6 +151,7 @@ NTSTATUS APIENTRY MwRender(IN_CONST_HANDLE hContext, DXGKARG_RENDER *Arg)
     PatchEveryAllocation(Arg->AllocationListSize, &Arg->pPatchLocationListOut, Arg->PatchLocationListOutSize);
     MarkDmaBuffer(&Arg->pDmaBuffer);
     ctx->Device->Adapter->Renders++;
+    MwVersionRendered();    /* confirms a WddmProbe once DWM is drawing */
     return STATUS_SUCCESS;
 }
 

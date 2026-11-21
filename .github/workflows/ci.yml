@@ -365,6 +365,8 @@ jobs:
           Copy-Item pkg\maliwddm\* "$rel\driver\"
           Copy-Item wddm-mali-g52-test.cer $rel
           Copy-Item wddm-mali-g52-test.cer pkg\maliwddm\
+          # The WDDM version probe (docs/WDDM2.md, P1).
+          Copy-Item tools\windows\wddm-probe.cmd $rel
           Copy-Item umd\libgallium_d3d10.pdb "$rel\symbols\" -ErrorAction SilentlyContinue
           $info = @(
             (Get-Content drivers\maliwddm\INSTALL.txt -Raw).TrimEnd(),
