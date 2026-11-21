@@ -1,0 +1,208 @@
+diff --git a/src/gallium/frontends/d3d10umd/Adapter.cpp b/src/gallium/frontends/d3d10umd/Adapter.cpp
+index ac94a51..8231393 100644
+--- a/src/gallium/frontends/d3d10umd/Adapter.cpp
++++ b/src/gallium/frontends/d3d10umd/Adapter.cpp
+@@ -39,6 +39,8 @@
+ 
+ #include "util/u_memory.h"
+ 
++#include <stddef.h>
++
+ 
+ EXTERN_C struct pipe_screen *
+ d3d10_create_screen(void);
+@@ -72,25 +74,33 @@ static unsigned long memdbg_no = 0;
+  */
+ struct MaliUmdInfo {
+    UINT Magic, Size, Ddi, FeatureLevel, Dxgi12, Video, DecodeNode, VirtualMode, KmdBuild;
+-   UINT Reserved[7];
++   UINT Msaa;                    /* UmdMsaa; 0 from a KMD that had a reserved word here */
++   UINT Reserved[6];
+ };
+ #define MALI_UMD_INFO_MAGIC 0x3149574Du
+ 
+ static unsigned
+-QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData)
++QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL)
+ {
+    MaliUmdInfo info = {};
+    D3DDDICB_QUERYADAPTERINFO q = {};
+    unsigned ddi = 100;
+ 
++   if (pMsaa)
++      *pMsaa = 0;
++
+    if (pOpenData->pAdapterCallbacks && pOpenData->pAdapterCallbacks->pfnQueryAdapterInfoCb) {
+       q.pPrivateDriverData = &info;
+       q.PrivateDriverDataSize = sizeof info;
+       HRESULT hr = pOpenData->pAdapterCallbacks->pfnQueryAdapterInfoCb(pOpenData->hRTAdapter.handle, &q);
+       if (SUCCEEDED(hr) && info.Magic == MALI_UMD_INFO_MAGIC && info.Size >= 3 * sizeof(UINT))
+          ddi = info.Ddi >= 101 ? 101 : 100;
+-      DebugPrintf("OpenAdapter: KMD adapter info 0x%08lx, magic 0x%08x, UmdDdi %u: offering D3D10.%u\n",
+-                  (unsigned long)hr, info.Magic, info.Ddi, ddi == 101 ? 1 : 0);
++      if (pMsaa && SUCCEEDED(hr) && info.Magic == MALI_UMD_INFO_MAGIC &&
++          info.Size >= offsetof(MaliUmdInfo, Msaa) + sizeof(UINT))
++         *pMsaa = info.Msaa >= 4 ? 4 : info.Msaa;
++      DebugPrintf("OpenAdapter: KMD adapter info 0x%08lx, magic 0x%08x, UmdDdi %u, UmdMsaa %u:"
++                  " offering D3D10.%u\n", (unsigned long)hr, info.Magic, info.Ddi,
++                  info.Msaa, ddi == 101 ? 1 : 0);
+    }
+    return ddi;
+ }
+@@ -119,7 +129,7 @@ OpenAdapterCommon(__inout D3D10DDIARG_OPENADAPTER *pOpenData)   // IN
+    }
+ 
+    pAdaptor->hRTAdapter = pOpenData->hRTAdapter.handle;
+-   pAdaptor->ddi = QueryUmdDdi(pOpenData);
++   pAdaptor->ddi = QueryUmdDdi(pOpenData, &pAdaptor->msaa);
+    pOpenData->hAdapter.pDrvPrivate = pAdaptor;
+ 
+    pOpenData->pAdapterFuncs->pfnCalcPrivateDeviceSize = CalcPrivateDeviceSize;
+diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
+index c64bd53..c43c200 100644
+--- a/src/gallium/frontends/d3d10umd/Device.cpp
++++ b/src/gallium/frontends/d3d10umd/Device.cpp
+@@ -162,6 +162,7 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+    struct pipe_context *pipe = screen->context_create(screen, NULL, 0);
+    pDevice->screen = screen;
+    pDevice->pipe = pipe;
++   pDevice->msaa = pAdapter->msaa;
+    pDevice->cso = cso_create_context(pipe, CSO_NO_VBUF);
+ 
+    /* D3D10UMD_NO_GS=1 takes the path Panfrost takes on a screen that has
+@@ -502,6 +503,7 @@ CheckFormatSupport(D3D10DDI_HDEVICE hDevice, // IN
+ {
+    //LOG_ENTRYPOINT();
+ 
++   Device *pDevice = CastDevice(hDevice);
+    struct pipe_context *pipe = CastPipeContext(hDevice);
+    struct pipe_screen *screen = pipe->screen;
+ 
+@@ -526,6 +528,25 @@ CheckFormatSupport(D3D10DDI_HDEVICE hDevice, // IN
+       *pFormatCaps |= D3D10_DDI_FORMAT_SUPPORT_RENDERTARGET;
+       *pFormatCaps |= D3D10_DDI_FORMAT_SUPPORT_BLENDABLE;
+ 
++      /*
++       * ANGLE (renderer11_utils.cpp, GenerateTextureFormatCaps) gives a
++       * format sample counts only if it is a multisample render target,
++       * and then starts from 1x; with none, OpenGL ES reports
++       * GL_NUM_SAMPLE_COUNTS 0 for it, and Skia's Ganesh GL backend
++       * (GrGLCaps::setupSampleCounts) then holds even RGBA8 not renderable:
++       * Chromium's compositor stopped with "backend_format.isValid()=0" on
++       * the TaishanPi 3M. With UmdMsaa 1 the formats say multisample render
++       * target, and CheckMultisampleQualityLevels below offers one sample
++       * only, so nothing ever renders multisampled; with 4 it offers 4x too.
++       */
++      if (pDevice->msaa >= 1) {
++         *pFormatCaps |= D3D10_DDI_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET;
++         if (pDevice->msaa >= 4 &&
++             screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 4, 4,
++                                         PIPE_BIND_SAMPLER_VIEW))
++            *pFormatCaps |= D3D10_DDI_FORMAT_SUPPORT_MULTISAMPLE_LOAD;
++      }
++
+ #if SUPPORT_MSAA
+       if (screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 4, 4,
+                                       PIPE_BIND_RENDER_TARGET)) {
+@@ -568,8 +589,23 @@ CheckMultisampleQualityLevels(D3D10DDI_HDEVICE hDevice,        // IN
+ {
+    //LOG_ENTRYPOINT();
+ 
+-   /* XXX: Disable MSAA */
++   /* MSAA only as maliwddm's UmdMsaa says (CheckFormatSupport above): 0
++    * none, as before; 1 a single sample; 4 also 4x where Panfrost can
++    * render and sample it (ResolveSubresource resolves on the GPU). */
++   Device *pDevice = CastDevice(hDevice);
++   struct pipe_screen *screen = pDevice->screen;
++   enum pipe_format format = FormatTranslate(Format, false);
++
+    *pNumQualityLevels = 0;
++   if (pDevice->msaa == 0 || format == PIPE_FORMAT_NONE)
++      return;
++   if (SampleCount == 1) {
++      *pNumQualityLevels = 1;
++   } else if (SampleCount == 4 && pDevice->msaa >= 4 &&
++              screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 4, 4,
++                                          PIPE_BIND_RENDER_TARGET)) {
++      *pNumQualityLevels = 1;
++   }
+ }
+ 
+ 
+diff --git a/src/gallium/frontends/d3d10umd/Resource.cpp b/src/gallium/frontends/d3d10umd/Resource.cpp
+index 026e17f..67522a2 100644
+--- a/src/gallium/frontends/d3d10umd/Resource.cpp
++++ b/src/gallium/frontends/d3d10umd/Resource.cpp
+@@ -1297,10 +1297,45 @@ ResourceResolveSubResource(D3D10DDI_HDEVICE hDevice,        // IN
+                            UINT SrcSubResource,             // IN
+                            DXGI_FORMAT ResolveFormat)       // IN
+ {
+-   LOG_UNSUPPORTED_ENTRYPOINT();
+-   /* Not carried out: counted, so that a caller that relies on it shows
+-    * up in m5test perf. */
+-   mali_count_add(MALI_COUNT_RESOLVE, 0, 0);
++   LOG_ENTRYPOINT();
++   /* A resolve on the GPU, by a blit from the multisampled resource:
++    * Panfrost averages the samples. Only reached with UmdMsaa 4, which is
++    * the only way the device offers more than one sample. */
++   uint64_t t0 = mali_count_now();
++   Device *pDevice = CastDevice(hDevice);
++   struct pipe_context *pipe = pDevice->pipe;
++   struct pipe_resource *dst = CastResource(hDstResource)->resource;
++   struct pipe_resource *src = CastResource(hSrcResource)->resource;
++   unsigned dst_level = DstSubResource % (dst->last_level + 1);
++   unsigned dst_layer = DstSubResource / (dst->last_level + 1);
++   unsigned src_level = SrcSubResource % (src->last_level + 1);
++   unsigned src_layer = SrcSubResource / (src->last_level + 1);
++   enum pipe_format format = FormatTranslate(ResolveFormat, false);
++   struct pipe_blit_info blit;
++
++   memset(&blit, 0, sizeof blit);
++   blit.src.resource = src;
++   blit.src.level = src_level;
++   blit.src.format = format != PIPE_FORMAT_NONE ? format : src->format;
++   blit.src.box.x = 0;
++   blit.src.box.y = 0;
++   blit.src.box.z = src_layer;
++   blit.src.box.width = u_minify(src->width0, src_level);
++   blit.src.box.height = u_minify(src->height0, src_level);
++   blit.src.box.depth = 1;
++   blit.dst.resource = dst;
++   blit.dst.level = dst_level;
++   blit.dst.format = format != PIPE_FORMAT_NONE ? format : dst->format;
++   blit.dst.box.x = 0;
++   blit.dst.box.y = 0;
++   blit.dst.box.z = dst_layer;
++   blit.dst.box.width = u_minify(dst->width0, dst_level);
++   blit.dst.box.height = u_minify(dst->height0, dst_level);
++   blit.dst.box.depth = 1;
++   blit.mask = PIPE_MASK_RGBA;
++   blit.filter = PIPE_TEX_FILTER_NEAREST;
++   pipe->blit(pipe, &blit);
++   mali_count_add(MALI_COUNT_RESOLVE, countBytes(dst, &blit.dst.box), t0);
+ }
+ 
+ 
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index 4c43a42..45edae4 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -54,6 +54,10 @@ struct Adapter
+    /* The highest DDI this adapter offers: 100 the D3D10.0 DDI, 101 the
+     * D3D10.1 DDI (Adapter.cpp, QueryUmdDdi). */
+    unsigned ddi;
++   /* Multisampling the adapter reports (maliwddm's UmdMsaa): 0 none, as the
++    * frontend always did; 1 render targets that are multisample-capable at
++    * one sample only; 4 also 4x where the driver can (Device.cpp). */
++   unsigned msaa;
+ };
+ 
+ 
+@@ -79,6 +83,7 @@ struct Device
+ {
+    struct pipe_screen *screen;
+    struct pipe_context *pipe;
++   unsigned msaa;               /* the adapter's (Adapter::msaa) */
+ 
+    struct cso_context *cso;
+    struct pipe_framebuffer_state fb;

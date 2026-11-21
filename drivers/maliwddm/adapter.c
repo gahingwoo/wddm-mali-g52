@@ -512,6 +512,7 @@ static NTSTATUS UmdAdapterInfo(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *In
     u.DecodeNode = MW_UMD_NO_NODE;      /* no decode engine yet (U5) */
     u.VirtualMode = 0;                  /* WDDM 1.3, physical (WDDM2.md P2 sets it) */
     u.KmdBuild = MW_BUILD;
+    u.Msaa = MwSetting(A, L"UmdMsaa", 1);
     if (n > sizeof(u))
         n = sizeof(u);
     u.Size = n;

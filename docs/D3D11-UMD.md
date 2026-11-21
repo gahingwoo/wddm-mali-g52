@@ -58,6 +58,42 @@ flag is ignored; `edge://gpu` then shows it under "Command Line"). If the
 GPU process stays up and GL_RENDERER names the Mali, U0 is the only
 blocker; if it dies later, its log says on what.
 
+**The no-code test, run on the board 2026-11-21** (maliwddm
+10.45.38.341, still 10_0): the ES 3.0 context was created on the Mali, so
+the feature level was the first blocker. The GPU process then died three
+times (exit 0x80000003) at `skia_output_surface_impl.cc:1228` with
+`color_type=4 backend_format.isValid()=0`, after many "CopySharedImage:
+Dest shared image is not writable" and "Unable to initialize SkSurface".
+Skia found RGBA8 not renderable. The chain, read from the three sources:
+
+1. ANGLE's DXGI support table (`dxgi_support_table_autogen.cpp`) makes
+   R8G8B8A8_UNORM always texturable, renderable and filterable at 10_0
+   and 10_1; only `MULTISAMPLE_RENDERTARGET` is asked of the driver.
+   (B8G8R8A8 asks the driver for everything; d3dprobe showed it fine.)
+2. `GenerateTextureFormatCaps` gives a format sample counts, starting
+   with 1x, only when it is a multisample render target. Our
+   `CheckFormatSupport` never says so (`SUPPORT_MSAA 0`) and
+   `CheckMultisampleQualityLevels` always answers 0, so every format has
+   no sample counts, and `GL_NUM_SAMPLE_COUNTS` is 0 (`queryutils.cpp`).
+3. Skia's `GrGLCaps::setupSampleCounts` on ES 3.0 fills a format's
+   sample counts, 1x included, only when `GL_NUM_SAMPLE_COUNTS` is not 0.
+   With none, the format is not renderable, `defaultBackendFormat` is
+   invalid, and Chromium's compositor stops.
+
+So it was our multisample answers, not the feature level, and `UmdDdi`
+101 alone would very probably not have fixed it: ANGLE's table asks the
+driver for multisampling at 10_1 exactly as at 10_0.
+
+**U0a, Mesa patch 0064 (done on this branch, not run):** with `UmdMsaa`
+1 (the default) `CheckFormatSupport` adds `MULTISAMPLE_RENDERTARGET` to
+every render-target format and `CheckMultisampleQualityLevels` answers 1
+for one sample, 0 for more. ANGLE then gives each format the count {1},
+Skia sees RGBA8 renderable, and nothing is ever rendered multisampled.
+`UmdMsaa` 4 also offers 4x where Panfrost can render and sample it, and
+`ResolveSubresource` now resolves on the GPU with a blit (it did nothing
+before); 0 is the old behaviour. This is also what makes the no-code
+flag worth trying again on the current feature level.
+
 **U0, the smallest change to 10_1 (Mesa patch 0063, done on this
 branch, not run):** `SUPPORT_D3D10_1 1`, with the D3D10.1 interface
 offered only where the KMD's answer allows it (`UmdDdi` 101; the default
@@ -75,8 +111,13 @@ ANGLE's ES 3.0:
 | Cube map arrays | resource target already chosen (`Resource.cpp:290`) | not an ES 3.0 feature |
 | Format support for 10_1 (BGRA as render target, R10G10B10A2, R11G11B10) | as at 10_0 | ANGLE builds its format table from `CheckFormatSupport`; missing formats only remove formats |
 
-Test for U0: `reg add "...\Device Parameters" /v UmdDdi /t REG_DWORD /d 101
-/f`, end every Edge process (or reboot), then:
+Test for U0a and U0, in this order:
+1. U0a alone (the package's defaults: `UmdMsaa` 1, `UmdDdi` 100): Edge
+   with `--enable-angle-features=allowES3OnFL100`. Expected: no FATAL
+   at `skia_output_surface_impl.cc`, `edge://gpu` "Software Rendering:
+   No", GL_RENDERER ANGLE on the Mali with `vs_4_0 ps_4_0`.
+2. U0: `reg add "...\Device Parameters" /v UmdDdi /t REG_DWORD /d 101 /f`,
+   end every Edge process (or reboot), then Edge without any flag:
 - `d3dprobe`: the Mali at feature level **10_1**.
 - `edge://gpu`: GL_RENDERER `ANGLE (Rockchip, ... Direct3D11 vs_4_1 ps_4_1,
   D3D11 ...)`, "D3D11 Feature Level: D3D 10.1", "Software Rendering: No",
@@ -102,6 +143,7 @@ step can be turned back without reinstalling:
 | `UmdDdi` | 100 until U0 has run, then 101, 110, 111 | 100: the D3D10.0 DDI as today (feature level 10_0); 101: the D3D10.1 DDI (10_1); 110: D3D11.0; 111: D3D11.1 |
 | `UmdDxgi12` | 0 until U3 has run | the DXGI 1.2 DDI and flip model |
 | `UmdVideo` | 0 | 0 none; 1 the video DDI with no profiles; 2 with the decoder's profiles |
+| `UmdMsaa` | 1 | 0: no multisampling, as before 0064; 1: multisample render targets at one sample (ANGLE and Skia need it); 4: also 4x, resolved on the GPU |
 | `UmdFeatureLevel` | 0xa000 (10_0) | the most the UMD reports |
 
 A KMD that does not answer the query means `UmdDdi` 100, so a new UMD on

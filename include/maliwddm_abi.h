@@ -153,7 +153,9 @@ typedef struct _MW_UMD_ADAPTER_INFO {
     mw_u32 DecodeNode;                  /* node ordinal of the VIDEO_DECODE engine, MW_UMD_NO_NODE none */
     mw_u32 VirtualMode;                 /* 1: WDDM 2.x with GPU virtual addressing (D3DWDDM2_0 DDI) */
     mw_u32 KmdBuild;                    /* the CI run that built the KMD (MW_BUILD) */
-    mw_u32 Reserved[7];
+    mw_u32 Msaa;                        /* UmdMsaa: 0 none; 1 multisample render targets at one
+                                         * sample (what ANGLE and Skia need); 4 also 4x (default 1) */
+    mw_u32 Reserved[6];
 } MW_UMD_ADAPTER_INFO;
 
 /* The KMD's counters, for tests and bring-up. */
