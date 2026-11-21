@@ -887,6 +887,104 @@ then stopped somewhere later. Suspects, none tested:
 - `check` prints every `Probe*` key and counts the GPU counters per LUID
   with PowerShell, which fixes section 6's count.
 
+### What Panorama taught us (2026-11-22)
+
+`github.com/awesomefroggy29/Panorama` holds two WinMali drivers for Valhall
+Malis:
+
+- `claude-g615`, by Jamie: a Mali-G615 on a MediaTek MT6897 tablet. It
+  reached a GPU-composited desktop at WDDM 2.0 with GpuMmu, and Windows
+  Terminal rendered on the Mali with no WARP.
+- `codex-g610`, by mr4g: a Mali-G610 on RK3588.
+
+Both authors gave permission on Discord on 2026-11-22 to use their work
+in this GPL-2.0 driver with credit; the records are kept with the
+project. The repository's base, `WoA-OpenMali/rk3588-GPU`, is not covered
+and nothing was taken from it. Nothing was copied: what follows are
+interface facts, read from their source and notes, and re-implemented here
+(`drivers/maliwddm/wddm2x.c` credits both).
+
+What their notes and code state about dxgkrnl, each found by them on
+hardware, mostly by disassembling `dxgkrnl.sys` 10.0.26100:
+
+1. **The paging node must be a node of its own, a copy engine.**
+   `PHYSICALADAPTERCAPS.PagingNodeIndex` naming the 3D node "bails at
+   StartDevice on Win11 ARM64". Naming a node beyond `NumExecutionNodes`
+   makes a phantom node and a 0xD1 in the scheduler later. Both drivers
+   declare two nodes, 3D and COPY, with the copy node's paging buffers
+   done on the CPU. **Our 2.0 probe declared one node and paging node 0:
+   this is the prime suspect for the hang.**
+2. **`BuildPagingBuffer` may return only `STATUS_SUCCESS` or
+   `STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER`.** Anything else is bugcheck
+   0x10E. Our 1.3 path refuses unknown operations with
+   `STATUS_NOT_SUPPORTED`, and a 2.x VidMm sends operations a 1.3 driver
+   never sees. Their driver also appends a small marker when given a DMA
+   buffer.
+3. **A GpuMmu driver's paging buffers arrive through
+   `SubmitCommandVirtual`**, which must not be a stub (0x119).
+4. **`PageTableAlignmentInBytes` must not be 0**, or dxgmms2 divides by
+   zero (0x7E).
+5. **`SchedulingCaps.MultiEngineAware` is checked for every WDDMv2
+   driver.** Ours sets it. Their GpuMmu driver also sets PreemptionAware,
+   CancelCommandAware, LowIrqlPreemptCommand and No64BitAtomics, which
+   they found mandatory at 3.2. Not known to be required at 2.0.
+6. **The version number matters for a display:** at `WDDMVersion >=
+   0x2300` dxgkrnl tears down a lost VidPN source instead of pausing it;
+   0x2200 hung at LogonUI; 0x2000 is the one that composited. **So the
+   target is 2.0**, not 2.6 as section 9.5 guessed. The 2.6 and 3.x rungs
+   of the ladder stay possible but are not the goal.
+7. **Their GpuMmu description is four 9-bit levels and 48 bits**, 4 KB
+   tables in their segment, CPU-virtual updates, and VidMm's level 0 as the
+   leaf. That is exactly the shape of Bifrost's legacy LPAE walk, which
+   always takes four levels (`io-pgtable-arm.c:1232`). There is no need
+   for the private level-0 page section 4.3 proposed. The G52 translates
+   only 35 bits, so `InternalGpuVirtualAddressRangeStart/End` keep VidMm's
+   own addresses below 2^35, and the UMD bounds its own.
+8. **The oracle for an adapter-start failure is `DxgKrnl-Admin` event
+   549**, which names the status and the reason. `wddm-probe check` now
+   dumps that log.
+
+Their UMD is Mesa d3d10umd too, so a d3d10umd-based UMD does run on a
+WDDM 2.0 GpuMmu adapter. Their memory work goes through private escapes
+(VM bind) as well as VidMm. Section 13's contract for our UMD stays as
+written.
+
+### P1, third build: two shapes (option c)
+
+The breadcrumb build (CI run 287) has not run. The next build keeps all of
+it and corrects the caps, with `Wddm2Shape` choosing between two shapes
+on successive boots:
+
+- **Shape 0, physical:** WDDM 2.0 in physical mode, as before, plus:
+  - two nodes, node 1 a copy node that is the paging node
+    (`PagingNodeIndex 1`, `MemoryManagementCaps.PagingNode 1`), whose
+    submissions complete at once;
+  - `SupportPerEngineTDR` and `CancelCommandAware` set (the DDIs exist);
+  - `BuildPagingBuffer` never fails at 2.x, and puts an 8-byte marker
+    into a paging DMA buffer (`PagingMarker 0` turns that off);
+  - per-node fences, engine reset and node metadata.
+- **Shape 1, GpuMmu:** shape 0, plus:
+  - `VirtualAddressingSupported` and `GpuMmuSupported`;
+  - `GPUMMUCAPS` (4 levels, 48 bits, CPU virtual, read-only and no-execute
+    supported) and `PAGETABLELEVELDESC` (9 bits, 4 KB, alignment 4 KB,
+    segment `GpuMmuPtSegment`, default 1);
+  - `CreateProcess`, `DestroyProcess`, `SetRootPageTable`,
+    `GetRootPageTableSize` and `SubmitCommandVirtual`;
+  - `UPDATE_PAGE_TABLE` written in the Mali format.
+
+  The Mali still runs only physical-mode work on AS0: the tables are kept
+  but not yet used (P2 binds them to address spaces).
+- **Both:** the pre-StartDevice QAIs WDDM 3.x asks (device caps, physical
+  memory caps, IOMMU caps, reserved ranges) are answered. They only matter
+  at 3.x.
+- `ProbeNotifyResidencyOk` is gone. A refusal there is now a bugcheck, not
+  a test.
+
+Order: shape 0 first, because it is the smaller change and the paging-node
+fact predicts it. Then shape 1, whatever shape 0 does: if shape 0 starts,
+shape 1 says whether GpuMmu also starts (P2's precondition). If it does
+not, shape 1 is the other half of the comparison.
+
 ## 13. What the KMD expects of the UMD, phase by phase
 
 This is the contract between `wddm2` (KMD) and the UMD branch. Where a
@@ -1044,6 +1142,33 @@ comes up, one more run with it at 0 shows whether that was the fix:
 `reg add HKLM\SYSTEM\CurrentControlSet\Services\maliwddm\Parameters /v
 ProbeNotifyResidencyOk /t REG_DWORD /d 0 /f`, then `wddm-probe set 2000
 uart` and a reboot.
+
+### 13.5 P1 board test, third build (two shapes)
+
+Before each step, do `wddm-probe off` and a reboot if the board is not on
+1.3. Keep the serial logger running. Wait at least 60 s at a hung spinner
+before you power-cycle.
+
+1. **Shape 0:** `wddm-probe set 2000 phys uart`, full reboot. Then `wddm-probe
+   check` on whatever boot comes next: the 2.0 desktop, or the 1.3
+   fallback.
+2. **Shape 1:** `wddm-probe off`, reboot, `wddm-probe set 2000 gpummu uart`,
+   full reboot, `wddm-probe check`.
+3. Send `C:\mali\probe\` and the serial log. Per shape, `check` shows:
+   - **accepted?** `WddmProbeConfirmed` against `WddmProbeFellBack`, and
+     the device status;
+   - **why not:** section 2c, the DxgKrnl Admin log with event 549's
+     reason, and section 2b, `Probe2000` with `Wd_Stuck`, `Wd_Last`, the
+     `Cnt_` list and `PgRefused_*`;
+   - **shape 1 only:** `Wd_Processes`, `Wd_RootSets` and `Wd_PteWrites`
+     say whether VidMm worked the GpuMmu side. `Wd_VirtSubmits3d` says
+     whether any 3D work came in virtual mode, which this build completes
+     without running. Expect a broken picture if it did; that is the
+     finding.
+4. If a shape reaches the desktop:
+   - Task Manager, Performance: is there a GPU entry? Take a photo.
+   - Section 6, the GPU counters by LUID, against the 1.3 baseline.
+   - Edge: `edge://gpu`.
 
 ## 14. Sources, and what I could not verify
 
