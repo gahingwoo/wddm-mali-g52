@@ -17,6 +17,10 @@
 #include "maliwddm_abi.h"
 #include "rotate.h"
 
+#ifndef DISPLAY_ADAPTER_HW_ID
+#define DISPLAY_ADAPTER_HW_ID   0xFFFFFFFFu  /* video.h */
+#endif
+
 #define MW_TAG                  'dwlM'
 #define MW_SEGMENT_ID           1           /* the aperture segment */
 #define MW_SEGMENT_SIZE         (1024ULL * 1024 * 1024)
@@ -172,6 +176,21 @@ struct _MW_ADAPTER {
     volatile ULONG RotDeg;
     BOOLEAN RotateFlips;
     ULONG RotFlipCopies, RotPresents;
+
+    /* The backlight of a MIPI DSI panel (backlight.c): its PWM channel,
+     * mapped from GPU0's second memory resource, which the firmware adds
+     * only when the screen it hands over is a lit DSI panel. BlVa NULL: no
+     * such resource, and the output is reported as HDMI. Duties are in
+     * cycles of the PWM clock; BlLevel is Windows' level in percent (the
+     * firmware's until Windows sets one). BlLock guards the rest. */
+    PUCHAR BlVa;
+    ULONG BlPeriod, BlDuty, BlTarget, BlFrom, BlTick;
+    UCHAR BlLevel;
+    BOOLEAN BlSmooth, BlOff;
+    KSPIN_LOCK BlLock;
+    KTIMER BlTimer;
+    KDPC BlDpc;
+    ULONG BlSets, BlRamps;
 
     /* GPU. MmuLock serialises the address allocator and the page tables. */
     MK_GPU Gpu;
@@ -333,6 +352,12 @@ DXGKDDI_SETVIDPNSOURCEADDRESS MwSetVidPnSourceAddress;
 DXGKDDI_STOP_DEVICE_AND_RELEASE_POST_DISPLAY_OWNERSHIP MwStopDeviceAndReleasePostDisplayOwnership;
 DXGKDDI_SYSTEM_DISPLAY_ENABLE MwSystemDisplayEnable;
 DXGKDDI_SYSTEM_DISPLAY_WRITE MwSystemDisplayWrite;
+
+/* backlight.c: a MIPI DSI panel's backlight and the brightness interface */
+void MwBacklightStart(MW_ADAPTER *A);
+void MwBacklightStop(MW_ADAPTER *A);
+void MwBacklightPower(MW_ADAPTER *A, BOOLEAN On);
+NTSTATUS MwBacklightQueryInterface(MW_ADAPTER *A, PQUERY_INTERFACE Qi);
 
 /* memory.c: allocations and the aperture segment */
 DXGKDDI_CREATEALLOCATION MwCreateAllocation;

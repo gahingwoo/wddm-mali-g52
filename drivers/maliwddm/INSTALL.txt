@@ -105,6 +105,23 @@ Display orientation
   m5test perf writes T_Rotation (degrees), T_RotFlipCopies and
   T_RotPresents (frames the driver turned) to Device Parameters\maliwddm.
 
+Screen brightness (TaishanPi 3M with its MIPI DSI screen)
+
+  With edk2-rk3576 firmware that describes the screen's backlight (GPU0
+  gets a second memory resource, the backlight PWM, when the DSI screen is
+  the screen the firmware shows), the driver reports the screen as an
+  internal panel and Windows offers brightness: Settings > System > Display
+  > Brightness, the quick settings slider and the brightness keys. 10% is
+  the lowest level; there is no 0%. Each start begins at the firmware's
+  "Screen Brightness" setting and Windows then sets the level it saved.
+  Turning the display off (power settings) turns the backlight off too.
+  With HDMI as the screen, or with older firmware, the output is HDMI and
+  there is no brightness control, as before.
+
+  Device Parameters\maliwddm records Backlight (1 found, 0 none),
+  BacklightFirmwareLevel and BacklightInterface (1 or 2: Windows asked for
+  it); m5test perf adds T_BacklightLevel, T_BacklightDuty and the counts.
+
 Replacing only the UMD while testing
 
   Rename the loaded file and copy the new one next to it; then end

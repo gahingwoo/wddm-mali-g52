@@ -201,6 +201,7 @@ static void PublishIdentity(MW_ADAPTER *A)
     static const WCHAR chip[] = L"Arm Mali-G52 (Bifrost)";
     static const WCHAR name[] = L"Rockchip RK3576 Mali-G52";
     static const WCHAR dac[] = L"Rockchip VOP2, HDMI";
+    static const WCHAR dsi[] = L"Rockchip VOP2, MIPI DSI";   /* an internal panel, backlight.c */
     static const WCHAR bios[] = L"UEFI (edk2-rk3576)";
     static const struct { PCWSTR Name; const WCHAR *Text; ULONG Bytes; } v[] = {
         { L"HardwareInformation.ChipType", chip, sizeof(chip) },
@@ -214,8 +215,10 @@ static void PublishIdentity(MW_ADAPTER *A)
     if (!NT_SUCCESS(IoOpenDeviceRegistryKey(A->Pdo, PLUGPLAY_REGKEY_DRIVER, KEY_WRITE, &key)))
         return;
     for (ULONG i = 0; i < ARRAYSIZE(v); i++) {
+        BOOLEAN panel = v[i].Text == dac && A->BlVa != NULL;
         RtlInitUnicodeString(&n, v[i].Name);
-        (void)ZwSetValueKey(key, &n, 0, REG_SZ, (PVOID)v[i].Text, v[i].Bytes);
+        (void)ZwSetValueKey(key, &n, 0, REG_SZ, (PVOID)(panel ? dsi : v[i].Text),
+                            panel ? sizeof(dsi) : v[i].Bytes);
     }
     ZwClose(key);
 }
@@ -274,6 +277,11 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
         st = MkGpuInit(&a->Gpu);
     a->GpuUp = NT_SUCCESS(st);
     MwLog(a, L"GpuUp", NT_SUCCESS(st) ? 1 : (ULONG)st);
+#if !MW_RENDER_ONLY
+    /* Before the children are asked for: the backlight decides whether the
+     * one child is an internal panel or HDMI (display.c). */
+    MwBacklightStart(a);
+#endif
     PublishIdentity(a);
     {
         ULONG clk = MwSetting(a, L"GpuClk", 0);
@@ -313,6 +321,7 @@ static NTSTATUS APIENTRY MwStopDevice(IN_CONST_PVOID Context)
     MwLog(a, L"FlipCopies", a->FlipCopies);
     MwLog(a, L"FlipCopySkips", a->FlipCopySkips);
     StopGpu(a);
+    MwBacklightStop(a);
     MwDisplayStop(a);
     return STATUS_SUCCESS;
 }
@@ -332,13 +341,15 @@ static NTSTATUS APIENTRY MwDispatchIoRequest(IN_CONST_PVOID Context, IN_ULONG So
     return STATUS_NOT_SUPPORTED;
 }
 
+/* The child's power is the panel's: its backlight goes off with it
+ * (backlight.c; nothing happens on HDMI). The adapter's is left alone. */
 static NTSTATUS APIENTRY MwSetPowerState(IN_CONST_PVOID Context, IN_ULONG Uid,
                                          IN_DEVICE_POWER_STATE State, IN_POWER_ACTION Action)
 {
-    UNREFERENCED_PARAMETER(Context);
-    UNREFERENCED_PARAMETER(Uid);
-    UNREFERENCED_PARAMETER(State);
+    MW_ADAPTER *a = (MW_ADAPTER *)Context;
     UNREFERENCED_PARAMETER(Action);
+    if (Uid != DISPLAY_ADAPTER_HW_ID)
+        MwBacklightPower(a, State == PowerDeviceD0);
     return STATUS_SUCCESS;
 }
 
@@ -351,11 +362,10 @@ static VOID APIENTRY MwUnload(VOID)
 {
 }
 
+/* The brightness interface, for an internal panel only (backlight.c). */
 static NTSTATUS APIENTRY MwQueryInterface(IN_CONST_PVOID Context, IN_PQUERY_INTERFACE Qi)
 {
-    UNREFERENCED_PARAMETER(Context);
-    UNREFERENCED_PARAMETER(Qi);
-    return STATUS_NOT_SUPPORTED;
+    return MwBacklightQueryInterface((MW_ADAPTER *)Context, Qi);
 }
 
 /* ---- interrupts ---- */
@@ -684,6 +694,13 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         MwLog(a, L"T_Rotation", a->RotDeg);
         MwLog(a, L"T_RotFlipCopies", a->RotFlipCopies);
         MwLog(a, L"T_RotPresents", a->RotPresents);
+        /* The DSI panel's backlight (backlight.c): Windows' level, the
+         * DUTY written last, and how many levels and ramps there were. */
+        MwLog(a, L"T_BacklightLevel", a->BlVa != NULL ? a->BlLevel : 0);
+        MwLog(a, L"T_BacklightDuty", a->BlDuty);
+        MwLog(a, L"T_BacklightSets", a->BlSets);
+        MwLog(a, L"T_BacklightRamps", a->BlRamps);
+        MwLog(a, L"T_BacklightOff", a->BlOff);
         /* Averages since the driver started, in microseconds; m5test perf
          * gives them for an interval. */
         MwLog(a, L"T_FlipCopyUsAvg", TicksEachUs(a, a->FlipCopyTicks, a->FlipCopies));

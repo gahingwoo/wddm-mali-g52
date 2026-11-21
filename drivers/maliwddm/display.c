@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * maliwddm's display: malidod's, which drives the HDMI output under
- * Windows (M5.1). One HDMI child with the monitor's EDID if the firmware
- * left it in the DSDT, the firmware's framebuffer and timing, identity
+ * Windows (M5.1). One HDMI child (an internal panel instead when the
+ * firmware hands over a MIPI DSI panel's backlight, see backlight.c) with
+ * the monitor's EDID if the firmware left it in the DSDT, the firmware's
+ * framebuffer and timing, identity
  * scaling (and, with ScaledModes, smaller source modes stretched to the
  * firmware's), rotation by 0, 90, 180 or 270 degrees (see "rotation"
  * below). Flips land in MwSetVidPnSourceAddress, which records them;
@@ -10,10 +12,6 @@
  */
 #include "maliwddm.h"
 #include <acpiioct.h>
-
-#ifndef DISPLAY_ADAPTER_HW_ID
-#define DISPLAY_ADAPTER_HW_ID 0xFFFFFFFFu
-#endif
 
 static UINT BytesPerPixel(D3DDDIFORMAT F)
 {
@@ -370,14 +368,18 @@ NTSTATUS APIENTRY MwStopDeviceAndReleasePostDisplayOwnership(IN_CONST_PVOID Mini
 }
 
 
-/* ---- the monitor: one HDMI output, always connected, its EDID from the
- * firmware when the firmware has one ---- */
+/* ---- the monitor: one output, always connected, its EDID from the
+ * firmware when the firmware has one. HDMI, or an internal panel when the
+ * firmware handed over a MIPI DSI panel's backlight (backlight.c): Windows
+ * offers brightness control only for an internal output, and asks the
+ * driver for the brightness interface only then. ---- */
 
 NTSTATUS APIENTRY MwQueryChildRelations(IN_CONST_PVOID MiniportDeviceContext,
                                PDXGK_CHILD_DESCRIPTOR ChildRelations, ULONG ChildRelationsSize)
 {
-    UNREFERENCED_PARAMETER(MiniportDeviceContext);
+    MW_ADAPTER *dev = (MW_ADAPTER *)MiniportDeviceContext;
 #if MW_RENDER_ONLY
+    UNREFERENCED_PARAMETER(dev);
     if (ChildRelationsSize < sizeof(DXGK_CHILD_DESCRIPTOR))
         return STATUS_BUFFER_TOO_SMALL;
     RtlZeroMemory(ChildRelations, sizeof(DXGK_CHILD_DESCRIPTOR)); /* the terminator alone */
@@ -387,7 +389,8 @@ NTSTATUS APIENTRY MwQueryChildRelations(IN_CONST_PVOID MiniportDeviceContext,
         return STATUS_BUFFER_TOO_SMALL;   /* one child plus the zeroed terminator */
     RtlZeroMemory(ChildRelations, sizeof(DXGK_CHILD_DESCRIPTOR));
     ChildRelations[0].ChildDeviceType = TypeVideoOutput;
-    ChildRelations[0].ChildCapabilities.Type.VideoOutput.InterfaceTechnology = D3DKMDT_VOT_HDMI;
+    ChildRelations[0].ChildCapabilities.Type.VideoOutput.InterfaceTechnology =
+        dev->BlVa != NULL ? D3DKMDT_VOT_INTERNAL : D3DKMDT_VOT_HDMI;
     ChildRelations[0].ChildCapabilities.Type.VideoOutput.MonitorOrientationAwareness = D3DKMDT_MOA_NONE;
     ChildRelations[0].ChildCapabilities.Type.VideoOutput.SupportsSdtvModes = FALSE;
     ChildRelations[0].ChildCapabilities.HpdAwareness = HpdAwarenessAlwaysConnected;
