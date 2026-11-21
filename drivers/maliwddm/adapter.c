@@ -493,6 +493,33 @@ static void GpuInfo(MW_ADAPTER *A, MW_ESCAPE_GPU_INFO_DATA *D)
         D->Valid = 0;
 }
 
+/* KMTQAITYPE_UMDRIVERPRIVATE: what the UMD may offer (MW_UMD_ADAPTER_INFO,
+ * docs/D3D11-UMD.md). Read from the settings at each query, PASSIVE.
+ * The UMD's input, if any, is not looked at. */
+static NTSTATUS UmdAdapterInfo(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info)
+{
+    MW_UMD_ADAPTER_INFO u;
+    UINT n = Info->OutputDataSize;
+
+    if (Info->pOutputData == NULL || n < 2 * sizeof(mw_u32))
+        return STATUS_BUFFER_TOO_SMALL;
+    RtlZeroMemory(&u, sizeof(u));
+    u.Magic = MW_UMD_INFO_MAGIC;
+    u.Ddi = MwSetting(A, L"UmdDdi", MW_UMD_DDI_D3D10_1);
+    u.FeatureLevel = MwSetting(A, L"UmdFeatureLevel", 0xa000);
+    u.Dxgi12 = MwSetting(A, L"UmdDxgi12", 0);
+    u.Video = MwSetting(A, L"UmdVideo", 0);
+    u.DecodeNode = MW_UMD_NO_NODE;      /* no decode engine yet (U5) */
+    u.VirtualMode = 0;                  /* WDDM 1.3, physical (WDDM2.md P2 sets it) */
+    u.KmdBuild = MW_BUILD;
+    if (n > sizeof(u))
+        n = sizeof(u);
+    u.Size = n;
+    RtlZeroMemory(Info->pOutputData, Info->OutputDataSize);
+    RtlCopyMemory(Info->pOutputData, &u, n);
+    return STATUS_SUCCESS;
+}
+
 static NTSTATUS APIENTRY MwQueryAdapterInfo(IN_CONST_HANDLE hAdapter, const DXGKARG_QUERYADAPTERINFO *Info)
 {
     MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
@@ -522,6 +549,9 @@ static NTSTATUS APIENTRY MwQueryAdapterInfo(IN_CONST_HANDLE hAdapter, const DXGK
     case 47: /* DXGKQAITYPE_64BITONLYCAPS: zero = not restricted to 64-bit */
         RtlZeroMemory(Info->pOutputData, Info->OutputDataSize);
         st = STATUS_SUCCESS;
+        break;
+    case DXGKQAITYPE_UMDRIVERPRIVATE:
+        st = UmdAdapterInfo(a, Info);
         break;
     case DXGKQAITYPE_DISPLAY_DRIVERCAPS_EXTENSION:
         RtlZeroMemory(Info->pOutputData, Info->OutputDataSize);

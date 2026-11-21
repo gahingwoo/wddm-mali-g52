@@ -102,8 +102,9 @@ static void flip_model(ID3D11Device *dev)
         HRESULT pr = E_FAIL;
         if (SUCCEEDED(hr))
             pr = sc->Present(0, 0);
-        printf("    swap chain %-15s create 0x%08lx, present 0x%08lx\n",
-               effect ? "FLIP_SEQUENTIAL" : "DISCARD (blt)", (unsigned long)hr, (unsigned long)pr);
+        printf("    swap chain %-15s create 0x%08lx, present 0x%08lx%s\n",
+               effect ? "FLIP_SEQUENTIAL" : "DISCARD (blt)", (unsigned long)hr, (unsigned long)pr,
+               hr == (HRESULT)0x887A0022 ? " (no interactive desktop: run it in a user's session)" : "");
         if (sc)
             sc->Release();
     }
@@ -164,6 +165,17 @@ static void probe(IDXGIAdapter1 *adapter, const char *label)
         if (d1) d1->Release();
         if (SUCCEEDED(dev->CheckFeatureSupport(D3D11_FEATURE_D3D10_X_HARDWARE_OPTIONS, &x, sizeof(x))))
             printf("    compute on 4_x: %u\n", x.ComputeShaders_Plus_RawAndStructuredBuffers_Via_Shader_4_x);
+        /* ID3D11Device1 exists on any device of the D3D11.1 runtime, even
+         * over a D3D10.1-DDI driver; what the driver's DDI decides shows
+         * here. The first two are TRUE only for a D3D11.1-DDI driver. */
+        D3D11_FEATURE_DATA_D3D11_OPTIONS o = {};
+        if (SUCCEEDED(dev->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS, &o, sizeof(o))))
+            printf("    D3D11.1 DDI seen: discard %u, copy/update flags %u; clear view %u, copy with overlap %u,"
+                   " constant buffer offsets %u, logic op %u\n", o.DiscardAPIsSeenByDriver,
+                   o.FlagsForUpdateAndCopySeenByDriver, o.ClearView, o.CopyWithOverlap,
+                   o.ConstantBufferOffsetting, o.OutputMergerLogicOp);
+        else
+            printf("    D3D11_OPTIONS: not answered\n");
         if (SUCCEEDED(dev->CheckFeatureSupport(D3D11_FEATURE_THREADING, &t, sizeof(t))))
             printf("    threading: concurrent creates %u, command lists %u\n", t.DriverConcurrentCreates,
                    t.DriverCommandLists);

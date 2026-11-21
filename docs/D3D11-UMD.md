@@ -30,9 +30,10 @@ place to plug in.
 At `OpenAdapter10_2` the UMD has the adapter callbacks, not a device, so
 the escape the shim uses later is not available. It asks with
 `pfnQueryAdapterInfoCb` for `KMTQAITYPE_UMDRIVERPRIVATE`, which maliwddm
-answers with a small versioned structure (new, `include/maliwddm_abi.h`):
+answers with `MW_UMD_ADAPTER_INFO` (`include/maliwddm_abi.h`, done on this
+branch: `UmdAdapterInfo` in `adapter.c`). It carries
 the highest DDI the UMD may offer, the feature level, whether the video
-DDI is exposed and which decode profiles, the node ordinal of a decode
+DDI is exposed, the node ordinal of a decode
 engine if there is one, and whether the adapter runs WDDM 2.x in virtual
 mode. The KMD fills it from DWORD settings in Device Parameters, so each
 step can be turned back without reinstalling:
@@ -45,7 +46,15 @@ step can be turned back without reinstalling:
 | `UmdFeatureLevel` | 0xa000 (10_0) | the most the UMD reports |
 
 A KMD that does not answer the query means `UmdDdi` 10, so a new UMD on
-an old KMD behaves as today.
+an old KMD behaves as today. The structure only grows at the end and says
+its own size.
+
+**For the `wddm2` branch:** keep `DXGKQAITYPE_UMDRIVERPRIVATE` answered
+with this structure, and set `VirtualMode` to 1 once the adapter runs in
+virtual mode (WDDM2.md P2), and `DecodeNode` to the ordinal of the decode
+node once it exists (U5). The UMD picks the D3DWDDM2_0 interface from
+`VirtualMode`, not from the WDDM version, so P1 (2.x in physical mode)
+changes nothing for it.
 
 ## Milestones
 
@@ -77,9 +86,12 @@ person-weeks WDDM2.md gives option (c), decode excluded.
   forms of copy and update (flags), `DiscardResource` and `DiscardView`,
   `Flush1`, blend and rasterizer state 1, `SetConstantBuffers` with
   offsets (or the cap off), `CheckDirectFlipSupport`.
-- Test: `d3dprobe` says `ID3D11Device1 (D3D11.1 DDI): yes`. In
-  `edge://gpu`, GL_RENDERER is ANGLE on the Mali and the "D3D11 feature
-  level" line reads 10_0. The same regression set as U1.
+- Test: `ID3D11Device1` is not the check: the D3D11.1 runtime offers it
+  over today's D3D10.1-DDI driver too (board, 2026-11-21: "yes"). The
+  check is d3dprobe's "D3D11.1 DDI seen" line, `discard 1, copy/update
+  flags 1`, which the runtime sets only for a D3D11.1-DDI driver, 0 0
+  today. In `edge://gpu`, GL_RENDERER is ANGLE on the Mali at 10_0. The
+  same regression set as U1.
 
 ### U3: DXGI 1.2 and flip model (2 to 3 weeks)
 
@@ -91,8 +103,9 @@ person-weeks WDDM2.md gives option (c), decode excluded.
 - Also implements `pfnBlt` (stretch and format conversion on the GPU
   through the blitter) and `ResolveSubresource`, which are counted as not
   carried out today.
-- Test: `d3dprobe` creates a `FLIP_SEQUENTIAL` swap chain and presents
-  with `0x00000000`. During YouTube, `m5test perf` shows `present, read
+- Test: `d3dprobe`, run in the user's session (not over SSH, where every
+  swap chain fails with 0x887a0022, no interactive desktop), creates a
+  `FLIP_SEQUENTIAL` swap chain and presents with `0x00000000`. During YouTube, `m5test perf` shows `present, read
   back` at about 0 for msedge.exe and `KMD blt presents` at about 0 MB,
   and stats-for-nerds dropped frames well below the 40% of 2026-11-21.
   `UmdDxgi12` 0 brings the read-back present back.
@@ -122,16 +135,25 @@ person-weeks WDDM2.md gives option (c), decode excluded.
 
 ### U5: the decode hook (design now, code with the decoder)
 
-- maliwddm gains a second node, `DXGK_ENGINE_TYPE_VIDEO_DECODE`, whose
-  submissions carry one private command: the decoder's picture
-  parameters, slice control, bitstream and output allocations, as the
-  DXVA buffers the runtime hands `SubmitDecoderBuffers`. The UMD passes
-  them on unparsed with the allocations in the list; the KMD hands them to
-  the VDPU383 backend (the MPP-based register builder of branch
-  `vdpu383`), which programs the block and signals the node's fence.
-  Whether the backend lives in maliwddm or is the standalone decoder
-  driver reached through a KMD-to-KMD interface is the open question to
-  settle with that work.
+- Decided 2026-11-21: decode lives inside maliwddm, because Edge decodes
+  only on its D3D11 device. maliwddm takes the VDPU383's MMIO, interrupt
+  and IOMMU from ACPI (resources on GPU0 or a device it also drives, as
+  the VOP2 already is) and gains a second node,
+  `DXGK_ENGINE_TYPE_VIDEO_DECODE`, with its own queue and fences, next to
+  the Mali's node 0. The standalone KMDF driver on woa-rk3576 `vdpu383` is
+  the bring-up rig (register replay, checking the MPP-based builder, a
+  console harness); its register-builder library is reused here.
+- Where the register building happens: in the UMD, from the DXVA picture
+  parameters and slice control the runtime hands `SubmitDecoderBuffers`,
+  as MPP builds them in user mode on Linux. The UMD submits on node 1 one
+  private command holding the register image and the allocations it
+  references (bitstream, the output and reference NV12 surfaces, the
+  scratch buffers), all in the allocation list. The KMD only patches
+  addresses into the image (IOVAs of the decoder's IOMMU, from the same
+  table code as scanout.c), checks that every address it writes belongs to
+  an allocation in the list, writes the registers and completes the fence
+  from the interrupt. The KMD never parses a bitstream, so a broken stream
+  cannot do more than a wrong picture or a timeout.
 - The output is an NV12 allocation the Mali samples (U4), so the decoded
   picture never touches the CPU. The VDPU383 has its own IOMMU, as the
   VOP2 has (scanout.c): the same table-building code, a third client.

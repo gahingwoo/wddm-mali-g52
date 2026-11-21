@@ -129,6 +129,32 @@ typedef struct _MW_UMD_PROC {
     MW_UMD_COUNT Count[MW_UMD_KINDS];
 } MW_UMD_PROC;
 
+/* What the UMD may offer, from the KMD: the answer to the UMD's
+ * KMTQAITYPE_UMDRIVERPRIVATE query (pfnQueryAdapterInfoCb at
+ * OpenAdapter10_2, before there is a device to escape through). The KMD
+ * fills it from DWORD settings in Device Parameters, so each step of the
+ * D3D11 work (docs/D3D11-UMD.md) can be turned back without reinstalling.
+ * A KMD that refuses the query means: Ddi 10, as before it existed.
+ * Fields are only ever added at the end; Size says how many there are. */
+#define MW_UMD_INFO_MAGIC       0x3149574Du     /* 'MWI1' */
+#define MW_UMD_DDI_D3D10_1      10
+#define MW_UMD_DDI_D3D11_0      11
+#define MW_UMD_DDI_D3D11_1      111
+#define MW_UMD_NO_NODE          0xFFFFFFFFu
+
+typedef struct _MW_UMD_ADAPTER_INFO {
+    mw_u32 Magic;                       /* MW_UMD_INFO_MAGIC */
+    mw_u32 Size;                        /* bytes filled in */
+    mw_u32 Ddi;                         /* UmdDdi: the highest DDI, MW_UMD_DDI_* (default 10) */
+    mw_u32 FeatureLevel;                /* UmdFeatureLevel: a D3D_FEATURE_LEVEL (default 0xa000) */
+    mw_u32 Dxgi12;                      /* UmdDxgi12: the DXGI 1.2 DDI and flip model (default 0) */
+    mw_u32 Video;                       /* UmdVideo: 0 none, 1 video DDI without profiles, 2 with (default 0) */
+    mw_u32 DecodeNode;                  /* node ordinal of the VIDEO_DECODE engine, MW_UMD_NO_NODE none */
+    mw_u32 VirtualMode;                 /* 1: WDDM 2.x with GPU virtual addressing (D3DWDDM2_0 DDI) */
+    mw_u32 KmdBuild;                    /* the CI run that built the KMD (MW_BUILD) */
+    mw_u32 Reserved[7];
+} MW_UMD_ADAPTER_INFO;
+
 /* The KMD's counters, for tests and bring-up. */
 typedef struct _MW_ESCAPE_STATS_DATA {
     mw_u32 Code;                        /* MW_ESCAPE_STATS */
