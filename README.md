@@ -104,9 +104,12 @@ trust the certificate, `pnputil /add-driver`. It needs the firmware below.
 
 Developed on the ArmSoM CM5-IO and the LCKFB TaishanPi 3M, with firmware from
 [edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576). M1 to M5.2 step (c)
-were done on the CM5-IO; the first picture from DWM came on the TaishanPi 3M,
-which LCKFB provided. The firmware has to power the GPU and describe it in
+were done on the CM5-IO; the first picture from DWM came on the TaishanPi 3M. The firmware has to power the GPU and describe it in
 ACPI (`RKCP7402`); edk2-rk3576 does both on these two boards.
+
+## Acknowledgements
+
+Thanks to [JLC](https://jlc.com/) (嘉立创) for sponsoring the LCKFB TaishanPi 3M, its MIPI DSI screen, the fan and the EC20 4G module used for this work, and to [ArmSoM](https://www.armsom.org/) for sponsoring the CM5 module and the CM5-IO board.
 
 ## License
 
