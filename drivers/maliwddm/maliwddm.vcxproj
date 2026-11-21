@@ -64,6 +64,7 @@
     <ClCompile Include="scanout.c" />
     <ClCompile Include="backlight.c" />
     <ClCompile Include="version.c" />
+    <ClCompile Include="probe.c" />
     <ClCompile Include="..\common\maligpu.c" />
   </ItemGroup>
 

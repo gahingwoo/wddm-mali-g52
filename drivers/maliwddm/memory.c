@@ -423,6 +423,13 @@ NTSTATUS APIENTRY MwBuildPagingBuffer(IN_CONST_HANDLE hAdapter, DXGKARG_BUILDPAG
 
     if ((ULONG)Arg->Operation < 16)
         a->PagingOps[Arg->Operation]++;
+    /* Every operation, refused ones marked, into the probe's breadcrumbs
+     * (probe.c): a WDDM 2.x VidMm asks for operations a 1.3 driver never
+     * sees, and refusing one may be what stops it. */
+    MwProbePagingOp((ULONG)Arg->Operation,
+                    Arg->Operation != DXGK_OPERATION_MAP_APERTURE_SEGMENT &&
+                    Arg->Operation != DXGK_OPERATION_UNMAP_APERTURE_SEGMENT &&
+                    !(Arg->Operation == DXGK_OPERATION_NOTIFY_RESIDENCY && MwProbeNotifyResidencyOk));
     switch (Arg->Operation) {
     case DXGK_OPERATION_MAP_APERTURE_SEGMENT: {
         MW_ALLOCATION *alloc = (MW_ALLOCATION *)Arg->MapApertureSegment.hAllocation;
@@ -464,6 +471,12 @@ NTSTATUS APIENTRY MwBuildPagingBuffer(IN_CONST_HANDLE hAdapter, DXGKARG_BUILDPAG
         MwCopyForget(a, alloc, FALSE);
         return STATUS_SUCCESS;
     }
+    case DXGK_OPERATION_NOTIFY_RESIDENCY:
+        /* WDDM 2.x tells the driver an allocation became resident or was
+         * evicted. The aperture mapping above already follows residency,
+         * so there is nothing to do. A 1.3 driver is never asked. Refusing
+         * it, as before, is ProbeNotifyResidencyOk = 0. */
+        return MwProbeNotifyResidencyOk ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
     default:
         return STATUS_NOT_SUPPORTED;
     }
