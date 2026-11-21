@@ -132,6 +132,7 @@ static NTSTATUS APIENTRY MwAddDevice(IN_CONST_PDEVICE_OBJECT Pdo, OUT_PPVOID Con
         return STATUS_NO_MEMORY;
     a->Pdo = (PDEVICE_OBJECT)Pdo;
     ExInitializeFastMutex(&a->MmuLock);
+    ExInitializeFastMutex(&a->UmdLock);
     a->Gpu.Log = MwLogHook;
     a->Gpu.LogOwner = a;
     MwCommandInit(a);
@@ -342,7 +343,11 @@ static NTSTATUS APIENTRY MwDispatchIoRequest(IN_CONST_PVOID Context, IN_ULONG So
 }
 
 /* The child's power is the panel's: its backlight goes off with it
- * (backlight.c; nothing happens on HDMI). The adapter's is left alone. */
+ * (backlight.c; nothing happens on HDMI). The adapter itself leaving D0
+ * for a shutdown, a restart or sleep: scan-out off and the IOMMU no longer
+ * translating, so the firmware, the bugcheck screen or the next driver
+ * finds the VOP2 reading the framebuffer at its physical address
+ * (scanout.c). */
 static NTSTATUS APIENTRY MwSetPowerState(IN_CONST_PVOID Context, IN_ULONG Uid,
                                          IN_DEVICE_POWER_STATE State, IN_POWER_ACTION Action)
 {
@@ -350,6 +355,10 @@ static NTSTATUS APIENTRY MwSetPowerState(IN_CONST_PVOID Context, IN_ULONG Uid,
     UNREFERENCED_PARAMETER(Action);
     if (Uid != DISPLAY_ADAPTER_HW_ID)
         MwBacklightPower(a, State == PowerDeviceD0);
+    else if (a != NULL) {
+        MwScanPower(a, State == PowerDeviceD0);
+        MwLog(a, L"AdapterPowerState", (ULONG)State);
+    }
     return STATUS_SUCCESS;
 }
 
@@ -546,6 +555,61 @@ static ULONG TicksEachUs(const MW_ADAPTER *A, ULONG64 Ticks, ULONG Count)
     return Count != 0 ? TicksToUs(A, Ticks / Count) : 0;
 }
 
+/* MW_ESCAPE_UMD: a UMD's counts since its last report go into the sums
+ * and into its process's entry; the answer is the switches, read from the
+ * settings each time (about once a second per process), so a change in
+ * the registry reaches running processes without a restart. PASSIVE. */
+static ULONG UmdFlags(MW_ADAPTER *A)
+{
+    ULONG f = MW_UMD_FLAG_VALID;
+    if (MwSetting(A, L"UmdCopyOnGpu", 1) != 0)
+        f |= MW_UMD_FLAG_COPY_GPU;
+    if (MwSetting(A, L"UmdReadbackOneCopy", 1) != 0)
+        f |= MW_UMD_FLAG_READBACK_1;
+    return f;
+}
+
+static NTSTATUS UmdReport(MW_ADAPTER *A, MW_ESCAPE_UMD_DATA *D)
+{
+    ULONG pid = (ULONG)(ULONG_PTR)PsGetCurrentProcessId();
+    MW_UMD_PROC *e = NULL;
+    MW_UMD_COUNT in[MW_UMD_KINDS];
+
+    /* The caller's buffer, read once. */
+    RtlCopyMemory(in, D->Delta, sizeof(in));
+    ExAcquireFastMutex(&A->UmdLock);
+    A->UmdReports++;
+    for (ULONG i = 0; i < MW_UMD_PROCS && e == NULL; i++)
+        if (A->UmdProc[i].Pid == pid)
+            e = &A->UmdProc[i];
+    if (e == NULL) {
+        /* A new process takes the oldest entry. */
+        e = &A->UmdProc[A->UmdProcNext];
+        A->UmdProcNext = (A->UmdProcNext + 1) % MW_UMD_PROCS;
+        RtlZeroMemory(e, sizeof(*e));
+        e->Pid = pid;
+    }
+    e->Reports++;
+    for (ULONG k = 0; k < MW_UMD_KINDS; k++) {
+        A->Umd[k].Calls += in[k].Calls;
+        A->Umd[k].Bytes += in[k].Bytes;
+        A->Umd[k].Ticks += in[k].Ticks;
+        e->Count[k].Calls += in[k].Calls;
+        e->Count[k].Bytes += in[k].Bytes;
+        e->Count[k].Ticks += in[k].Ticks;
+    }
+    ExReleaseFastMutex(&A->UmdLock);
+    D->Flags = UmdFlags(A);
+    return STATUS_SUCCESS;
+}
+
+/* MW_ESCAPE_STATS_DATA.ScanState. */
+static ULONG ScanState(const MW_ADAPTER *A)
+{
+    return (A->ScanOn ? 1u : 0) | (A->ScanPaging ? 2u : 0) | (A->ScanShowing ? 4u : 0) |
+           (A->ScanReady ? 8u : 0) | (A->ScanSetting ? 16u : 0);
+}
+
 static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D, UINT Size)
 {
     D->GpuUp = A->GpuUp;
@@ -602,7 +666,7 @@ static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D, UINT Size)
         D->VsyncGapMaxUs = TicksToUs(A, A->VsyncGapMaxTicks);
         D->FlipsWhileBusy = A->FlipsWhileBusy;
     }
-    if (Size >= sizeof(MW_ESCAPE_STATS_DATA)) {
+    if (Size >= RTL_SIZEOF_THROUGH_FIELD(MW_ESCAPE_STATS_DATA, WaitOtherMaxUs)) {
         D->TimeSliceMs = A->Slice;
         D->PreemptRequests = A->PreemptRequests;
         D->PreemptIdle = A->PreemptIdle;
@@ -625,6 +689,35 @@ static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D, UINT Size)
         D->WaitMaxUs = TicksToUs(A, A->WaitMaxTicks);
         D->WaitOtherCount = A->WaitOtherCount;
         D->WaitOtherMaxUs = TicksToUs(A, A->WaitOtherMaxTicks);
+    }
+    if (Size >= sizeof(MW_ESCAPE_STATS_DATA)) {
+        D->ScanState = ScanState(A);
+        D->FlipsScanned = A->FlipsScanned;
+        D->FlipsRotCopied = A->RotFlipCopies;
+        D->WhyScanOff = A->WhyScanOff;
+        D->WhyNotMapped = A->WhyNotMapped;
+        D->WhyRotated = A->WhyRotated;
+        D->WhyInvisible = A->WhyInvisible;
+        D->ScanAutoOff = A->ScanAutoOff;
+        D->ScanFaults = A->ScanFaults;
+        D->ScanFaultAddr = A->ScanFaultAddr;
+        D->FlipIntervals = A->FlipIntervals;
+        D->FlipIntervalMaxUs = TicksToUs(A, A->FlipIntervalMaxTicks);
+        D->FlipShows = A->FlipShows;
+        D->FlipShowMaxUs = TicksToUs(A, A->FlipShowMaxTicks);
+        D->FlipCallMaxUs = TicksToUs(A, A->FlipCallMaxTicks);
+        D->LastPath = A->LastPath;
+        D->FlipIntervalTicks = A->FlipIntervalTicks;
+        D->FlipShowTicks = A->FlipShowTicks;
+        D->FlipCallTicks = A->FlipCallTicks;
+        D->CopyBytesAvoided = A->CopyBytesAvoided;
+        D->PresentBltBytes = A->PresentBltBytes;
+        ExAcquireFastMutex(&A->UmdLock);
+        D->UmdReports = A->UmdReports;
+        RtlCopyMemory(D->Umd, A->Umd, sizeof(D->Umd));
+        RtlCopyMemory(D->UmdProc, A->UmdProc, sizeof(D->UmdProc));
+        ExReleaseFastMutex(&A->UmdLock);
+        D->UmdFlags = UmdFlags(A);
     }
 }
 
@@ -664,10 +757,19 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_SCANOUT_DATA))
             return STATUS_INVALID_PARAMETER;
         return MwScanSet(a, (MW_ESCAPE_SCANOUT_DATA *)Esc->pPrivateDriverData);
+    case MW_ESCAPE_UMD:
+        if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_UMD_DATA))
+            return STATUS_INVALID_PARAMETER;
+        return UmdReport(a, (MW_ESCAPE_UMD_DATA *)Esc->pPrivateDriverData);
     case MW_ESCAPE_STATS:
         if (Esc->PrivateDriverDataSize < (UINT)FIELD_OFFSET(MW_ESCAPE_STATS_DATA, Vsyncs))
             return STATUS_INVALID_PARAMETER;
         Stats(a, (MW_ESCAPE_STATS_DATA *)Esc->pPrivateDriverData, Esc->PrivateDriverDataSize);
+        /* The registry trace only for a full reading (m5test), not for the
+         * UMD's idle poll, which asks for the fences alone every
+         * millisecond. */
+        if (Esc->PrivateDriverDataSize <= (UINT)FIELD_OFFSET(MW_ESCAPE_STATS_DATA, Vsyncs))
+            return STATUS_SUCCESS;
         MwLog(a, L"T_CommitsPinned", a->CommitsPinned);
         MwLog(a, L"T_CommitsUnpinned", a->CommitsUnpinned);
         MwLog(a, L"T_CommitsNoPath", a->CommitsNoPath);
@@ -736,6 +838,74 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         MwLog(a, L"T_WaitUsAvg", TicksEachUs(a, a->WaitTicks, a->WaitCount));
         MwLog(a, L"T_WaitUsMax", TicksToUs(a, a->WaitMaxTicks));
         MwLog(a, L"T_WaitOtherUsMax", TicksToUs(a, a->WaitOtherMaxTicks));
+        /* How flips reach the screen (scanout.c, display.c). T_PresentPath
+         * is the last flip shown: 1 scanned out by the VOP2, 2 copied, 3
+         * copied and turned. T_FlipsScanned are the copies avoided; each
+         * T_CopyWhy* counts flips that were left to the copy, by reason.
+         * T_ScanState: 1 on, 2 translating, 4 a primary shown, 8 set up,
+         * 16 the ScanOut setting on. */
+        MwLog(a, L"T_PresentPath", a->LastPath);
+        MwLog(a, L"T_ScanState", ScanState(a));
+        MwLog(a, L"T_FlipsScanned", a->FlipsScanned);
+        MwLog(a, L"T_CopiesAvoided", a->FlipsScanned);
+        MwLog(a, L"T_CopyMBAvoided", (ULONG)(a->CopyBytesAvoided >> 20));
+        MwLog(a, L"T_CopyWhyScanOff", a->WhyScanOff);
+        MwLog(a, L"T_CopyWhyNotMapped", a->WhyNotMapped);
+        MwLog(a, L"T_CopyWhyRotated", a->WhyRotated);
+        MwLog(a, L"T_CopyWhyInvisible", a->WhyInvisible);
+        MwLog(a, L"T_ScanFlips", a->ScanFlips);
+        MwLog(a, L"T_ScanMaps", a->ScanMaps);
+        MwLog(a, L"T_ScanMismatch", a->ScanMismatch);
+        MwLog(a, L"T_ScanNoSlot", a->ScanNoSlot);
+        MwLog(a, L"T_ScanToFbs", a->ScanToFbs);
+        MwLog(a, L"T_ScanFaults", a->ScanFaults);
+        MwLog(a, L"T_ScanFaultAddr", a->ScanFaultAddr);
+        MwLog(a, L"T_ScanAutoOff", a->ScanAutoOff);
+        MwLog(a, L"T_ScanLastRefusedW", a->ScanLastW);
+        MwLog(a, L"T_ScanLastRefusedH", a->ScanLastH);
+        MwLog(a, L"T_ScanLastRefusedPitch", a->ScanLastPitch);
+        MwLog(a, L"T_FbWidth", a->Fb.Width);
+        MwLog(a, L"T_FbHeight", a->Fb.Height);
+        MwLog(a, L"T_FbPitch", a->Fb.Pitch);
+        /* Per flip: the time between flips (1000000 / it is the flip rate),
+         * flip to the vsync that reported it shown, and the driver's own
+         * time in SetVidPnSourceAddress; T_FlipCopyMsTotal is all the CPU
+         * time the copies took since the start. */
+        MwLog(a, L"T_FlipIntervalUsAvg", TicksEachUs(a, a->FlipIntervalTicks, a->FlipIntervals));
+        MwLog(a, L"T_FlipIntervalUsMax", TicksToUs(a, a->FlipIntervalMaxTicks));
+        MwLog(a, L"T_FlipShowUsAvg", TicksEachUs(a, a->FlipShowTicks, a->FlipShows));
+        MwLog(a, L"T_FlipShowUsMax", TicksToUs(a, a->FlipShowMaxTicks));
+        MwLog(a, L"T_FlipCallUsAvg", TicksEachUs(a, a->FlipCallTicks, a->Flips));
+        MwLog(a, L"T_FlipCallUsMax", TicksToUs(a, a->FlipCallMaxTicks));
+        MwLog(a, L"T_FlipCopyMsTotal", TicksToUs(a, a->FlipCopyTicks) / 1000);
+        MwLog(a, L"T_PresentBltMB", (ULONG)(a->PresentBltBytes >> 20));
+        /* The UMDs' counts since the start, all processes: calls, MB and
+         * microseconds a call, by kind (MW_UMD_* in maliwddm_abi.h). */
+        {
+            static const PCWSTR names[MW_UMD_KINDS] = {
+                L"CopyGpu", L"CopyCpu", L"CopyCpuBuffer", L"Upload", L"MapRead", L"MapWrite",
+                L"PresentReadback", L"PresentDirect", L"GpuWait", L"Blt", L"Resolve", L"Spare",
+            };
+            MW_UMD_COUNT c[MW_UMD_KINDS];
+            ExAcquireFastMutex(&a->UmdLock);
+            RtlCopyMemory(c, a->Umd, sizeof(c));
+            ExReleaseFastMutex(&a->UmdLock);
+            MwLog(a, L"T_UmdReports", a->UmdReports);
+            MwLog(a, L"T_UmdFlags", UmdFlags(a));
+            for (ULONG k = 0; k < MW_UMD_KINDS - 1; k++) {
+                WCHAR n[48];
+                UNICODE_STRING us;
+                RtlInitEmptyUnicodeString(&us, n, sizeof(n));
+                if (NT_SUCCESS(RtlUnicodeStringPrintf(&us, L"T_Umd%wsCalls", names[k])))
+                    MwLog(a, n, (ULONG)c[k].Calls);
+                RtlInitEmptyUnicodeString(&us, n, sizeof(n));
+                if (NT_SUCCESS(RtlUnicodeStringPrintf(&us, L"T_Umd%wsMB", names[k])))
+                    MwLog(a, n, (ULONG)(c[k].Bytes >> 20));
+                RtlInitEmptyUnicodeString(&us, n, sizeof(n));
+                if (NT_SUCCESS(RtlUnicodeStringPrintf(&us, L"T_Umd%wsUsAvg", names[k])))
+                    MwLog(a, n, c[k].Calls ? TicksToUs(a, c[k].Ticks / c[k].Calls) : 0);
+            }
+        }
         return STATUS_SUCCESS;
     default:
         MwLog(a, L"EscapeUnknownCode", code);

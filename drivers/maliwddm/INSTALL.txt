@@ -122,6 +122,82 @@ Screen brightness (TaishanPi 3M with its MIPI DSI screen)
   BacklightFirmwareLevel and BacklightInterface (1 or 2: Windows asked for
   it); m5test perf adds T_BacklightLevel, T_BacklightDuty and the counts.
 
+Scan-out: flips without a CPU copy
+
+  The display controller (VOP2) reads the desktop straight from the
+  primary DWM drew into, through its own IOMMU; a flip is two register
+  writes. Without it every flip is a CPU copy of the whole frame into the
+  firmware framebuffer (about 25 ms a frame on the TaishanPi 3M's panel).
+  It is on from the start, also with the desktop turned to landscape: DWM
+  draws the turned desktop into a primary of the panel's own size, which
+  the VOP2 shows as it is.
+
+  Off, from an administrator prompt, then reboot (flips are copied, as in
+  every package before this one):
+
+       reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters" /v ScanOut /t REG_DWORD /d 0 /f
+
+  On again: the same with /d 1, or delete the value. Without a reboot,
+  m5test scan 0 (off) and m5test scan 1 (on) change it until the next
+  start; m5test scan 4 and m5test scan 5 also write the setting. An IOMMU
+  fault while a primary is shown turns it off by itself (T_ScanAutoOff).
+
+  With no usable picture, the same reg add over SSH, or from the rescue
+  Windows with the main Windows' SYSTEM hive loaded, followed by a reboot.
+
+Measuring presents
+
+  m5test perf 10 prints, for a 10 s interval: flips a second, how many
+  were scanned out and how many copied, why a flip was left to the copy,
+  the time from a flip to the vsync that showed it, and the CPU time the
+  copies took. Every stats escape (m5test perf, m5test with no argument)
+  also writes T_* values to Device Parameters\maliwddm:
+
+       reg query "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\maliwddm" /f T_ /c
+
+  T_PresentPath        the last flip shown: 1 scanned out, 2 copied,
+                       3 copied and turned
+  T_ScanState          1 on, 2 translating, 4 a primary shown, 8 set up,
+                       16 the ScanOut setting on; 31 is all of them
+  T_FlipsScanned       flips scanned out (T_CopiesAvoided, the same)
+  T_FlipCopies         flips copied; T_RotFlipCopies of them turned
+  T_CopyWhy*           flips left to the copy, by reason: ScanOff,
+                       NotMapped (the primary has no VOP2 address; see
+                       T_ScanMismatch, T_ScanLastRefused*, T_Fb*),
+                       Rotated, Invisible
+  T_FlipIntervalUsAvg  time between flips; 1000000 / it is flips a second
+  T_FlipShowUsAvg      flip to the vsync that reported it shown
+  T_FlipCopyUsAvg      one copy, when there are copies
+  T_FlipCopyMsTotal    CPU time in copies since the start
+  T_ScanFaults, T_ScanFaultAddr, T_ScanAutoOff   IOMMU faults
+
+What the user-mode driver does on the CPU
+
+  Each process's maliumd.dll counts its copies, uploads, maps, presents
+  and waits, and hands the counts to maliwddm about once a second.
+  m5test perf prints them for its interval, in all and by process
+  (the "UMD" lines), next to "KMD blt presents" (a window's frame copied
+  on the CPU into DWM's surface). The kinds:
+
+    copy on the GPU / on the CPU   CopyResource, CopySubresourceRegion
+    upload                         UpdateSubresource
+    map for reading / writing      Map; the time includes any wait
+    present, read back             a window's frame read back on the CPU
+    present, no copy               a frame the runtime already has
+    wait for GPU idle              the UMD waiting for everything queued
+    Blt, resolve                   calls the UMD does not carry out
+
+  Two switches, DWORDs in Device Parameters, on unless 0; a running
+  process picks a change up within a second or two, no reboot:
+
+    UmdCopyOnGpu         copies between textures as GPU jobs (0: on the
+                         CPU, as the file C:\mali\copy-cpu also does)
+    UmdReadbackOneCopy   a read-back present copies the frame once,
+                         straight into the surface DXGI presents from
+                         (0: through a second buffer, as before)
+
+       reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters" /v UmdCopyOnGpu /t REG_DWORD /d 0 /f
+
 Replacing only the UMD while testing
 
   Rename the loaded file and copy the new one next to it; then end

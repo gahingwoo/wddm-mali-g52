@@ -21,6 +21,7 @@
 #include <io.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,6 +29,7 @@
 
 #include "util/os_time.h"
 #include "util/mali_slow.h"
+#include "util/mali_count.h"
 #include "drm-uapi/drm.h"
 #include "drm-uapi/panfrost_drm.h"
 #include "malikm_ioctl.h"
@@ -1247,12 +1249,54 @@ w_render_inner(UINT commandLength, UINT allocations)
    return 0;
 }
 
+/* The UMD's kinds are the KMD's, by number. */
+typedef char wumd_kinds_match[(MALI_COUNT_KINDS == MW_UMD_KINDS) ? 1 : -1];
+
+/* The UMD's counters (util/mali_count.h) to maliwddm, at most once a
+ * second, and the switches it answers with. Under wddm_lock, from a
+ * submission, so the device the escape goes through is a live one. A
+ * report that does not get through is kept for the next. */
+static void
+wumd_report(int force)
+{
+   static uint64_t last, hz;
+   uint64_t now = mali_count_now();
+   MW_ESCAPE_UMD_DATA d;
+   struct mali_count c[MALI_COUNT_KINDS];
+
+   if (!hz) {
+      LARGE_INTEGER f;
+      QueryPerformanceFrequency(&f);
+      hz = (uint64_t)f.QuadPart;
+   }
+   if (!force && last && now - last < hz)
+      return;
+   last = now;
+   memset(&d, 0, sizeof(d));
+   d.Code = MW_ESCAPE_UMD;
+   mali_count_take(c);
+   for (unsigned k = 0; k < MW_UMD_KINDS; k++) {
+      d.Delta[k].Calls = c[k].calls;
+      d.Delta[k].Bytes = c[k].bytes;
+      d.Delta[k].Ticks = c[k].ticks;
+   }
+   /* A KMD from before MW_ESCAPE_UMD refuses it: the switches stay on, as
+    * they were before they existed. */
+   if (w_escape(&d, sizeof(d)) < 0) {
+      mali_count_give_back(c);
+      return;
+   }
+   if (d.Flags & MW_UMD_FLAG_VALID)
+      mali_count_set_flags(d.Flags);
+}
+
 static NTSTATUS
 w_render(UINT commandLength, UINT allocations)
 {
    unsigned long long t0 = malikm_perf_now();
    NTSTATUS st = w_render_inner(commandLength, allocations);
    malikm_perf_add(6 /* submit */, t0);
+   wumd_report(0);
    return st;
 }
 
@@ -1262,9 +1306,11 @@ static int
 wddm_poll_idle(void)
 {
    for (int ms = 0; ms < 10000; ms++) {
+      /* The fences alone: the KMD then fills only those and writes no
+       * registry trace for this reading. */
       MW_ESCAPE_STATS_DATA st = {0};
       st.Code = MW_ESCAPE_STATS;
-      if (w_escape(&st, sizeof(st)) < 0)
+      if (w_escape(&st, (UINT)offsetof(MW_ESCAPE_STATS_DATA, Vsyncs)) < 0)
          return -MK_EIO;
       if (st.LastCompletedFence == st.LastSubmittedFence && !st.Queued && !st.Running)
          return 0;
@@ -1306,6 +1352,7 @@ wddm_idle(const char *why)
       ret = kmt.WaitForIdle(&w) >= 0 ? 0 : -MK_EIO;
    }
    malikm_perf_add(7 /* gpu-wait */, t0);
+   mali_count_add(MALI_COUNT_GPU_WAIT, 0, t0);
    MALI_SLOW(slow_t0, "gpu-idle", "for %s, %s, %s", why,
              ddi.on ? (ddi.last_unsignalled ? "polled the KMD" : "on the last event")
                     : "WaitForIdle", ret ? "timed out" : "idle");
@@ -1545,6 +1592,101 @@ malikm_present_allocation(void *hRTDevice, unsigned src_allocation, unsigned dst
                   src_allocation, dst_allocation, (unsigned long)hr);
    ReleaseSRWLockExclusive(&wddm_lock);
    return hr;
+}
+
+/* As malikm_present_d3dddi, straight from the read-back map: rows of
+ * Stride bytes, R and B exchanged when Rgba. One pass over the frame
+ * (d3d10_gdi.c). 0 when the runtime was asked to present (present_result
+ * says how that went), -1 when this device is not on the runtime and the
+ * caller presents some other way. */
+static void
+copy_rows(uint8_t *dst, size_t dst_pitch, const uint8_t *src, size_t stride, unsigned w,
+          unsigned h, int rgba)
+{
+   for (unsigned y = 0; y < h; y++) {
+      const uint32_t *s = (const uint32_t *)(src + (size_t)y * stride);
+      uint32_t *d = (uint32_t *)(dst + (size_t)y * dst_pitch);
+      if (!rgba) {
+         memcpy(d, s, (size_t)w * 4);
+      } else {
+         for (unsigned x = 0; x < w; x++) {
+            uint32_t p = s[x];
+            d[x] = (p & 0xff00ff00u) | ((p & 0xffu) << 16) | ((p >> 16) & 0xffu);
+         }
+      }
+   }
+}
+
+int
+malikm_present_d3dddi_rows(const void *map, unsigned stride, unsigned w, unsigned h, int rgba,
+                           void *dxgi_context)
+{
+   int ret = -1;
+   HRESULT hr = E_FAIL;
+   D3DKMT_HANDLE src = 0, dst = 0;
+
+   wlock(__func__);
+   if (!present_target.set || !wselect_rt(present_target.device) || !ddi.on || !ddi.dxgi ||
+       !ddi.dxgi->pfnPresentCb)
+      goto out;
+   ret = 0;
+   if (present_target.src) {
+      /* A primary: into its own allocation. */
+      void *cpu = w_lock(present_target.src);
+      if (cpu) {
+         unsigned long long t0 = malikm_perf_now();
+         copy_rows((uint8_t *)cpu, (size_t)w * 4, (const uint8_t *)map, stride, w, h, rgba);
+         w_unlock(present_target.src);
+         malikm_perf_add(3 /* primary-copy */, t0);
+         src = present_target.src;
+         dst = present_target.dst;
+      }
+   } else {
+      if (ddi.present && (ddi.present_w != w || ddi.present_h != h)) {
+         w_unlock(ddi.present);
+         w_destroy(ddi.present);
+         ddi.present = 0;
+         ddi.present_cpu = NULL;
+      }
+      if (!ddi.present) {
+         MW_ALLOCATION_INFO pi = {0};
+         D3DDDI_ALLOCATIONINFO ai = {0};
+         pi.Version = MW_ABI_VERSION;
+         pi.Flags = MW_ALLOC_NOEXEC;
+         pi.Width = w;
+         pi.Height = h;
+         pi.Pitch = w * 4;
+         pi.Format = D3DDDIFMT_X8R8G8B8;
+         pi.Size = (uint64_t)w * h * 4;
+         ai.pPrivateDriverData = &pi;
+         ai.PrivateDriverDataSize = sizeof(pi);
+         if (w_create(&ai) >= 0) {
+            ddi.present = ai.hAllocation;
+            ddi.present_cpu = w_lock(ddi.present);
+            ddi.present_w = w;
+            ddi.present_h = h;
+         }
+      }
+      if (ddi.present && ddi.present_cpu) {
+         copy_rows((uint8_t *)ddi.present_cpu, (size_t)w * 4, (const uint8_t *)map, stride, w, h,
+                   rgba);
+         src = ddi.present;
+      }
+   }
+   if (src) {
+      DXGIDDICB_PRESENT p = {0};
+      p.hSrcAllocation = src;
+      p.hDstAllocation = dst;
+      p.pDXGIContext = dxgi_context;
+      p.hContext = ddi.context;
+      unsigned long long t0 = malikm_perf_now();
+      hr = ddi.dxgi->pfnPresentCb(ddi.device, &p);
+      malikm_perf_add(4 /* present-cb */, t0);
+   }
+   present_result = hr;
+out:
+   ReleaseSRWLockExclusive(&wddm_lock);
+   return ret;
 }
 
 /* Present for d3d10umd on the hardware runtime: Bgrx is the frame, linear

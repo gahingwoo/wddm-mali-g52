@@ -19,8 +19,23 @@
  * them back has cost the HDMI signal before (in the firmware). The IOMMU's
  * registers are read, as Linux reads them.
  *
- * Nothing here runs until MW_ESCAPE_SCANOUT turns it on, and the same
- * escape turns it off again. */
+ * It is on from the start unless the ScanOut setting (a DWORD in Device
+ * Parameters) is 0; MW_ESCAPE_SCANOUT turns it on and off while running.
+ * Until 2026-11-21 it was off unless the setting was 1, so every flip on
+ * a board nobody had run "m5test scan 5" on was a CPU copy: about 25 ms a
+ * frame on the TaishanPi 3M's 800x1280 panel.
+ *
+ * Rotation does not stop it. The source mode, and so every shared
+ * primary, keeps the panel's own size at every rotation and DWM draws the
+ * desktop already turned into it (display.c), so a 90 or 270 degree
+ * desktop is scanned out like an unturned one. The VOP2 itself cannot
+ * turn a picture by 90 or 270 degrees: on the RK3576 the Esmart windows
+ * can only mirror vertically and the Cluster windows only mirror
+ * (rk3576_vop_win_data in mainline rockchip_vop2_reg.c). Only a primary of
+ * the turned size would need that, and it is copied (MwFlipDegrees).
+ *
+ * If the IOMMU reports a fault while a primary is shown, MwScanCheck puts
+ * the window back on the framebuffer and flips are copied from then on. */
 
 #include "maliwddm.h"
 
@@ -161,8 +176,11 @@ void MwScanStart(MW_ADAPTER *A)
         A->ScanSlot[i] = NULL;
     A->ScanReady = TRUE;
     MwLog(A, L"ScanSlotBytes", A->ScanSlotBytes);
-    /* On from the start if a test asked for that (m5test scan 5). */
-    if (MwSetting(A, L"ScanOut", 0) != 0) {
+    /* On from the start unless the setting says 0 (m5test scan 4, or
+     * reg add ... /v ScanOut /d 0). */
+    A->ScanSetting = MwSetting(A, L"ScanOut", 1) != 0;
+    MwLog(A, L"ScanOutSetting", A->ScanSetting);
+    if (A->ScanSetting) {
         MW_ESCAPE_SCANOUT_DATA d = {0};
         d.Mode = 1;
         MwScanSet(A, &d);
@@ -187,10 +205,80 @@ void MwScanToFb(MW_ADAPTER *A)
 
 /* Would a flip to this allocation be scanned out? Not if the driver has to
  * turn it (MwFlipDegrees): the window cannot rotate, and the copy does. */
+ULONG MwScanWhy(MW_ADAPTER *A, MW_ALLOCATION *P)
+{
+    if (!A->ScanOn || !A->ScanPaging)
+        return MW_SCAN_WHY_OFF;
+    if (P == NULL || P->ScanIova == 0 || !P->Mapped)
+        return MW_SCAN_WHY_NOT_MAPPED;
+    if (MwFlipDegrees(A, P) != 0)
+        return MW_SCAN_WHY_ROTATED;
+    return 0;
+}
+
 BOOLEAN MwScanUsable(MW_ADAPTER *A, MW_ALLOCATION *P)
 {
-    return A->ScanOn && A->ScanPaging && P != NULL && P->ScanIova != 0 && P->Mapped &&
-           MwFlipDegrees(A, P) == 0;
+    return MwScanWhy(A, P) == 0;
+}
+
+/* From the vsync DPC, every few vsyncs: an IOMMU fault while a primary is
+ * shown means the window reads pages that are not entered, and the
+ * display stalls on every one of them. The window goes back to the
+ * framebuffer, which is always entered, the faults are acknowledged as
+ * MwScanSet does, and flips are copied until scan-out is turned on again.
+ * Only the IOMMU's registers are read. Any IRQL. */
+void MwScanCheck(MW_ADAPTER *A)
+{
+    BOOLEAN fault = FALSE;
+    ULONG addr = 0;
+
+    if (!A->ScanReady || !A->ScanPaging || !A->ScanOn)
+        return;
+    for (ULONG m = VOP_MMU0; m <= VOP_MMU1; m += VOP_MMU1 - VOP_MMU0)
+        if (R(A, m + VMMU_STATUS) & VMMU_STATUS_FAULT) {
+            fault = TRUE;
+            addr = R(A, m + VMMU_PAGE_FAULT_ADDR);
+        }
+    if (!fault)
+        return;
+    InterlockedExchange(&A->ScanOn, 0);
+    MwScanToFb(A);
+    /* The rest of the frame being read can fault again before the window
+     * moves: acknowledge for a little while, about a millisecond. */
+    for (int i = 0; i < 64; i++) {
+        for (ULONG m = VOP_MMU0; m <= VOP_MMU1; m += VOP_MMU1 - VOP_MMU0)
+            if (R(A, m + VMMU_STATUS) & VMMU_STATUS_FAULT) {
+                W(A, m + VMMU_COMMAND, VMMU_CMD_ZAP_CACHE);
+                W(A, m + VMMU_COMMAND, VMMU_CMD_PAGE_FAULT_DONE);
+            }
+        KeStallExecutionProcessor(20);
+    }
+    A->ScanFaults++;
+    A->ScanFaultAddr = addr;
+    A->ScanAutoOff++;
+}
+
+/* The adapter leaving D0 (shutdown, restart, sleep): the window on the
+ * framebuffer and translation off, so that whatever runs next finds the
+ * VOP2 reading physical addresses again; back on when it returns to D0 if
+ * it was on. PASSIVE_LEVEL. */
+void MwScanPower(MW_ADAPTER *A, BOOLEAN On)
+{
+    MW_ESCAPE_SCANOUT_DATA d = {0};
+
+    if (!A->ScanReady)
+        return;
+    if (!On) {
+        if (A->ScanOn || A->ScanPaging) {
+            A->ScanResume = A->ScanOn != 0;
+            d.Mode = 2;
+            MwScanSet(A, &d);
+        }
+    } else if (A->ScanResume) {
+        A->ScanResume = FALSE;
+        d.Mode = 1;
+        MwScanSet(A, &d);
+    }
 }
 
 /* A flip: point the window at the primary. Called at the level
@@ -217,6 +305,9 @@ void MwScanMap(MW_ADAPTER *A, MW_ALLOCATION *P, PPFN_NUMBER Pfn, ULONG Pages)
     /* Only what the window is already set up for. */
     if (P->Width != A->Fb.Width || P->Height != A->Fb.Height || P->Pitch != A->Fb.Pitch) {
         A->ScanMismatch++;
+        A->ScanLastW = P->Width;
+        A->ScanLastH = P->Height;
+        A->ScanLastPitch = P->Pitch;
         return;
     }
     for (s = 0; s < MW_SCAN_SLOTS; s++)
@@ -273,6 +364,7 @@ NTSTATUS MwScanSet(MW_ADAPTER *A, MW_ESCAPE_SCANOUT_DATA *D)
     }
     if (D->Mode == 4 || D->Mode == 5) {
         MwSetSetting(A, L"ScanOut", D->Mode == 5);
+        A->ScanSetting = D->Mode == 5;
         D->Mode = D->Mode == 5 ? 1 : 0;
     }
     ExAcquireFastMutex(&A->MmuLock);

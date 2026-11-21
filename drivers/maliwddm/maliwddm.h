@@ -17,8 +17,9 @@
 #include "maliwddm_abi.h"
 #include "rotate.h"
 
+/* The adapter's own power and ACPI target (video.h; dispmprt.h has it in newer WDKs). */
 #ifndef DISPLAY_ADAPTER_HW_ID
-#define DISPLAY_ADAPTER_HW_ID   0xFFFFFFFFu  /* video.h */
+#define DISPLAY_ADAPTER_HW_ID   0xFFFFFFFFu
 #endif
 
 #define MW_TAG                  'dwlM'
@@ -249,6 +250,36 @@ struct _MW_ADAPTER {
     volatile BOOLEAN ScanShowing;
     volatile LONG ScanOn;
     ULONG ScanFlips, ScanMaps, ScanToFbs, ScanMismatch, ScanNoSlot, ScanFaults, ScanFaultAddr;
+    /* The ScanOut setting as read at the start (on unless it is 0), scan-out
+     * to be turned on again when the adapter is back in D0, IOMMU faults
+     * that turned it off (MwScanCheck), and the last primary refused for
+     * its size, to compare with the framebuffer's. */
+    BOOLEAN ScanSetting, ScanResume;
+    ULONG ScanAutoOff;
+    ULONG ScanLastW, ScanLastH, ScanLastPitch;
+    /* Which way each flip went (MwSetVidPnSourceAddress): scanned out there,
+     * or left to the copy, and why (MwScanWhy). */
+    ULONG FlipsScanned, WhyScanOff, WhyNotMapped, WhyRotated, WhyInvisible;
+    ULONG LastPath;             /* the last flip shown: 1 scanned out, 2 copied, 3 copied and turned */
+    ULONG64 CopyBytesAvoided;
+    ULONG64 FlipCallTicks, FlipCallMaxTicks;
+    ULONG64 FlipIntervalTicks, FlipIntervalMaxTicks;
+    ULONG FlipIntervals;
+    /* Flip to the vsync that reports it shown: ShownFlipTick is the flip
+     * time of the flip now on the screen, ReportedSeq the last one a vsync
+     * has reported. */
+    volatile ULONG64 ShownFlipTick;
+    LONG ReportedSeq;
+    ULONG FlipShows;
+    ULONG64 FlipShowTicks, FlipShowMaxTicks;
+    ULONG64 PresentBltBytes;
+    /* The user-mode drivers' reports (MW_ESCAPE_UMD, adapter.c): sums, and
+     * by process, under UmdLock. */
+    FAST_MUTEX UmdLock;
+    ULONG UmdReports;
+    MW_UMD_COUNT Umd[MW_UMD_KINDS];
+    MW_UMD_PROC UmdProc[MW_UMD_PROCS];
+    ULONG UmdProcNext;
     ULONG GpuClk;               /* (parent << 8) | divider last written here; 0 the firmware's */
     PKTHREAD CopyThread;
     KEVENT CopyEvent;
@@ -400,6 +431,12 @@ void MwScanStart(MW_ADAPTER *A);
 void MwScanStop(MW_ADAPTER *A);
 void MwScanToFb(MW_ADAPTER *A);
 BOOLEAN MwScanUsable(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
+#define MW_SCAN_WHY_OFF         1   /* scan-out off, or the IOMMU not translating */
+#define MW_SCAN_WHY_NOT_MAPPED  2   /* the primary has no VOP2 address */
+#define MW_SCAN_WHY_ROTATED     3   /* the driver has to turn it */
+ULONG MwScanWhy(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
+void MwScanCheck(MW_ADAPTER *A);
+void MwScanPower(MW_ADAPTER *A, BOOLEAN On);
 BOOLEAN MwScanFlip(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
 UINT MwFlipDegrees(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
 void MwScanMap(MW_ADAPTER *A, struct _MW_ALLOCATION *P, PPFN_NUMBER Pfn, ULONG Pages);

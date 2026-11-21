@@ -57,7 +57,9 @@ typedef struct _MW_COMMAND {
 
 /* Scan-out of primaries by the display controller, on and off.
  * Mode: 1 on, 0 off (flips are copied), 2 off and the IOMMU off too,
- * 3 only report. */
+ * 3 only report; 5 on and the ScanOut setting 1, 4 off and the setting 0.
+ * The setting decides the state at every start; without it scan-out is on
+ * (it was off before 2026-11-21). */
 typedef struct _MW_ESCAPE_SCANOUT_DATA {
     mw_u32 Code;                        /* MW_ESCAPE_SCANOUT */
     mw_u32 Mode;
@@ -83,6 +85,49 @@ typedef struct _MW_ESCAPE_GPU_INFO_DATA {
     mw_u64 Value[MW_GPU_PARAMS];        /* out; index = DRM_PANFROST_PARAM_* */
     mw_u64 Valid;                       /* out: bit n = Value[n] is meaningful */
 } MW_ESCAPE_GPU_INFO_DATA;
+
+/* What the user-mode driver does on the CPU and on the GPU, by kind: each
+ * process's UMD counts these and hands the KMD what it counted since the
+ * last time, about once a second (MW_ESCAPE_UMD); MW_ESCAPE_STATS returns
+ * the sums. Bytes are what was copied, uploaded, mapped or presented;
+ * Ticks the CPU time the calls took in the UMD (for a GPU copy that is the
+ * time to queue it, not the GPU's). */
+#define MW_UMD_COPY_GPU         0       /* CopyResource / CopySubresourceRegion as a GPU job */
+#define MW_UMD_COPY_CPU         1       /* the same between textures, done on the CPU */
+#define MW_UMD_COPY_CPU_BUFFER  2       /* the same between buffers, on the CPU */
+#define MW_UMD_UPLOAD           3       /* UpdateSubresource (from application memory) */
+#define MW_UMD_MAP_READ         4       /* Map for reading (staging read-back) */
+#define MW_UMD_MAP_WRITE        5       /* Map for writing only */
+#define MW_UMD_PRESENT_READBACK 6       /* a present read back on the CPU and blitted by the KMD */
+#define MW_UMD_PRESENT_DIRECT   7       /* a present of a surface the runtime already has: no copy */
+#define MW_UMD_GPU_WAIT         8       /* waits for the GPU to be idle (the shim's wddm_idle) */
+#define MW_UMD_BLT              9       /* DXGI pfnBlt calls, which the UMD does not carry out */
+#define MW_UMD_RESOLVE          10      /* ResolveSubresource */
+#define MW_UMD_KINDS            12
+
+typedef struct _MW_UMD_COUNT {
+    mw_u64 Calls, Bytes, Ticks;
+} MW_UMD_COUNT;
+
+/* MW_ESCAPE_UMD: in, the UMD's counts since its previous report; out, the
+ * switches the KMD's settings give (UmdCopyOnGpu, UmdReadbackOneCopy in
+ * Device Parameters, each on unless 0). */
+#define MW_ESCAPE_UMD           7
+#define MW_UMD_FLAG_COPY_GPU    0x1     /* copies between textures may run on the GPU */
+#define MW_UMD_FLAG_READBACK_1  0x2     /* a read-back present copies once, straight into the surface */
+#define MW_UMD_FLAG_VALID       0x80000000u
+
+typedef struct _MW_ESCAPE_UMD_DATA {
+    mw_u32 Code;                        /* MW_ESCAPE_UMD */
+    mw_u32 Flags;                       /* out: MW_UMD_FLAG_* */
+    MW_UMD_COUNT Delta[MW_UMD_KINDS];   /* in */
+} MW_ESCAPE_UMD_DATA;
+
+#define MW_UMD_PROCS            12
+typedef struct _MW_UMD_PROC {
+    mw_u32 Pid, Reports;
+    MW_UMD_COUNT Count[MW_UMD_KINDS];
+} MW_UMD_PROC;
 
 /* The KMD's counters, for tests and bring-up. */
 typedef struct _MW_ESCAPE_STATS_DATA {
@@ -147,6 +192,37 @@ typedef struct _MW_ESCAPE_STATS_DATA {
     mw_u64 WaitTicks;
     mw_u32 WaitCount, WaitMaxUs;
     mw_u32 WaitOtherCount, WaitOtherMaxUs;
+    /* How flips reach the screen (0 from a driver without these). A flip
+     * is scanned out (the VOP2 is pointed at the primary, no pixel is
+     * copied) or left to the copy thread, which copies it into the
+     * firmware framebuffer, turned if it has to be. */
+    mw_u32 ScanState;                   /* 1 on, 2 translating, 4 a primary shown, 8 set up, 16 ScanOut setting on */
+    mw_u32 FlipsScanned;                /* flips scanned out at SetVidPnSourceAddress: copies avoided */
+    mw_u32 FlipsRotCopied;              /* of FlipCopies, those turned on the CPU */
+    mw_u32 WhyScanOff;                  /* flips not scanned out: scan-out off or not translating */
+    mw_u32 WhyNotMapped;                /* ... the primary has no VOP2 address (size, slot, not resident) */
+    mw_u32 WhyRotated;                  /* ... the driver has to turn it (a primary of the turned size) */
+    mw_u32 WhyInvisible;                /* ... the source was invisible (display off) */
+    mw_u32 ScanAutoOff;                 /* times an IOMMU fault turned scan-out off */
+    mw_u32 ScanFaults, ScanFaultAddr;   /* IOMMU faults seen, the last address */
+    mw_u32 FlipIntervals, FlipIntervalMaxUs;    /* gaps between flips: their count, the longest */
+    mw_u32 FlipShows, FlipShowMaxUs;    /* flips a vsync reported shown; flip to that vsync, longest */
+    mw_u32 FlipCallMaxUs;               /* the longest SetVidPnSourceAddress */
+    mw_u32 LastPath;                    /* the last flip shown: 1 scanned out, 2 copied, 3 copied and turned */
+    mw_u64 FlipIntervalTicks;           /* between flips, summed: with FlipIntervals, the flip rate */
+    mw_u64 FlipShowTicks;               /* flip to the vsync that reported it, summed, either path */
+    mw_u64 FlipCallTicks;               /* inside SetVidPnSourceAddress, summed over Flips */
+    mw_u64 CopyBytesAvoided;            /* bytes the scanned-out flips did not copy */
+    /* Blt presents carried out on the CPU (PresentBlts): the bytes copied. */
+    mw_u64 PresentBltBytes;
+    /* What the user-mode drivers reported (MW_ESCAPE_UMD), summed over
+     * every process, and by process: UmdProc has up to MW_UMD_PROCS of the
+     * processes that reported most recently. Ticks are of the performance
+     * counter (PerfHz). */
+    mw_u32 UmdReports;                  /* escapes received */
+    mw_u32 UmdFlags;                    /* MW_UMD_FLAG_* the KMD hands out now */
+    MW_UMD_COUNT Umd[MW_UMD_KINDS];
+    MW_UMD_PROC UmdProc[MW_UMD_PROCS];
 } MW_ESCAPE_STATS_DATA;
 
 /* GPU memory: what is allocated, what VidMm has made resident, and by which

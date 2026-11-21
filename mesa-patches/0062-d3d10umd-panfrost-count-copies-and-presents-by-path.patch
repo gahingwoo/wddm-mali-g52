@@ -1,0 +1,526 @@
+diff --git a/src/gallium/drivers/panfrost/pan_blit.c b/src/gallium/drivers/panfrost/pan_blit.c
+index 7f8f2eb..38d17fc 100644
+--- a/src/gallium/drivers/panfrost/pan_blit.c
++++ b/src/gallium/drivers/panfrost/pan_blit.c
+@@ -103,6 +103,7 @@ panfrost_blit(struct pipe_context *pipe, const struct pipe_blit_info *info)
+ #ifdef _WIN32
+ #include <windows.h>
+ #include "util/u_surface.h"
++#include "util/mali_count.h"
+ 
+ /* A copy between two textures, on the GPU.
+  *
+@@ -116,7 +117,10 @@ panfrost_blit(struct pipe_context *pipe, const struct pipe_blit_info *info)
+  * The blitter copies through views in the linear format of each resource,
+  * so nothing is converted. What it cannot do (buffers, multisampled or
+  * compressed resources, a copy within one level of one resource) stays on
+- * the CPU. The file C:\mali\copy-cpu puts everything back there.
++ * the CPU. The file C:\mali\copy-cpu puts everything back there, and so
++ * does maliwddm's setting UmdCopyOnGpu = 0 (in the device's Device
++ * Parameters key), which reaches running processes within a second or so.
++ * Each copy is counted by the way it went (mali_count.h; m5test perf).
+  */
+ static bool
+ pan_copy_on_gpu(void)
+@@ -124,7 +128,14 @@ pan_copy_on_gpu(void)
+    static int on = -1;
+    if (on < 0)
+       on = GetFileAttributesA("C:\\mali\\copy-cpu") == INVALID_FILE_ATTRIBUTES;
+-   return on;
++   return on && (mali_count_flags() & MALI_COUNT_FLAG_COPY_GPU);
++}
++
++static uint64_t
++pan_copy_bytes(const struct pipe_resource *res, const struct pipe_box *box)
++{
++   return (uint64_t)util_format_get_stride(res->format, box->width) *
++          util_format_get_nblocksy(res->format, box->height) * MAX2(box->depth, 1);
+ }
+ 
+ void
+@@ -135,6 +146,7 @@ panfrost_resource_copy_region(struct pipe_context *pipe,
+                               const struct pipe_box *src_box)
+ {
+    struct panfrost_context *ctx = pan_context(pipe);
++   uint64_t count_t0 = mali_count_now();
+ 
+    if (!pan_copy_on_gpu() || dst->target == PIPE_BUFFER ||
+        src->target == PIPE_BUFFER || dst->nr_samples > 1 ||
+@@ -144,6 +156,9 @@ panfrost_resource_copy_region(struct pipe_context *pipe,
+        !util_blitter_is_copy_supported(ctx->blitter, dst, src)) {
+       util_resource_copy_region(pipe, dst, dst_level, dstx, dsty, dstz, src,
+                                 src_level, src_box);
++      mali_count_add(dst->target == PIPE_BUFFER ? MALI_COUNT_COPY_CPU_BUFFER
++                                                : MALI_COUNT_COPY_CPU,
++                     pan_copy_bytes(src, src_box), count_t0);
+       return;
+    }
+ 
+@@ -157,6 +172,7 @@ panfrost_resource_copy_region(struct pipe_context *pipe,
+    util_blitter_copy_texture(ctx->blitter, dst, dst_level, dstx, dsty, dstz,
+                              src, src_level, src_box);
+    panfrost_flush_all_batches(ctx, "Copy");
++   mali_count_add(MALI_COUNT_COPY_GPU, pan_copy_bytes(src, src_box), count_t0);
+ }
+ #endif
+ 
+diff --git a/src/gallium/frontends/d3d10umd/DxgiFns.cpp b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+index 72b6d12..3ee9b95 100644
+--- a/src/gallium/frontends/d3d10umd/DxgiFns.cpp
++++ b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+@@ -40,6 +40,7 @@
+ 
+ #include "util/format/u_format.h"
+ #include "util/mali_slow.h"
++#include "util/mali_count.h"
+ 
+ 
+ /*
+@@ -74,6 +75,7 @@ _Present(DXGI_DDI_ARG_PRESENT *pPresentData)
+                pSrcResource->present_allocation, pDstResource,
+                pDstResource ? pDstResource->present_allocation : 0);
+ 
++   uint64_t count_t0 = mali_count_now();
+    unsigned long long t0 = d3d10_perf_now();
+    device->pipe->flush(device->pipe, NULL, 0);
+    d3d10_perf_add(D3D10_PERF_FLUSH, t0);
+@@ -93,6 +95,7 @@ _Present(DXGI_DDI_ARG_PRESENT *pPresentData)
+          pPresentData->pDXGIContext);
+       if (hr != S_OK)
+          DebugPrintf("Present: shared, result 0x%08lx\n", (unsigned long)hr);
++      mali_count_add(MALI_COUNT_PRESENT_DIRECT, 0, count_t0);
+       d3d10_perf_frame();
+       return hr;
+    }
+@@ -116,6 +119,7 @@ _Present(DXGI_DDI_ARG_PRESENT *pPresentData)
+          pPresentData->pDXGIContext);
+       if (hr != S_OK)
+          DebugPrintf("Present: rendered-into primary, result 0x%08lx\n", (unsigned long)hr);
++      mali_count_add(MALI_COUNT_PRESENT_DIRECT, 0, count_t0);
+       d3d10_perf_frame();
+       return hr;
+    }
+@@ -495,6 +499,9 @@ HRESULT APIENTRY
+ _Blt(DXGI_DDI_ARG_BLT *Blt)
+ {
+    LOG_UNSUPPORTED_ENTRYPOINT();
++   /* Not carried out: counted (m5test perf), since DXGI uses it for a
++    * present between surfaces of different sizes or formats. */
++   mali_count_add(MALI_COUNT_BLT, 0, 0);
+ 
+    return S_OK;
+ }
+diff --git a/src/gallium/frontends/d3d10umd/Resource.cpp b/src/gallium/frontends/d3d10umd/Resource.cpp
+index aeedcb1..026e17f 100644
+--- a/src/gallium/frontends/d3d10umd/Resource.cpp
++++ b/src/gallium/frontends/d3d10umd/Resource.cpp
+@@ -42,10 +42,15 @@
+ #include "util/u_rect.h"
+ #include "util/u_surface.h"
+ #include "util/mali_slow.h"
++#include "util/mali_count.h"
++#include "util/format/u_format.h"
+ #include "frontend/winsys_handle.h"
+ 
+ #include <io.h>
+ 
++/* The bytes of a box of a resource, for the counters (below). */
++static uint64_t countBytes(const struct pipe_resource *res, const struct pipe_box *box);
++
+ 
+ /* The slow-operation log's detail for an entry point on a resource: its
+  * size, and a third number of the caller's. */
+@@ -915,6 +920,7 @@ ResourceMap(D3D10DDI_HDEVICE hDevice,                                // IN
+ {
+    LOG_ENTRYPOINT();
+    MaliSlowScope slow("map");
++   uint64_t count_t0 = mali_count_now();
+    SlowResource(slow, hResource, "%llux%llu, D3D10_DDI_MAP %llu", (unsigned long long)DDIMap);
+ 
+    struct pipe_context *pipe = CastPipeContext(hDevice);
+@@ -981,6 +987,10 @@ ResourceMap(D3D10DDI_HDEVICE hDevice,                                // IN
+    pMappedSubResource->pData = map;
+    pMappedSubResource->RowPitch = pResource->transfers[SubResource]->stride;
+    pMappedSubResource->DepthPitch = pResource->transfers[SubResource]->layer_stride;
++   /* The time is the map's: a wait for the GPU, a read-back or a fresh
++    * buffer. The bytes are what the caller can now touch. */
++   mali_count_add((usage & PIPE_MAP_READ) ? MALI_COUNT_MAP_READ : MALI_COUNT_MAP_WRITE,
++                  countBytes(resource, &box), count_t0);
+ }
+ 
+ 
+@@ -1036,6 +1046,53 @@ ResourceUnmap(D3D10DDI_HDEVICE hDevice,      // IN
+  *----------------------------------------------------------------------
+  */
+ 
++static bool
++areResourcesCompatible(const struct pipe_resource *src_resource, // IN
++                       const struct pipe_resource *dst_resource) // IN
++;
++
++/*
++ * The bytes of a box of a resource, for the counters (mali_count.h).
++ */
++static uint64_t
++countBytes(const struct pipe_resource *res, const struct pipe_box *box)
++{
++   return (uint64_t)util_format_get_stride(res->format, box->width) *
++          util_format_get_nblocksy(res->format, box->height) * MAX2(box->depth, 1);
++}
++
++/*
++ * A copy the frontend does on the CPU itself, counted.
++ */
++static void
++cpuCopyRegion(struct pipe_context *pipe,
++              struct pipe_resource *dst, unsigned dst_level,
++              unsigned dstx, unsigned dsty, unsigned dstz,
++              struct pipe_resource *src, unsigned src_level,
++              const struct pipe_box *box)
++{
++   uint64_t t0 = mali_count_now();
++   util_resource_copy_region(pipe, dst, dst_level, dstx, dsty, dstz, src, src_level, box);
++   mali_count_add(dst->target == PIPE_BUFFER ? MALI_COUNT_COPY_CPU_BUFFER : MALI_COUNT_COPY_CPU,
++                  countBytes(src, box), t0);
++}
++
++/*
++ * Formats D3D lets one copy between that are not the same pipe format but
++ * have the same bits (B8G8R8A8_UNORM and its _SRGB, for one) went to the
++ * CPU copy above. The driver's copy can take them when their linear
++ * formats agree: Panfrost's copies through linear views (pan_blit.c), and
++ * a driver whose copy is util_resource_copy_region copies the bytes as the
++ * CPU path would.
++ */
++static bool
++areResourcesBitIdentical(const struct pipe_resource *src_resource,
++                         const struct pipe_resource *dst_resource)
++{
++   return src_resource->target != PIPE_BUFFER && dst_resource->target != PIPE_BUFFER &&
++          util_format_linear(src_resource->format) == util_format_linear(dst_resource->format);
++}
++
+ static bool
+ areResourcesCompatible(const struct pipe_resource *src_resource, // IN
+                        const struct pipe_resource *dst_resource) // IN
+@@ -1113,7 +1170,8 @@ ResourceCopy(D3D10DDI_HDEVICE hDevice,          // IN
+    assert(dst_resource->last_level == src_resource->last_level);
+    assert(dst_resource->array_size == src_resource->array_size);
+ 
+-   compatible = areResourcesCompatible(src_resource, dst_resource);
++   compatible = areResourcesCompatible(src_resource, dst_resource) ||
++                areResourcesBitIdentical(src_resource, dst_resource);
+ 
+    /* could also use one 3d copy for arrays */
+    for (unsigned layer = 0; layer < dst_resource->array_size; ++layer) {
+@@ -1133,11 +1191,11 @@ ResourceCopy(D3D10DDI_HDEVICE hDevice,          // IN
+                                        src_resource, level,
+                                        &box);
+          } else {
+-            util_resource_copy_region(pipe,
+-                                      dst_resource, level,
+-                                      0, 0, layer,
+-                                      src_resource, level,
+-                                      &box);
++            cpuCopyRegion(pipe,
++                          dst_resource, level,
++                          0, 0, layer,
++                          src_resource, level,
++                          &box);
+          }
+       }
+    }
+@@ -1203,18 +1261,19 @@ ResourceCopyRegion(D3D10DDI_HDEVICE hDevice,                // IN
+       src_box.depth  = u_minify(src_resource->depth0,  src_level);
+    }
+ 
+-   if (areResourcesCompatible(src_resource, dst_resource)) {
++   if (areResourcesCompatible(src_resource, dst_resource) ||
++       areResourcesBitIdentical(src_resource, dst_resource)) {
+       pipe->resource_copy_region(pipe,
+                                  dst_resource, dst_level,
+                                  DstX, DstY, DstZ + dst_layer,
+                                  src_resource, src_level,
+                                  &src_box);
+    } else {
+-      util_resource_copy_region(pipe,
+-                                dst_resource, dst_level,
+-                                DstX, DstY, DstZ + dst_layer,
+-                                src_resource, src_level,
+-                                &src_box);
++      cpuCopyRegion(pipe,
++                    dst_resource, dst_level,
++                    DstX, DstY, DstZ + dst_layer,
++                    src_resource, src_level,
++                    &src_box);
+    }
+ }
+ 
+@@ -1239,6 +1298,9 @@ ResourceResolveSubResource(D3D10DDI_HDEVICE hDevice,        // IN
+                            DXGI_FORMAT ResolveFormat)       // IN
+ {
+    LOG_UNSUPPORTED_ENTRYPOINT();
++   /* Not carried out: counted, so that a caller that relies on it shows
++    * up in m5test perf. */
++   mali_count_add(MALI_COUNT_RESOLVE, 0, 0);
+ }
+ 
+ 
+@@ -1311,6 +1373,7 @@ ResourceUpdateSubResourceUP(D3D10DDI_HDEVICE hDevice,                // IN
+ {
+    LOG_ENTRYPOINT();
+    MaliSlowScope slow("update-subres");
++   uint64_t count_t0 = mali_count_now();
+    SlowResource(slow, hDstResource, "into %llux%llu, subresource %llu", DstSubResource);
+ 
+    Device *pDevice = CastDevice(hDevice);
+@@ -1374,6 +1437,7 @@ ResourceUpdateSubResourceUP(D3D10DDI_HDEVICE hDevice,                // IN
+       } else {
+          pipe_texture_unmap(pipe, transfer);
+       }
++      mali_count_add(MALI_COUNT_UPLOAD, countBytes(dst_resource, &box), count_t0);
+    }
+ }
+ 
+diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+index 7f3170b..6410879 100644
+--- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
++++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+@@ -29,6 +29,7 @@
+ 
+ #include <stdbool.h>
+ #include "util/u_debug.h"
++#include "util/mali_count.h"
+ #include "target-helpers/inline_debug_helper.h"
+ #include "llvmpipe/lp_public.h"
+ #include "softpipe/sp_public.h"
+@@ -108,6 +109,8 @@ d3d10_gdi_release_hdc(void *winsys_drawable_handle, HDC hDC) {
+  * the software winsys does. One copy per frame: enough until a WDDM driver
+  * owns the display. */
+ int malikm_present_d3dddi(const void *bgrx, unsigned w, unsigned h, void *dxgi_context);
++int malikm_present_d3dddi_rows(const void *map, unsigned stride, unsigned w, unsigned h, int rgba,
++                               void *dxgi_context);
+ unsigned long long malikm_perf_now(void);
+ void malikm_perf_add(unsigned stage, unsigned long long since);
+ void malikm_perf_frame(void);
+@@ -124,6 +127,7 @@ d3d10_pan_flush_frontbuffer(struct pipe_screen *screen, struct pipe_context *pip
+ 
+    if (!pipe || !desc || desc->block.bits != 32)
+       return;
++   uint64_t count_t0 = mali_count_now();
+    /* Mapping waits for the GPU to finish the frame. */
+    unsigned long long t0 = malikm_perf_now();
+    const uint8_t *map = pipe_texture_map(pipe, res, level, layer, PIPE_MAP_READ,
+@@ -135,6 +139,27 @@ d3d10_pan_flush_frontbuffer(struct pipe_screen *screen, struct pipe_context *pip
+ 
+    /* GDI wants B, G, R, X in memory. */
+    bool rgba = desc->swizzle[0] == PIPE_SWIZZLE_X;
++
++   /* On the hardware runtime, straight from the map into the surface DXGI
++    * presents from: one pass over the frame instead of two, and no 4 to
++    * 15 MB allocation a frame. maliwddm's UmdReadbackOneCopy = 0 goes back
++    * to the copy below. Either way the map has to read the frame from
++    * write-combined memory, which is the larger part of the cost
++    * (MALI_COUNT_PRESENT_READBACK in m5test perf). */
++   if (mali_count_flags() & MALI_COUNT_FLAG_READBACK_1) {
++      int done = malikm_present_d3dddi_rows(map, xfer->stride, w, h, rgba, context_private);
++      pipe_texture_unmap(pipe, xfer);
++      malikm_perf_add(2 /* readback-copy */, t0);
++      if (done == 0) {
++         mali_count_add(MALI_COUNT_PRESENT_READBACK, (uint64_t)w * h * 4, count_t0);
++         return;
++      }
++      /* Not on the runtime: map again for the GDI path below. */
++      map = pipe_texture_map(pipe, res, level, layer, PIPE_MAP_READ, 0, 0, w, h, &xfer);
++      if (!map)
++         return;
++      t0 = malikm_perf_now();
++   }
+    uint32_t *bits = malloc((size_t)w * h * 4);
+    if (bits) {
+       for (unsigned y = 0; y < h; y++) {
+@@ -155,6 +180,7 @@ d3d10_pan_flush_frontbuffer(struct pipe_screen *screen, struct pipe_context *pip
+     * goes into a surface of the runtime's device and the kernel driver
+     * blts it to the screen. Otherwise (the software runtime) GDI below. */
+    if (malikm_present_d3dddi(bits, w, h, context_private) == 0) {
++      mali_count_add(MALI_COUNT_PRESENT_READBACK, (uint64_t)w * h * 4, count_t0);
+       free(bits);
+       return;
+    }
+diff --git a/src/util/mali_count.c b/src/util/mali_count.c
+new file mode 100644
+index 0000000..7d38a4a
+--- /dev/null
++++ b/src/util/mali_count.c
+@@ -0,0 +1,68 @@
++/*
++ * Counters of the Windows Mali UMD; see mali_count.h.
++ */
++#include "mali_count.h"
++
++#ifdef _WIN32
++#include <windows.h>
++
++static struct {
++   volatile LONG64 calls, bytes, ticks;
++} counts[MALI_COUNT_KINDS];
++
++static volatile LONG flags = -1;
++
++uint64_t
++mali_count_now(void)
++{
++   LARGE_INTEGER t;
++   QueryPerformanceCounter(&t);
++   return (uint64_t)t.QuadPart;
++}
++
++void
++mali_count_add(unsigned kind, uint64_t bytes, uint64_t t0)
++{
++   if (kind >= MALI_COUNT_KINDS)
++      return;
++   InterlockedIncrement64(&counts[kind].calls);
++   if (bytes)
++      InterlockedAdd64(&counts[kind].bytes, (LONG64)bytes);
++   if (t0)
++      InterlockedAdd64(&counts[kind].ticks, (LONG64)(mali_count_now() - t0));
++}
++
++void
++mali_count_take(struct mali_count out[MALI_COUNT_KINDS])
++{
++   for (unsigned k = 0; k < MALI_COUNT_KINDS; k++) {
++      out[k].calls = (uint64_t)InterlockedExchange64(&counts[k].calls, 0);
++      out[k].bytes = (uint64_t)InterlockedExchange64(&counts[k].bytes, 0);
++      out[k].ticks = (uint64_t)InterlockedExchange64(&counts[k].ticks, 0);
++   }
++}
++
++void
++mali_count_give_back(const struct mali_count in[MALI_COUNT_KINDS])
++{
++   for (unsigned k = 0; k < MALI_COUNT_KINDS; k++) {
++      InterlockedAdd64(&counts[k].calls, (LONG64)in[k].calls);
++      InterlockedAdd64(&counts[k].bytes, (LONG64)in[k].bytes);
++      InterlockedAdd64(&counts[k].ticks, (LONG64)in[k].ticks);
++   }
++}
++
++uint32_t
++mali_count_flags(void)
++{
++   return (uint32_t)flags;
++}
++
++void
++mali_count_set_flags(uint32_t f)
++{
++   InterlockedExchange(&flags, (LONG)f);
++}
++#else
++typedef int mali_count_unused;
++#endif
+diff --git a/src/util/mali_count.h b/src/util/mali_count.h
+new file mode 100644
+index 0000000..62a06d3
+--- /dev/null
++++ b/src/util/mali_count.h
+@@ -0,0 +1,84 @@
++/*
++ * Counters of the Windows Mali UMD (maliumd.dll): what the driver did on
++ * the CPU and on the GPU, by kind, so that "m5test perf" on the board can
++ * tell a GPU copy from a CPU copy and a read-back present from one that
++ * copies nothing.
++ *
++ *    uint64_t t0 = mali_count_now();
++ *    ... the operation ...
++ *    mali_count_add(MALI_COUNT_UPLOAD, bytes, t0);
++ *
++ * The sums are per process. The Panfrost winsys (malikm_drm.c) takes them
++ * about once a second and hands them to maliwddm (MW_ESCAPE_UMD), which
++ * answers with the switches its registry settings give; mali_count_flags()
++ * returns those (all on until the first answer). The kinds are the KMD's
++ * MW_UMD_* (include/maliwddm_abi.h in wddm-mali-g52), by number.
++ *
++ * Off Windows everything here is empty.
++ */
++#ifndef MALI_COUNT_H
++#define MALI_COUNT_H
++
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++enum mali_count_kind {
++   MALI_COUNT_COPY_GPU = 0,
++   MALI_COUNT_COPY_CPU = 1,
++   MALI_COUNT_COPY_CPU_BUFFER = 2,
++   MALI_COUNT_UPLOAD = 3,
++   MALI_COUNT_MAP_READ = 4,
++   MALI_COUNT_MAP_WRITE = 5,
++   MALI_COUNT_PRESENT_READBACK = 6,
++   MALI_COUNT_PRESENT_DIRECT = 7,
++   MALI_COUNT_GPU_WAIT = 8,
++   MALI_COUNT_BLT = 9,
++   MALI_COUNT_RESOLVE = 10,
++   MALI_COUNT_KINDS = 12,
++};
++
++/* maliwddm's MW_UMD_FLAG_*. */
++#define MALI_COUNT_FLAG_COPY_GPU   0x1u
++#define MALI_COUNT_FLAG_READBACK_1 0x2u
++
++struct mali_count {
++   uint64_t calls, bytes, ticks;
++};
++
++#ifdef _WIN32
++
++/* Now, in performance-counter ticks. */
++uint64_t mali_count_now(void);
++
++/* One call of Kind, with Bytes, that started at T0 (0: no time). */
++void mali_count_add(unsigned kind, uint64_t bytes, uint64_t t0);
++
++/* The sums since the previous take, which start again from 0. */
++void mali_count_take(struct mali_count out[MALI_COUNT_KINDS]);
++
++/* Back into the sums: a take whose report did not get through. */
++void mali_count_give_back(const struct mali_count in[MALI_COUNT_KINDS]);
++
++/* The switches maliwddm handed out; every bit set until it has. */
++uint32_t mali_count_flags(void);
++void mali_count_set_flags(uint32_t flags);
++
++#else
++
++static inline uint64_t mali_count_now(void) { return 0; }
++static inline void mali_count_add(unsigned kind, uint64_t bytes, uint64_t t0)
++{
++   (void)kind; (void)bytes; (void)t0;
++}
++static inline uint32_t mali_count_flags(void) { return ~0u; }
++
++#endif
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* MALI_COUNT_H */
+diff --git a/src/util/meson.build b/src/util/meson.build
+index d0e0367..4d0b778 100644
+--- a/src/util/meson.build
++++ b/src/util/meson.build
+@@ -162,6 +162,8 @@ files_mesa_util = files(
+   'u_pack_color.h',
+   'u_debug.c',
+   'mali_wassert.c',
++  'mali_count.c',
++  'mali_count.h',
+   'u_debug.h',
+   'u_debug_memory.c',
+   'u_cpu_detect.c',
