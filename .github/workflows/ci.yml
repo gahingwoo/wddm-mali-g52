@@ -111,6 +111,12 @@ jobs:
           if ($LASTEXITCODE) { throw 'm5test build failed' }
           .\out\m5test.exe
           if ($LASTEXITCODE -ne 1) { throw "m5test: unexpected exit code $LASTEXITCODE" }
+          # d3dprobe: what Direct3D offers a browser on each adapter. The
+          # runner has no Mali; it must still run through and exit 0.
+          cl /nologo /W4 /WX /O2 /EHsc tools\windows\d3dprobe.cpp d3d11.lib dxgi.lib user32.lib /Fe:out\d3dprobe.exe
+          if ($LASTEXITCODE) { throw 'd3dprobe build failed' }
+          .\out\d3dprobe.exe
+          if ($LASTEXITCODE) { throw "d3dprobe: exit code $LASTEXITCODE" }
           # etwrec: start/stop a DxgKrnl ETW session (WinPE has no working wpr).
           cl /nologo /W4 /WX /O2 tools\windows\etwrec.c advapi32.lib /Fe:out\etwrec.exe
           if ($LASTEXITCODE) { throw 'etwrec build failed' }
@@ -130,6 +136,7 @@ jobs:
             out/m3test.exe
             out/m5test.exe
             out/etwrec.exe
+            out/d3dprobe.exe
 
   malikm-host:
     name: malikm on a simulated G52 (Linux, ASan/UBSan)
