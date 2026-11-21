@@ -111,10 +111,10 @@ index 72b6d12..3ee9b95 100644
     return S_OK;
  }
 diff --git a/src/gallium/frontends/d3d10umd/Resource.cpp b/src/gallium/frontends/d3d10umd/Resource.cpp
-index aeedcb1..e9a4eef 100644
+index aeedcb1..026e17f 100644
 --- a/src/gallium/frontends/d3d10umd/Resource.cpp
 +++ b/src/gallium/frontends/d3d10umd/Resource.cpp
-@@ -42,6 +42,8 @@
+@@ -42,10 +42,15 @@
  #include "util/u_rect.h"
  #include "util/u_surface.h"
  #include "util/mali_slow.h"
@@ -123,7 +123,14 @@ index aeedcb1..e9a4eef 100644
  #include "frontend/winsys_handle.h"
  
  #include <io.h>
-@@ -915,6 +917,7 @@ ResourceMap(D3D10DDI_HDEVICE hDevice,                                // IN
+ 
++/* The bytes of a box of a resource, for the counters (below). */
++static uint64_t countBytes(const struct pipe_resource *res, const struct pipe_box *box);
++
+ 
+ /* The slow-operation log's detail for an entry point on a resource: its
+  * size, and a third number of the caller's. */
+@@ -915,6 +920,7 @@ ResourceMap(D3D10DDI_HDEVICE hDevice,                                // IN
  {
     LOG_ENTRYPOINT();
     MaliSlowScope slow("map");
@@ -131,7 +138,7 @@ index aeedcb1..e9a4eef 100644
     SlowResource(slow, hResource, "%llux%llu, D3D10_DDI_MAP %llu", (unsigned long long)DDIMap);
  
     struct pipe_context *pipe = CastPipeContext(hDevice);
-@@ -981,6 +984,10 @@ ResourceMap(D3D10DDI_HDEVICE hDevice,                                // IN
+@@ -981,6 +987,10 @@ ResourceMap(D3D10DDI_HDEVICE hDevice,                                // IN
     pMappedSubResource->pData = map;
     pMappedSubResource->RowPitch = pResource->transfers[SubResource]->stride;
     pMappedSubResource->DepthPitch = pResource->transfers[SubResource]->layer_stride;
@@ -142,7 +149,7 @@ index aeedcb1..e9a4eef 100644
  }
  
  
-@@ -1036,6 +1043,53 @@ ResourceUnmap(D3D10DDI_HDEVICE hDevice,      // IN
+@@ -1036,6 +1046,53 @@ ResourceUnmap(D3D10DDI_HDEVICE hDevice,      // IN
   *----------------------------------------------------------------------
   */
  
@@ -196,7 +203,7 @@ index aeedcb1..e9a4eef 100644
  static bool
  areResourcesCompatible(const struct pipe_resource *src_resource, // IN
                         const struct pipe_resource *dst_resource) // IN
-@@ -1113,7 +1167,8 @@ ResourceCopy(D3D10DDI_HDEVICE hDevice,          // IN
+@@ -1113,7 +1170,8 @@ ResourceCopy(D3D10DDI_HDEVICE hDevice,          // IN
     assert(dst_resource->last_level == src_resource->last_level);
     assert(dst_resource->array_size == src_resource->array_size);
  
@@ -206,7 +213,7 @@ index aeedcb1..e9a4eef 100644
  
     /* could also use one 3d copy for arrays */
     for (unsigned layer = 0; layer < dst_resource->array_size; ++layer) {
-@@ -1133,11 +1188,11 @@ ResourceCopy(D3D10DDI_HDEVICE hDevice,          // IN
+@@ -1133,11 +1191,11 @@ ResourceCopy(D3D10DDI_HDEVICE hDevice,          // IN
                                         src_resource, level,
                                         &box);
           } else {
@@ -223,7 +230,7 @@ index aeedcb1..e9a4eef 100644
           }
        }
     }
-@@ -1203,18 +1258,19 @@ ResourceCopyRegion(D3D10DDI_HDEVICE hDevice,                // IN
+@@ -1203,18 +1261,19 @@ ResourceCopyRegion(D3D10DDI_HDEVICE hDevice,                // IN
        src_box.depth  = u_minify(src_resource->depth0,  src_level);
     }
  
@@ -249,7 +256,7 @@ index aeedcb1..e9a4eef 100644
     }
  }
  
-@@ -1239,6 +1295,9 @@ ResourceResolveSubResource(D3D10DDI_HDEVICE hDevice,        // IN
+@@ -1239,6 +1298,9 @@ ResourceResolveSubResource(D3D10DDI_HDEVICE hDevice,        // IN
                             DXGI_FORMAT ResolveFormat)       // IN
  {
     LOG_UNSUPPORTED_ENTRYPOINT();
@@ -259,7 +266,7 @@ index aeedcb1..e9a4eef 100644
  }
  
  
-@@ -1311,6 +1370,7 @@ ResourceUpdateSubResourceUP(D3D10DDI_HDEVICE hDevice,                // IN
+@@ -1311,6 +1373,7 @@ ResourceUpdateSubResourceUP(D3D10DDI_HDEVICE hDevice,                // IN
  {
     LOG_ENTRYPOINT();
     MaliSlowScope slow("update-subres");
@@ -267,7 +274,7 @@ index aeedcb1..e9a4eef 100644
     SlowResource(slow, hDstResource, "into %llux%llu, subresource %llu", DstSubResource);
  
     Device *pDevice = CastDevice(hDevice);
-@@ -1374,6 +1434,7 @@ ResourceUpdateSubResourceUP(D3D10DDI_HDEVICE hDevice,                // IN
+@@ -1374,6 +1437,7 @@ ResourceUpdateSubResourceUP(D3D10DDI_HDEVICE hDevice,                // IN
        } else {
           pipe_texture_unmap(pipe, transfer);
        }
