@@ -302,6 +302,7 @@ static void DoPresent(MW_ADAPTER *A, const MW_PRESENT_OP *Op)
             l.Bottom = r.bottom;
             if (Op->Kind == MW_PRESENT_BLT) {
                 MwRotCopy(rot, dst, dstPitch, A->Fb.Width, A->Fb.Height, src, srcPitch, dx, dy, &l);
+                A->PresentBltBytes += (ULONG64)(l.Right - l.Left) * (ULONG64)(l.Bottom - l.Top) * 4;
             } else {
                 MW_ROT_RECT f = MwRotRect(rot, A->Fb.Width, A->Fb.Height, &l);
                 for (LONG y = f.Top; y < f.Bottom; y++) {
@@ -317,6 +318,7 @@ static void DoPresent(MW_ADAPTER *A, const MW_PRESENT_OP *Op)
             if (Op->Kind == MW_PRESENT_BLT) {
                 const ULONG *s = (const ULONG *)(src + (SIZE_T)(y + dy) * srcPitch) + r.left + dx;
                 RtlCopyMemory(d, s, (SIZE_T)(r.right - r.left) * 4);
+                A->PresentBltBytes += (ULONG64)(r.right - r.left) * 4;
             } else {
                 for (LONG x = 0; x < r.right - r.left; x++)
                     d[x] = Op->Color;

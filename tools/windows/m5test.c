@@ -75,6 +75,7 @@ static int resolve_all(void)
 static D3DKMT_HANDLE g_adapter;
 static void print_stats(D3DKMT_HANDLE adapter, const char *when);
 static void print_path(const MW_ESCAPE_STATS_DATA *s);
+static void print_umd(const MW_ESCAPE_STATS_DATA *a, const MW_ESCAPE_STATS_DATA *b, double secs);
 
 static int fail(const char *what, NTSTATUS st)
 {
@@ -163,6 +164,9 @@ static void print_stats(D3DKMT_HANDLE adapter, const char *when)
            " unexpected %u\n", s.TimeSliceMs, s.PreemptRequests, s.SoftStops, s.StopsTaken, s.Resumes,
            s.ResumeMismatch + s.ResumeLost + s.StopBadTail + s.StopUnasked);
     print_path(&s);
+    printf("  KMD blt presents: %.1f MB copied on the CPU since the start\n",
+           (double)s.PresentBltBytes / 1e6);
+    print_umd(NULL, &s, 0);
 }
 
 static const char *path_name(unsigned p)
@@ -186,6 +190,76 @@ static void print_path(const MW_ESCAPE_STATS_DATA *s)
            s->FlipsRotCopied, s->WhyScanOff, s->WhyNotMapped, s->WhyRotated, s->WhyInvisible);
     printf("  IOMMU faults %u (last at 0x%08x), scan-out turned off by one %u times\n", s->ScanFaults,
            s->ScanFaultAddr, s->ScanAutoOff);
+}
+
+static const char *const umd_names[MW_UMD_KINDS] = {
+    "copy on the GPU", "copy on the CPU", "buffer copy on the CPU", "upload (UpdateSubresource)",
+    "map for reading", "map for writing", "present, read back", "present, no copy",
+    "wait for GPU idle", "Blt (not carried out)", "resolve (not carried out)", "",
+};
+
+/* The UMDs' counts between two readings (or since the start, A NULL):
+ * calls, MB, and microseconds a call in the UMD, by kind; then the
+ * processes that reported, by name. */
+static void print_umd(const MW_ESCAPE_STATS_DATA *a, const MW_ESCAPE_STATS_DATA *b, double secs)
+{
+    unsigned long long hz = b->PerfHz;
+
+    if (b->UmdReports == 0) {
+        printf("  UMD: no reports (a maliumd.dll from before MW_ESCAPE_UMD, or no D3D process)\n");
+        return;
+    }
+    printf("  UMD (all processes%s; switches 0x%x: 1 GPU copies allowed, 2 one-copy read-back):\n",
+           a ? ", this interval" : ", since the start", b->UmdFlags & 0xff);
+    for (int k = 0; k < MW_UMD_KINDS; k++) {
+        unsigned long long calls = b->Umd[k].Calls - (a ? a->Umd[k].Calls : 0);
+        unsigned long long bytes = b->Umd[k].Bytes - (a ? a->Umd[k].Bytes : 0);
+        unsigned long long ticks = b->Umd[k].Ticks - (a ? a->Umd[k].Ticks : 0);
+        if (!umd_names[k][0] || calls == 0)
+            continue;
+        printf("    %-28s %8llu (%.1f/s)  %9.1f MB  %8llu us each  %6.0f ms in all\n", umd_names[k],
+               calls, secs > 0 ? (double)calls / secs : 0.0, (double)bytes / 1e6,
+               hz ? ticks * 1000000ull / hz / calls : 0, hz ? (double)ticks * 1000.0 / (double)hz : 0.0);
+    }
+    for (int i = 0; i < MW_UMD_PROCS; i++) {
+        const MW_UMD_PROC *p = &b->UmdProc[i];
+        const MW_UMD_PROC *q = NULL;
+        char name[MAX_PATH] = "?";
+        const char *base = name;
+        HANDLE h;
+
+        if (p->Pid == 0)
+            continue;
+        if (a)
+            for (int j = 0; j < MW_UMD_PROCS; j++)
+                if (a->UmdProc[j].Pid == p->Pid)
+                    q = &a->UmdProc[j];
+        if (a && q && q->Reports == p->Reports)
+            continue;           /* nothing from it in this interval */
+        h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, p->Pid);
+        if (h) {
+            DWORD len = sizeof(name);
+            if (QueryFullProcessImageNameA(h, 0, name, &len))
+                for (const char *c = name; *c; c++)
+                    if (*c == '\\')
+                        base = c + 1;
+            CloseHandle(h);
+        } else {
+            base = "(gone or not openable)";
+        }
+        printf("    pid %5u %-20.20s", p->Pid, base);
+        for (int k = 0; k < MW_UMD_KINDS; k++) {
+            unsigned long long calls = p->Count[k].Calls - (q ? q->Count[k].Calls : 0);
+            unsigned long long ticks = p->Count[k].Ticks - (q ? q->Count[k].Ticks : 0);
+            static const char *const tag[MW_UMD_KINDS] = {
+                "gpucopy", "cpucopy", "cpubuf", "upload", "mapR", "mapW", "readback", "direct",
+                "idle", "blt", "resolve", "",
+            };
+            if (calls && tag[k][0])
+                printf(" %s %llu/%llums", tag[k], calls, hz ? ticks * 1000ull / hz : 0);
+        }
+        printf("\n");
+    }
 }
 
 /* Ticks over a count, as microseconds each. */
@@ -260,6 +334,9 @@ static int perf(D3DKMT_HANDLE adapter, unsigned seconds)
                100.0 * (double)(b.FlipCopyTicks - a.FlipCopyTicks) / (double)b.PerfHz / secs,
                b.ScanFaults - a.ScanFaults, b.ScanAutoOff - a.ScanAutoOff);
     }
+    printf("  KMD blt presents (a window's frame into DWM's surface, on the CPU): %.1f MB\n",
+           (double)(b.PresentBltBytes - a.PresentBltBytes) / 1e6);
+    print_umd(&a, &b, secs);
     printf("  blt and fill presents %u, %llu us each\n", blts,
            each_us(b.PresentBltTicks - a.PresentBltTicks, b.PerfHz, blts));
     printf("  renders %u, submissions %u, interrupts %u, aperture maps %u, unmaps %u\n",

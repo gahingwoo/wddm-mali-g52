@@ -257,6 +257,14 @@ struct _MW_ADAPTER {
     LONG ReportedSeq;
     ULONG FlipShows;
     ULONG64 FlipShowTicks, FlipShowMaxTicks;
+    ULONG64 PresentBltBytes;
+    /* The user-mode drivers' reports (MW_ESCAPE_UMD, adapter.c): sums, and
+     * by process, under UmdLock. */
+    FAST_MUTEX UmdLock;
+    ULONG UmdReports;
+    MW_UMD_COUNT Umd[MW_UMD_KINDS];
+    MW_UMD_PROC UmdProc[MW_UMD_PROCS];
+    ULONG UmdProcNext;
     ULONG GpuClk;               /* (parent << 8) | divider last written here; 0 the firmware's */
     PKTHREAD CopyThread;
     KEVENT CopyEvent;

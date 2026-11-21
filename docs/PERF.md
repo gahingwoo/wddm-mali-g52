@@ -175,6 +175,45 @@ Changed on branch `present-fast`, not yet run on a board:
   flips, flip to the vsync that showed it, the time in
   `SetVidPnSourceAddress`, and all the CPU time the copies took.
 
+## Video in Edge, 2026-11-21
+
+With every flip scanned out (167 flips in 8 s during YouTube, none copied,
+GPU busy 4%), YouTube still dropped about 40% of its frames at 640x480,
+with AV1 and with H.264 alike; decode is not the bottleneck.
+
+Read from the code, not yet measured:
+
+- `CopySubresourceRegion` and `CopyResource` between textures have run on
+  the GPU since patch 0054 (`pan_blit.c`, blitter, linear views). The
+  22 to 26 ms CPU copies in the 2026-11-14 slow log were from before it.
+  What 0054 leaves on the CPU: buffers, copies within one level of one
+  texture, MSAA, compressed formats, and formats the frontend judged not
+  compatible (B8G8R8A8 to its _SRGB went to the CPU; 0062 sends pairs
+  with the same linear format to the driver's copy).
+- A window's present (not DWM's own, which renders into the primary) is
+  the expensive one. `d3d10_gdi.c` maps the back buffer for reading,
+  which waits for the GPU to finish everything queued and then reads the
+  frame from write-combined memory; it was then copied into a malloc'd
+  buffer, copied again into the surface DXGI presents from, and maliwddm
+  copies it once more on the CPU into DWM's redirection surface
+  (`DoPresent`, a blt present). Four passes over the frame, two of them
+  reads of uncached memory, and a GPU wait in Edge's GPU process for
+  every frame it presents. 0062 removes one pass (one copy straight from
+  the map). The rest needs the frame never to touch the CPU: a GPU copy
+  into the presented surface with maliwddm doing blt presents behind the
+  GPU queue instead of at submission, or DXGI flip model (DWM composing
+  Edge's buffers directly), which needs the DXGI 1.2 DDI the UMD does not
+  have.
+- There is no video DDI in the UMD (no `ID3D11VideoDevice`), so Chromium
+  decodes in software and uploads planes with `UpdateSubresource` or
+  `Map`; `VideoProcessorBlt` and NV12 textures are never reached. YUV to
+  RGB runs in Chromium's shaders on the GPU.
+- `ResolveSubresource` and DXGI's `pfnBlt` do nothing; both are now
+  counted, so a caller relying on either shows up.
+
+Patch 0062 counts all of this per process (`m5test perf`, the UMD lines;
+INSTALL.txt lists the kinds and the two switches).
+
 ## Also run that day
 
 `gsso.exe hw nogs` on the Mali with patches 0041 to 0044: creating a

@@ -132,6 +132,7 @@ static NTSTATUS APIENTRY MwAddDevice(IN_CONST_PDEVICE_OBJECT Pdo, OUT_PPVOID Con
         return STATUS_NO_MEMORY;
     a->Pdo = (PDEVICE_OBJECT)Pdo;
     ExInitializeFastMutex(&a->MmuLock);
+    ExInitializeFastMutex(&a->UmdLock);
     a->Gpu.Log = MwLogHook;
     a->Gpu.LogOwner = a;
     MwCommandInit(a);
@@ -542,6 +543,54 @@ static ULONG TicksEachUs(const MW_ADAPTER *A, ULONG64 Ticks, ULONG Count)
     return Count != 0 ? TicksToUs(A, Ticks / Count) : 0;
 }
 
+/* MW_ESCAPE_UMD: a UMD's counts since its last report go into the sums
+ * and into its process's entry; the answer is the switches, read from the
+ * settings each time (about once a second per process), so a change in
+ * the registry reaches running processes without a restart. PASSIVE. */
+static ULONG UmdFlags(MW_ADAPTER *A)
+{
+    ULONG f = MW_UMD_FLAG_VALID;
+    if (MwSetting(A, L"UmdCopyOnGpu", 1) != 0)
+        f |= MW_UMD_FLAG_COPY_GPU;
+    if (MwSetting(A, L"UmdReadbackOneCopy", 1) != 0)
+        f |= MW_UMD_FLAG_READBACK_1;
+    return f;
+}
+
+static NTSTATUS UmdReport(MW_ADAPTER *A, MW_ESCAPE_UMD_DATA *D)
+{
+    ULONG pid = (ULONG)(ULONG_PTR)PsGetCurrentProcessId();
+    MW_UMD_PROC *e = NULL;
+    MW_UMD_COUNT in[MW_UMD_KINDS];
+
+    /* The caller's buffer, read once. */
+    RtlCopyMemory(in, D->Delta, sizeof(in));
+    ExAcquireFastMutex(&A->UmdLock);
+    A->UmdReports++;
+    for (ULONG i = 0; i < MW_UMD_PROCS && e == NULL; i++)
+        if (A->UmdProc[i].Pid == pid)
+            e = &A->UmdProc[i];
+    if (e == NULL) {
+        /* A new process takes the oldest entry. */
+        e = &A->UmdProc[A->UmdProcNext];
+        A->UmdProcNext = (A->UmdProcNext + 1) % MW_UMD_PROCS;
+        RtlZeroMemory(e, sizeof(*e));
+        e->Pid = pid;
+    }
+    e->Reports++;
+    for (ULONG k = 0; k < MW_UMD_KINDS; k++) {
+        A->Umd[k].Calls += in[k].Calls;
+        A->Umd[k].Bytes += in[k].Bytes;
+        A->Umd[k].Ticks += in[k].Ticks;
+        e->Count[k].Calls += in[k].Calls;
+        e->Count[k].Bytes += in[k].Bytes;
+        e->Count[k].Ticks += in[k].Ticks;
+    }
+    ExReleaseFastMutex(&A->UmdLock);
+    D->Flags = UmdFlags(A);
+    return STATUS_SUCCESS;
+}
+
 /* MW_ESCAPE_STATS_DATA.ScanState. */
 static ULONG ScanState(const MW_ADAPTER *A)
 {
@@ -650,6 +699,13 @@ static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D, UINT Size)
         D->FlipShowTicks = A->FlipShowTicks;
         D->FlipCallTicks = A->FlipCallTicks;
         D->CopyBytesAvoided = A->CopyBytesAvoided;
+        D->PresentBltBytes = A->PresentBltBytes;
+        ExAcquireFastMutex(&A->UmdLock);
+        D->UmdReports = A->UmdReports;
+        RtlCopyMemory(D->Umd, A->Umd, sizeof(D->Umd));
+        RtlCopyMemory(D->UmdProc, A->UmdProc, sizeof(D->UmdProc));
+        ExReleaseFastMutex(&A->UmdLock);
+        D->UmdFlags = UmdFlags(A);
     }
 }
 
@@ -689,10 +745,19 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_SCANOUT_DATA))
             return STATUS_INVALID_PARAMETER;
         return MwScanSet(a, (MW_ESCAPE_SCANOUT_DATA *)Esc->pPrivateDriverData);
+    case MW_ESCAPE_UMD:
+        if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_UMD_DATA))
+            return STATUS_INVALID_PARAMETER;
+        return UmdReport(a, (MW_ESCAPE_UMD_DATA *)Esc->pPrivateDriverData);
     case MW_ESCAPE_STATS:
         if (Esc->PrivateDriverDataSize < (UINT)FIELD_OFFSET(MW_ESCAPE_STATS_DATA, Vsyncs))
             return STATUS_INVALID_PARAMETER;
         Stats(a, (MW_ESCAPE_STATS_DATA *)Esc->pPrivateDriverData, Esc->PrivateDriverDataSize);
+        /* The registry trace only for a full reading (m5test), not for the
+         * UMD's idle poll, which asks for the fences alone every
+         * millisecond. */
+        if (Esc->PrivateDriverDataSize <= (UINT)FIELD_OFFSET(MW_ESCAPE_STATS_DATA, Vsyncs))
+            return STATUS_SUCCESS;
         MwLog(a, L"T_CommitsPinned", a->CommitsPinned);
         MwLog(a, L"T_CommitsUnpinned", a->CommitsUnpinned);
         MwLog(a, L"T_CommitsNoPath", a->CommitsNoPath);
@@ -794,6 +859,34 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         MwLog(a, L"T_FlipCallUsAvg", TicksEachUs(a, a->FlipCallTicks, a->Flips));
         MwLog(a, L"T_FlipCallUsMax", TicksToUs(a, a->FlipCallMaxTicks));
         MwLog(a, L"T_FlipCopyMsTotal", TicksToUs(a, a->FlipCopyTicks) / 1000);
+        MwLog(a, L"T_PresentBltMB", (ULONG)(a->PresentBltBytes >> 20));
+        /* The UMDs' counts since the start, all processes: calls, MB and
+         * microseconds a call, by kind (MW_UMD_* in maliwddm_abi.h). */
+        {
+            static const PCWSTR names[MW_UMD_KINDS] = {
+                L"CopyGpu", L"CopyCpu", L"CopyCpuBuffer", L"Upload", L"MapRead", L"MapWrite",
+                L"PresentReadback", L"PresentDirect", L"GpuWait", L"Blt", L"Resolve", L"Spare",
+            };
+            MW_UMD_COUNT c[MW_UMD_KINDS];
+            ExAcquireFastMutex(&a->UmdLock);
+            RtlCopyMemory(c, a->Umd, sizeof(c));
+            ExReleaseFastMutex(&a->UmdLock);
+            MwLog(a, L"T_UmdReports", a->UmdReports);
+            MwLog(a, L"T_UmdFlags", UmdFlags(a));
+            for (ULONG k = 0; k < MW_UMD_KINDS - 1; k++) {
+                WCHAR n[48];
+                UNICODE_STRING us;
+                RtlInitEmptyUnicodeString(&us, n, sizeof(n));
+                if (NT_SUCCESS(RtlUnicodeStringPrintf(&us, L"T_Umd%wsCalls", names[k])))
+                    MwLog(a, n, (ULONG)c[k].Calls);
+                RtlInitEmptyUnicodeString(&us, n, sizeof(n));
+                if (NT_SUCCESS(RtlUnicodeStringPrintf(&us, L"T_Umd%wsMB", names[k])))
+                    MwLog(a, n, (ULONG)(c[k].Bytes >> 20));
+                RtlInitEmptyUnicodeString(&us, n, sizeof(n));
+                if (NT_SUCCESS(RtlUnicodeStringPrintf(&us, L"T_Umd%wsUsAvg", names[k])))
+                    MwLog(a, n, c[k].Calls ? TicksToUs(a, c[k].Ticks / c[k].Calls) : 0);
+            }
+        }
         return STATUS_SUCCESS;
     default:
         MwLog(a, L"EscapeUnknownCode", code);

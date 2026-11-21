@@ -154,6 +154,33 @@ Measuring presents
   T_FlipCopyMsTotal    CPU time in copies since the start
   T_ScanFaults, T_ScanFaultAddr, T_ScanAutoOff   IOMMU faults
 
+What the user-mode driver does on the CPU
+
+  Each process's maliumd.dll counts its copies, uploads, maps, presents
+  and waits, and hands the counts to maliwddm about once a second.
+  m5test perf prints them for its interval, in all and by process
+  (the "UMD" lines), next to "KMD blt presents" (a window's frame copied
+  on the CPU into DWM's surface). The kinds:
+
+    copy on the GPU / on the CPU   CopyResource, CopySubresourceRegion
+    upload                         UpdateSubresource
+    map for reading / writing      Map; the time includes any wait
+    present, read back             a window's frame read back on the CPU
+    present, no copy               a frame the runtime already has
+    wait for GPU idle              the UMD waiting for everything queued
+    Blt, resolve                   calls the UMD does not carry out
+
+  Two switches, DWORDs in Device Parameters, on unless 0; a running
+  process picks a change up within a second or two, no reboot:
+
+    UmdCopyOnGpu         copies between textures as GPU jobs (0: on the
+                         CPU, as the file C:\mali\copy-cpu also does)
+    UmdReadbackOneCopy   a read-back present copies the frame once,
+                         straight into the surface DXGI presents from
+                         (0: through a second buffer, as before)
+
+       reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters" /v UmdCopyOnGpu /t REG_DWORD /d 0 /f
+
 Replacing only the UMD while testing
 
   Rename the loaded file and copy the new one next to it; then end
