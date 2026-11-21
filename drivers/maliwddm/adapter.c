@@ -4,6 +4,7 @@
  * escapes, and the registry trace that found every M5.1 bug.
  */
 #include "maliwddm.h"
+#include "wddm2.h"
 
 /* ---- settings: DWORDs in the device's Device Parameters key ---- */
 
@@ -261,6 +262,10 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
     }
     MwLog(a, L"Build", MW_BUILD);
     MwLog(a, L"RenderOnly", MW_RENDER_ONLY);
+    MwLog(a, L"WddmVersion", MwWddmVersion);
+    MwLog(a, L"DdiInterface", MwDdiInterface);
+    MwLog(a, L"WddmProbe", MwWddmProbe);
+    MwLog(a, L"WddmProbeResult", MwWddmProbeResult);
     MwCommandSettings(a);
     MwLog(a, L"TimeSlice", a->Slice);
 #if !MW_RENDER_ONLY
@@ -413,7 +418,7 @@ static NTSTATUS DriverCaps(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info)
     if (!FITS(size, DXGK_DRIVERCAPS, WDDMVersion))
         return STATUS_BUFFER_TOO_SMALL;
     RtlZeroMemory(caps, size);
-    caps->WDDMVersion = DXGKDDI_WDDMv1_3;
+    caps->WDDMVersion = (DXGK_WDDMVERSION)MwWddmVersion; /* 1.3 unless WddmProbe says otherwise (version.c) */
     caps->HighestAcceptableAddress.QuadPart = (1LL << 40) - 1;   /* the Mali sees 40 bits */
     caps->MaxAllocationListSlotId = 256;   /* Render patches every allocation, SlotId = index */
     caps->SchedulingCaps.MultiEngineAware = 1;
@@ -536,6 +541,12 @@ static NTSTATUS APIENTRY MwQueryAdapterInfo(IN_CONST_HANDLE hAdapter, const DXGK
         break;
     case DXGKQAITYPE_QUERYSEGMENT3:
         st = MwQuerySegment(a, Info);
+        break;
+    case DXGKQAITYPE_QUERYSEGMENT4:         /* WDDM 2.x only (version.c) */
+        st = MwQuerySegment4(a, Info);
+        break;
+    case DXGKQAITYPE_PHYSICALADAPTERCAPS:   /* WDDM 2.x only */
+        st = MwQueryPhysicalAdapterCaps(a, Info);
         break;
     case DXGKQAITYPE_HISTORYBUFFERPRECISION:
         /* WDDM 1.3 (Windows 8.1) asks this of every 1.3 driver. Answering
@@ -1035,7 +1046,9 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
     DRIVER_INITIALIZATION_DATA init = {0};
 
-    init.Version = DXGKDDI_INTERFACE_VERSION_WDDM1_3;
+    /* WDDM 1.3 unless the WddmProbe setting asks for another (version.c). */
+    MwVersionInit(RegistryPath);
+    init.Version = MwDdiInterface;
     init.DxgkDdiAddDevice = MwAddDevice;
     init.DxgkDdiStartDevice = MwStartDevice;
     init.DxgkDdiStopDevice = T_StopDevice;
@@ -1097,6 +1110,10 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     init.DxgkDdiStopDeviceAndReleasePostDisplayOwnership = MwStopDeviceAndReleasePostDisplayOwnership;
     init.DxgkDdiSystemDisplayEnable = MwSystemDisplayEnable;
     init.DxgkDdiSystemDisplayWrite = MwSystemDisplayWrite;
+    /* Mandatory from WDDM 2.6; left out below it so that a 1.3 driver is
+     * the same as before. */
+    if (MwDdiInterface >= DXGKDDI_INTERFACE_VERSION_WDDM2_6)
+        init.DxgkDdiCollectDiagnosticInfo = MwCollectDiagnosticInfo;
 
     return DxgkInitialize(DriverObject, RegistryPath, &init);
 }

@@ -8,6 +8,7 @@
  * used for anything: the Mali MMU is the aperture.
  */
 #include "maliwddm.h"
+#include "wddm2.h"
 
 /* ---- the segment ---- */
 
@@ -40,6 +41,41 @@ NTSTATUS MwQuerySegment(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info)
     d->Flags.CacheCoherent = FALSE;
     /* As viogpu3d. Paging buffers stay empty: map and unmap are done on
      * the CPU while the paging buffer is built. */
+    out->PagingBufferSegmentId = MW_SEGMENT_ID;
+    out->PagingBufferSize = 10 * PAGE_SIZE;
+    out->PagingBufferPrivateDataSize = 0;
+    return STATUS_SUCCESS;
+}
+
+/* The WDDM 2.x form of the same answer (DXGKQAITYPE_QUERYSEGMENT4), asked
+ * of a driver that reports 2.0 or later (docs/WDDM2.md, P1). The segment is
+ * the one above, field for field. The descriptors are an array of
+ * SegmentDescriptorStride bytes each, sized by dxgkrnl for our interface
+ * version, so only the fields that fit are written. */
+NTSTATUS MwQuerySegment4(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info)
+{
+    DXGK_QUERYSEGMENTOUT4 *out = (DXGK_QUERYSEGMENTOUT4 *)Info->pOutputData;
+    DXGK_SEGMENTDESCRIPTOR4 *d;
+    SIZE_T stride;
+    UNREFERENCED_PARAMETER(A);
+
+    if (Info->OutputDataSize < sizeof(*out))
+        return STATUS_BUFFER_TOO_SMALL;
+    if (out->pSegmentDescriptor == NULL) {
+        out->NbSegment = 1;
+        return STATUS_SUCCESS;
+    }
+    stride = out->SegmentDescriptorStride != 0 ? out->SegmentDescriptorStride : sizeof(*d);
+    if (stride < RTL_SIZEOF_THROUGH_FIELD(DXGK_SEGMENTDESCRIPTOR4, CommitLimit))
+        return STATUS_BUFFER_TOO_SMALL;
+    RtlZeroMemory(out->pSegmentDescriptor, stride);
+    d = (DXGK_SEGMENTDESCRIPTOR4 *)out->pSegmentDescriptor;
+    d->BaseAddress.QuadPart = MK_VA_START;
+    d->Size = MW_SEGMENT_SIZE;
+    d->CommitLimit = MW_SEGMENT_SIZE;
+    d->Flags.Aperture = TRUE;
+    d->Flags.CpuVisible = TRUE;     /* the shared primary, as above */
+    d->Flags.CacheCoherent = FALSE;
     out->PagingBufferSegmentId = MW_SEGMENT_ID;
     out->PagingBufferSize = 10 * PAGE_SIZE;
     out->PagingBufferPrivateDataSize = 0;
