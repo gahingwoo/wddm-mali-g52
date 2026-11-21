@@ -416,20 +416,12 @@ NTSTATUS APIENTRY MwCloseAllocation(IN_CONST_HANDLE hDevice, const DXGKARG_CLOSE
  * buffer itself stays empty. Everything else VidMm may ask (transfers,
  * fills) is not supported, as in viogpu3d; with one aperture segment it
  * has not been needed there. */
-NTSTATUS APIENTRY MwBuildPagingBuffer(IN_CONST_HANDLE hAdapter, DXGKARG_BUILDPAGINGBUFFER *Arg)
+static NTSTATUS BuildPaging1x(MW_ADAPTER *a, DXGKARG_BUILDPAGINGBUFFER *Arg)
 {
-    MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
     NTSTATUS st = STATUS_SUCCESS;
 
     if ((ULONG)Arg->Operation < 16)
         a->PagingOps[Arg->Operation]++;
-    /* Every operation, refused ones marked, into the probe's breadcrumbs
-     * (probe.c): a WDDM 2.x VidMm asks for operations a 1.3 driver never
-     * sees, and refusing one may be what stops it. */
-    MwProbePagingOp((ULONG)Arg->Operation,
-                    Arg->Operation != DXGK_OPERATION_MAP_APERTURE_SEGMENT &&
-                    Arg->Operation != DXGK_OPERATION_UNMAP_APERTURE_SEGMENT &&
-                    !(Arg->Operation == DXGK_OPERATION_NOTIFY_RESIDENCY && MwProbeNotifyResidencyOk));
     switch (Arg->Operation) {
     case DXGK_OPERATION_MAP_APERTURE_SEGMENT: {
         MW_ALLOCATION *alloc = (MW_ALLOCATION *)Arg->MapApertureSegment.hAllocation;
@@ -471,15 +463,34 @@ NTSTATUS APIENTRY MwBuildPagingBuffer(IN_CONST_HANDLE hAdapter, DXGKARG_BUILDPAG
         MwCopyForget(a, alloc, FALSE);
         return STATUS_SUCCESS;
     }
-    case DXGK_OPERATION_NOTIFY_RESIDENCY:
-        /* WDDM 2.x tells the driver an allocation became resident or was
-         * evicted. The aperture mapping above already follows residency,
-         * so there is nothing to do. A 1.3 driver is never asked. Refusing
-         * it, as before, is ProbeNotifyResidencyOk = 0. */
-        return MwProbeNotifyResidencyOk ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
     default:
         return STATUS_NOT_SUPPORTED;
     }
+}
+
+NTSTATUS APIENTRY MwBuildPagingBuffer(IN_CONST_HANDLE hAdapter, DXGKARG_BUILDPAGINGBUFFER *Arg)
+{
+    MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
+    NTSTATUS st;
+
+    /* WDDM 1.3: as it always was. */
+    if (MwWddmProbe == 0) {
+        st = BuildPaging1x(a, Arg);
+        MwProbePagingOp((ULONG)Arg->Operation, !NT_SUCCESS(st));
+        return st;
+    }
+    /* WDDM 2.x (wddm2x.c). dxgmms2 accepts only STATUS_SUCCESS or
+     * STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER from this DDI; anything else
+     * is bugcheck 0x10E. Map and unmap are done as before; the operations a
+     * 1.3 driver never sees are taken; a failure is counted (PgRefused_<op>
+     * in the probe's key) and reported as success. */
+    if (Arg->Operation == DXGK_OPERATION_MAP_APERTURE_SEGMENT ||
+        Arg->Operation == DXGK_OPERATION_UNMAP_APERTURE_SEGMENT)
+        st = BuildPaging1x(a, Arg);
+    else
+        st = Mw2xPagingOp(a, Arg) ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+    MwProbePagingOp((ULONG)Arg->Operation, !NT_SUCCESS(st));
+    return Mw2xPagingFill(Arg);
 }
 
 /* ---- the UMD's question: where is this allocation on the GPU? ---- */

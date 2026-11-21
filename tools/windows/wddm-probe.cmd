@@ -4,8 +4,12 @@ rem
 rem   wddm-probe set 2000     report WDDM 2.0 from the next boot (2100 = 2.1,
 rem                           ... 2900, 3000, 3100 = 3.1). Also arms a boot-time
 rem                           DxgKrnl ETW capture to C:\mali\probe\boot.etl.
-rem   wddm-probe set 2000 uart  the same, and the driver's watchdog also prints
-rem                           one line a second on the debug UART (1500000 8n1)
+rem   wddm-probe set 2000 gpummu  the same in Wddm2Shape 1: GpuMmu caps and DDIs
+rem                           (default, "phys": Wddm2Shape 0, physical mode with
+rem                           a copy node as the paging node). See wddm2x.c.
+rem   wddm-probe set 2000 uart  (with or without phys/gpummu) the driver's
+rem                           watchdog also prints one line a second on the
+rem                           debug UART (1500000 8n1)
 rem   wddm-probe keep 2000    the same, without the one-shot fallback (only
 rem                           for a version already seen to start)
 rem   wddm-probe watch        on 1.3: run the driver's watchdog anyway (a
@@ -46,15 +50,20 @@ if /i "%~1"=="keep" goto set
 if /i "%~1"=="check" goto check
 if /i "%~1"=="watch" goto watch
 if /i "%~1"=="off" goto off
-echo usage: wddm-probe set ^<2000^|2100^|...^|3100^> [uart] ^| keep ^<v^> [uart] ^| watch ^| check ^| off
+echo usage: wddm-probe set ^<2000^|2100^|...^|3100^> [phys^|gpummu] [uart] ^| keep ^<v^> [...] ^| watch ^| check ^| off
 exit /b 1
 
 :set
 if "%~2"=="" (echo which version? e.g. wddm-probe set 2000 & exit /b 1)
 reg add %PARAMS% /v WddmProbe /t REG_DWORD /d 0x%~2 /f >nul || exit /b 1
-for %%v in (WddmProbeArmed WddmProbeConfirmed WddmProbeFellBack WddmProbeUnknown WddmProbeKeep ProbeUart ProbeWatchdog) do reg delete %PARAMS% /v %%v /f >nul 2>&1
+for %%v in (WddmProbeArmed WddmProbeConfirmed WddmProbeFellBack WddmProbeUnknown WddmProbeKeep ProbeUart ProbeWatchdog Wddm2Shape) do reg delete %PARAMS% /v %%v /f >nul 2>&1
 if /i "%~1"=="keep" reg add %PARAMS% /v WddmProbeKeep /t REG_DWORD /d 1 /f >nul
-if /i "%~3"=="uart" reg add %PARAMS% /v ProbeUart /t REG_DWORD /d 1 /f >nul
+set SHAPE=0
+for %%a in (%3 %4) do (
+  if /i "%%a"=="uart" reg add %PARAMS% /v ProbeUart /t REG_DWORD /d 1 /f >nul
+  if /i "%%a"=="gpummu" set SHAPE=1
+)
+reg add %PARAMS% /v Wddm2Shape /t REG_DWORD /d %SHAPE% /f >nul
 rem The previous run's trace values, so that this run's are its own. The
 rem Probe* keys of earlier runs are saved to a file first.
 reg query %DEVKEY% /s > "%DIR%\devkey-before-set.txt" 2>&1
@@ -62,7 +71,7 @@ reg delete %DEVKEY% /f >nul 2>&1
 call :autologger
 reg query %PARAMS%
 echo.
-echo WddmProbe 0x%~2 is set. Do a full REBOOT now (not pnputil /restart-device),
+echo WddmProbe 0x%~2, Wddm2Shape %SHAPE% is set. Do a full REBOOT now (not pnputil /restart-device),
 echo then run: wddm-probe check
 exit /b 0
 
@@ -102,6 +111,7 @@ reg add %PARAMS% /v WddmProbeArmed /t REG_DWORD /d 0 /f >nul
 reg delete %PARAMS% /v WddmProbeKeep /f >nul 2>&1
 reg delete %PARAMS% /v ProbeWatchdog /f >nul 2>&1
 reg delete %PARAMS% /v ProbeUart /f >nul 2>&1
+reg delete %PARAMS% /v Wddm2Shape /f >nul 2>&1
 reg delete %AUTO% /f >nul 2>&1
 echo WDDM 1.3 from the next boot. REBOOT to apply.
 exit /b 0
@@ -137,6 +147,11 @@ echo == 2b. the probe's breadcrumbs, every Probe* key (survive the fallback boot
 echo   Wd_Stuck / Wd_WorstStuck = a DDI still in progress after 2 s >> "%OUT%"
 echo   Wd_Last = the last DDI entered; Cnt_^<ddi^> = calls; PgRefused_^<op^> = paging ops refused >> "%OUT%"
 for /f "delims=" %%k in ('reg query %DEVKEY% 2^>nul ^| findstr /i /r "\\Probe[0-9a-f]*$"') do reg query "%%k" >> "%OUT%" 2>&1
+
+echo == 2c. dxgkrnl's own account: DxgKrnl Admin log (event 549 names an adapter start failure and its reason) >> "%OUT%"
+wevtutil qe Microsoft-Windows-DxgKrnl-Admin /c:40 /rd:true /f:text >> "%OUT%" 2>&1
+wevtutil qe Microsoft-Windows-DxgKrnl/Admin /c:40 /rd:true /f:text >> "%OUT%" 2>&1
+wevtutil qe System /q:"*[System[Provider[@Name='Microsoft-Windows-DxgKrnl']]]" /c:20 /rd:true /f:text >> "%OUT%" 2>&1
 
 echo == 3. device state (Problem code 43 = refused) >> "%OUT%"
 pnputil /enum-devices /instanceid "%DEV%" >> "%OUT%" 2>&1

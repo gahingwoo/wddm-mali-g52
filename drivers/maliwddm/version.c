@@ -73,7 +73,9 @@ ULONG MwWddmProbeResult;        /* see MW_PROBE_* in maliwddm.h */
 ULONG MwProbeWatchdog;
 ULONG MwProbeUart;
 ULONG64 MwProbeUartBase = 0x2AD40000ULL;
-ULONG MwProbeNotifyResidencyOk = 1;
+ULONG MwWddm2Shape = MW_SHAPE_PHYSICAL;
+ULONG MwGpuMmuPtSegment = 1;
+ULONG MwPagingMarker = 1;
 
 static volatile LONG ProbeRenders;
 static volatile LONG ProbeConfirmed;
@@ -162,7 +164,9 @@ void MwVersionInit(PUNICODE_STRING RegistryPath)
     MwProbeWatchdog = ParamRead(L"ProbeWatchdog", 0);
     MwProbeUart = ParamRead(L"ProbeUart", 0);
     MwProbeUartBase = ParamRead(L"ProbeUartBase", (ULONG)MwProbeUartBase);
-    MwProbeNotifyResidencyOk = ParamRead(L"ProbeNotifyResidencyOk", 1);
+    MwWddm2Shape = ParamRead(L"Wddm2Shape", MW_SHAPE_PHYSICAL);
+    MwGpuMmuPtSegment = ParamRead(L"GpuMmuPtSegment", 1);
+    MwPagingMarker = ParamRead(L"PagingMarker", 1);
 
     want = ParamRead(L"WddmProbe", 0);
     if (want == 0 || want == DXGKDDI_WDDMv1_3) {
@@ -205,29 +209,6 @@ void MwVersionRendered(void)
         return;
     ParamWrite(L"WddmProbeArmed", 0);
     ParamWrite(L"WddmProbeConfirmed", MwWddmProbe);
-}
-
-/* DXGKQAITYPE_PHYSICALADAPTERCAPS, asked of a 2.0 or later driver. One
- * physical adapter with one node, which is also the paging node, and no
- * GPU virtual addressing yet (P2 sets GpuMmuSupported here and in the
- * DRIVERCAPS). The structure grows with the interface version (VPRPagingNode
- * in 2.1, VirtualCopyNodeIndex in 2.7), so it is written field by field. */
-NTSTATUS MwQueryPhysicalAdapterCaps(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info)
-{
-    DXGK_PHYSICALADAPTERCAPS *c = (DXGK_PHYSICALADAPTERCAPS *)Info->pOutputData;
-    UINT size = Info->OutputDataSize;
-
-    if (size < RTL_SIZEOF_THROUGH_FIELD(DXGK_PHYSICALADAPTERCAPS, Flags))
-        return STATUS_BUFFER_TOO_SMALL;
-    if (Info->pInputData != NULL && Info->InputDataSize >= sizeof(DXGK_QUERYPHYSICALADAPTERCAPSIN) &&
-        ((const DXGK_QUERYPHYSICALADAPTERCAPSIN *)Info->pInputData)->PhysicalAdapterIndex != 0)
-        return STATUS_INVALID_PARAMETER;
-    RtlZeroMemory(c, size);
-    c->NumExecutionNodes = 1;
-    c->PagingNodeIndex = 0;
-    c->DxgkPhysicalAdapterHandle = (HANDLE)A;
-    c->Flags.Value = 0;
-    return STATUS_SUCCESS;
 }
 
 /* WDDM 2.6 makes this DDI mandatory ("Collect Diagnostic Info"). Its

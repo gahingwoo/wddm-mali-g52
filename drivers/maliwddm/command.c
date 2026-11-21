@@ -946,6 +946,12 @@ NTSTATUS APIENTRY MwSubmitCommand(IN_CONST_HANDLE hAdapter, const DXGKARG_SUBMIT
     MW_SUBMISSION sub;
     MW_SYNC sync;
 
+    /* WddmProbe: node 1 is the copy (paging) node; its work is done on the
+     * CPU when it is built (wddm2x.c). */
+    if (Arg->NodeOrdinal == MW_COPY_NODE && MwNodeCount() > 1) {
+        a->Submits++;
+        return MwCopyNodeSubmit(a, Arg->SubmissionFenceId);
+    }
     RtlZeroMemory(&sub, sizeof(sub));
     sub.FenceId = Arg->SubmissionFenceId;
     sub.SubmitTick = MwTick();
@@ -1029,7 +1035,7 @@ NTSTATUS APIENTRY MwPreemptCommand(IN_CONST_HANDLE hAdapter, const DXGKARG_PREEM
 NTSTATUS APIENTRY MwQueryCurrentFence(IN_CONST_HANDLE hAdapter, DXGKARG_QUERYCURRENTFENCE *Arg)
 {
     MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
-    Arg->CurrentFence = a->LastCompletedFence;
+    Arg->CurrentFence = Arg->NodeOrdinal == MW_COPY_NODE ? MwCopyNodeFence() : a->LastCompletedFence;
     return STATUS_SUCCESS;
 }
 
@@ -1089,8 +1095,20 @@ NTSTATUS APIENTRY MwGetNodeMetadata(IN_CONST_HANDLE hAdapter, UINT NodeOrdinal,
                                     DXGKARG_GETNODEMETADATA *Arg)
 {
     UNREFERENCED_PARAMETER(hAdapter);
-    UNREFERENCED_PARAMETER(NodeOrdinal);
     RtlZeroMemory(Arg, sizeof(*Arg));
+    /* WddmProbe: the ordinal carries the physical adapter in its top 16
+     * bits, and node 1 is the copy (paging) node (wddm2x.c). */
+    if (MwNodeCount() > 1) {
+        UINT node = DXGKNODEMETADATA_GETNODEORDINAL(NodeOrdinal);
+        if (DXGKNODEMETADATA_GETPHYSICALADAPTERINDEX(NodeOrdinal) != 0 || node >= MwNodeCount())
+            return STATUS_INVALID_PARAMETER;
+        Arg->GpuMmuSupported = MwGpuMmu();
+        if (node == MW_COPY_NODE) {
+            Arg->EngineType = DXGK_ENGINE_TYPE_COPY;
+            (void)RtlStringCbCopyW(Arg->FriendlyName, sizeof(Arg->FriendlyName), L"Mali-G52 paging");
+            return STATUS_SUCCESS;
+        }
+    }
     Arg->EngineType = DXGK_ENGINE_TYPE_3D;
     (void)RtlStringCbCopyW(Arg->FriendlyName, sizeof(Arg->FriendlyName), L"Mali-G52 job manager");
     return STATUS_SUCCESS;
@@ -1103,6 +1121,10 @@ NTSTATUS APIENTRY MwGetNodeMetadata(IN_CONST_HANDLE hAdapter, UINT NodeOrdinal,
 NTSTATUS APIENTRY MwResetEngine(IN_CONST_HANDLE hAdapter, DXGKARG_RESETENGINE *Arg)
 {
     MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
+    if (Arg->NodeOrdinal == MW_COPY_NODE) {     /* nothing runs there */
+        Arg->LastAbortedFenceId = MwCopyNodeFence();
+        return STATUS_SUCCESS;
+    }
     (void)Synchronize(a, SyncReset, a);
     Arg->LastAbortedFenceId = a->LastCompletedFence;
     return STATUS_SUCCESS;
