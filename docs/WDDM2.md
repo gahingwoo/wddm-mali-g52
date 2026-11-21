@@ -817,6 +817,76 @@ What it is (`drivers/maliwddm/version.c`, `wddm2.h`, a few lines in
 
 The board test is in section 13.3.
 
+### P1, first board run (2026-11-22, TaishanPi 3M, 23H2, CI run 283)
+
+- **1.3 baseline:** fine. dxdiag WDDM 1.3, FL 10_0, DDI 11.2, UMD in
+  `dwm.exe`. **On 1.3 `typeperf` already lists `GPU Engine` instances**
+  (`pid_*_luid_0x9F39_phys_0_eng_0..8_engtype_3D`, 9 engines per process,
+  all 0%). So "the counters exist" is not the test for the Task Manager
+  page; which LUID they name and whether 3D use moves is.
+- **0x2000, hot (set plus `pnputil /restart-device`):** black screen and a
+  hang. Recorded before it: `QAI_11` (size 0x28) and `QAI_15` (size 0x14),
+  both status 0, and `Fail_QueryInterface 0xc00000bb`. That path is not a
+  valid test (the loaded image is kept); n=1.
+- **0x2000, full reboot:** hangs at the boot spinner; power cycle needed.
+  n=1.
+- **Fallback:** worked both times (`WddmProbeFellBack = 0x2000`, next boot
+  1.3 with a desktop). n=2.
+- **Lost:** everything from the hung boot. `boot.etl` was 0 bytes, the
+  fallback boot rewrote the Device Parameters trace, and a file written just
+  before the power cut vanished.
+
+What is known: dxgkrnl accepted DRIVERCAPS at 2.0 and asked for
+`QUERYSEGMENT4` and `PHYSICALADAPTERCAPS`, which this driver answered. It
+then stopped somewhere later. Suspects, none tested:
+
+- `DXGK_OPERATION_NOTIFY_RESIDENCY` (15), a 2.0 paging operation the driver
+  refused with `STATUS_NOT_SUPPORTED`;
+- a QAI or interface a 2.0 driver must answer;
+- a wait on a fence or interrupt that a 2.0 VidMm expects in a different
+  form.
+
+### P1, second build: breadcrumbs that survive a hang
+
+`drivers/maliwddm/probe.c`:
+
+- Every DDI wrapper, plus StartDevice, GetNodeMetadata,
+  QueryDependentEngineGroup, the ISR and the DPC, counts its enters, exits,
+  failures and the sequence and time of its last enter. This is in memory,
+  interlocked, at any IRQL.
+- In probe mode everything the trace writes is mirrored, flushed, to
+  `Device Parameters\maliwddm\Probe<version>`. The 1.3 fallback boot never
+  writes that key.
+- A watchdog thread, started in AddDevice so that a hang inside StartDevice
+  is caught, writes the same key every second for the first 5 minutes,
+  then every 10 s or on any change. Each write is flushed, and contains:
+  - `Wd_Seconds`;
+  - `Wd_Last` (the last DDI entered, with its sequence number);
+  - `Wd_Stuck` ("still in <DDI> after N ms" for anything in progress over
+    2 s) and `Wd_WorstStuck`;
+  - `Cnt_<ddi>`, `Seq_<ddi>` and `Fails_<ddi>`/`LastFail_<ddi>`;
+  - the adapter's render, submit, fence, IRQ, vsync and flip counters;
+  - `Pg_<op>` and `PgRefused_<op>` for every paging operation VidMm built.
+- `ProbeUart = 1` also prints one watchdog line a second on the debug UART,
+  RK3576 UART0, 1500000 8n1. It needs neither the registry nor the file
+  system, in case the SYSTEM hive is not yet being written to disk when the
+  adapter starts.
+- `NOTIFY_RESIDENCY` is now answered with success, the first suspect. It
+  is a switch: `ProbeNotifyResidencyOk = 0` refuses it as before.
+- QueryInterface records the GUID (`QI_RefusedData1`) and version of an
+  interface it refuses. StartDevice records the adapter LUID
+  (`AdapterLuidLow`/`High`), to map the `GPU Engine` counters to this
+  adapter.
+
+`wddm-probe.cmd`:
+
+- `set <v> [uart]` and `watch` (the watchdog on 1.3, a baseline).
+- The boot-time ETW capture keeps one file per boot (`FileMax 8`) and
+  flushes every second (`FlushTimer 1`), so the fallback boot no longer
+  overwrites the hung boot's file.
+- `check` prints every `Probe*` key and counts the GPU counters per LUID
+  with PowerShell, which fixes section 6's count.
+
 ## 13. What the KMD expects of the UMD, phase by phase
 
 This is the contract between `wddm2` (KMD) and the UMD branch. Where a
@@ -899,6 +969,8 @@ heading, so the two branches do not edit the same lines.
 
 ### 13.3 P1 board test
 
+(As first written. The second build adds the steps in 13.4.)
+
 Install the `wddm-mali-g52-driver-arm64` package of the CI run for the
 `wddm2` commit as usual (`INSTALL.txt`) and reboot once on 1.3. First, the
 baseline: run `wddm-probe check` with no probe set, and keep that output.
@@ -939,6 +1011,39 @@ What would stop the ladder: a refusal at 2.0. The event 494 text then says
 which cap or DDI dxgkrnl wanted, and that is the next build. A pass at 2.0
 with no Task Manager GPU page would mean the page needs virtual addressing,
 which P2 brings. Either result is useful.
+
+### 13.4 P1 board test, second build (breadcrumbs)
+
+1. Install the new package and do a full reboot. Then run `wddm-probe watch
+   uart`, reboot, run `wddm-probe check`, and keep the output. This is a 1.3
+   baseline of the new instruments: key `Probe1300`, with `Wd_Stuck none` on
+   a healthy boot, and the UART lines if a serial logger is attached.
+2. Run `wddm-probe off`, then `wddm-probe set 2000 uart`, then do a **full
+   reboot**, not `pnputil /restart-device`. Keep the serial logger running
+   from before the reboot.
+3. If it hangs, wait at least 60 s at the spinner, so the watchdog has
+   written a minute of crumbs, then power off and on. The next boot falls
+   back to 1.3.
+4. On the fallback boot (or the 2.0 desktop, if it comes up), run `wddm-probe
+   check` and send `C:\mali\probe\` and the serial log. In the output,
+   section 2b is the `Probe2000` key from the 2.0 boot:
+   - `Wd_Stuck` and `Wd_WorstStuck`: where it hung;
+   - `Wd_Last`: the last DDI called;
+   - `Wd_Seconds`: how long the watchdog stayed alive;
+   - `PgRefused_<op>`: operations refused;
+   - `QI_RefusedData1`;
+   - and the `Cnt_` list, which shows how far the boot got.
+5. If `Probe2000` is empty or missing, the hive was not being written yet.
+   The UART lines are then the record, and that is itself a finding.
+6. Then, only if 2000 reached a desktop: in Task Manager, compare the GPU
+   entry and the per-LUID counter list in section 6 against the 1.3
+   baseline.
+
+`ProbeNotifyResidencyOk` stays at its default (1) for this run. If 2.0
+comes up, one more run with it at 0 shows whether that was the fix:
+`reg add HKLM\SYSTEM\CurrentControlSet\Services\maliwddm\Parameters /v
+ProbeNotifyResidencyOk /t REG_DWORD /d 0 /f`, then `wddm-probe set 2000
+uart` and a reboot.
 
 ## 14. Sources, and what I could not verify
 
