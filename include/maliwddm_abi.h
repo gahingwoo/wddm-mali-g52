@@ -134,18 +134,19 @@ typedef struct _MW_UMD_PROC {
  * OpenAdapter10_2, before there is a device to escape through). The KMD
  * fills it from DWORD settings in Device Parameters, so each step of the
  * D3D11 work (docs/D3D11-UMD.md) can be turned back without reinstalling.
- * A KMD that refuses the query means: Ddi 10, as before it existed.
+ * A KMD that refuses the query means: Ddi 100, as before it existed.
  * Fields are only ever added at the end; Size says how many there are. */
 #define MW_UMD_INFO_MAGIC       0x3149574Du     /* 'MWI1' */
-#define MW_UMD_DDI_D3D10_1      10
-#define MW_UMD_DDI_D3D11_0      11
+#define MW_UMD_DDI_D3D10_0      100     /* what the UMD always offered: feature level 10_0 */
+#define MW_UMD_DDI_D3D10_1      101     /* the D3D10.1 DDI: feature level 10_1, ANGLE's ES 3.0 */
+#define MW_UMD_DDI_D3D11_0      110
 #define MW_UMD_DDI_D3D11_1      111
 #define MW_UMD_NO_NODE          0xFFFFFFFFu
 
 typedef struct _MW_UMD_ADAPTER_INFO {
     mw_u32 Magic;                       /* MW_UMD_INFO_MAGIC */
     mw_u32 Size;                        /* bytes filled in */
-    mw_u32 Ddi;                         /* UmdDdi: the highest DDI, MW_UMD_DDI_* (default 10) */
+    mw_u32 Ddi;                         /* UmdDdi: the highest DDI, MW_UMD_DDI_* (default 100) */
     mw_u32 FeatureLevel;                /* UmdFeatureLevel: a D3D_FEATURE_LEVEL (default 0xa000) */
     mw_u32 Dxgi12;                      /* UmdDxgi12: the DXGI 1.2 DDI and flip model (default 0) */
     mw_u32 Video;                       /* UmdVideo: 0 none, 1 video DDI without profiles, 2 with (default 0) */

@@ -505,7 +505,7 @@ static NTSTATUS UmdAdapterInfo(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *In
         return STATUS_BUFFER_TOO_SMALL;
     RtlZeroMemory(&u, sizeof(u));
     u.Magic = MW_UMD_INFO_MAGIC;
-    u.Ddi = MwSetting(A, L"UmdDdi", MW_UMD_DDI_D3D10_1);
+    u.Ddi = MwSetting(A, L"UmdDdi", MW_UMD_DDI_D3D10_0);
     u.FeatureLevel = MwSetting(A, L"UmdFeatureLevel", 0xa000);
     u.Dxgi12 = MwSetting(A, L"UmdDxgi12", 0);
     u.Video = MwSetting(A, L"UmdVideo", 0);

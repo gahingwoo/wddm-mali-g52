@@ -10,20 +10,79 @@ place to plug in.
 ## Where the UMD is today
 
 - Mesa 26.2's d3d10umd frontend with Panfrost, patches 0001 to 0062. It
-  answers `OpenAdapter10_2` with the D3D10 and D3D10.1 DDI only
-  (`Adapter.cpp:113-131`). A `SUPPORT_D3D11` switch exists in `State.h`
-  and is 0; behind it there are only the two interface numbers, no table.
-- The D3D11 runtime drives a D3D10.1 DDI driver down-level, so D3D11
-  applications get feature level 10_0 today, but no `ID3D11Device1`, no
-  `ID3D11VideoDevice` and no DXGI 1.2 (`d3dprobe`, branch `present-fast`).
+  offers the **D3D10.0 DDI only**: `State.h` has `SUPPORT_D3D10_1 0` and
+  `SUPPORT_MSAA 0`, so the D3D10.1 interface numbers are compiled out of
+  `OpenAdapter10`, `GetSupportedVersions` and `CreateDevice`, although the
+  10.1 code behind them (the 10.1 function table, per-render-target blend
+  in `CreateBlendState1`, cube-array views in `CreateShaderResourceView1`)
+  is there. A `SUPPORT_D3D11` switch is 0 too, with only two interface
+  numbers behind it.
+- The D3D11 runtime drives it down-level at feature level 10_0. The board,
+  2026-11-21: `d3dprobe` gives the Mali at 10_0, `ID3D11Device1` yes (the
+  runtime offers that over any DDI), `ID3D11VideoDevice` no, NV12 not
+  supported.
 - DXGI is the 1.0/1.1 DDI. Without the 1.2 DDI there is no flip model, so
   every windowed present is read back on the CPU and blitted by the KMD
   (PERF.md, "Video in Edge"). That makes U2 a performance milestone too,
   not only a feature one.
 - Feature level: the G52 has no tessellation and Panfrost has no D3D11
-  compute model through this frontend, so 11_0 is out. 10_0 is the
-  target; 10_1 (cube arrays, per-sample shading, 4x MSAA everywhere) is a
-  stretch to try once U2 runs.
+  compute model through this frontend, so 11_0 is out. **10_1 is the
+  target, and the first priority (U0)**: it is what turns on Edge.
+
+## Why Edge renders on WARP, and U0
+
+The board's `edge://gpu` (2026-11-21, maliwddm 10.26.16.996): two GPU
+process launches each failed with `eglCreateContext ES 3.0 failed with
+error EGL_BAD_ATTRIBUTE. ES version fallback is disabled`, then Edge fell
+back to SwANGLE; "D3D11 Feature Level: Unknown", "Software Rendering:
+Yes". `GetGpuDriverOverlayInfo: Failed to retrieve video device` is the
+missing `ID3D11VideoDevice` (U4).
+
+ANGLE's rule, read from its source (google/angle main,
+`src/libANGLE/renderer/d3d/d3d11/renderer11_utils.cpp`,
+`GetMaximumClientVersion`): feature levels 12_1 to 10_1 give OpenGL ES
+3.0; 10_0 gives ES 2.0 unless the D3D workaround `allowES3OnFL100` is on,
+and `GenerateWorkarounds` sets it to false. Nothing else limits the
+version: `getMaxSupportedESVersion` returns that value as it is. Chromium
+asks for ES 3.0 and no longer falls back to 2.0. So a device at 10_0
+cannot run Edge's GPU process at all, and one at 10_1 can.
+
+**Try first, no code:** start Edge with ANGLE's workaround forced, which
+gives ES 3.0 on our 10_0 device, and see whether everything after context
+creation works on the Mali:
+
+    "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --enable-angle-features=allowES3OnFL100
+
+(close every Edge window first, including the background ones, or the
+flag is ignored; `edge://gpu` then shows it under "Command Line"). If the
+GPU process stays up and GL_RENDERER names the Mali, U0 is the only
+blocker; if it dies later, its log says on what.
+
+**U0, the smallest change to 10_1 (Mesa patch 0063, done on this
+branch, not run):** `SUPPORT_D3D10_1 1`, with the D3D10.1 interface
+offered only where the KMD's answer allows it (`UmdDdi` 101; the default
+100 keeps the D3D10.0 DDI): `OpenAdapter10`, `GetSupportedVersions` and
+`CreateDevice` check it. The D3D11 runtime then creates devices at 10_1.
+
+What 10_1 asks for that this does not yet do, in the order it matters to
+ANGLE's ES 3.0:
+
+| 10_1 requirement | State | Matters for ES 3.0 |
+|---|---|---|
+| D3D10.1 DDI entry points (blend per target, cube-array views, `ResourceConvert`) | present in the frontend, now compiled in | yes |
+| 4x MSAA on render-target formats, `CheckMultisampleQualityLevels`, `ResolveSubresource` | `SUPPORT_MSAA 0`; resolve does nothing | ES 3.0 wants `GL_MAX_SAMPLES` of 4; ANGLE does not lower the version for it, but Chromium's MSAA paths and WebGL antialias will fail or fall back. Next step (U0b): `SUPPORT_MSAA 1`, resolve through `pipe->blit`, behind `UmdMsaa` |
+| Shader model 4.1 opcodes `lod`, `gather4`, `sample_pos`, `sample_info` | parsed, `TGSI_LOG_UNSUPPORTED` (`ShaderTGSI.c:175-178`) | not used by ES 3.0 shaders (gather is ES 3.1); map to TGSI `LODQ`, `TG4`, `TXQS` and a sample-position table in U0b |
+| Cube map arrays | resource target already chosen (`Resource.cpp:290`) | not an ES 3.0 feature |
+| Format support for 10_1 (BGRA as render target, R10G10B10A2, R11G11B10) | as at 10_0 | ANGLE builds its format table from `CheckFormatSupport`; missing formats only remove formats |
+
+Test for U0: `reg add "...\Device Parameters" /v UmdDdi /t REG_DWORD /d 101
+/f`, end every Edge process (or reboot), then:
+- `d3dprobe`: the Mali at feature level **10_1**.
+- `edge://gpu`: GL_RENDERER `ANGLE (Rockchip, ... Direct3D11 vs_4_1 ps_4_1,
+  D3D11 ...)`, "D3D11 Feature Level: D3D 10.1", "Software Rendering: No",
+  no "ES version fallback is disabled" in the log.
+- `m5test perf` during YouTube: an msedge.exe line with GPU work.
+- `UmdDdi` 100 (or deleting it) goes back.
 
 ## How the KMD tells the UMD what to offer
 
@@ -40,12 +99,12 @@ step can be turned back without reinstalling:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `UmdDdi` | 10 until U1 has run, then 11, then 111 | 10: D3D10.1 DDI as today; 11: D3D11.0; 111: D3D11.1 |
+| `UmdDdi` | 100 until U0 has run, then 101, 110, 111 | 100: the D3D10.0 DDI as today (feature level 10_0); 101: the D3D10.1 DDI (10_1); 110: D3D11.0; 111: D3D11.1 |
 | `UmdDxgi12` | 0 until U3 has run | the DXGI 1.2 DDI and flip model |
 | `UmdVideo` | 0 | 0 none; 1 the video DDI with no profiles; 2 with the decoder's profiles |
 | `UmdFeatureLevel` | 0xa000 (10_0) | the most the UMD reports |
 
-A KMD that does not answer the query means `UmdDdi` 10, so a new UMD on
+A KMD that does not answer the query means `UmdDdi` 100, so a new UMD on
 an old KMD behaves as today. The structure only grows at the end and says
 its own size.
 
@@ -62,7 +121,7 @@ Each is a branch commit series, built by CI, installable on its own, and
 has a board test. Times are for one person; they add up to the 12 to 24
 person-weeks WDDM2.md gives option (c), decode excluded.
 
-### U1: the D3D11.0 DDI at feature level 10_0 (2 to 4 weeks)
+### U1: the D3D11.0 DDI at feature level 10_1 (2 to 4 weeks)
 
 - `OpenAdapter10_2` accepts `D3D11_0_DDI_INTERFACE_VERSION` and the 11.0
   build numbers; `GetSupportedVersions` lists them when `UmdDdi` allows.
@@ -73,10 +132,10 @@ person-weeks WDDM2.md gives option (c), decode excluded.
   entries that set `E_NOTIMPL`; at 10_0 the runtime does not call them.
 - `GetCaps`: threading caps with no deferred-context support, the 10_0
   feature level, the formats as today.
-- Test: `d3dprobe` shows the Mali at 10_0 as before, `ID3D11Device1` still
+- Test: `d3dprobe` shows the Mali at 10_1 as after U0, `ID3D11Device1` still
   no. The UMD log (`C:\mali\log`) says it opened the 11.0 interface.
   dwm, the desktop, FurMark through the GL ICD, `gsso.exe hw` and the
-  triangle tests behave as on the previous package. `UmdDdi` 10 restores
+  triangle tests behave as on the previous package. `UmdDdi` 101 restores
   the old interface.
 
 ### U2: the D3D11.1 DDI (2 to 4 weeks)
@@ -90,7 +149,7 @@ person-weeks WDDM2.md gives option (c), decode excluded.
   over today's D3D10.1-DDI driver too (board, 2026-11-21: "yes"). The
   check is d3dprobe's "D3D11.1 DDI seen" line, `discard 1, copy/update
   flags 1`, which the runtime sets only for a D3D11.1-DDI driver, 0 0
-  today. In `edge://gpu`, GL_RENDERER is ANGLE on the Mali at 10_0. The
+  today. In `edge://gpu`, GL_RENDERER is ANGLE on the Mali at 10_1. The
   same regression set as U1.
 
 ### U3: DXGI 1.2 and flip model (2 to 3 weeks)

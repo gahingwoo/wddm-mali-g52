@@ -1,0 +1,141 @@
+diff --git a/src/gallium/frontends/d3d10umd/Adapter.cpp b/src/gallium/frontends/d3d10umd/Adapter.cpp
+index 3259249..ac94a51 100644
+--- a/src/gallium/frontends/d3d10umd/Adapter.cpp
++++ b/src/gallium/frontends/d3d10umd/Adapter.cpp
+@@ -62,6 +62,46 @@ static unsigned long memdbg_no = 0;
+  */
+ 
+ 
++/*
++ * What maliwddm lets the UMD offer: its answer to KMTQAITYPE_UMDRIVERPRIVATE,
++ * MW_UMD_ADAPTER_INFO in wddm-mali-g52's include/maliwddm_abi.h, by layout
++ * (the frontend does not see that header). The KMD fills Ddi from its
++ * UmdDdi setting: 100 the D3D10.0 DDI, 101 the D3D10.1 DDI. Any other
++ * driver, the software runtime, or a KMD from before the query: 100, the
++ * DDI this frontend always offered.
++ */
++struct MaliUmdInfo {
++   UINT Magic, Size, Ddi, FeatureLevel, Dxgi12, Video, DecodeNode, VirtualMode, KmdBuild;
++   UINT Reserved[7];
++};
++#define MALI_UMD_INFO_MAGIC 0x3149574Du
++
++static unsigned
++QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData)
++{
++   MaliUmdInfo info = {};
++   D3DDDICB_QUERYADAPTERINFO q = {};
++   unsigned ddi = 100;
++
++   if (pOpenData->pAdapterCallbacks && pOpenData->pAdapterCallbacks->pfnQueryAdapterInfoCb) {
++      q.pPrivateDriverData = &info;
++      q.PrivateDriverDataSize = sizeof info;
++      HRESULT hr = pOpenData->pAdapterCallbacks->pfnQueryAdapterInfoCb(pOpenData->hRTAdapter.handle, &q);
++      if (SUCCEEDED(hr) && info.Magic == MALI_UMD_INFO_MAGIC && info.Size >= 3 * sizeof(UINT))
++         ddi = info.Ddi >= 101 ? 101 : 100;
++      DebugPrintf("OpenAdapter: KMD adapter info 0x%08lx, magic 0x%08x, UmdDdi %u: offering D3D10.%u\n",
++                  (unsigned long)hr, info.Magic, info.Ddi, ddi == 101 ? 1 : 0);
++   }
++   return ddi;
++}
++
++static bool
++IsD3D10_1Interface(UINT Interface)
++{
++   return Interface == D3D10_1_DDI_INTERFACE_VERSION || Interface == D3D10_1_x_DDI_INTERFACE_VERSION ||
++          Interface == D3D10_1_7_DDI_INTERFACE_VERSION;
++}
++
+ static HRESULT
+ OpenAdapterCommon(__inout D3D10DDIARG_OPENADAPTER *pOpenData)   // IN
+ {
+@@ -79,6 +119,7 @@ OpenAdapterCommon(__inout D3D10DDIARG_OPENADAPTER *pOpenData)   // IN
+    }
+ 
+    pAdaptor->hRTAdapter = pOpenData->hRTAdapter.handle;
++   pAdaptor->ddi = QueryUmdDdi(pOpenData);
+    pOpenData->hAdapter.pDrvPrivate = pAdaptor;
+ 
+    pOpenData->pAdapterFuncs->pfnCalcPrivateDeviceSize = CalcPrivateDeviceSize;
+@@ -132,6 +173,10 @@ OpenAdapter10(__inout D3D10DDIARG_OPENADAPTER *pOpenData)   // IN
+       return E_FAIL;
+    }
+ 
++   /* The D3D10.1 interface only where the KMD allows it. */
++   if (IsD3D10_1Interface(pOpenData->Interface) && QueryUmdDdi(pOpenData) < 101)
++      return E_FAIL;
++
+    return OpenAdapterCommon(pOpenData);
+ }
+ 
+@@ -171,17 +216,22 @@ GetSupportedVersions(D3D10DDI_HADAPTER hAdapter,
+ {
+    LOG_ENTRYPOINT();
+ 
+-   if (pSupportedDDIInterfaceVersions &&
+-       *puEntries < ARRAYSIZE(SupportedDDIInterfaceVersions)) {
++   /* The D3D10.0 entries come first; the D3D10.1 ones (and later) only
++    * where the adapter offers them. */
++   UINT n = ARRAYSIZE(SupportedDDIInterfaceVersions);
++   if (CastAdapter(hAdapter)->ddi < 101)
++      n = 3;
++
++   if (pSupportedDDIInterfaceVersions && *puEntries < n) {
+       return E_OUTOFMEMORY;
+    }
+ 
+-   *puEntries = ARRAYSIZE(SupportedDDIInterfaceVersions);
++   *puEntries = n;
+ 
+    if (pSupportedDDIInterfaceVersions) {
+       memcpy(pSupportedDDIInterfaceVersions,
+              SupportedDDIInterfaceVersions,
+-             sizeof SupportedDDIInterfaceVersions);
++             n * sizeof SupportedDDIInterfaceVersions[0]);
+    }
+ 
+    return S_OK;
+diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
+index 131187f..c64bd53 100644
+--- a/src/gallium/frontends/d3d10umd/Device.cpp
++++ b/src/gallium/frontends/d3d10umd/Device.cpp
+@@ -138,6 +138,12 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+    }
+ 
+    Adapter *pAdapter = CastAdapter(hAdapter);
++   if (pAdapter->ddi < 101 && (pCreateData->Interface == D3D10_1_DDI_INTERFACE_VERSION ||
++                               pCreateData->Interface == D3D10_1_x_DDI_INTERFACE_VERSION ||
++                               pCreateData->Interface == D3D10_1_7_DDI_INTERFACE_VERSION)) {
++      DebugPrintf("%s: the D3D10.1 interface is not offered on this adapter\n", __func__);
++      return E_FAIL;
++   }
+ 
+    Device *pDevice = CastDevice(pCreateData->hDrvDevice);
+    memset(pDevice, 0, sizeof *pDevice);
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index 3e976c6..4c43a42 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -36,7 +36,11 @@
+ #include "cso_cache/cso_context.h"
+ 
+ #define SUPPORT_MSAA 0
+-#define SUPPORT_D3D10_1 0
++/* The D3D10.1 DDI is compiled in; whether it is offered is decided per
++ * adapter at OpenAdapter (Adapter::ddi, from maliwddm's UmdDdi setting).
++ * Without it the D3D11 runtime makes every device feature level 10_0,
++ * and ANGLE gives Chromium no OpenGL ES 3.0 context there. */
++#define SUPPORT_D3D10_1 1
+ #define SUPPORT_D3D11 0
+ 
+ 
+@@ -47,6 +51,9 @@ struct Adapter
+     * device's kernel callbacks, so that a hardware driver's buffers are the
+     * runtime device's allocations. */
+    HANDLE hRTAdapter;
++   /* The highest DDI this adapter offers: 100 the D3D10.0 DDI, 101 the
++    * D3D10.1 DDI (Adapter.cpp, QueryUmdDdi). */
++   unsigned ddi;
+ };
+ 
+ 
