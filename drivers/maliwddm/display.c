@@ -739,9 +739,11 @@ NTSTATUS APIENTRY MwSetVidPnSourceVisibility(IN_CONST_HANDLE hAdapter,
     }
     /* Invisible means blank: clear the framebuffer once, and show it if
      * the window was on a primary. HdmiDiag 2 keeps its pattern. */
-    if (!Arg->Visible && dev->FbVa != NULL && !dev->Hdmi.Hold) {
+    if (!Arg->Visible && dev->FbVa != NULL && !dev->Hdmi.Hold && MwHpdFbEnter(dev)) {
         RtlZeroMemory(dev->FbVa, dev->FbSize);
+        dev->Hdmi.ToFbFrom = 1;
         MwScanToFb(dev);
+        MwHpdFbLeave(dev);
     }
     /* Visible again: the current primary back on the screen if it is
      * scanned out (flips made meanwhile were not). Under CopyLock, which
@@ -900,6 +902,7 @@ NTSTATUS APIENTRY MwSystemDisplayEnable(IN_CONST_PVOID MiniportDeviceContext,
     UNREFERENCED_PARAMETER(Flags);
     if (dev->FbVa == NULL)
         return STATUS_UNSUCCESSFUL;
+    dev->Hdmi.ToFbFrom = 7;
     MwScanToFb(dev);            /* the bugcheck screen is drawn in the framebuffer */
     /* Rotated, the screen is the size Windows sees (bdd.cxx does the same),
      * and SystemDisplayWrite turns it. */
