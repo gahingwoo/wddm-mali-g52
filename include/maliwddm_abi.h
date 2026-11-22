@@ -17,9 +17,11 @@
 #include <stdint.h>
 typedef uint32_t mw_u32;
 typedef uint64_t mw_u64;
+typedef int32_t mw_s32;
 #else
 typedef unsigned __int32 mw_u32;
 typedef unsigned __int64 mw_u64;
+typedef __int32 mw_s32;
 #endif
 
 /* Allocation private data (D3DDDI_ALLOCATIONINFO.pPrivateDriverData). */
@@ -103,6 +105,9 @@ typedef struct _MW_ESCAPE_GPU_INFO_DATA {
 #define MW_UMD_GPU_WAIT         8       /* waits for the GPU to be idle (the shim's wddm_idle) */
 #define MW_UMD_BLT              9       /* DXGI pfnBlt calls, which the UMD does not carry out */
 #define MW_UMD_RESOLVE          10      /* ResolveSubresource */
+#define MW_UMD_SUBMIT           11      /* pfnRenderCb from the Panfrost shim: Calls are renders,
+                                         * Bytes the allocation-list entries they carried (not
+                                         * bytes), Ticks the CPU time in the call */
 #define MW_UMD_KINDS            12
 
 typedef struct _MW_UMD_COUNT {
@@ -115,6 +120,9 @@ typedef struct _MW_UMD_COUNT {
 #define MW_ESCAPE_UMD           7
 #define MW_UMD_FLAG_COPY_GPU    0x1     /* copies between textures may run on the GPU */
 #define MW_UMD_FLAG_READBACK_1  0x2     /* a read-back present copies once, straight into the surface */
+#define MW_UMD_FLAG_MERGE_SUBMIT 0x4    /* UmdMergeSubmit 1 (off unless 1): a batch's vertex/tiler
+                                         * chain and the fragment chain Panfrost submits right
+                                         * after it go to the KMD as one render with two commands */
 #define MW_UMD_FLAG_VALID       0x80000000u
 
 typedef struct _MW_ESCAPE_UMD_DATA {
@@ -299,3 +307,98 @@ typedef struct _MW_ESCAPE_MEMORY_DATA {
     mw_u32 Creates, Destroys, CreateFails, NoSlot;
     MW_MEM_PROC Proc[MW_MEM_PROCS];
 } MW_ESCAPE_MEMORY_DATA;
+
+/* Where the time goes, in more detail than MW_ESCAPE_STATS (m5test prof,
+ * docs/PERF.md). Everything is a running total since the driver started:
+ * two readings a few seconds apart give rates and averages. Ticks are of
+ * the performance counter, PerfHz a second, Now the counter at the
+ * reading. Each Max is the longest since the start.
+ *
+ * Histograms: bucket b counts durations of 2^b to 2^(b+1) - 1 us (bucket 0
+ * also counts 0 us, the last one everything longer). */
+#define MW_ESCAPE_PERF          0x20
+#define MW_PERF_VERSION         1
+#define MW_PERF_BUCKETS         20
+#define MW_PERF_RING            128
+
+/* The DDIs timed, by index into Ddi[]: CPU time inside the driver's own
+ * function, from entry to return, whatever dxgkrnl does around it. */
+#define MW_DDI_RENDER           0
+#define MW_DDI_PRESENT          1
+#define MW_DDI_SUBMIT           2       /* SubmitCommand, including a blt present done there */
+#define MW_DDI_PAGING           3       /* BuildPagingBuffer: GPU page tables written here */
+#define MW_DDI_PATCH            4
+#define MW_DDI_CREATE_ALLOC     5
+#define MW_DDI_DESTROY_ALLOC    6
+#define MW_DDI_OPEN_ALLOC       7
+#define MW_DDI_ESCAPE           8       /* includes the UMD's reports and its fence polls */
+#define MW_DDI_SET_SOURCE       9       /* SetVidPnSourceAddress, a flip */
+#define MW_DDI_ISR              10      /* the interrupt routine, at DIRQL, claimed or not */
+#define MW_DDI_DPC              11
+#define MW_PERF_DDIS            12
+
+typedef struct _MW_PERF_TIME {
+    mw_u64 Calls, Ticks, MaxTicks;
+} MW_PERF_TIME;
+
+/* One job chain as it ran, newest last (RingNext - 1). */
+#define MW_PERF_JOB_FAILED      0x100   /* faulted or timed out; the low byte is JS_STATUS */
+#define MW_PERF_JOB_STOPPED     0x200   /* soft-stopped, to be resumed */
+#define MW_PERF_JOB_BY_POLL     0x400   /* collected by the poll timer, not the interrupt */
+#define MW_PERF_JOB_SECOND      0x800   /* not the first chain of its submission */
+typedef struct _MW_PERF_JOB {
+    mw_u32 Fence;                       /* the submission's fence */
+    mw_u32 SlotFlags;                   /* slot (0 fragment, 1 vertex/tiler/compute) << 16 | MW_PERF_JOB_* | JS_STATUS */
+    mw_u64 SubmitTick;                  /* SubmitCommand of its submission */
+    mw_u64 StartTick;                   /* written to JS_COMMAND_NEXT */
+    mw_u64 EndTick;                     /* collected */
+} MW_PERF_JOB;
+
+typedef struct _MW_ESCAPE_PERF_DATA {
+    mw_u32 Code;                        /* MW_ESCAPE_PERF */
+    mw_u32 Version;                     /* out: MW_PERF_VERSION */
+    mw_u64 PerfHz, Now;
+    MW_PERF_TIME Ddi[MW_PERF_DDIS];
+    /* Renders: allocation-list entries and commands they carried. */
+    mw_u64 RenderAllocs, RenderCmds;
+    mw_u32 RenderAllocsMax, RenderCmdsMax;
+    /* Aperture maps: pages written into the GPU page tables. */
+    mw_u64 MapPages;
+    /* Job chains by slot: 0 fragment, 1 vertex/tiler/compute. On the GPU
+     * one at a time, so their ticks over the interval are its busy time. */
+    mw_u64 SlotJobs[2], SlotTicks[2], SlotMaxTicks[2];
+    mw_u32 SlotHist[2][MW_PERF_BUCKETS];
+    /* Submissions with jobs, SubmitCommand to DMA_COMPLETED. */
+    mw_u64 FenceCount, FenceTicks, FenceMaxTicks;
+    mw_u32 FenceHist[MW_PERF_BUCKETS];
+    /* Bubbles: a chain whose submission was already queued when the chain
+     * before it ended; the time from that end to its start. This is the
+     * driver's own latency (interrupt or poll, then the start). */
+    mw_u64 GapCount, GapTicks, GapMaxTicks;
+    mw_u32 GapHist[MW_PERF_BUCKETS];
+    /* Who collected finished chains, and the poll timer's runs. */
+    mw_u32 ReapIsr, ReapPoll, PollRuns, PollMs;
+    /* A completion noticed (DMA_COMPLETED) to the DPC that tells dxgkrnl. */
+    mw_u64 DpcCount, DpcTicks, DpcMaxTicks;
+    /* Submissions already queued in the driver when one arrived, summed. */
+    mw_u64 QueueDepthSum;
+    mw_u32 QueueDepthMax, Submissions;
+    /* The GPU clock as the CRU says now: CRU_CLKSEL_CON165, raw (mux
+     * [7:5] 0 GPLL, 1 CPLL, 2 AUPLL, 3 SPLL; divider - 1 in [4:0]), and the
+     * rate it gives with GPLL 1188, CPLL 1000 and SPLL 702 MHz; 0 when the
+     * parent's rate is not known here. ~0 for both: not read. */
+    mw_u32 ClkSel165, GpuHz;
+    /* TSADC channels 0-5 (0 centre, 1 big cores, 2 little cores, 3 GPU by
+     * the TRM, 4 NPU, 5 DDR): the raw 9-bit codes and the temperature in
+     * millidegrees C by mainline's table, WITHOUT the per-chip OTP trim
+     * (a few degrees). Read only with the setting PerfTemp 1; TempValid 0
+     * otherwise, or when a code is not a temperature. */
+    mw_u32 TempValid;                   /* bit n: channel n read and in the table */
+    mw_u32 TsadcCode[6];
+    mw_s32 TempMilliC[6];
+    mw_u32 Reserved0;
+    /* The last MW_PERF_RING chains: RingNext chains have been recorded
+     * since the start; the newest is Ring[(RingNext - 1) % MW_PERF_RING]. */
+    mw_u32 RingNext, Reserved1;
+    MW_PERF_JOB Ring[MW_PERF_RING];
+} MW_ESCAPE_PERF_DATA;

@@ -14,8 +14,10 @@
  * dxcore, so a static gdi32 import never even loaded there
  * (STATUS_DLL_NOT_FOUND in every PE run).
  *
- * m5test perf [seconds], m5test scan [mode] and m5test mem (GPU memory by
- * process) only ask the driver; nothing is submitted.
+ * m5test perf [seconds], m5test prof [seconds] (DDI times, chains by slot,
+ * latencies, clock and temperatures), m5test ring [csv] (the last 128
+ * chains), m5test scan [mode] and m5test mem (GPU memory by process) only
+ * ask the driver; nothing is submitted.
  *
  * Build: cl /W4 /I include tools\windows\m5test.c
  */
@@ -195,7 +197,7 @@ static void print_path(const MW_ESCAPE_STATS_DATA *s)
 static const char *const umd_names[MW_UMD_KINDS] = {
     "copy on the GPU", "copy on the CPU", "buffer copy on the CPU", "upload (UpdateSubresource)",
     "map for reading", "map for writing", "present, read back", "present, no copy",
-    "wait for GPU idle", "Blt (not carried out)", "resolve (not carried out)", "",
+    "wait for GPU idle", "Blt (not carried out)", "resolve (not carried out)", "submit (pfnRenderCb)",
 };
 
 /* The UMDs' counts between two readings (or since the start, A NULL):
@@ -217,6 +219,13 @@ static void print_umd(const MW_ESCAPE_STATS_DATA *a, const MW_ESCAPE_STATS_DATA 
         unsigned long long ticks = b->Umd[k].Ticks - (a ? a->Umd[k].Ticks : 0);
         if (!umd_names[k][0] || calls == 0)
             continue;
+        if (k == MW_UMD_SUBMIT) {
+            /* Bytes are allocation-list entries here. */
+            printf("    %-28s %8llu (%.1f/s)  %6.1f BOs listed each  %8llu us each  %6.0f ms in all\n",
+                   umd_names[k], calls, secs > 0 ? (double)calls / secs : 0.0, (double)bytes / (double)calls,
+                   hz ? ticks * 1000000ull / hz / calls : 0, hz ? (double)ticks * 1000.0 / (double)hz : 0.0);
+            continue;
+        }
         printf("    %-28s %8llu (%.1f/s)  %9.1f MB  %8llu us each  %6.0f ms in all\n", umd_names[k],
                calls, secs > 0 ? (double)calls / secs : 0.0, (double)bytes / 1e6,
                hz ? ticks * 1000000ull / hz / calls : 0, hz ? (double)ticks * 1000.0 / (double)hz : 0.0);
@@ -253,7 +262,7 @@ static void print_umd(const MW_ESCAPE_STATS_DATA *a, const MW_ESCAPE_STATS_DATA 
             unsigned long long ticks = p->Count[k].Ticks - (q ? q->Count[k].Ticks : 0);
             static const char *const tag[MW_UMD_KINDS] = {
                 "gpucopy", "cpucopy", "cpubuf", "upload", "mapR", "mapW", "readback", "direct",
-                "idle", "blt", "resolve", "",
+                "idle", "blt", "resolve", "submit",
             };
             if (calls && tag[k][0])
                 printf(" %s %llu/%llums", tag[k], calls, hz ? ticks * 1000ull / hz : 0);
@@ -362,6 +371,189 @@ static int perf(D3DKMT_HANDLE adapter, unsigned seconds)
                b.ResumeMismatch - a.ResumeMismatch, b.ResumeLost - a.ResumeLost, b.StopBadTail - a.StopBadTail,
                b.StopUnasked - a.StopUnasked, b.JobsTimedOut - a.JobsTimedOut);
     }
+    return 0;
+}
+
+
+/* ---- m5test prof: MW_ESCAPE_PERF ---- */
+
+static const char *const ddi_names[MW_PERF_DDIS] = {
+    "Render", "Present", "SubmitCommand", "BuildPagingBuffer", "Patch", "CreateAllocation",
+    "DestroyAllocation", "OpenAllocation", "Escape", "SetVidPnSourceAddress", "interrupt", "DPC",
+};
+
+static double us_of(unsigned long long ticks, unsigned long long hz)
+{
+    return hz ? (double)ticks * 1e6 / (double)hz : 0.0;
+}
+
+/* A histogram's change between two readings, as "<2us:n 2-3us:n ...". */
+static void print_hist(const char *what, const mw_u32 *a, const mw_u32 *b)
+{
+    printf("    %s:", what);
+    for (int i = 0; i < MW_PERF_BUCKETS; i++) {
+        unsigned n = b[i] - (a ? a[i] : 0);
+        unsigned lo = i ? 1u << i : 0;
+        if (n == 0)
+            continue;
+        if (i == MW_PERF_BUCKETS - 1)
+            printf(" >=%uus:%u", lo, n);
+        else if (lo >= 1000)
+            printf(" %.1f-%.1fms:%u", lo / 1000.0, ((2u << i) - 1) / 1000.0, n);
+        else
+            printf(" %u-%uus:%u", lo, (2u << i) - 1, n);
+    }
+    printf("\n");
+}
+
+static NTSTATUS read_perf(D3DKMT_HANDLE adapter, MW_ESCAPE_PERF_DATA *d)
+{
+    memset(d, 0, sizeof(*d));
+    d->Code = MW_ESCAPE_PERF;
+    return escape(adapter, 0, d, sizeof(*d));
+}
+
+static void print_temps(const MW_ESCAPE_PERF_DATA *d)
+{
+    static const char *const ch[6] = { "centre", "big", "little", "GPU", "NPU", "DDR" };
+    if (d->TempValid == 0) {
+        printf("  temperatures: not read (set PerfTemp 1 in Device Parameters; needs firmware with TSHUT/_CRT)\n");
+        return;
+    }
+    printf("  temperatures (TSADC, no OTP trim, +-3 C):");
+    for (int n = 0; n < 6; n++)
+        if (d->TempValid & (1u << n))
+            printf(" %s %.1f C", ch[n], d->TempMilliC[n] / 1000.0);
+    printf("\n");
+}
+
+static void print_clock(const MW_ESCAPE_PERF_DATA *d)
+{
+    static const char *const mux[8] = { "GPLL", "CPLL", "AUPLL", "SPLL", "LPLL", "?", "?", "?" };
+    if (d->ClkSel165 == 0xFFFFFFFFu)
+        printf("  GPU clock: not read (GPU not up)\n");
+    else if (d->GpuHz)
+        printf("  GPU clock: %u MHz (CRU_CLKSEL_CON165 0x%08x: %s / %u)\n", d->GpuHz / 1000000,
+               d->ClkSel165, mux[(d->ClkSel165 >> 5) & 7], (d->ClkSel165 & 0x1F) + 1);
+    else
+        printf("  GPU clock: CRU_CLKSEL_CON165 0x%08x (%s / %u, rate not known here)\n", d->ClkSel165,
+               mux[(d->ClkSel165 >> 5) & 7], (d->ClkSel165 & 0x1F) + 1);
+}
+
+/* m5test prof [seconds]: two readings of MW_ESCAPE_PERF and what changed. */
+static int prof(D3DKMT_HANDLE adapter, unsigned seconds)
+{
+    static MW_ESCAPE_PERF_DATA a, b;
+    NTSTATUS st;
+    double secs;
+    unsigned long long hz;
+
+    if ((st = read_perf(adapter, &a)) < 0 || a.Version == 0) {
+        printf("prof: this maliwddm.sys has no MW_ESCAPE_PERF (0x%08lx)\n", (unsigned long)st);
+        return 1;
+    }
+    Sleep(seconds * 1000);
+    if ((st = read_perf(adapter, &b)) < 0)
+        return fail("Escape(PERF)", st);
+    hz = b.PerfHz;
+    secs = hz ? (double)(b.Now - a.Now) / (double)hz : 0.0;
+    if (secs <= 0)
+        secs = 1;
+    printf("prof over %.2f s:\n", secs);
+    print_clock(&b);
+    print_temps(&b);
+
+    printf("  DDI CPU time (in the driver only):\n");
+    printf("    %-22s %9s %9s %9s %10s\n", "", "calls/s", "avg us", "max us", "ms per s");
+    for (int i = 0; i < MW_PERF_DDIS; i++) {
+        unsigned long long n = b.Ddi[i].Calls - a.Ddi[i].Calls, t = b.Ddi[i].Ticks - a.Ddi[i].Ticks;
+        if (n == 0)
+            continue;
+        printf("    %-22s %9.1f %9.1f %9.0f %10.2f\n", ddi_names[i], n / secs, us_of(t, hz) / (double)n,
+               us_of(b.Ddi[i].MaxTicks, hz), us_of(t, hz) / 1000.0 / secs);
+    }
+    {
+        unsigned long long r = b.Ddi[MW_DDI_RENDER].Calls - a.Ddi[MW_DDI_RENDER].Calls;
+        if (r)
+            printf("  renders: %.1f allocation-list entries each (most %u), %.2f chains each (most %u)\n",
+                   (double)(b.RenderAllocs - a.RenderAllocs) / (double)r, b.RenderAllocsMax,
+                   (double)(b.RenderCmds - a.RenderCmds) / (double)r, b.RenderCmdsMax);
+        printf("  GPU page tables: %.0f pages mapped a second\n", (double)(b.MapPages - a.MapPages) / secs);
+    }
+    {
+        static const char *const slot[2] = { "fragment", "vertex/tiler/compute" };
+        unsigned long long busy = 0;
+        for (int i = 0; i < 2; i++)
+            busy += b.SlotTicks[i] - a.SlotTicks[i];
+        printf("  GPU busy %.1f%% of the interval (one chain at a time):\n", 100.0 * us_of(busy, hz) / 1e6 / secs);
+        for (int i = 0; i < 2; i++) {
+            unsigned long long n = b.SlotJobs[i] - a.SlotJobs[i], t = b.SlotTicks[i] - a.SlotTicks[i];
+            printf("    %-21s %8llu chains (%.1f/s), %.0f us each, busy %.1f%%, longest since start %.0f us\n",
+                   slot[i], n, n / secs, n ? us_of(t, hz) / (double)n : 0.0, 100.0 * us_of(t, hz) / 1e6 / secs,
+                   us_of(b.SlotMaxTicks[i], hz));
+            if (n)
+                print_hist("  run time", a.SlotHist[i], b.SlotHist[i]);
+        }
+    }
+    {
+        unsigned long long n = b.FenceCount - a.FenceCount, g = b.GapCount - a.GapCount;
+        printf("  submission to completion: %llu (%.1f/s), %.0f us each, longest since start %.0f us\n", n,
+               n / secs, n ? us_of(b.FenceTicks - a.FenceTicks, hz) / (double)n : 0.0, us_of(b.FenceMaxTicks, hz));
+        if (n)
+            print_hist("latency", a.FenceHist, b.FenceHist);
+        printf("  bubbles (a chain ready when the one before it ended, to its start): %llu, %.0f us each,"
+               " %.1f ms in all, longest since start %.0f us\n", g, g ? us_of(b.GapTicks - a.GapTicks, hz) / (double)g : 0.0,
+               us_of(b.GapTicks - a.GapTicks, hz) / 1000.0, us_of(b.GapMaxTicks, hz));
+        if (g)
+            print_hist("gap", a.GapHist, b.GapHist);
+    }
+    printf("  chains collected by the interrupt %u, by the poll timer %u; poll timer ran %u times (%.0f/s),"
+           " PollMs %u\n", b.ReapIsr - a.ReapIsr, b.ReapPoll - a.ReapPoll, b.PollRuns - a.PollRuns,
+           (b.PollRuns - a.PollRuns) / secs, b.PollMs);
+    {
+        unsigned long long n = b.DpcCount - a.DpcCount;
+        unsigned subs = b.Submissions - a.Submissions;
+        printf("  completion to DPC: %llu, %.0f us each, longest since start %.0f us\n", n,
+               n ? us_of(b.DpcTicks - a.DpcTicks, hz) / (double)n : 0.0, us_of(b.DpcMaxTicks, hz));
+        printf("  submissions %u (%.1f/s), %.2f already queued in the driver at each (most %u)\n", subs, subs / secs,
+               subs ? (double)(b.QueueDepthSum - a.QueueDepthSum) / subs : 0.0, b.QueueDepthMax);
+    }
+    return 0;
+}
+
+/* m5test ring: the last chains the GPU ran, oldest first, in microseconds
+ * from the first one's submission. CSV with "csv". */
+static int ring(D3DKMT_HANDLE adapter, int csv)
+{
+    static MW_ESCAPE_PERF_DATA d;
+    NTSTATUS st = read_perf(adapter, &d);
+    unsigned n, first;
+    unsigned long long hz, base;
+
+    if (st < 0 || d.Version == 0) {
+        printf("ring: this maliwddm.sys has no MW_ESCAPE_PERF (0x%08lx)\n", (unsigned long)st);
+        return 1;
+    }
+    hz = d.PerfHz;
+    n = d.RingNext < MW_PERF_RING ? d.RingNext : MW_PERF_RING;
+    first = d.RingNext - n;
+    if (n == 0) {
+        printf("ring: no chain has run since the driver started\n");
+        return 0;
+    }
+    base = d.Ring[first % MW_PERF_RING].SubmitTick;
+    printf(csv ? "fence,slot,flags,status,submit_us,start_us,end_us,queued_us,run_us\n"
+               : "  fence slot flags status   submit_us    start_us      end_us  queued_us     run_us\n");
+    for (unsigned i = first; i != d.RingNext; i++) {
+        const MW_PERF_JOB *r = &d.Ring[i % MW_PERF_RING];
+        double s = us_of(r->SubmitTick - base, hz), b = us_of(r->StartTick - base, hz), e = us_of(r->EndTick - base, hz);
+        printf(csv ? "%u,%u,0x%x,0x%x,%.1f,%.1f,%.1f,%.1f,%.1f\n"
+                   : "%7u %4u 0x%03x   0x%02x %11.1f %11.1f %11.1f %10.1f %10.1f\n",
+               r->Fence, r->SlotFlags >> 16, r->SlotFlags & 0xF00, r->SlotFlags & 0xFF, s, b, e, b - s, e - b);
+    }
+    if (!csv)
+        printf("  flags: 0x100 failed, 0x200 soft-stopped, 0x400 collected by the poll timer,"
+               " 0x800 not its submission's first chain\n");
     return 0;
 }
 
@@ -518,6 +710,12 @@ int main(int argc, char **argv)
     }
     if (argc >= 2 && strcmp(argv[1], "mem") == 0)
         return mem(adapter);
+    if (argc >= 2 && strcmp(argv[1], "prof") == 0) {
+        int seconds = argc >= 3 ? atoi(argv[2]) : 5;
+        return prof(adapter, seconds > 0 && seconds <= 600 ? (unsigned)seconds : 5);
+    }
+    if (argc >= 2 && strcmp(argv[1], "ring") == 0)
+        return ring(adapter, argc >= 3 && strcmp(argv[2], "csv") == 0);
     if (argc >= 2 && strcmp(argv[1], "perf") == 0) {
         int seconds = argc >= 3 ? atoi(argv[2]) : 5;
         return perf(adapter, seconds > 0 && seconds <= 600 ? (unsigned)seconds : 5);

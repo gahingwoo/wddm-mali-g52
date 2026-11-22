@@ -198,6 +198,40 @@ What the user-mode driver does on the CPU
 
        reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters" /v UmdCopyOnGpu /t REG_DWORD /d 0 /f
 
+Profiling (m5test prof, m5test ring; docs/PERF.md)
+
+  m5test prof 10 prints, for a 10 s interval: the CPU time in the
+  driver's own DDIs (Render, Present, SubmitCommand, BuildPagingBuffer,
+  Patch, the allocation DDIs, Escape, SetVidPnSourceAddress, the
+  interrupt and the DPC), the allocation-list entries a render carried,
+  the GPU's busy time by job slot with histograms of chain run times,
+  submission-to-completion latency, the driver's own gaps between chains,
+  who collected each chain (interrupt or poll timer), the GPU clock as the
+  CRU has it, and, with PerfTemp 1, the TSADC temperatures. m5test ring
+  lists the last 128 chains with their timestamps (m5test ring csv for a
+  spreadsheet). Neither submits anything. The UMD lines of m5test perf
+  now include "submit (pfnRenderCb)": renders a second, BOs listed in each
+  and the CPU time in the runtime's render call, by process.
+
+  Settings, DWORDs in Device Parameters, each off (today's behaviour)
+  unless set:
+
+    PerfTemp 1         m5test prof reads TSADC_DATA0..5. Only on firmware
+                       that starts the TSADC (edk2-rk3576 with the
+                       thermal-safety work; Windows then shows thermal
+                       zones). Read at every m5test prof, no reboot.
+    PollMs n           the job-status poll timer's period, 1 to 50 ms
+                       (default 1). Raise it only when m5test prof shows
+                       the interrupt collecting the chains. Read at the
+                       adapter's start: reboot.
+    UmdMergeSubmit 1   the UMD sends a batch's vertex/tiler and fragment
+                       chains as one render instead of two (half the
+                       renders, events and allocation lists). Running
+                       processes pick it up within a second or two; 0 or
+                       deleting it goes back.
+
+       reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters" /v UmdMergeSubmit /t REG_DWORD /d 1 /f
+
 Replacing only the UMD while testing
 
   Rename the loaded file and copy the new one next to it; then end
