@@ -368,6 +368,43 @@ NTSTATUS APIENTRY MwSubmitCommandVirtual(IN_CONST_HANDLE hAdapter, const DXGKARG
     return MwSubmitCommand(hAdapter, &s);
 }
 
+/* ---- the two DDIs every 2.x interface must fill in ----
+ * dxgkrnl refuses the adapter start without them at any interface from
+ * 0x5008 on (wddm2plan.h, Mw2NeedsPowerDdis). The first two 2.0 probes on
+ * the TaishanPi (2026-11-23) were refused there, after QAI 16. */
+
+/* History-buffer timestamps against the CPU clock, at DISPATCH_LEVEL and
+ * as often as every 30 ms. This driver writes no GPU timestamps into
+ * history buffers, so GPU time is modelled as the performance counter
+ * itself: the same counter read once for both, an exact correlation. */
+static volatile LONG Calibrations, StablePowerOn;
+
+NTSTATUS APIENTRY MwCalibrateGpuClock(IN_CONST_HANDLE hAdapter, IN UINT32 NodeOrdinal, IN UINT32 EngineOrdinal,
+                                      DXGKARG_CALIBRATEGPUCLOCK *Arg)
+{
+    LARGE_INTEGER hz, now;
+
+    UNREFERENCED_PARAMETER(hAdapter);
+    UNREFERENCED_PARAMETER(EngineOrdinal);
+    if (Arg == NULL || NodeOrdinal >= MwNodeCount())
+        return STATUS_INVALID_PARAMETER;
+    now = KeQueryPerformanceCounter(&hz);
+    Arg->GpuFrequency = (UINT64)hz.QuadPart;
+    Arg->GpuClockCounter = (UINT64)now.QuadPart;
+    Arg->CpuClockCounter = (UINT64)now.QuadPart;
+    InterlockedIncrement(&Calibrations);
+    return STATUS_SUCCESS;
+}
+
+/* "Stable power" for profiling: the clock is fixed already (GpuClk, set
+ * once at StartDevice; no DVFS here), so there is nothing to pin. */
+VOID APIENTRY MwSetStablePowerState(IN_CONST_HANDLE hAdapter, const DXGKARG_SETSTABLEPOWERSTATE *Arg)
+{
+    UNREFERENCED_PARAMETER(hAdapter);
+    if (Arg != NULL)
+        InterlockedExchange(&StablePowerOn, Arg->Enabled ? 1 : 0);
+}
+
 /* ---- paging operations a 2.x VidMm asks for ---- */
 
 /* The legacy Mali LPAE encoding (maligpu.h): leaf pages pa | 0x2C5 (block

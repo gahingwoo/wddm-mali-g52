@@ -55,6 +55,7 @@ static void check_plan(unsigned wddm, unsigned shape, unsigned budget)
         CHECK(!p.GpuMmu && !p.VirtualAddressing && !p.PerEngineTdr && !p.CancelCommandAware,
               "1.3: no 2.x caps");
         CHECK(!p.SegApplicationTarget && !p.SegNonLocalBudget, "1.3: no budget flags");
+        CHECK(!p.PowerDdis, "1.3: the DDI table as before, no CalibrateGpuClock/SetStablePowerState");
         return;
     }
     /* The paging node is a COPY node of its own: naming the 3D node made
@@ -68,6 +69,9 @@ static void check_plan(unsigned wddm, unsigned shape, unsigned budget)
     /* DXGK_PHYSICALADAPTERCAPS: "Handle, which is passed to the kernel mode
      * driver as DXGKRNL_INTERFACE::DeviceHandle in DxgkDdiStartDevice". */
     CHECK(p.HandleIsDxgkrnls, "2.x: DxgkPhysicalAdapterHandle is dxgkrnl's DeviceHandle");
+    /* dxgkrnl 22621.2428 DXGADAPTER::Initialize: interface >= 0x5008 without
+     * both DDIs fails the start (the 2026-11-23 0x139 boots). */
+    CHECK(p.PowerDdis, "2.x: CalibrateGpuClock and SetStablePowerState registered");
     CHECK(p.SegApplicationTarget == (budget != 0) && p.SegNonLocalBudget == (budget != 0),
           "2.x: budget flags follow Wddm2Budget %u", budget);
     /* GpuMmu: one bit, the same in DRIVERCAPS, PHYSICALADAPTERCAPS and
@@ -220,6 +224,12 @@ int main(void)
             check_plan(MW2_WDDM_2_0, shape, budget);
             check_plan(0x2100u, shape, budget);
         }
+    /* The interface versions version.c can claim (DXGKDDI_INTERFACE_VERSION_*):
+     * 1.3 is below dxgkrnl's 0x5008 test, every 2.x and 3.x one above. */
+    CHECK(!Mw2NeedsPowerDdis(0x4002u), "1.3 interface 0x4002 needs neither DDI");
+    CHECK(Mw2NeedsPowerDdis(0x5023u), "2.0 interface 0x5023 needs CalibrateGpuClock and SetStablePowerState");
+    CHECK(Mw2NeedsPowerDdis(0x5008u), "the 0x5008 boundary itself");
+    CHECK(Mw2NeedsPowerDdis(0xB004u), "3.x interfaces too");
     check_segment_pass();
     check_per_node();
     check_fallback();

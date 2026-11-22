@@ -110,6 +110,7 @@ typedef struct {
     unsigned MultiEngineAware;      /* DRIVERCAPS.SchedulingCaps: checked for every WDDMv2 driver */
     unsigned CancelCommandAware;
     unsigned HandleIsDxgkrnls;      /* PHYSICALADAPTERCAPS.DxgkPhysicalAdapterHandle = DeviceHandle */
+    unsigned PowerDdis;             /* DxgkDdiCalibrateGpuClock and DxgkDdiSetStablePowerState registered */
 
     /* GpuMmu only */
     unsigned PtLevels, PtIndexBits, PtSize, PtAlign, VaBits;
@@ -159,6 +160,7 @@ static __inline void Mw2Plan(unsigned Wddm, unsigned Shape, unsigned Budget, MW2
     P->PerEngineTdr = 1;
     P->CancelCommandAware = 1;
     P->HandleIsDxgkrnls = 1;
+    P->PowerDdis = 1;           /* Mw2NeedsPowerDdis: every 2.x interface */
     if (Budget) {
         P->SegApplicationTarget = 1;
         P->SegNonLocalBudget = 1;
@@ -174,6 +176,25 @@ static __inline void Mw2Plan(unsigned Wddm, unsigned Shape, unsigned Budget, MW2
     P->VaBits = MW2_PT_LEVELS * MW2_PT_INDEX_BITS + 12;
     P->InternalVaStart = 0x100000000ULL;                        /* above Panfrost's 32 MB..4 GB */
     P->InternalVaEnd = (1ULL << MW2_HW_VA_BITS) - 1;
+}
+
+/* ---- the DDIs dxgkrnl insists on by interface version ----
+ * dxgkrnl 10.0.22621.2428 (the 22631 binary), DXGADAPTER::Initialize, right
+ * after ADAPTER_DISPLAY::Initialize has asked QAI 16, on a dxgmms2 adapter
+ * with a render core:
+ *   "Driver is compiled against DXGKDDI_INTERFACE_VERSION_WDDM2_0_M2_2_1 or
+ *    greater, but does not fill in the pfnCalibrateGpuClock or
+ *    pfnSetStablePowerState DDI."
+ * The test is DRIVER_INITIALIZATION_DATA.Version >= 0x5008 and either
+ * pointer NULL, and the adapter start fails. Every 2.x interface this
+ * driver can claim (0x5023 for 2.0 and up) is past it; 1.3's 0x4002 is not.
+ * Read from the public symbols of the amd64 build of the same version
+ * (docs/WDDM2.md 16.6, tools/re). */
+#define MW2_DDI_WDDM2_0_M2_2_1  0x5008u
+
+static __inline unsigned Mw2NeedsPowerDdis(unsigned DdiInterface)
+{
+    return DdiInterface >= MW2_DDI_WDDM2_0_M2_2_1;
 }
 
 /* ---- DXGKQAITYPE_QUERYSEGMENT4: which of the two calls this is ----

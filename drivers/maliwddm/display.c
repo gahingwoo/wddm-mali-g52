@@ -379,7 +379,10 @@ void MwDisplayStop(MW_ADAPTER *A)
 }
 
 
-/* Hand the framebuffer back, e.g. to Basic Display when we are disabled. */
+/* Hand the framebuffer back, e.g. to Basic Display when we are disabled.
+ * dxgkrnl calls this instead of StopDevice, also when its own part of an
+ * adapter start fails, so it stops everything StopDevice does
+ * (MwAdapterStop, adapter.c), not only the display. */
 NTSTATUS APIENTRY MwStopDeviceAndReleasePostDisplayOwnership(IN_CONST_PVOID MiniportDeviceContext,
                                                    IN_CONST_D3DDDI_VIDEO_PRESENT_TARGET_ID TargetId,
                                                    PDXGK_DISPLAY_INFORMATION DisplayInfo)
@@ -387,7 +390,7 @@ NTSTATUS APIENTRY MwStopDeviceAndReleasePostDisplayOwnership(IN_CONST_PVOID Mini
     MW_ADAPTER *dev = (MW_ADAPTER *)MiniportDeviceContext;
     UNREFERENCED_PARAMETER(TargetId);
     *DisplayInfo = dev->Fb;
-    MwDisplayStop(dev);
+    MwAdapterStop(dev);
     return STATUS_SUCCESS;
 }
 

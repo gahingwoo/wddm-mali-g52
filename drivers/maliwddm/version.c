@@ -84,6 +84,7 @@ ULONG MwWddm2Budget = 1;
 MW2_PLAN MwPlan;
 ULONG MwGpuMmuPtSegment = 1;
 ULONG MwPagingMarker = 1;
+ULONG MwWddm2PowerDdis = 1;
 
 static volatile LONG ProbeRenders;
 static volatile LONG ProbeConfirmed;
@@ -179,6 +180,7 @@ void MwVersionInit(PUNICODE_STRING RegistryPath)
     MwWddm2Budget = ParamRead(L"Wddm2Budget", 1);
     MwGpuMmuPtSegment = ParamRead(L"GpuMmuPtSegment", 1);
     MwPagingMarker = ParamRead(L"PagingMarker", 1);
+    MwWddm2PowerDdis = ParamRead(L"Wddm2PowerDdis", 1);
 
     /* The decision itself is wddm2plan.h's, checked by tests/wddm2-host. */
     in.Want = ParamRead(L"WddmProbe", 0);
@@ -213,6 +215,10 @@ void MwVersionInit(PUNICODE_STRING RegistryPath)
     MwDdiInterface = level->Interface;
     MwWddmProbe = in.Want;
     Mw2Plan(MwWddmVersion, MwWddm2Shape, MwWddm2Budget, &MwPlan);
+    /* Wddm2PowerDdis 0 (wddm-probe "nopowerddi") leaves the two DDIs out
+     * again, to see dxgkrnl refuse the start cleanly (WDDM2.md 16.6). */
+    if (MwWddm2PowerDdis == 0)
+        MwPlan.PowerDdis = 0;
 
     /* The boot journal (probe.c), from here on: a hang anywhere after
      * DriverEntry leaves the last DDI it entered on disk. */
@@ -222,10 +228,12 @@ void MwVersionInit(PUNICODE_STRING RegistryPath)
     MwBc("DriverEntry: WddmProbe 0x%x armed (keep %u), interface 0x%x, shape %u, budget %u, build %u",
          MwWddmProbe, in.Keep, MwDdiInterface, MwWddm2Shape, MwWddm2Budget, (ULONG)MW_BUILD);
     MwBc("plan: nodes %u, paging node %u (engine %u), VPR paging node %u, GpuMmu %u, VA %u, "
-         "TDR %u, segment aperture %u cpuvisible %u apptarget %u nonlocal %u",
+         "TDR %u, segment aperture %u cpuvisible %u apptarget %u nonlocal %u, "
+         "CalibrateGpuClock+SetStablePowerState %u (interface needs them: %u)",
          MwPlan.Nodes, MwPlan.PagingNode, MwPlan.Engine[MwPlan.PagingNode], MwPlan.VprPagingNode,
          MwPlan.GpuMmu, MwPlan.VirtualAddressing, MwPlan.PerEngineTdr, MwPlan.SegAperture,
-         MwPlan.SegCpuVisible, MwPlan.SegApplicationTarget, MwPlan.SegNonLocalBudget);
+         MwPlan.SegCpuVisible, MwPlan.SegApplicationTarget, MwPlan.SegNonLocalBudget,
+         MwPlan.PowerDdis, Mw2NeedsPowerDdis(MwDdiInterface));
 }
 
 /* From MwRender. Counting only: the confirm is the watchdog's (below),

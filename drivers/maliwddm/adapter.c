@@ -260,6 +260,7 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
     UNREFERENCED_PARAMETER(StartInfo);
 
     a->Dxgk = *Dxgk;
+    a->Stopped = FALSE;
     /* PHYSICALADAPTERCAPS hands this handle back to dxgkrnl (wddm2x.c). */
     MwBc("StartDevice: dxgkrnl DeviceHandle %p, interface version 0x%x", Dxgk->DeviceHandle, Dxgk->Version);
     {
@@ -329,29 +330,62 @@ static void StopGpu(MW_ADAPTER *A)
     A->GpuUp = FALSE;
 }
 
+/* Everything StartDevice (and AddDevice's copy thread) set going, stopped:
+ * from StopDevice, and from StopDeviceAndReleasePostDisplayOwnership, which
+ * dxgkrnl calls INSTEAD of StopDevice when it gives the screen to Basic
+ * Display, including after its own part of an adapter start has failed
+ * (dxgkrnl's DpiFdoStartAdapter). Until 2026-11-23 that path stopped only
+ * the scan-out, and RemoveDevice then freed the adapter under the running
+ * HPD and copy threads, which wait on events inside it. The two 2.0 boots
+ * that dxgkrnl refused that day bugchecked about a second later with 0x139
+ * (LIST_ENTRY corruption) on what looks like a DPC stack, with no DDI of
+ * ours in between; this is the likely cause (WDDM2.md 16.6). */
+void MwAdapterStop(MW_ADAPTER *A)
+{
+    if (A->Stopped)
+        return;
+    A->Stopped = TRUE;
+    MwCommandStop(A);
+    MwLog(A, L"Renders", A->Renders);
+    MwLog(A, L"Submits", A->Submits);
+    MwLog(A, L"JobsDone", A->JobsDone);
+    MwLog(A, L"JobsFailed", A->JobsFailed);
+    MwLog(A, L"Vsyncs", A->Vsyncs);
+    MwLog(A, L"Flips", A->Flips);
+    MwLog(A, L"FlipCopies", A->FlipCopies);
+    MwLog(A, L"FlipCopySkips", A->FlipCopySkips);
+    StopGpu(A);
+    MwHpdStop(A);
+    MwBacklightStop(A);
+    MwDisplayStop(A);
+}
+
 static NTSTATUS APIENTRY MwStopDevice(IN_CONST_PVOID Context)
 {
-    MW_ADAPTER *a = (MW_ADAPTER *)Context;
-    MwCommandStop(a);
-    MwLog(a, L"Renders", a->Renders);
-    MwLog(a, L"Submits", a->Submits);
-    MwLog(a, L"JobsDone", a->JobsDone);
-    MwLog(a, L"JobsFailed", a->JobsFailed);
-    MwLog(a, L"Vsyncs", a->Vsyncs);
-    MwLog(a, L"Flips", a->Flips);
-    MwLog(a, L"FlipCopies", a->FlipCopies);
-    MwLog(a, L"FlipCopySkips", a->FlipCopySkips);
-    StopGpu(a);
-    MwHpdStop(a);
-    MwBacklightStop(a);
-    MwDisplayStop(a);
+    MwAdapterStop((MW_ADAPTER *)Context);
     return STATUS_SUCCESS;
 }
 
+/* RemoveDevice may come without either stop: after AddDevice alone (the
+ * copy thread already runs), or after a StartDevice that failed. Nothing
+ * of ours may still run, wait or be queued in the adapter when it is
+ * freed: the copy and HPD threads, the poll, vsync and backlight timers
+ * and their DPCs. Each of these stops is safe to repeat and safe on an
+ * adapter that never started; the screen and backlight are left as they
+ * are. */
 static NTSTATUS APIENTRY MwRemoveDevice(IN_CONST_PVOID Context)
 {
-    MwProbeStop((MW_ADAPTER *)Context);
-    ExFreePoolWithTag(Context, MW_TAG);
+    MW_ADAPTER *a = (MW_ADAPTER *)Context;
+
+    MwBc("RemoveDevice: %hs", a->Stopped ? "already stopped" : "not stopped, stopping the threads and timers first");
+    if (!a->Stopped) {
+        MwCommandStop(a);
+        MwHpdStop(a);
+        MwBacklightStop(a);
+    }
+    KeFlushQueuedDpcs();
+    MwProbeStop(a);
+    ExFreePoolWithTag(a, MW_TAG);
     return STATUS_SUCCESS;
 }
 
@@ -1120,6 +1154,27 @@ static VOID APIENTRY T_SetRootPageTable(IN_CONST_HANDLE hAdapter, const DXGKARG_
 }
 TRACE_CONTEXT(StartDevice, (IN_CONST_PVOID Context, IN_PDXGK_START_INFO s, IN_PDXGKRNL_INTERFACE d, OUT_PULONG n, OUT_PULONG c),
               (Context, s, d, n, c))
+/* dxgkrnl's way out of a failed start (MwAdapterStop): journaled like the
+ * rest. RemoveDevice frees the adapter, so its wrapper uses only the slot. */
+TRACE_CONTEXT(StopDeviceAndReleasePostDisplayOwnership,
+              (IN_CONST_PVOID Context, IN_CONST_D3DDDI_VIDEO_PRESENT_TARGET_ID t, PDXGK_DISPLAY_INFORMATION d),
+              (Context, t, d))
+static MW_DDI_SLOT S_RemoveDevice = { L"RemoveDevice" };
+static NTSTATUS APIENTRY T_RemoveDevice(IN_CONST_PVOID Context)
+{
+    MwDdiEnter(&S_RemoveDevice);
+    return MwDdiExit(&S_RemoveDevice, MwRemoveDevice(Context));
+}
+/* WDDM 2.x (wddm2x.c). SetStablePowerState returns nothing. */
+TRACE_ADAPTER(CalibrateGpuClock, (IN_CONST_HANDLE hAdapter, IN UINT32 n, IN UINT32 e, DXGKARG_CALIBRATEGPUCLOCK *a),
+              (hAdapter, n, e, a))
+static MW_DDI_SLOT S_SetStablePowerState = { L"SetStablePowerState" };
+static VOID APIENTRY T_SetStablePowerState(IN_CONST_HANDLE hAdapter, const DXGKARG_SETSTABLEPOWERSTATE *a)
+{
+    MwDdiEnter(&S_SetStablePowerState);
+    MwSetStablePowerState(hAdapter, a);
+    (void)MwDdiExit(&S_SetStablePowerState, STATUS_SUCCESS);
+}
 
 NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
@@ -1131,7 +1186,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     init.DxgkDdiAddDevice = MwAddDevice;
     init.DxgkDdiStartDevice = T_StartDevice;
     init.DxgkDdiStopDevice = T_StopDevice;
-    init.DxgkDdiRemoveDevice = MwRemoveDevice;
+    init.DxgkDdiRemoveDevice = T_RemoveDevice;
     init.DxgkDdiDispatchIoRequest = T_DispatchIoRequest;
     init.DxgkDdiInterruptRoutine = MwInterruptRoutine;
     init.DxgkDdiDpcRoutine = MwDpcRoutine;
@@ -1186,7 +1241,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     init.DxgkDdiSetVidPnSourceAddress = T_SetVidPnSourceAddress;
     init.DxgkDdiRecommendMonitorModes = T_RecommendMonitorModes;
     init.DxgkDdiQueryVidPnHWCapability = T_QueryVidPnHWCapability;
-    init.DxgkDdiStopDeviceAndReleasePostDisplayOwnership = MwStopDeviceAndReleasePostDisplayOwnership;
+    init.DxgkDdiStopDeviceAndReleasePostDisplayOwnership = T_StopDeviceAndReleasePostDisplayOwnership;
     init.DxgkDdiSystemDisplayEnable = MwSystemDisplayEnable;
     init.DxgkDdiSystemDisplayWrite = MwSystemDisplayWrite;
     /* Mandatory from WDDM 2.6; left out below it so that a 1.3 driver is
@@ -1201,6 +1256,13 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         init.DxgkDdiSetRootPageTable = T_SetRootPageTable;
         init.DxgkDdiGetRootPageTableSize = MwGetRootPageTableSize;
         init.DxgkDdiSubmitCommandVirtual = T_SubmitCommandVirtual;
+    }
+    /* Mandatory from interface 0x5008 on: without them dxgkrnl fails the
+     * adapter start after QAI 16 (wddm2plan.h, Mw2NeedsPowerDdis). Never at
+     * 1.3, whose table stays as it was. */
+    if (MwPlan.PowerDdis) {
+        init.DxgkDdiCalibrateGpuClock = T_CalibrateGpuClock;
+        init.DxgkDdiSetStablePowerState = T_SetStablePowerState;
     }
 
     return DxgkInitialize(DriverObject, RegistryPath, &init);

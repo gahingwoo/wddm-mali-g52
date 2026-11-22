@@ -346,6 +346,7 @@ struct _MW_ADAPTER {
     KDPC PollDpc;
     volatile LONG PollArmed;
     volatile BOOLEAN Stopping;
+    BOOLEAN Stopped;            /* MwAdapterStop has run since StartDevice (adapter.c) */
 
     /* VSync, emulated (command.c): the scanout is the firmware framebuffer,
      * which raises no interrupt, but DWM paces every frame on CRTC_VSYNC
@@ -497,6 +498,10 @@ void MwLog(MW_ADAPTER *A, PCWSTR Name, ULONG Value);
 void MwLogHook(void *Owner, PCWSTR Name, ULONG Value);
 NTSTATUS MwRet(MW_ADAPTER *A, PCWSTR Name, NTSTATUS St);
 void MwEnter(MW_ADAPTER *A, PCWSTR Name);
+
+/* adapter.c: StopDevice's work, from StopDevice and from
+ * StopDeviceAndReleasePostDisplayOwnership; once per start. */
+void MwAdapterStop(MW_ADAPTER *A);
 
 /* display.c: VidPN and the POST framebuffer */
 NTSTATUS MwDisplayStart(MW_ADAPTER *A);
