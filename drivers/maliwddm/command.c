@@ -58,6 +58,7 @@ void MwCommandSettings(MW_ADAPTER *A)
 
 NTSTATUS APIENTRY MwCreateDevice(IN_CONST_HANDLE hAdapter, DXGKARG_CREATEDEVICE *Arg)
 {
+    MwBc("CreateDevice: flags 0x%08x (system device %u)", Arg->Flags.Value, (ULONG)Arg->Flags.SystemDevice);
     MW_DEVICE *dev = (MW_DEVICE *)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(*dev), MW_TAG);
 
     if (dev == NULL)
@@ -80,6 +81,7 @@ NTSTATUS APIENTRY MwCreateContext(IN_CONST_HANDLE hDevice, DXGKARG_CREATECONTEXT
     if (ctx == NULL)
         return STATUS_NO_MEMORY;
     ctx->Device = (MW_DEVICE *)hDevice;
+    MwBc("CreateContext: node %u engine %u flags 0x%08x", Arg->NodeOrdinal, Arg->EngineAffinity, Arg->Flags.Value);
     Arg->hContext = ctx;
     Arg->ContextInfo.DmaBufferSize = MW_DMA_BUFFER_SIZE;
     Arg->ContextInfo.DmaBufferSegmentSet = 0;           /* system memory, as viogpu3d */
@@ -361,6 +363,7 @@ static void NotifyCompleted(MW_ADAPTER *A, ULONG Fence)
     n.DmaCompleted.SubmissionFenceId = Fence;
     n.DmaCompleted.NodeOrdinal = 0;
     n.DmaCompleted.EngineOrdinal = 0;
+    MwRing(MW_RING_DMA_DONE, 0, Fence);
     A->Dxgk.DxgkCbNotifyInterrupt(A->Dxgk.DeviceHandle, &n);
     A->LastCompletedFence = Fence;
     A->NeedDpc = TRUE;
@@ -407,6 +410,7 @@ static void FinishPreempt(MW_ADAPTER *A)
     n.DmaPreempted.LastCompletedFenceId = A->LastCompletedFence;
     n.DmaPreempted.NodeOrdinal = 0;
     n.DmaPreempted.EngineOrdinal = 0;
+    MwRing(MW_RING_PREEMPTED, 0, A->PreemptFence);
     A->Dxgk.DxgkCbNotifyInterrupt(A->Dxgk.DeviceHandle, &n);
     A->PreemptPending = FALSE;
     MwTickAdd(&A->PreemptTicks, &A->PreemptMaxTicks, A->PreemptTick);
@@ -687,6 +691,7 @@ static BOOLEAN SyncVsync(PVOID Context)
     n.CrtcVsync.VidPnTargetId = a->Hdmi.ActiveTarget;     /* 0 unless HdmiHpd moved VP0 to HDMI */
     /* The flip this vsync completes: the one whose pixels are shown. */
     n.CrtcVsync.PhysicalAddress = a->CopyThread != NULL ? a->ShownAddr : a->ScanAddr;
+    MwRing(MW_RING_VSYNC, n.CrtcVsync.VidPnTargetId, (ULONG64)n.CrtcVsync.PhysicalAddress.QuadPart);
     a->Dxgk.DxgkCbNotifyInterrupt(a->Dxgk.DeviceHandle, &n);
     return TRUE;
 }

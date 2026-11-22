@@ -11,6 +11,7 @@
  * scanout.c or the flip copy in command.c puts them on the screen.
  */
 #include "maliwddm.h"
+#include "wddm2.h"
 #include <acpiioct.h>
 
 static UINT BytesPerPixel(D3DDDIFORMAT F)
@@ -320,6 +321,8 @@ NTSTATUS MwDisplayStart(MW_ADAPTER *A)
 
     st = A->Dxgk.DxgkCbAcquirePostDisplayOwnership(A->Dxgk.DeviceHandle, &A->Fb);
     MwLog(A, L"AcquirePostDisplay", (ULONG)st);
+    MwBc("DxgkCbAcquirePostDisplayOwnership 0x%08x: %ux%u pitch %u format %u", (ULONG)st,
+         A->Fb.Width, A->Fb.Height, A->Fb.Pitch, (ULONG)A->Fb.ColorFormat);
     if (!NT_SUCCESS(st) || A->Fb.Width == 0 || BytesPerPixel(A->Fb.ColorFormat) == 0)
         return STATUS_UNSUCCESSFUL;
     MwLog(A, L"FbWidth", A->Fb.Width);

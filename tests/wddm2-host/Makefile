@@ -17,6 +17,7 @@ lint:
 	@grep -q 'Mw2SegmentPass(out->NbSegment' $(SRC)/memory.c || { echo "FAIL: QUERYSEGMENT4 pass not from Mw2SegmentPass"; exit 1; }
 	@grep -q 'Mw2BootDecide(&in, &out)' $(SRC)/version.c || { echo "FAIL: the fallback is not wddm2plan.h's"; exit 1; }
 	@grep -q 'MwVersionConfirmCheck(A->Renders' $(SRC)/probe.c || { echo "FAIL: the confirm is not the watchdog's"; exit 1; }
+	@grep -q 'Mw2PerNodeEntries(Info->OutputDataSize' $(SRC)/adapter.c || { echo "FAIL: QAI 10 not answered per node"; exit 1; }
 	@echo "lint: ok"
 
 run: wddm2-host lint

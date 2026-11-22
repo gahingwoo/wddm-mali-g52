@@ -66,6 +66,18 @@ void MwBc(PCSTR Fmt, ...);
 BOOLEAN MwBcOn(void);
 void MwBcClose(void);
 
+/* probe.c: what happens above PASSIVE_LEVEL (the ISR, DPCs, the callbacks
+ * into dxgkrnl made at interrupt level), kept in memory at any IRQL and
+ * copied into the journal by the watchdog once a second. The first
+ * MW_RING_PER_CODE of each kind per boot. */
+#define MW_RING_ISR         0   /* a = ours */
+#define MW_RING_DPC         1
+#define MW_RING_DMA_DONE    2   /* a = node, b = fence */
+#define MW_RING_PREEMPTED   3   /* a = node, b = preemption fence */
+#define MW_RING_VSYNC       4   /* a = target, b = address */
+#define MW_RING_CODES       5
+void MwRing(ULONG Code, ULONG64 A, ULONG64 B);
+
 /* wddm2x.c: the 2.x shapes (Services\maliwddm\Parameters\Wddm2Shape). */
 #define MW_SHAPE_PHYSICAL   0   /* physical mode, a copy node as the paging node */
 #define MW_SHAPE_GPUMMU     1   /* the same and GpuMmu (VA caps, page tables) */

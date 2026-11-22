@@ -102,6 +102,21 @@ static void check_segment_pass(void)
     CHECK(Mw2SegmentPass(1, 1, 96, 64, 2) == MW2_SEG_TOO_SMALL, "fewer than ours");
 }
 
+/* ---- QAI 10: one entry per node ---- */
+
+static void check_per_node(void)
+{
+    for (unsigned w = 0; w < 2; w++) {
+        MW2_PLAN p;
+        Mw2Plan(w ? MW2_WDDM_2_0 : MW2_WDDM_1_3, 0, 1, &p);
+        /* dxgkrnl sizes the buffer as 4 bytes x nodes (22631 asked 8 at 2.0). */
+        CHECK(Mw2PerNodeEntries(4ull * p.Nodes, 4) == p.Nodes,
+              "QAI 10: every node of %u gets an answer", p.Nodes);
+    }
+    CHECK(Mw2PerNodeEntries(3, 4) == 0, "QAI 10: too small is no entry");
+    CHECK(Mw2PerNodeEntries(8, 0) == 0, "QAI 10: no divide by zero");
+}
+
 /* ---- the one-shot fallback over boots ---- */
 
 typedef struct {
@@ -206,6 +221,7 @@ int main(void)
             check_plan(0x2100u, shape, budget);
         }
     check_segment_pass();
+    check_per_node();
     check_fallback();
     printf("%d checks, %d failed\n", checks, fails);
     return fails != 0;

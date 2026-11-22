@@ -75,6 +75,7 @@ static BOOLEAN SyncCopyDone(PVOID Context)
     n.DmaCompleted.SubmissionFenceId = c->Fence;
     n.DmaCompleted.NodeOrdinal = MW_COPY_NODE;
     n.DmaCompleted.EngineOrdinal = 0;
+    MwRing(MW_RING_DMA_DONE, MW_COPY_NODE, c->Fence);
     c->A->Dxgk.DxgkCbNotifyInterrupt(c->A->Dxgk.DeviceHandle, &n);
     InterlockedExchange(&CopyFence, (LONG)c->Fence);
     c->A->Dxgk.DxgkCbQueueDpc(c->A->Dxgk.DeviceHandle);
@@ -119,6 +120,7 @@ static BOOLEAN SyncCopyPreempt(PVOID Context)
     n.DmaPreempted.LastCompletedFenceId = (UINT)CopyFence;
     n.DmaPreempted.NodeOrdinal = MW_COPY_NODE;
     n.DmaPreempted.EngineOrdinal = 0;
+    MwRing(MW_RING_PREEMPTED, MW_COPY_NODE, p->PreemptionFence);
     p->A->Dxgk.DxgkCbNotifyInterrupt(p->A->Dxgk.DeviceHandle, &n);
     p->A->Dxgk.DxgkCbQueueDpc(p->A->Dxgk.DeviceHandle);
     return TRUE;
@@ -505,6 +507,17 @@ void Mw2xBcQai(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info, NTSTATUS St)
              (ULONG)d->PageTableAlignmentInBytes);
         return;
     }
+    case DXGKQAITYPE_HISTORYBUFFERPRECISION: {
+        const DXGKARG_HISTORYBUFFERPRECISION *h = (const DXGKARG_HISTORYBUFFERPRECISION *)Info->pOutputData;
+        ULONG n = Mw2PerNodeEntries(size, sizeof(*h));
+        MwBc("QAI 10 HISTORYBUFFERPRECISION answered 0: %u entries (nodes %u), bits %u, %u",
+             n, MwPlan.Nodes, h[0].PrecisionBits, n > 1 ? h[1].PrecisionBits : 0xFFFFFFFFu);
+        return;
+    }
+    case DXGKQAITYPE_DISPLAY_DRIVERCAPS_EXTENSION:
+        MwBc("QAI 16 DISPLAY_DRIVERCAPS_EXTENSION answered 0: 0x%08x (%u bytes)",
+             size >= sizeof(ULONG) ? *(const ULONG *)Info->pOutputData : 0u, size);
+        return;
     default:
         MwBc("QAI %u answered 0", t);
         return;

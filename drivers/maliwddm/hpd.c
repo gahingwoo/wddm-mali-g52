@@ -38,6 +38,7 @@
  * Scan_*. docs/HDMI-HPD.md says what each means.
  */
 #include "maliwddm.h"
+#include "wddm2.h"
 
 /* The TaishanPi 3M's panel, as Tspi3mDsiPanel.c's NativeMode has it:
  * 800x1280, 71 MHz, HFP 52 HSYNC 8 HBP 48, VFP 15 VSYNC 6 VBP 16, both syncs
@@ -240,6 +241,7 @@ static void IndicateOne(MW_ADAPTER *A, ULONG Child, BOOLEAN Connected, PCWSTR Na
     cs.HotPlug.Connected = Connected;
     st = A->Dxgk.DxgkCbIndicateChildStatus(A->Dxgk.DeviceHandle, &cs);
     MwLog(A, Name, (ULONG)st);
+    MwBc("DxgkCbIndicateChildStatus child %u connected %u: 0x%08x", Child, (ULONG)Connected, (ULONG)st);
 }
 
 /* HdmiExclusive (DSI boot): the panel is reported disconnected while a

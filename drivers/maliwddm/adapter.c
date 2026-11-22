@@ -423,6 +423,7 @@ static BOOLEAN APIENTRY MwInterruptRoutine(IN_CONST_PVOID Context, IN_ULONG Mess
         (void)MwJobInterrupt(a);
         ours = TRUE;
     }
+    MwRing(MW_RING_ISR, ours, 0);
     (void)MwDdiExit(&S_Interrupt, STATUS_SUCCESS);
     return ours;
 }
@@ -431,6 +432,7 @@ static VOID APIENTRY MwDpcRoutine(IN_CONST_PVOID Context)
 {
     MW_ADAPTER *a = (MW_ADAPTER *)Context;
     MwDdiEnter(&S_Dpc);
+    MwRing(MW_RING_DPC, 0, 0);
     a->Dxgk.DxgkCbNotifyDpc(a->Dxgk.DeviceHandle);
     (void)MwDdiExit(&S_Dpc, STATUS_SUCCESS);
 }
@@ -603,11 +605,18 @@ static NTSTATUS APIENTRY MwQueryAdapterInfo(IN_CONST_HANDLE hAdapter, const DXGK
          * failed with STATUS_GRAPHICS_INVALID_DRIVER_MODEL (WinPE runs 5-8).
          * No history buffers are written; 64 bits is the honest width of
          * anything that would be. */
-        if (Info->OutputDataSize < sizeof(DXGKARG_HISTORYBUFFERPRECISION)) {
-            st = STATUS_BUFFER_TOO_SMALL;
-        } else {
-            ((DXGKARG_HISTORYBUFFERPRECISION *)Info->pOutputData)->PrecisionBits = 64;
-            st = STATUS_SUCCESS;
+        /* One entry per node (wddm2plan.h): at WDDM 2.x there are two, and
+         * build 310 answered only the first (0x139 at the next step). */
+        {
+            ULONG n = Mw2PerNodeEntries(Info->OutputDataSize, sizeof(DXGKARG_HISTORYBUFFERPRECISION));
+            if (Info->pOutputData == NULL || n == 0) {
+                st = STATUS_BUFFER_TOO_SMALL;
+            } else {
+                RtlZeroMemory(Info->pOutputData, Info->OutputDataSize);
+                for (ULONG i = 0; i < n; i++)
+                    ((DXGKARG_HISTORYBUFFERPRECISION *)Info->pOutputData)[i].PrecisionBits = 64;
+                st = STATUS_SUCCESS;
+            }
         }
         break;
     case 47: /* DXGKQAITYPE_64BITONLYCAPS: zero = not restricted to 64-bit */

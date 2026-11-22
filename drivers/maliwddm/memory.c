@@ -497,6 +497,11 @@ NTSTATUS APIENTRY MwBuildPagingBuffer(IN_CONST_HANDLE hAdapter, DXGKARG_BUILDPAG
 {
     MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
     NTSTATUS st;
+    static volatile LONG journaled;
+
+    if (MwBcOn() && InterlockedIncrement(&journaled) <= 64)
+        MwBc("BuildPagingBuffer: operation %u, DMA buffer %p size %u, private size %u",
+             (ULONG)Arg->Operation, Arg->pDmaBuffer, Arg->DmaSize, Arg->DmaBufferPrivateDataSize);
 
     /* WDDM 1.3: as it always was. */
     if (MwWddmProbe == 0) {

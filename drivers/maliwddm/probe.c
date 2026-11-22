@@ -169,6 +169,59 @@ void MwBcClose(void)
         ZwClose(k);
 }
 
+/* ---- the ring: events above PASSIVE_LEVEL ---- */
+
+#define MW_RING_SIZE        128
+#define MW_RING_PER_CODE    32
+
+typedef struct {
+    volatile LONG Seq;          /* 0 = empty or being written */
+    ULONG Code;
+    ULONG64 Time;               /* KeQueryInterruptTime */
+    ULONG64 A, B;
+} MW_RING_ENTRY;
+
+static MW_RING_ENTRY Ring[MW_RING_SIZE];
+static volatile LONG RingSeq;
+static volatile LONG RingPerCode[MW_RING_CODES];
+static LONG RingDumped;
+
+void MwRing(ULONG Code, ULONG64 A, ULONG64 B)
+{
+    MW_RING_ENTRY *e;
+    LONG q;
+
+    if (BcKey == NULL || Code >= MW_RING_CODES)
+        return;
+    if (InterlockedIncrement(&RingPerCode[Code]) > MW_RING_PER_CODE)
+        return;
+    q = InterlockedIncrement(&RingSeq);
+    e = &Ring[q % MW_RING_SIZE];
+    InterlockedExchange(&e->Seq, 0);
+    e->Code = Code;
+    e->Time = KeQueryInterruptTime();
+    e->A = A;
+    e->B = B;
+    InterlockedExchange(&e->Seq, q);
+}
+
+/* From the watchdog, at PASSIVE_LEVEL: new ring entries into the journal,
+ * at most 32 a second. */
+static void RingDump(void)
+{
+    static const char *const names[MW_RING_CODES] = { "isr", "dpc", "dma-completed", "dma-preempted", "vsync" };
+    LONG last = RingSeq;
+
+    for (int n = 0; RingDumped < last && n < 32; n++) {
+        LONG q = ++RingDumped;
+        MW_RING_ENTRY *e = &Ring[q % MW_RING_SIZE];
+        if (e->Seq != q)
+            continue;       /* overwritten, or still being written */
+        MwBc("ring %d at %u ms: %hs 0x%I64x 0x%I64x", q, (ULONG)((e->Time - BcStart) / 10000),
+             names[e->Code], e->A, e->B);
+    }
+}
+
 static MW_DDI_SLOT *Slots[MW_DDI_MAX];
 static volatile LONG SlotCount;
 static volatile LONG Seq;
@@ -412,6 +465,8 @@ static void WatchdogTick(MW_WATCHDOG *W, ULONG Seconds)
     if (RtlCompareMemory(counters, W->Counters, sizeof(counters)) != sizeof(counters))
         changed = TRUE;
 
+    if (BcKey != NULL)
+        RingDump();
     /* The one-shot fallback's confirm (version.c), at PASSIVE_LEVEL here. */
     MwVersionConfirmCheck(A->Renders, Seconds, stuck);
     if (stuck && !W->WasStuck)

@@ -195,3 +195,15 @@ static __inline int Mw2SegmentPass(unsigned NbSegmentIn, int HaveDescriptors,
         return MW2_SEG_TOO_SMALL;
     return MW2_SEG_FILL;
 }
+
+/* ---- DXGKQAITYPE_HISTORYBUFFERPRECISION (10): one answer per node ----
+ * Microsoft: OutputDataSize "is sizeof(DXGKARG_HISTORYBUFFERPRECISION) *
+ * m_DriverCaps.GpuEngineTopology.NbAsymetricProcessingNodes". With two
+ * nodes dxgkrnl 22631 asked with 8 bytes, and build 310 filled only the
+ * first: node 1's precision was whatever the buffer held, and 0 means
+ * "call DxgkDdiFormatHistoryBuffer", which this driver does not have.
+ * Every whole entry gets the answer; 0 entries is BUFFER_TOO_SMALL. */
+static __inline unsigned Mw2PerNodeEntries(unsigned long long OutputSize, unsigned long long EntrySize)
+{
+    return EntrySize == 0 ? 0u : (unsigned)(OutputSize / EntrySize);
+}
