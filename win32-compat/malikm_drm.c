@@ -1166,7 +1166,15 @@ w_lock(D3DKMT_HANDLE h)
       D3DDDICB_LOCK l = {0};
       l.hAllocation = h;
       l.Flags.IgnoreSync = 1;
-      return ddi.cb.pfnLockCb(ddi.device, &l) >= 0 ? l.pData : NULL;
+      HRESULT lhr = ddi.cb.pfnLockCb(ddi.device, &l);
+      if (lhr < 0) {
+         static volatile LONG said = 0;
+         if (InterlockedIncrement(&said) <= 64)
+            DebugPrintf("ddi-error: pfnLockCb 0x%08lx (allocation 0x%x)\n", (unsigned long)lhr,
+                        (unsigned)l.hAllocation);
+         return NULL;
+      }
+      return l.pData;
    }
    D3DKMT_LOCK l = {0};
    l.hDevice = wdevice;
@@ -1202,8 +1210,16 @@ w_render_inner(UINT commandLength, UINT allocations)
       r.hContext = ddi.context;
       r.CommandLength = commandLength;
       r.NumAllocations = allocations;
-      if (ddi.cb.pfnRenderCb(ddi.device, &r) < 0)
+      HRESULT rhr = ddi.cb.pfnRenderCb(ddi.device, &r);
+      if (rhr < 0) {
+         /* A failed submission is where a device the runtime removes would
+          * show first (Edge's GPU process, 2026-11-22): always in the log. */
+         static volatile LONG said = 0;
+         if (InterlockedIncrement(&said) <= 64)
+            DebugPrintf("ddi-error: pfnRenderCb 0x%08lx (%u bytes, %u allocations)\n",
+                        (unsigned long)rhr, commandLength, allocations);
          return (NTSTATUS)0xC0000001;
+      }
       wcmd = r.pNewCommandBuffer;
       wcmd_size = r.NewCommandBufferSize;
       walloc = r.pNewAllocationList;
@@ -1514,7 +1530,9 @@ malikm_primary_destroy(void *hRTDevice, unsigned handle)
 long
 malikm_set_display_mode(void *hRTDevice, unsigned primary_allocation)
 {
-   HRESULT hr = E_FAIL;
+   /* S_OK when it cannot be asked, as the stub was: E_FAIL from a DXGI DDI
+    * removes the device. */
+   HRESULT hr = S_OK;
 
    wlock(__func__);
    if (wselect_rt(hRTDevice) && ddi.on && ddi.cb.pfnSetDisplayModeCb && primary_allocation) {
@@ -1571,10 +1589,14 @@ malikm_present_allocation(void *hRTDevice, unsigned src_allocation, unsigned dst
                           void *dxgi_context)
 {
    static volatile LONG said = 0;
-   HRESULT hr = E_FAIL;
+   /* With no pfnPresentCb to call the frame is dropped and logged, not
+    * failed: E_FAIL from a DXGI DDI removes the device (Edge, 2026-11-22). */
+   HRESULT hr = S_OK;
+   int called = 0;
 
    wlock(__func__);
    if (wselect_rt(hRTDevice) && ddi.on && ddi.dxgi && ddi.dxgi->pfnPresentCb && src_allocation) {
+      called = 1;
       DXGIDDICB_PRESENT p = {0};
       p.hSrcAllocation = src_allocation;
       p.hDstAllocation = dst_allocation;
@@ -1587,7 +1609,10 @@ malikm_present_allocation(void *hRTDevice, unsigned src_allocation, unsigned dst
       MALI_SLOW(slow_t0, "present-cb", "pfnPresentCb 0x%x -> 0x%x, 0x%08lx", src_allocation,
                 dst_allocation, (unsigned long)hr);
    }
-   if (InterlockedIncrement(&said) <= 40 || hr < 0)
+   if (!called)
+      DebugPrintf("ddi-error: present of allocation 0x%x not possible (bound %d, DXGI callbacks %d):"
+                  " frame dropped\n", src_allocation, ddi.on, ddi.dxgi != NULL);
+   else if (InterlockedIncrement(&said) <= 40 || hr < 0)
       DebugPrintf("present: shared allocation 0x%x -> 0x%x, pfnPresentCb 0x%08lx\n",
                   src_allocation, dst_allocation, (unsigned long)hr);
    ReleaseSRWLockExclusive(&wddm_lock);
