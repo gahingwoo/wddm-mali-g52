@@ -1,0 +1,40 @@
+diff --git a/src/gallium/drivers/panfrost/pan_bo.c b/src/gallium/drivers/panfrost/pan_bo.c
+index a560712..819a2b2 100644
+--- a/src/gallium/drivers/panfrost/pan_bo.c
++++ b/src/gallium/drivers/panfrost/pan_bo.c
+@@ -280,7 +280,15 @@ panfrost_bo_cache_put(struct panfrost_bo *bo)
+ {
+    struct panfrost_device *dev = bo->dev;
+ 
+-   if (bo->flags & PAN_BO_SHARED || dev->debug & PAN_DBG_NO_CACHE)
++   /* A shareable BO is kept out of the cache as well, exported or not.
++    * The Windows winsys (win32-compat/malikm_drm.c) makes a shared
++    * resource's buffer the runtime's allocation at the CREATE_BO that
++    * resource_create issues; a BO from the cache issues none, and the
++    * resource fails. A temporary made from a shared resource's template
++    * and never exported (RotateResourceIdentities' copy) left one in the
++    * cache, and the next shared resource of that size failed with
++    * E_OUTOFMEMORY (CreateSwapChainForComposition, 2026-11-23). */
++   if (bo->flags & (PAN_BO_SHARED | PAN_BO_SHAREABLE) || dev->debug & PAN_DBG_NO_CACHE)
+       return false;
+ 
+    /* Must be first */
+diff --git a/src/gallium/frontends/d3d10umd/DxgiFns.cpp b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+index 32aaa8c..ef44870 100644
+--- a/src/gallium/frontends/d3d10umd/DxgiFns.cpp
++++ b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+@@ -418,8 +418,13 @@ RotateResourceIdentitiesImpl( DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *RotateRes
+     * alternative of recreating all views.
+     */
+ 
++   /* The temporary is this process's own: not shared, not a scanout. Made
++    * from a shared resource's template it was a shareable buffer that no
++    * runtime allocation stands behind. */
++   struct pipe_resource temp_templ = *resource0;
++   temp_templ.bind &= ~(PIPE_BIND_SHARED | PIPE_BIND_SCANOUT | PIPE_BIND_DISPLAY_TARGET);
+    struct pipe_resource *temp_resource;
+-   temp_resource = screen->resource_create(screen, resource0);
++   temp_resource = screen->resource_create(screen, &temp_templ);
+    assert(temp_resource);
+    if (!temp_resource) {
+       return E_OUTOFMEMORY;
