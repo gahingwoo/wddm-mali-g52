@@ -84,6 +84,17 @@ static void SetRotation(MW_ADAPTER *A, UINT Deg, PCWSTR Why)
     }
 }
 
+/* For hpd.c, which has its own VidPN at HdmiHpd level 3. */
+UINT MwPathDegrees(D3DKMDT_VIDPN_PRESENT_PATH_ROTATION R)
+{
+    return PathDegrees(R);
+}
+
+void MwSetRotation(MW_ADAPTER *A, UINT Deg, PCWSTR Why)
+{
+    SetRotation(A, Deg, Why);
+}
+
 /* ---- source modes ----
  *
  * The firmware's mode is the only timing there is: the HDMI link is never
@@ -332,6 +343,12 @@ NTSTATUS MwDisplayStart(MW_ADAPTER *A)
         return STATUS_INSUFFICIENT_RESOURCES;
     A->SourceVisible = TRUE;
     A->PathActive = TRUE;
+    /* HDMI hot-plug (hpd.c): the setting, and at level 3 the framebuffer for
+     * the driver's own mode sets, which MwScanStart enters in the IOMMU. At
+     * HdmiHpd 0 this reads the setting and does nothing else. */
+    MwHpdSettings(A);
+    if (A->Hdmi.Level >= 3)
+        (void)MwHpdReserve(A);
     MwScanStart(A);
     /* Only with scan-out set up: see SourceModeSize. */
     A->ScaledModes = MwSetting(A, L"ScaledModes", 0) != 0 && A->ScanReady;
@@ -348,6 +365,10 @@ NTSTATUS MwDisplayStart(MW_ADAPTER *A)
 void MwDisplayStop(MW_ADAPTER *A)
 {
     MwScanStop(A);
+    if (A->Hdmi.Level >= 3) {
+        MwHpdDisplayStop(A);
+        return;
+    }
     if (A->FbVa != NULL) {
         MmUnmapIoSpace(A->FbVa, A->FbSize);
         A->FbVa = NULL;
@@ -385,6 +406,8 @@ NTSTATUS APIENTRY MwQueryChildRelations(IN_CONST_PVOID MiniportDeviceContext,
     RtlZeroMemory(ChildRelations, sizeof(DXGK_CHILD_DESCRIPTOR)); /* the terminator alone */
     return STATUS_SUCCESS;
 #else
+    if (dev->Hdmi.Expose)
+        return MwHpdQueryChildRelations(dev, ChildRelations, ChildRelationsSize);
     if (ChildRelationsSize < 2 * sizeof(DXGK_CHILD_DESCRIPTOR))
         return STATUS_BUFFER_TOO_SMALL;   /* one child plus the zeroed terminator */
     RtlZeroMemory(ChildRelations, sizeof(DXGK_CHILD_DESCRIPTOR));
@@ -403,8 +426,10 @@ NTSTATUS APIENTRY MwQueryChildRelations(IN_CONST_PVOID MiniportDeviceContext,
 NTSTATUS APIENTRY MwQueryChildStatus(IN_CONST_PVOID MiniportDeviceContext, INOUT_PDXGK_CHILD_STATUS ChildStatus,
                             IN_BOOLEAN NonDestructiveOnly)
 {
-    UNREFERENCED_PARAMETER(MiniportDeviceContext);
+    MW_ADAPTER *dev = (MW_ADAPTER *)MiniportDeviceContext;
     UNREFERENCED_PARAMETER(NonDestructiveOnly);
+    if (dev != NULL && dev->Hdmi.Expose)
+        return MwHpdQueryChildStatus(dev, ChildStatus);
     switch (ChildStatus->Type) {
     case StatusConnection:
         ChildStatus->HotPlug.Connected = TRUE;
@@ -427,6 +452,8 @@ NTSTATUS APIENTRY MwQueryDeviceDescriptor(IN_CONST_PVOID MiniportDeviceContext, 
     MW_ADAPTER *dev = (MW_ADAPTER *)MiniportDeviceContext;
     ULONG off, len, n;
 
+    if (dev->Hdmi.Expose && ChildUid == dev->Hdmi.HdmiChild)
+        return MwHpdQueryDeviceDescriptor(dev, ChildUid, DeviceDescriptor);
     if (ChildUid != 0 || dev->EdidSize == 0)
         return STATUS_MONITOR_NO_DESCRIPTOR;
     off = DeviceDescriptor->DescriptorOffset;
@@ -454,6 +481,8 @@ NTSTATUS APIENTRY MwIsSupportedVidPn(IN_CONST_HANDLE hAdapter, DXGKARG_ISSUPPORT
     const D3DKMDT_VIDPN_SOURCE_MODE *pinned = NULL;
     NTSTATUS st;
 
+    if (dev->Hdmi.Switch)
+        return MwHpdIsSupportedVidPn(dev, Arg);
     Arg->IsVidPnSupported = FALSE;
     if (Arg->hDesiredVidPn == 0) {
         Arg->IsVidPnSupported = TRUE;
@@ -606,6 +635,8 @@ NTSTATUS APIENTRY MwEnumVidPnCofuncModality(IN_CONST_HANDLE hAdapter,
     const D3DKMDT_VIDPN_PRESENT_PATH *path = NULL, *next;
     NTSTATUS st;
 
+    if (dev->Hdmi.Switch)
+        return MwHpdEnumVidPnCofuncModality(dev, Arg);
     st = dev->Dxgk.DxgkCbQueryVidPnInterface(Arg->hConstrainingVidPn, DXGK_VIDPN_INTERFACE_VERSION_V1, &vidpn);
     if (!NT_SUCCESS(st))
         return st;
@@ -717,6 +748,8 @@ NTSTATUS APIENTRY MwCommitVidPn(IN_CONST_HANDLE hAdapter, const DXGKARG_COMMITVI
     const D3DKMDT_VIDPN_SOURCE_MODE *pinned = NULL;
     NTSTATUS st;
 
+    if (dev->Hdmi.Switch)
+        return MwHpdCommitVidPn(dev, Arg);
     st = dev->Dxgk.DxgkCbQueryVidPnInterface(Arg->hFunctionalVidPn, DXGK_VIDPN_INTERFACE_VERSION_V1, &vidpn);
     if (!NT_SUCCESS(st))
         return st;
@@ -794,6 +827,8 @@ NTSTATUS APIENTRY MwRecommendMonitorModes(IN_CONST_HANDLE hAdapter,
     D3DKMDT_MONITOR_SOURCE_MODE *mode;
     NTSTATUS st;
 
+    if (dev->Hdmi.Switch)
+        return MwHpdRecommendMonitorModes(dev, Arg);
     st = Arg->pMonitorSourceModeSetInterface->pfnCreateNewModeInfo(Arg->hMonitorSourceModeSet, &mode);
     if (!NT_SUCCESS(st))
         return st;

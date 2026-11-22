@@ -16,6 +16,7 @@
 #include "../common/maligpu.h"
 #include "maliwddm_abi.h"
 #include "rotate.h"
+#include "hdmi_calc.h"
 
 /* The adapter's own power and ACPI target (video.h; dispmprt.h has it in newer WDKs). */
 #ifndef DISPLAY_ADAPTER_HW_ID
@@ -76,6 +77,83 @@ typedef struct _MW_MEM_SLOT {
 } MW_MEM_SLOT;
 
 typedef struct _MW_ADAPTER MW_ADAPTER;
+
+/* HDMI hot-plug (hdmi.c, the hardware; hpd.c, what Windows sees). All of it
+ * is behind the HdmiHpd setting, a DWORD in Device Parameters:
+ *   0  (default) nothing here runs and nothing here is allocated
+ *   1  sense only: HPD is polled and the EDID read over DDC, the results
+ *      go to the registry; Windows is told nothing new
+ *   2  report: on an HDMI boot the one child becomes hot-plug aware and its
+ *      EDID is the one just read; no mode is ever set (a DSI boot as 1)
+ *   3  mode set: the driver programs VOP2 VP0, the HDMI controller and the
+ *      HDPTX PHY itself, so HDMI works when plugged after a DSI boot, and a
+ *      different monitor gets its own timing; HDMI audio follows the link */
+#define MW_EDID_MAX 512
+#define MW_HDMI_MODES       6
+#define MW_WIRE_DSI         1
+#define MW_WIRE_HDMI        2
+
+typedef struct _MW_HDMI {
+    ULONG Level;                /* the HdmiHpd setting */
+    ULONG Source;               /* HdmiHpdSource: 0 IOC LEVEL_INT, 1 IOC PORT_LEVEL, 2 GPIO4_PC1 pad */
+    ULONG PollMs;
+    BOOLEAN Audio;              /* HdmiAudio, on by default at level 3 */
+    BOOLEAN Dsi;                /* the firmware's screen is the DSI panel */
+    BOOLEAN Expose;             /* the HDMI child is reported hot-plug aware */
+    BOOLEAN Switch;             /* level 3: the driver sets modes */
+    ULONG HdmiChild;            /* the HDMI child's id: 0 on an HDMI boot, 1 next to the panel */
+    ULONG Children;
+
+    /* Registers, mapped by hdmi.c; Mapped has a bit for each. */
+    PUCHAR Ioc, Gpio4, Vo0Grf, PhyGrf, Phy, Ctl, Cru, Pmu1Cru, Pmu, Vop;
+    ULONG Mapped;
+
+    /* The poll thread, and the two locks it shares with the DDIs. HwLock:
+     * the controller (DDC and mode sets). StateLock: the EDID and modes.
+     * Mutexes, not fast mutexes: the registry trace needs PASSIVE_LEVEL. */
+    PKTHREAD Thread;
+    KEVENT Wake;
+    volatile LONG Stop;
+    KMUTEX HwLock, StateLock;
+    BOOLEAN Started;
+
+    /* HPD, the poll thread's. Connected is what Windows was last told. */
+    BOOLEAN Connected, SeenHigh, Last;
+    ULONG Same, Polls, Changes, LastRaw;
+
+    /* What DDC returned (StateLock). */
+    UCHAR Edid[MW_EDID_MAX];
+    ULONG EdidSize;
+    MW_SINK Sink;
+    UCHAR BootEdid[128];
+    BOOLEAN HaveBootEdid;
+    MW_TIMING Modes[MW_HDMI_MODES];
+    ULONG ModeCount;
+
+    /* The firmware's timing (Fw), and for a DSI boot the panel's real one. */
+    MW_TIMING FwTiming, Panel;
+    BOOLEAN HavePanel;
+
+    /* What VP0 drives now. */
+    ULONG WireKind;
+    MW_TIMING Wire;
+    ULONG ActiveTarget;
+    volatile LONG Busy;         /* a mode set is writing VOP2: no flips */
+
+    /* The firmware's framebuffer, and the one the driver scans out after a
+     * mode set of its own (contiguous, below 4 GB, identity-mapped in the
+     * VOP2 IOMMU like the firmware's; scanout.c). */
+    DXGK_DISPLAY_INFORMATION FwFb;
+    PUCHAR FwFbVa;
+    SIZE_T FwFbSize;
+    PUCHAR ResVa;
+    PHYSICAL_ADDRESS ResPa;
+    SIZE_T ResBytes;
+    ULONG ResMaxPixels;
+    BOOLEAN OnRes;
+
+    ULONG ModeSets, ModeSetFails, Restores;
+} MW_HDMI;
 
 typedef struct _MW_DEVICE {
     MW_ADAPTER *Adapter;
@@ -342,6 +420,9 @@ struct _MW_ADAPTER {
     ULONG64 PreemptTicks, PreemptMaxTicks;
     ULONG64 WaitTicks, WaitMaxTicks, WaitOtherMaxTicks;
     ULONG WaitCount, WaitOtherCount;
+
+    /* HDMI hot-plug, all of it behind HdmiHpd (hdmi.c, hpd.c). */
+    MW_HDMI Hdmi;
 };
 
 /* The performance counter, at any IRQL. */
@@ -447,3 +528,29 @@ void MwCopyForget(MW_ADAPTER *A, struct _MW_ALLOCATION *Alloc, BOOLEAN Freed);
 void MwCommandStop(MW_ADAPTER *A);
 void MwArmPoll(MW_ADAPTER *A);
 void MwCommandSettings(MW_ADAPTER *A);
+
+/* hdmi.c: the RK3576 HDMI hardware, ported from edk2-rk3576 */
+NTSTATUS MwHdmiMap(MW_ADAPTER *A);
+void MwHdmiUnmap(MW_ADAPTER *A);
+BOOLEAN MwHdmiPowered(MW_ADAPTER *A);
+BOOLEAN MwHdmiReadHpd(MW_ADAPTER *A, ULONG *Raw);
+NTSTATUS MwHdmiReadEdid(MW_ADAPTER *A, UCHAR *Buf, ULONG Max, ULONG *Len);
+NTSTATUS MwHdmiModeSet(MW_ADAPTER *A, const MW_TIMING *T, ULONG FbAddr, ULONG Pitch);
+NTSTATUS MwHdmiDsiRestore(MW_ADAPTER *A, ULONG FbAddr, ULONG Pitch);
+
+/* hpd.c: hot-plug as Windows sees it */
+void MwHpdSettings(MW_ADAPTER *A);
+NTSTATUS MwHpdReserve(MW_ADAPTER *A);
+void MwHpdStart(MW_ADAPTER *A);
+void MwHpdStop(MW_ADAPTER *A);
+void MwHpdDisplayStop(MW_ADAPTER *A);
+NTSTATUS MwHpdQueryChildRelations(MW_ADAPTER *A, PDXGK_CHILD_DESCRIPTOR C, ULONG Size);
+NTSTATUS MwHpdQueryChildStatus(MW_ADAPTER *A, PDXGK_CHILD_STATUS S);
+NTSTATUS MwHpdQueryDeviceDescriptor(MW_ADAPTER *A, ULONG ChildUid, PDXGK_DEVICE_DESCRIPTOR D);
+NTSTATUS MwHpdIsSupportedVidPn(MW_ADAPTER *A, DXGKARG_ISSUPPORTEDVIDPN *Arg);
+NTSTATUS MwHpdEnumVidPnCofuncModality(MW_ADAPTER *A, const DXGKARG_ENUMVIDPNCOFUNCMODALITY *Arg);
+NTSTATUS MwHpdCommitVidPn(MW_ADAPTER *A, const DXGKARG_COMMITVIDPN *Arg);
+NTSTATUS MwHpdRecommendMonitorModes(MW_ADAPTER *A, const DXGKARG_RECOMMENDMONITORMODES *Arg);
+/* display.c's, for hpd.c */
+UINT MwPathDegrees(D3DKMDT_VIDPN_PRESENT_PATH_ROTATION R);
+void MwSetRotation(MW_ADAPTER *A, UINT Deg, PCWSTR Why);

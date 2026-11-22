@@ -282,6 +282,9 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
     /* Before the children are asked for: the backlight decides whether the
      * one child is an internal panel or HDMI (display.c). */
     MwBacklightStart(a);
+    /* HDMI hot-plug (hpd.c): after the backlight, which says whether the
+     * screen is the panel. Nothing at HdmiHpd 0. */
+    MwHpdStart(a);
 #endif
     PublishIdentity(a);
     {
@@ -293,7 +296,7 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
     /* Render-only: no sources and no children, and the firmware framebuffer
      * stays with Basic Display, which keeps the desktop up. */
     *Sources = MW_RENDER_ONLY ? 0 : 1;
-    *Children = MW_RENDER_ONLY ? 0 : 1;
+    *Children = MW_RENDER_ONLY ? 0 : a->Hdmi.Children;
     MwLog(a, L"Started", 1);
     return STATUS_SUCCESS;
 }
@@ -322,6 +325,7 @@ static NTSTATUS APIENTRY MwStopDevice(IN_CONST_PVOID Context)
     MwLog(a, L"FlipCopies", a->FlipCopies);
     MwLog(a, L"FlipCopySkips", a->FlipCopySkips);
     StopGpu(a);
+    MwHpdStop(a);
     MwBacklightStop(a);
     MwDisplayStop(a);
     return STATUS_SUCCESS;

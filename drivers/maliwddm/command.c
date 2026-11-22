@@ -682,7 +682,7 @@ static BOOLEAN SyncVsync(PVOID Context)
     DXGKARGCB_NOTIFY_INTERRUPT_DATA n = {0};
 
     n.InterruptType = DXGK_INTERRUPT_CRTC_VSYNC;
-    n.CrtcVsync.VidPnTargetId = 0;
+    n.CrtcVsync.VidPnTargetId = a->Hdmi.ActiveTarget;     /* 0 unless HdmiHpd moved VP0 to HDMI */
     /* The flip this vsync completes: the one whose pixels are shown. */
     n.CrtcVsync.PhysicalAddress = a->CopyThread != NULL ? a->ShownAddr : a->ScanAddr;
     a->Dxgk.DxgkCbNotifyInterrupt(a->Dxgk.DeviceHandle, &n);

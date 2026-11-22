@@ -147,16 +147,29 @@ void MwScanStart(MW_ADAPTER *A)
 {
     PHYSICAL_ADDRESS lo = {0}, hi, vop;
     ULONG64 fb = (ULONG64)A->Fb.PhysicAddress.QuadPart;
+    ULONG64 res = A->Hdmi.ResVa != NULL ? (ULONG64)A->Hdmi.ResPa.QuadPart : 0;
     SIZE_T n;
 
     A->ScanReady = FALSE;
     if (A->FbVa == NULL || A->FbSize == 0 || fb < 0x40000000ull || fb + A->FbSize > 0x100000000ull)
         return;
+    if (res != 0 && (res < 0x40000000ull || res + A->Hdmi.ResBytes > 0x100000000ull))
+        res = 0;
     A->ScanSlotBytes = (ULONG)((A->FbSize + SCAN_PT_SPAN - 1) & ~((SIZE_T)SCAN_PT_SPAN - 1));
+    /* HdmiHpd level 3 (hpd.c): the driver's own framebuffer is entered at its
+     * address like the firmware's, and a slot must hold a primary of its
+     * size. Without it (res 0) this is what it always was. */
+    if (res != 0) {
+        ULONG r = (ULONG)((A->Hdmi.ResBytes + SCAN_PT_SPAN - 1) & ~((SIZE_T)SCAN_PT_SPAN - 1));
+        if (r > A->ScanSlotBytes)
+            A->ScanSlotBytes = r;
+    }
     if (A->ScanSlotBytes > SCAN_SLOT_MAX)
         return;
     A->ScanTablesTotal = 1 + (ULONG)(((fb + A->FbSize - 1) >> 22) - (fb >> 22) + 1) +
                          MW_SCAN_SLOTS * (A->ScanSlotBytes / SCAN_PT_SPAN);
+    if (res != 0)
+        A->ScanTablesTotal += (ULONG)(((res + A->Hdmi.ResBytes - 1) >> 22) - (res >> 22) + 1);
     hi.QuadPart = 0xFFFFFFFFll;
     n = (SIZE_T)SCAN_TABLES * PAGE_SIZE;
     A->ScanTables = MmAllocateContiguousMemorySpecifyCache(n, lo, hi, lo, MmNonCached);
@@ -166,6 +179,9 @@ void MwScanStart(MW_ADAPTER *A)
     A->ScanTablesPa = MmGetPhysicalAddress(A->ScanTables);
     A->ScanTablesUsed = 1;                      /* the directory */
     for (ULONG64 p = fb & ~0xFFFull; p < fb + A->FbSize; p += PAGE_SIZE)
+        if (!Enter(A, (ULONG)p, p))
+            goto fail;
+    for (ULONG64 p = res; res != 0 && p < res + A->Hdmi.ResBytes; p += PAGE_SIZE)
         if (!Enter(A, (ULONG)p, p))
             goto fail;
     vop.QuadPart = VOP_PA;
@@ -195,7 +211,7 @@ fail:
 /* Back to the firmware framebuffer. Any IRQL. */
 void MwScanToFb(MW_ADAPTER *A)
 {
-    if (!A->ScanReady || !A->ScanShowing)
+    if (!A->ScanReady || !A->ScanShowing || A->Hdmi.Busy)
         return;
     W(A, VOP_ESMART0_YRGB_MST, A->Fb.PhysicAddress.LowPart);
     W(A, VOP_CFG_DONE, 0x00018001);
@@ -285,7 +301,7 @@ void MwScanPower(MW_ADAPTER *A, BOOLEAN On)
  * SetVidPnSourceAddress is. */
 BOOLEAN MwScanFlip(MW_ADAPTER *A, MW_ALLOCATION *P)
 {
-    if (!MwScanUsable(A, P))
+    if (!MwScanUsable(A, P) || A->Hdmi.Busy)
         return FALSE;
     W(A, VOP_ESMART0_YRGB_MST, P->ScanIova);
     W(A, VOP_CFG_DONE, 0x00018001);

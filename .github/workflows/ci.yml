@@ -147,6 +147,8 @@ jobs:
         run: make -C tests/malikm-host run
       - name: maliwddm's rotation against the Basic Display Driver sample's
         run: make -C tests/rotate-host run
+      - name: maliwddm's HDMI arithmetic against the firmware's numbers
+        run: make -C tests/hdmi-host run
 
   umd:
     # The UMD for the package: mesa.yml's Panfrost build of the same inputs.
