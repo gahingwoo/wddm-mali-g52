@@ -284,7 +284,7 @@ New trace values (all level 3):
 | Value | Meaning |
 |---|---|
 | `Per_*`, `Per_N` | Every 5 s for 2 min after the last mode set, then every 30 s: the snapshot below. |
-| `Blk_Why`, `Blk_EventMs`, `Blk_AfterMs`, `Blk_*` | The first event after a mode set that can blank the screen: 1 visibility off, 2 window moved off a primary onto A->Fb, 3 a commit with no path; when (ms since boot, and after the mode set), and the snapshot at the next poll. |
+| `Blk_Why`, `Blk_EventMs`, `Blk_AfterMs`, `Blk_*` | The first event after a mode set that can blank the screen: 1 visibility off, 0x20 + `ToFbFrom` window moved off a primary onto A->Fb (was 2 before 2722e33's successor), 3 a commit with no path; when (ms since boot, and after the mode set), and the snapshot at the next poll. |
 | snapshot `_Flips` .. `_Maps` | Since the mode set: flips, scanned, copied, not mapped, invisible, refused at map time; `_Refused` the last refused size (any time). |
 | `_Showing` | bit 0 window on a primary, 1 scan-out on, 2 paging, 3 visible, 4 path active, 5 our framebuffer, 6 Hold, 15:8 rotation. |
 | `_LastFlip`, `_LastWhy` | The last flip's primary size, and why it was (0) or was not scanned out: 1 off, 2 not entered, 3 rotated, 4 another size, 9 invisible. |
@@ -368,6 +368,65 @@ Two cold boots, trace cleared before each, panel and monitor attached,
 2. `HdmiExclusive` 1. Expected: the desktop on HDMI, `Per_Flips` climbing,
    `Per_VisOff` small. Then unplug HDMI (the panel should come back) and
    replug (HDMI should take over again). Dump the trace.
+
+## Board run of 2722e33 + 0068 (pkg 8.16.32.821), HdmiExclusive 1
+
+The two-path theory is ruled out: `Per_Sup1`..`5` 0, `Per_Sup2Path` 0,
+every IsSupportedVidPn answered yes. Vsync is fine: 3334 interrupts in
+76 s for target 1, switched on once. DWM is alive (one instance, no
+crash). Yet: 2447 visibility-off calls and 2 visibility-on, 1301
+allocations created and 1231 destroyed, 283 presents and none of them a
+flip, 2 flips in all. No DDI of ours failed (the DDI wrappers log every
+failure as `Fail_*`; there are none for Present, CreateAllocation,
+OpenAllocation, DescribeAllocation or the VidPN). So it is dxgkrnl, or
+DWM through it, that does not accept what it gets.
+
+- **Prime suspect: the primaries' refresh rate.** `MwDescribeAllocation`
+  reported 60/1 for every allocation. The panel's mode as the driver
+  reports it is exactly 60 Hz (display.c's made-up timing, 60 by
+  construction), so that never mattered. HDMI's is the EDID's:
+  241,700,000 / (2720 x 1481) = 59.998 Hz. A primary whose described
+  refresh rate is not the mode's is not one the source can be flipped to;
+  DWM then cannot set its display mode, presents by blt instead (283 blts,
+  0 flips), and keeps rebuilding its swap chain (the create/destroy pairs),
+  with dxgkrnl turning the source off around each attempt. That is the
+  same symptom as the UMD's missing SetDisplayMode in November (memory:
+  project_wddm_mali_tspi3m_2026_11_13). At level 3 a primary now reports
+  the committed target's VSyncFreq exactly (`Hpd_Refresh` is it in
+  hundredths of a Hz). Note: an HDMI boot at level 0 with the firmware's
+  EDID in the DSDT has the same 60/1 against a 59.998 Hz mode; level 0 is
+  left as it is, but if this turns out to be the cause, level 0 needs it
+  too.
+- **Why `Blk_VisOff*Ms` stayed 0.** They were written once, when the
+  `Blk_*` snapshot was taken, at the first blanking event; that was 106 ms
+  after the mode set, before any visibility-off had happened. They are now
+  in every snapshot (`Per_VisOff1Ms`..`4Ms`, `Per_VisOffN`).
+- **`Blk_Why` 2 at 23.1 s, 106 ms after the mode set**: the window was
+  moved off a primary onto our framebuffer. Not a visibility-off (that is
+  1, and none had happened yet). The callers are now told apart: `Blk_Why`
+  is 0x20 plus `ToFbFrom` (1 visibility off, 2 a blt present to the
+  primary, 3 the copy thread, 4 a primary unmapped, 5 an IOMMU fault, 6
+  scan-out switched off, 7 the bugcheck screen). A blt present to the
+  primary draws into our framebuffer and moves the window there, which is
+  what 283 blts would do.
+
+New snapshot values: `_PrimCreates`, `_LastPrim` (W << 16 \| H),
+`_LastPrimPitch`; `_Describes`, `_LastDesc` (W << 16 \| H, bit 15 primary),
+`_LastDescRef` (the refresh rate it reported, hundredths of a Hz); `_Blts`,
+`_Fills`, `_LastPresent` (the present's DXGK_PRESENTFLAGS), `_LastPresentSrc`
+and `_LastPresentDst` (W << 16 \| H, bit 15 primary); `_Ref` (the committed
+refresh rate), `_SharedRef` (the refresh rate dxgkrnl asked for when it
+created the last shared primary); `_ToFbFrom`.
+
+### The next one-shot test
+
+`HdmiHpd` 3, `HdmiDiag` 0, `HdmiExclusive` 1, trace cleared, cold boot
+with panel and monitor attached, not logged in. After 90 s, dump the trace.
+If the refresh rate was it: the LogonUI on HDMI, `Per_PresentFlips` and
+`Per_Flips` climbing, `Per_VisOff` small, `Per_LastDescRef` 5999 and
+`Per_SharedRef` 5999. If it was not: `Per_SharedRef` against
+`Per_LastDescRef` and `Per_LastPresent`/`Per_LastPresentDst` say what DWM
+is doing instead.
 
 ## Open risks
 

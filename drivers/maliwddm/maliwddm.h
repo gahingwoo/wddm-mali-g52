@@ -171,6 +171,18 @@ typedef struct _MW_HDMI {
     volatile LONG VisOffN;
     volatile LONG IntOn, IntOff;
     ULONG BaseVsyncs, BasePresents, BasePresentFlips, BaseCreates, BaseDestroys, BaseVisOff;
+    /* The refresh rate of the committed target mode, which primaries report
+     * in DescribeAllocation at level 3 (0/0: none committed yet). */
+    ULONG RefNum, RefDen;
+    /* Who moved the window onto A->Fb last (MwScanToFb's callers): 1
+     * visibility off, 2 a blt present to the primary, 3 the copy thread, 4
+     * a primary unmapped, 5 an IOMMU fault, 6 scan-out switched off, 7 the
+     * bugcheck screen. */
+    volatile LONG ToFbFrom;
+    /* Primaries and presents, for the snapshots. */
+    volatile LONG PrimCreates, LastPrimWH, LastPrimPitch, Describes, LastDescWH, LastDescRef;
+    volatile LONG PresentBltsH, PresentFillsH, LastPresentFlags, LastPresentDstWH, LastPresentSrcWH;
+    ULONG SharedPrimRefNum, SharedPrimRefDen;
     ULONG BaseFlips, BaseScanned, BaseCopies, BaseNotMapped, BaseInvisible, BaseMismatch, BaseMaps, BaseScanFlips;
     ULONG LastSup, LastEnum, Commits;
 

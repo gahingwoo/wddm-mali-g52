@@ -216,6 +216,11 @@ static NTSTATUS NewAllocation(MW_ADAPTER *A, const MW_ALLOCATION_INFO *In, DXGK_
 
     MemCreated(A, alloc);
     A->Allocations++;
+    if (A->Hdmi.Switch && (alloc->Flags & MW_ALLOC_PRIMARY)) {
+        InterlockedIncrement(&A->Hdmi.PrimCreates);
+        A->Hdmi.LastPrimWH = (LONG)(alloc->Width << 16 | (alloc->Height & 0xFFFF));
+        A->Hdmi.LastPrimPitch = (LONG)alloc->Pitch;
+    }
     A->LastAllocVa = alloc->GpuVa;
     Out->hAllocation = alloc;
     Out->Size = alloc->Size;
@@ -287,7 +292,7 @@ NTSTATUS APIENTRY MwDestroyAllocation(IN_CONST_HANDLE hAdapter, const DXGKARG_DE
 NTSTATUS APIENTRY MwDescribeAllocation(IN_CONST_HANDLE hAdapter, DXGKARG_DESCRIBEALLOCATION *Arg)
 {
     MW_ALLOCATION *alloc = (MW_ALLOCATION *)Arg->hAllocation;
-    UNREFERENCED_PARAMETER(hAdapter);
+    MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
 
     Arg->Width = alloc->Width;
     Arg->Height = alloc->Height;
@@ -296,6 +301,20 @@ NTSTATUS APIENTRY MwDescribeAllocation(IN_CONST_HANDLE hAdapter, DXGKARG_DESCRIB
     Arg->MultisampleMethod.NumQualityLevels = 0;
     Arg->RefreshRate.Numerator = 60;
     Arg->RefreshRate.Denominator = 1;
+    /* HdmiHpd 3: a primary has the refresh rate of the mode it is shown in
+     * (the committed target's VSyncFreq), not a nominal 60: 2560x1440 at
+     * 241.70 MHz is 59.998 Hz. The firmware's own mode on the panel is
+     * exactly 60 (display.c TimingMadeUp), which is why 60/1 never
+     * mattered there. */
+    if (a != NULL && a->Hdmi.Switch && (alloc->Flags & MW_ALLOC_PRIMARY) && a->Hdmi.RefDen != 0) {
+        Arg->RefreshRate.Numerator = a->Hdmi.RefNum;
+        Arg->RefreshRate.Denominator = a->Hdmi.RefDen;
+    }
+    if (a != NULL && a->Hdmi.Switch) {
+        InterlockedIncrement(&a->Hdmi.Describes);
+        a->Hdmi.LastDescWH = (LONG)(alloc->Width << 16 | (alloc->Height & 0xFFFF) | ((alloc->Flags & MW_ALLOC_PRIMARY) ? 0x8000u : 0));
+        a->Hdmi.LastDescRef = (LONG)(Arg->RefreshRate.Denominator ? Arg->RefreshRate.Numerator * 100ull / Arg->RefreshRate.Denominator : 0);
+    }
     Arg->PrivateDriverFormatAttribute = 0;
     return STATUS_SUCCESS;
 }
@@ -314,6 +333,10 @@ NTSTATUS APIENTRY MwGetStandardAllocationDriverData(IN_CONST_HANDLE hAdapter,
 
     switch (Arg->StandardAllocationType) {
     case D3DKMDT_STANDARDALLOCATION_SHAREDPRIMARYSURFACE:
+        if (((MW_ADAPTER *)hAdapter)->Hdmi.Switch) {
+            ((MW_ADAPTER *)hAdapter)->Hdmi.SharedPrimRefNum = Arg->pCreateSharedPrimarySurfaceData->RefreshRate.Numerator;
+            ((MW_ADAPTER *)hAdapter)->Hdmi.SharedPrimRefDen = Arg->pCreateSharedPrimarySurfaceData->RefreshRate.Denominator;
+        }
         w = Arg->pCreateSharedPrimarySurfaceData->Width;
         h = Arg->pCreateSharedPrimarySurfaceData->Height;
         f = Arg->pCreateSharedPrimarySurfaceData->Format;

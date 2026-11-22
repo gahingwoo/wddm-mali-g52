@@ -301,6 +301,9 @@ static void Snapshot(MW_ADAPTER *A, PCWSTR Prefix)
         L"Showing", L"ScanAddr", L"Fb", L"LastFlip", L"LastWhy", L"VisOn",
         L"IsSup", L"Enum", L"RecFunc", L"Status", L"Desc",
         L"Sup0", L"Sup1", L"Sup2", L"Sup3", L"Sup4", L"Sup5", L"IntOn", L"IntOff",
+        L"PrimCreates", L"LastPrim", L"LastPrimPitch", L"Describes", L"LastDesc", L"LastDescRef",
+        L"Blts", L"Fills", L"LastPresent", L"LastPresentSrc", L"LastPresentDst", L"Ref", L"SharedRef",
+        L"ToFbFrom", L"VisOff1Ms", L"VisOff2Ms", L"VisOff3Ms", L"VisOff4Ms", L"VisOffN",
         L"Mmu0", L"Mmu1", L"Fault", L"Ms" };
     ULONG v[ARRAYSIZE(names)], fault = 0, k = 0;
     WCHAR buf[48];
@@ -338,6 +341,23 @@ static void Snapshot(MW_ADAPTER *A, PCWSTR Prefix)
         v[k++] = (ULONG)H->SupBy[r];
     v[k++] = (ULONG)H->IntOn;
     v[k++] = (ULONG)H->IntOff;
+    v[k++] = (ULONG)H->PrimCreates;
+    v[k++] = (ULONG)H->LastPrimWH;
+    v[k++] = (ULONG)H->LastPrimPitch;
+    v[k++] = (ULONG)H->Describes;
+    v[k++] = (ULONG)H->LastDescWH;
+    v[k++] = (ULONG)H->LastDescRef;
+    v[k++] = (ULONG)H->PresentBltsH;
+    v[k++] = (ULONG)H->PresentFillsH;
+    v[k++] = (ULONG)H->LastPresentFlags;
+    v[k++] = (ULONG)H->LastPresentSrcWH;
+    v[k++] = (ULONG)H->LastPresentDstWH;
+    v[k++] = H->RefDen ? (ULONG)(H->RefNum * 100ull / H->RefDen) : 0;
+    v[k++] = H->SharedPrimRefDen ? (ULONG)(H->SharedPrimRefNum * 100ull / H->SharedPrimRefDen) : 0;
+    v[k++] = (ULONG)H->ToFbFrom;
+    for (ULONG i = 0; i < 4; i++)
+        v[k++] = H->VisOffMs[i];
+    v[k++] = (ULONG)H->VisOffN;
     v[k++] = MwScanMmuStatus(A, 0, &fault);
     v[k++] = MwScanMmuStatus(A, 1, &fault);
     v[k++] = fault;
@@ -1184,6 +1204,15 @@ NTSTATUS MwHpdCommitVidPn(MW_ADAPTER *A, const DXGKARG_COMMITVIDPN *Arg)
         return st;
     }
     H->ActiveTarget = target;
+    {
+        /* What primaries report from now on (memory.c MwDescribeAllocation). */
+        D3DKMDT_VIDEO_SIGNAL_INFO sig;
+        RtlZeroMemory(&sig, sizeof(sig));
+        Signal(A, &m[t], &sig);
+        H->RefNum = sig.VSyncFreq.Numerator;
+        H->RefDen = sig.VSyncFreq.Denominator;
+        MwLog(A, L"Hpd_Refresh", H->RefDen ? (ULONG)(H->RefNum * 100ull / H->RefDen) : 0);
+    }
     A->PathActive = TRUE;
     A->CommitsPinned++;
     if (w != A->SrcWidth || h != A->SrcHeight) {
