@@ -139,8 +139,8 @@ static UINT family(DXGI_FORMAT f)
  * The whole table, and what in it does not agree: on a render or depth
  * target format, a sample count above one with quality levels but no
  * multisample render target bit, or the bit with no such count; and any
- * member of a typeless family whose quality levels above 1x are not the
- * typeless format's. The second is what the D3D11 runtime refuses a device for
+ * member of a typeless family (but the views of one plane of a depth
+ * format) whose quality levels above 1x are not the typeless format's. The second is what the D3D11 runtime refuses a device for
  * (0x887A0020): it asks the typeless format first and stops at the first
  * member that answers otherwise (mesa-patches/0068). Returns the number of
  * disagreements.
@@ -182,7 +182,12 @@ static unsigned format_table(ID3D11Device *dev)
             bad++;
         }
         UINT fam = family(all_formats[i].f);
-        if (!fam || (UINT)all_formats[i].f == fam)
+        /* The views of one plane of a depth format answer no sample count
+         * above 1x, whatever their typeless format says. */
+        DXGI_FORMAT f = all_formats[i].f;
+        if (!fam || (UINT)f == fam || f == DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS ||
+            f == DXGI_FORMAT_X32_TYPELESS_G8X24_UINT || f == DXGI_FORMAT_R24_UNORM_X8_TYPELESS ||
+            f == DXGI_FORMAT_X24_TYPELESS_G8_UINT)
             continue;
         for (UINT j = 0; j < ARRAYSIZE(all_formats); j++) {
             if ((UINT)all_formats[j].f != fam)
