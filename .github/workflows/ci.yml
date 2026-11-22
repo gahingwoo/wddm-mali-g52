@@ -117,6 +117,9 @@ jobs:
           if ($LASTEXITCODE) { throw 'd3dprobe build failed' }
           .\out\d3dprobe.exe
           if ($LASTEXITCODE) { throw "d3dprobe: exit code $LASTEXITCODE" }
+          # ccdtest: what CCD knows of the targets, and a topology change (HDMI hot-plug).
+          cl /nologo /W4 /WX /O2 tools\windows\ccdtest.c user32.lib /Fe:out\ccdtest.exe
+          if ($LASTEXITCODE) { throw 'ccdtest build failed' }
           # etwrec: start/stop a DxgKrnl ETW session (WinPE has no working wpr).
           cl /nologo /W4 /WX /O2 tools\windows\etwrec.c advapi32.lib /Fe:out\etwrec.exe
           if ($LASTEXITCODE) { throw 'etwrec build failed' }
@@ -137,6 +140,7 @@ jobs:
             out/m5test.exe
             out/etwrec.exe
             out/d3dprobe.exe
+            out/ccdtest.exe
 
   malikm-host:
     name: malikm on a simulated G52 (Linux, ASan/UBSan)

@@ -149,6 +149,16 @@ typedef struct _MW_HDMI {
     volatile LONG Hold;
     ULONG64 MsetTick;
     ULONG CheckStage;
+    /* After the last mode set the poll thread writes Per_* every 5 s for
+     * 2 min, then every 30 s; the first event after it that can blank the
+     * screen is stamped here at any IRQL and logged as Blk_* (hpd.c). */
+    ULONG64 NextPer;
+    ULONG PerN;
+    volatile LONG64 BlackTick;
+    volatile LONG BlackWhy;
+    BOOLEAN BlackLogged;
+    volatile LONG VisOn, VisOff, RecFunc, IsSupCalls, EnumCalls, StatusCalls, DescCalls;
+    volatile LONG LastFlipWH, LastFlipWhy;
     ULONG BaseFlips, BaseScanned, BaseCopies, BaseNotMapped, BaseInvisible, BaseMismatch, BaseMaps, BaseScanFlips;
     ULONG LastSup, LastEnum, Commits;
 
@@ -527,6 +537,8 @@ BOOLEAN MwScanUsable(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
 #define MW_SCAN_WHY_OFF         1   /* scan-out off, or the IOMMU not translating */
 #define MW_SCAN_WHY_NOT_MAPPED  2   /* the primary has no VOP2 address */
 #define MW_SCAN_WHY_ROTATED     3   /* the driver has to turn it */
+#define MW_SCAN_WHY_SIZE        4   /* HdmiHpd 3: entered, but not the size VP0 shows now */
+void MwHpdBlackEvent(MW_ADAPTER *A, LONG Why);
 ULONG MwScanWhy(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
 void MwScanCheck(MW_ADAPTER *A);
 void MwScanPower(MW_ADAPTER *A, BOOLEAN On);

@@ -452,6 +452,8 @@ NTSTATUS APIENTRY MwQueryDeviceDescriptor(IN_CONST_PVOID MiniportDeviceContext, 
     MW_ADAPTER *dev = (MW_ADAPTER *)MiniportDeviceContext;
     ULONG off, len, n;
 
+    if (dev->Hdmi.Expose)
+        InterlockedIncrement(&dev->Hdmi.DescCalls);
     if (dev->Hdmi.Expose && ChildUid == dev->Hdmi.HdmiChild)
         return MwHpdQueryDeviceDescriptor(dev, ChildUid, DeviceDescriptor);
     if (ChildUid != 0 || dev->EdidSize == 0)
@@ -511,8 +513,10 @@ NTSTATUS APIENTRY MwIsSupportedVidPn(IN_CONST_HANDLE hAdapter, DXGKARG_ISSUPPORT
 NTSTATUS APIENTRY MwRecommendFunctionalVidPn(IN_CONST_HANDLE hAdapter,
                                              const DXGKARG_RECOMMENDFUNCTIONALVIDPN *Arg)
 {
-    UNREFERENCED_PARAMETER(hAdapter);
+    MW_ADAPTER *dev = (MW_ADAPTER *)hAdapter;
     UNREFERENCED_PARAMETER(Arg);
+    if (dev != NULL && dev->Hdmi.Switch)
+        InterlockedIncrement(&dev->Hdmi.RecFunc);
     return STATUS_GRAPHICS_NO_RECOMMENDED_FUNCTIONAL_VIDPN;
 }
 
@@ -721,9 +725,14 @@ NTSTATUS APIENTRY MwSetVidPnSourceVisibility(IN_CONST_HANDLE hAdapter,
     MW_ADAPTER *dev = (MW_ADAPTER *)hAdapter;
     dev->SourceVisible = Arg->Visible;
     if (Arg->Visible) dev->VisibleOn++; else dev->VisibleOff++;
+    if (dev->Hdmi.Switch) {
+        InterlockedIncrement(Arg->Visible ? &dev->Hdmi.VisOn : &dev->Hdmi.VisOff);
+        if (!Arg->Visible)
+            MwHpdBlackEvent(dev, 1);
+    }
     /* Invisible means blank: clear the framebuffer once, and show it if
-     * the window was on a primary. */
-    if (!Arg->Visible && dev->FbVa != NULL) {
+     * the window was on a primary. HdmiDiag 2 keeps its pattern. */
+    if (!Arg->Visible && dev->FbVa != NULL && !dev->Hdmi.Hold) {
         RtlZeroMemory(dev->FbVa, dev->FbSize);
         MwScanToFb(dev);
     }
@@ -734,6 +743,10 @@ NTSTATUS APIENTRY MwSetVidPnSourceVisibility(IN_CONST_HANDLE hAdapter,
         ExAcquireFastMutex(&dev->CopyLock);
         if (MwScanUsable(dev, dev->ScanAlloc))
             MwScanFlip(dev, dev->ScanAlloc);
+        else if (dev->Hdmi.Switch && dev->ScanAlloc != NULL)
+            /* Not scanned out: copy it again at the next vsync, or the
+             * framebuffer cleared above stays black until the next flip. */
+            InterlockedExchange(&dev->ShownSeq, dev->FlipSeq - 1);
         ExReleaseFastMutex(&dev->CopyLock);
     }
     return STATUS_SUCCESS;
@@ -967,6 +980,10 @@ NTSTATUS APIENTRY MwSetVidPnSourceAddress(IN_CONST_HANDLE hAdapter, const DXGKAR
         } else {
             dev->WhyNotMapped++;
         }
+    }
+    if (dev->Hdmi.Switch) {
+        dev->Hdmi.LastFlipWH = p != NULL ? (LONG)(p->Width << 16 | (p->Height & 0xFFFF)) : 0;
+        dev->Hdmi.LastFlipWhy = (LONG)(dev->SourceVisible ? MwScanWhy(dev, p) : 9);
     }
     if (Arg->hAllocation == NULL) dev->FlipsNullAlloc++;
     if (!dev->SourceVisible) dev->FlipsInvisible++;

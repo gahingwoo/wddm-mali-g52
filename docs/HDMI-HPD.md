@@ -237,6 +237,73 @@ VidPN or it was refused before the commit; `Hpd_IsSup` reason 3 with the
 HDMI size in `Hpd_IsSupSize` would mean dxgkrnl kept the 2560x1440 source
 pinned for the panel's path.
 
+## Board run of 9b164db (2026-11-22) and what changed
+
+Results (DSI boot, AOC on HDMI, level 3): `HdmiDiag` 1 showed VP0's colour
+bars, so VP0, the port mux and the HDMI side work. `HdmiDiag` 2 showed the
+test pattern in our framebuffer during the boot spinner, so the window,
+its address, stride, size and IOMMU entries work, and went black at the
+logon chime. `HdmiDiag` 0 showed the boot spinner squashed, then black from
+the logon chime. Every flip after the mode set was "not mapped" and copied,
+and the primary refused at map time was 2560x1440 itself.
+
+What that says, and what the build does about it:
+
+- **The 2560x1440 primary refused.** `MwScanMap` entered a primary only if
+  its size was A->Fb's at the moment VidMm mapped it. dxgkrnl creates and
+  maps the primary of the new mode before it calls CommitVidPn, when A->Fb
+  is still the panel's 800x1280, so the primary was refused once and never
+  entered, and every flip went to the copy. At level 3 any unpadded primary
+  that fits a slot is now entered, and `MwScanWhy` decides per flip whether
+  its size is the one VP0 shows (new reason 4, "another size", copied).
+- **Black at DWM start with `HdmiDiag` 2.** `SetVidPnSourceVisibility(FALSE)`
+  clears A->Fb, which is our framebuffer: that erased the pattern, and Hold
+  kept anything from being drawn again. With Hold it no longer clears.
+- **Black at DWM start with `HdmiDiag` 0.** The same clear, followed by
+  `Visible(TRUE)`: the current primary was put back only if it was scanned
+  out; one that was copied stayed black until the next flip with new
+  content. At level 3 a copied primary is now copied again at the next
+  vsync. Whether this was the whole of it is what the next run says: the
+  first blanking event after a mode set is now stamped and logged.
+- **The squashed spinner** is Windows' boot animation drawn into the new
+  2560x1440 primary at the boot screen's own aspect (the panel's), stretched:
+  the driver scales nothing (post scaler identity, `ACT_INFO` = `DSP_INFO`),
+  and the copy is 1:1. It ends when DWM takes over. Not a driver defect as
+  far as can be seen; noted here so it is not chased.
+- **DisplaySwitch /internal never reached the driver.** `Hpd_IsSup`
+  0x2000100 says the only other topology Windows ever asked about was clone
+  (both targets on source 0), refused. A topology change that is decided
+  in user mode and never asks the driver cannot be seen in the trace, so
+  `tools/windows/ccdtest.exe` (in the `m3test-arm64` artifact) lists what
+  CCD has (paths, `outputTechnology`, `targetAvailable`) and calls
+  `SetDisplayConfig` with a topology, printing its Win32 error. The panel
+  child is reported `D3DKMDT_VOT_INTERNAL`, `HpdAwarenessAlwaysConnected`.
+
+New trace values (all level 3):
+
+| Value | Meaning |
+|---|---|
+| `Per_*`, `Per_N` | Every 5 s for 2 min after the last mode set, then every 30 s: the snapshot below. |
+| `Blk_Why`, `Blk_EventMs`, `Blk_AfterMs`, `Blk_*` | The first event after a mode set that can blank the screen: 1 visibility off, 2 window moved off a primary onto A->Fb, 3 a commit with no path; when (ms since boot, and after the mode set), and the snapshot at the next poll. |
+| snapshot `_Flips` .. `_Maps` | Since the mode set: flips, scanned, copied, not mapped, invisible, refused at map time; `_Refused` the last refused size (any time). |
+| `_Showing` | bit 0 window on a primary, 1 scan-out on, 2 paging, 3 visible, 4 path active, 5 our framebuffer, 6 Hold, 15:8 rotation. |
+| `_LastFlip`, `_LastWhy` | The last flip's primary size, and why it was (0) or was not scanned out: 1 off, 2 not entered, 3 rotated, 4 another size, 9 invisible. |
+| `_Vis` | Visibility on << 16 \| off, since start. |
+| `_Calls` | IsSupportedVidPn, EnumVidPnCofuncModality, RecommendFunctionalVidPn, QueryChildStatus, QueryDeviceDescriptor calls since start, 6 bits each from the low end. Unchanged across a `ccdtest internal` means CCD never asked the driver. |
+| `_Mmu0`, `_Mmu1`, `_Fault`, `_Ms` | IOMMU status, fault address, time. |
+
+### The next one-shot test
+
+`HdmiHpd` 3, `HdmiDiag` 0, trace cleared, cold boot with panel and monitor:
+
+1. Watch HDMI from power-on to two minutes after logon; note the time the
+   chime sounds and whether the desktop appears, and photograph it.
+2. In the user's session: `ccdtest.exe > c:\mali\ccd0.txt`, then
+   `ccdtest.exe validate internal > c:\mali\ccd1.txt`, then
+   `ccdtest.exe internal > c:\mali\ccd2.txt`. Note what the screens do.
+3. Unplug HDMI, wait 15 s, note the panel; plug it back, wait 15 s.
+4. Dump the trace (all values) and the three text files.
+
 ## Open risks
 
 - Nothing here has run. The first board session decides which HPD bit is

@@ -243,28 +243,44 @@ static void Indicate(MW_ADAPTER *A, BOOLEAN Connected)
     MwLog(A, L"Hpd_Indicate", (ULONG)st);
 }
 
-/* What the flips did after a mode set, at +3 s (stage 1) and +10 s
- * (stage 2): deltas from the moment it finished. Flips: SetVidPnSourceAddress
- * calls; Scanned: pointed the window at a primary; Copied: copied into our
- * framebuffer instead; NotMapped: the primary had no VOP2 address (usually a
- * size mismatch, then Refused is its W << 16 | H); Maps: primaries entered
- * in the IOMMU. Mmu0/1: the IOMMU status words, Fault the last fault
- * address. VpRaw (stage 1 only): VP0's interrupt raw status, the single
- * VOP2 read; bit 4 is POST_BUF_EMPTY. */
-static void Checkpoint(MW_ADAPTER *A, ULONG Stage)
+/* Something that can leave the screen black, stamped once after each mode
+ * set: 1 SetVidPnSourceVisibility(FALSE), 2 the window moved off a primary
+ * onto A->Fb (MwScanToFb), 3 a commit with no path. Any IRQL; the poll
+ * thread logs it (Blk_*) with a snapshot of the state at that moment. */
+void MwHpdBlackEvent(MW_ADAPTER *A, LONG Why)
 {
     MW_HDMI *H = &A->Hdmi;
-    PCWSTR const *n;
-    ULONG v[14], fault = 0, k = 0;
 
-    static PCWSTR const s1[14] = {
-        L"Chk1_Flips", L"Chk1_Scanned", L"Chk1_Copied", L"Chk1_NotMapped", L"Chk1_Invisible", L"Chk1_Mismatch",
-        L"Chk1_Refused", L"Chk1_Maps", L"Chk1_Showing", L"Chk1_ScanAddr", L"Chk1_Fb", L"Chk1_Mmu0", L"Chk1_Mmu1", L"Chk1_Fault" };
-    static PCWSTR const s2[14] = {
-        L"Chk2_Flips", L"Chk2_Scanned", L"Chk2_Copied", L"Chk2_NotMapped", L"Chk2_Invisible", L"Chk2_Mismatch",
-        L"Chk2_Refused", L"Chk2_Maps", L"Chk2_Showing", L"Chk2_ScanAddr", L"Chk2_Fb", L"Chk2_Mmu0", L"Chk2_Mmu1", L"Chk2_Fault" };
+    if (H->MsetTick == 0)
+        return;
+    if (InterlockedCompareExchange64(&H->BlackTick, (LONG64)KeQueryInterruptTime(), 0) == 0)
+        InterlockedExchange(&H->BlackWhy, Why);
+}
 
-    n = Stage == 1 ? s1 : s2;
+/* The state of the HDMI scan-out, as registry values Prefix_<name>.
+ * Flips, Scanned, Copied, NotMapped, Invisible, Mismatch, Maps: deltas
+ * since the last mode set. Refused: the last primary refused at map time,
+ * W << 16 | H (from any time). Showing: bit 0 window on a primary, 1
+ * scan-out on, 2 IOMMU paging, 3 source visible, 4 path active, 5 on our
+ * framebuffer, 6 Hold, 15:8 rotation. ScanAddr: the last flip's address.
+ * Fb: A->Fb, W << 16 | H. LastFlip: that flip's primary, W << 16 | H;
+ * LastWhy: why it was or was not scanned out (0 scanned, 1 scan-out off,
+ * 2 not entered, 3 rotated, 4 another size, 9 source invisible). Vis:
+ * visibility on << 16 | off since start. Calls: IsSupportedVidPn,
+ * EnumVidPnCofuncModality, RecommendFunctionalVidPn, QueryChildStatus and
+ * QueryDeviceDescriptor calls since start, 6 bits each (low to high).
+ * Mmu0, Mmu1, Fault: the IOMMU registers MwScanCheck reads. Ms: interrupt
+ * time in ms since boot. */
+static void Snapshot(MW_ADAPTER *A, PCWSTR Prefix)
+{
+    MW_HDMI *H = &A->Hdmi;
+    static PCWSTR const names[] = {
+        L"Flips", L"Scanned", L"Copied", L"NotMapped", L"Invisible", L"Mismatch", L"Refused", L"Maps",
+        L"Showing", L"ScanAddr", L"Fb", L"LastFlip", L"LastWhy", L"Vis", L"Calls", L"Mmu0", L"Mmu1", L"Fault", L"Ms" };
+    ULONG v[ARRAYSIZE(names)], fault = 0, k = 0;
+    WCHAR buf[48];
+    UNICODE_STRING us;
+
     v[k++] = A->Flips - H->BaseFlips;
     v[k++] = A->ScanFlips - H->BaseScanFlips;
     v[k++] = A->FlipCopies - H->BaseCopies;
@@ -274,16 +290,54 @@ static void Checkpoint(MW_ADAPTER *A, ULONG Stage)
     v[k++] = A->ScanLastW << 16 | (A->ScanLastH & 0xFFFF);
     v[k++] = A->ScanMaps - H->BaseMaps;
     v[k++] = (A->ScanShowing ? 1u : 0) | (A->ScanOn ? 2u : 0) | (A->ScanPaging ? 4u : 0) |
-             (A->SourceVisible ? 8u : 0) | (A->PathActive ? 16u : 0) | (H->OnRes ? 32u : 0) | A->RotDeg << 8;
+             (A->SourceVisible ? 8u : 0) | (A->PathActive ? 16u : 0) | (H->OnRes ? 32u : 0) |
+             (H->Hold ? 64u : 0) | A->RotDeg << 8;
     v[k++] = A->ScanAddr.LowPart;
     v[k++] = A->Fb.Width << 16 | (A->Fb.Height & 0xFFFF);
+    v[k++] = (ULONG)H->LastFlipWH;
+    v[k++] = (ULONG)H->LastFlipWhy;
+    v[k++] = (ULONG)H->VisOn << 16 | ((ULONG)H->VisOff & 0xFFFF);
+    v[k++] = ((ULONG)H->IsSupCalls & 63) | ((ULONG)H->EnumCalls & 63) << 6 | ((ULONG)H->RecFunc & 63) << 12 |
+             ((ULONG)H->StatusCalls & 63) << 18 | ((ULONG)H->DescCalls & 63) << 24;
     v[k++] = MwScanMmuStatus(A, 0, &fault);
     v[k++] = MwScanMmuStatus(A, 1, &fault);
     v[k++] = fault;
-    for (ULONG i = 0; i < k; i++)
-        MwLog(A, n[i], v[i]);
-    if (Stage == 1)
+    v[k++] = (ULONG)(KeQueryInterruptTime() / 10000);
+    for (ULONG i = 0; i < k; i++) {
+        RtlInitEmptyUnicodeString(&us, buf, sizeof(buf));
+        if (NT_SUCCESS(RtlUnicodeStringPrintf(&us, L"%ws_%ws", Prefix, names[i])))
+            MwLog(A, buf, v[i]);
+    }
+}
+
+/* From the poll thread: Chk1_* and the one VOP2 read 3 s after a mode set;
+ * Per_* every 5 s for 2 minutes, then every 30 s (Per_N counts them); Blk_*
+ * once, at the first poll after a blanking event, with Blk_Why and
+ * Blk_EventMs (ms since boot) and Blk_AfterMs (ms after the mode set). */
+static void Periodic(MW_ADAPTER *A)
+{
+    MW_HDMI *H = &A->Hdmi;
+    ULONG64 now = KeQueryInterruptTime();
+
+    if (H->MsetTick == 0)
+        return;
+    if (H->CheckStage == 1 && now >= H->MsetTick + 3000ull * 10000) {
+        Snapshot(A, L"Chk1");
         MwLog(A, L"Chk1_VpRaw", MwHdmiVpRawStatus(A));
+        H->CheckStage = 2;
+    }
+    if (!H->BlackLogged && H->BlackTick != 0) {
+        H->BlackLogged = TRUE;
+        MwLog(A, L"Blk_Why", (ULONG)H->BlackWhy);
+        MwLog(A, L"Blk_EventMs", (ULONG)((ULONG64)H->BlackTick / 10000));
+        MwLog(A, L"Blk_AfterMs", (ULONG)(((ULONG64)H->BlackTick - H->MsetTick) / 10000));
+        Snapshot(A, L"Blk");
+    }
+    if (now >= H->NextPer) {
+        Snapshot(A, L"Per");
+        MwLog(A, L"Per_N", ++H->PerN);
+        H->NextPer = now + (now - H->MsetTick < 120000ull * 10000 ? 5000ull : 30000ull) * 10000;
+    }
 }
 
 static VOID HpdThread(PVOID Context)
@@ -300,13 +354,7 @@ static VOID HpdThread(PVOID Context)
         KeWaitForSingleObject(&H->Wake, Executive, KernelMode, FALSE, &t);
         if (H->Stop)
             break;
-        if (H->CheckStage != 0 && H->CheckStage < 3) {
-            ULONG64 due = H->MsetTick + (H->CheckStage == 1 ? 3000ull : 10000ull) * 10000;
-            if (KeQueryInterruptTime() >= due) {
-                Checkpoint(a, H->CheckStage);
-                H->CheckStage++;
-            }
-        }
+        Periodic(a);
         hpd = MwHdmiReadHpd(a, &raw);
         H->Polls++;
         if (raw != H->LastRaw) {
@@ -490,6 +538,7 @@ NTSTATUS MwHpdQueryChildStatus(MW_ADAPTER *A, PDXGK_CHILD_STATUS S)
 {
     MW_HDMI *H = &A->Hdmi;
 
+    InterlockedIncrement(&H->StatusCalls);
     switch (S->Type) {
     case StatusConnection:
         S->HotPlug.Connected = S->ChildUid == H->HdmiChild ? H->Connected : TRUE;
@@ -752,6 +801,7 @@ NTSTATUS MwHpdIsSupportedVidPn(MW_ADAPTER *A, DXGKARG_ISSUPPORTEDVIDPN *Arg)
     UINT w = 0, h = 0;
     NTSTATUS st;
 
+    InterlockedIncrement(&H->IsSupCalls);
     Arg->IsVidPnSupported = FALSE;
     if (Arg->hDesiredVidPn == 0) {
         Arg->IsVidPnSupported = TRUE;
@@ -811,6 +861,7 @@ NTSTATUS MwHpdEnumVidPnCofuncModality(MW_ADAPTER *A, const DXGKARG_ENUMVIDPNCOFU
     MW_TIMING m[MW_HDMI_MODES];
     NTSTATUS st;
 
+    InterlockedIncrement(&A->Hdmi.EnumCalls);
     st = A->Dxgk.DxgkCbQueryVidPnInterface(vp, DXGK_VIDPN_INTERFACE_VERSION_V1, &v);
     if (!NT_SUCCESS(st))
         return st;
@@ -929,6 +980,10 @@ static void Baseline(MW_ADAPTER *A)
     H->BaseMaps = A->ScanMaps;
     H->MsetTick = KeQueryInterruptTime();
     H->CheckStage = 1;
+    H->NextPer = H->MsetTick + 5000ull * 10000;
+    H->PerN = 0;
+    InterlockedExchange64(&H->BlackTick, 0);
+    H->BlackLogged = FALSE;
 }
 
 /* Make VP0 drive Target at T. PASSIVE_LEVEL, from CommitVidPn. */
@@ -1041,6 +1096,7 @@ NTSTATUS MwHpdCommitVidPn(MW_ADAPTER *A, const DXGKARG_COMMITVIDPN *Arg)
         return st;
     if (!PathOf(v, Arg->hFunctionalVidPn, &target, &deg) || !PinnedSource(v, Arg->hFunctionalVidPn, 0, &w, &h)) {
         /* No path for our source, or nothing pinned: it is being turned off. */
+        MwHpdBlackEvent(A, 3);
         A->PathActive = FALSE;
         A->CommitsNoPath++;
         MwLog(A, L"CommitNoPath", 0);

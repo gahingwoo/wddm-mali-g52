@@ -217,6 +217,8 @@ void MwScanToFb(MW_ADAPTER *A)
     W(A, VOP_CFG_DONE, 0x00018001);
     A->ScanShowing = FALSE;
     A->ScanToFbs++;
+    if (A->Hdmi.Switch)
+        MwHpdBlackEvent(A, 2);          /* window off a primary, onto A->Fb */
 }
 
 /* Would a flip to this allocation be scanned out? Not if the driver has to
@@ -229,6 +231,8 @@ ULONG MwScanWhy(MW_ADAPTER *A, MW_ALLOCATION *P)
         return MW_SCAN_WHY_NOT_MAPPED;
     if (MwFlipDegrees(A, P) != 0)
         return MW_SCAN_WHY_ROTATED;
+    if (A->Hdmi.Switch && (P->Width != A->Fb.Width || P->Height != A->Fb.Height || P->Pitch != A->Fb.Pitch))
+        return MW_SCAN_WHY_SIZE;
     return 0;
 }
 
@@ -332,8 +336,14 @@ void MwScanMap(MW_ADAPTER *A, MW_ALLOCATION *P, PPFN_NUMBER Pfn, ULONG Pages)
 
     if (!A->ScanReady || !(P->Flags & MW_ALLOC_PRIMARY) || Pages > SCAN_SLOT_PAGES)
         return;
-    /* Only what the window is already set up for. */
-    if (P->Width != A->Fb.Width || P->Height != A->Fb.Height || P->Pitch != A->Fb.Pitch) {
+    /* Only what the window is already set up for. At HdmiHpd 3 the mode can
+     * change under a primary: dxgkrnl creates and maps the primary of the
+     * new mode before CommitVidPn, while A->Fb is still the old one (board,
+     * 2026-11-22: the 2560x1440 primary refused, every flip copied). So any
+     * unpadded primary that fits a slot is entered, and MwScanWhy decides
+     * per flip whether its size is the one on the screen. */
+    if (A->Hdmi.Switch ? (P->Pitch != P->Width * 4 || P->Width == 0 || P->Height == 0)
+                       : (P->Width != A->Fb.Width || P->Height != A->Fb.Height || P->Pitch != A->Fb.Pitch)) {
         A->ScanMismatch++;
         A->ScanLastW = P->Width;
         A->ScanLastH = P->Height;
