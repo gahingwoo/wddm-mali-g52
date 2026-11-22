@@ -95,6 +95,14 @@ static void test_vp(void)
     CHECK(r.HTotalHsEnd == (908u << 16 | 8), "DSI HTOTAL");
     CHECK(r.PreScan == ((20u + 400 - 1) << 16 | 8), "DSI PRE_SCAN");
 
+    /* The panel on VP2, as the vendor 6.1 kernel and Linux run it: the
+     * vendor dump's MIPI0_IF_CTRL 0x8010003b (CFG_DONE_IMD, PCLK_DIV, PIN_POL
+     * 3, MUX 2, CLK_OUT_EN, EN), VP2_CLK_CTRL 0, BG_DLY 16. */
+    MwVpRegsPort(&t, 1, 2, &r);
+    CHECK(r.IfCtrl == 0x8010003b, "MIPI0 on VP2 IF_CTRL 0x%08x", r.IfCtrl);
+    CHECK(r.ClkCtrl == 0, "VP2_CLK_CTRL");
+    CHECK(r.PreScan == ((16u + 400 - 1) << 16 | 8), "VP2 PRE_SCAN");
+
     /* Negative syncs on HDMI: PIN_POL 0. */
     MwCeaTiming(&MwCeaModes[0], &t);            /* VIC 1, -H -V */
     MwVpRegs(&t, 0, &r);

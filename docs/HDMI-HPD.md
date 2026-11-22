@@ -23,6 +23,7 @@ Other DWORDs, all optional:
 |---|---|---|
 | `HdmiHpdSource` | 0 | Which bit is HPD: 0 `IOC_HDMI_HPD_STATUS` bit 3 (LEVEL_INT, what mainline and the firmware's HPD wait read), 1 bit 6 (vendor's HPD_PORT_LEVEL), 2 the GPIO4_PC1 pad. |
 | `HdmiHpdPollMs` | 200 | Poll period, 50 to 2000. |
+| `HdmiExclusive` | 1 | Level 3, DSI boot: the panel is reported gone while a monitor is on HDMI (one display at a time). 0: both reported. |
 | `HdmiHpdDebounceMs` | 1000 | A level counts only after it has held this long with no edge, 300 to 10000. |
 | `HdmiAudio` | 1 | 0: no audio setup after a mode set. |
 | `HdmiMaxPixels` | 4096000 (2560x1600) | Size of the driver's own framebuffer, allocated at start at level 3. Modes larger than this are not offered. |
@@ -450,6 +451,75 @@ kind it was; 0x41790 (a page table entry count), 0x41284/0x41287 (a PTE
 or working set inconsistency) and 0x61941 (a bad address in a
 paging operation) point elsewhere than a write past a mapping, which
 would more likely show as 0x50 or 0x1A 0x41201.
+
+## Board run of c435f07 (2026-11-22): it works
+
+DSI boot, panel and AOC attached, `HdmiHpd` 3, `HdmiExclusive` 1: LogonUI
+and the desktop on the 2560x1440 monitor, `Per_Flips` 2613 and
+`Per_PresentFlips` 2610, `Per_VisOff` 2, primaries and the shared primary
+both at the mode's refresh rate (`Hpd_Refresh`, `Per_LastDescRef`,
+`Per_SharedRef` 6000), HDMI audio playing (`Aud_Status` 1, CTS 241700).
+The refresh rate the primaries described was the cause of the black
+desktop. With `HdmiExclusive` 1 every Win+P choice shows HDMI only, as it
+must with one VidPN source.
+
+Since then:
+
+- **Level 0 gets the same refresh-rate fix**, for the one case it can
+  matter: an HDMI boot whose mode is from the firmware's EDID and is not
+  60 Hz exactly (the AOC at 2560x1440 is 59.998 Hz). A primary now
+  describes the rate display.c's target mode has; for a mode that is 60 Hz
+  exactly (the panel, a boot without EDID, CEA 1080p60) it stays 60/1, so
+  nothing changes there.
+- **`HdmiExclusive` is on by default at level 3** (`HdmiExclusive` 0 turns
+  it off). Without it, a DSI boot with HDMI attached has a black HDMI
+  desktop the session cannot get out of except by unplugging; with it,
+  HDMI and the panel take turns and both work. It only matters on a DSI
+  boot. It stays the default until the extended desktop below exists.
+
+## Plan: extend and duplicate, panel on VP2 and HDMI on VP0
+
+What Linux does on this board (Armbian 7.3.5, drm.debug): HDMI on VP0
+(Cluster0 window), the panel on VP2 (Esmart0), both running at once. The
+firmware and this driver put the panel on VP0. For two displays at once:
+
+1. **Hardware (hdmi.c), panel on VP2.** Started: `MwVpRegsPort` computes
+   any port's values (VP2: CLK_CTRL 0, BG_DLY 16, MIPI0_IF_CTRL with MUX 2
+   and PCLK_DIV, which tests/hdmi-host checks against the vendor dump's
+   0x8010003b). Still to write:
+   - dclk_vp2_src from CPLL (CLKSEL_CON147 [10:8] = 1, [7:0] = 15 - 1),
+     DCLK_VP2 on it (CON147 bit 13 = 0), gates CON61 bit 12 and CON62
+     bit 1 (Vop2IfConfig's MIPI0 branch for Vp = 2);
+   - a window for VP2: Esmart1 (0x1A00), PORT_SEL 2, AXI bus 0, read IDs
+     0x12/0x13 (Vop2SetSmartWin's table), alpha map 0xFFFFFFFF, its own
+     address, stride, size; VP2's three mixers with the firmware's four
+     values (Vop2Enable) and VP2's OVL_LAYER_SEL;
+   - the move: VP0 to standby, MIPI0 off VP0, VP2 programmed and released,
+     MIPI0 onto VP2, then VP0 free for HDMI. The DSI host and the panel
+     keep running; only the source of their pixels changes, which is the
+     same unknown the VP0 panel restore already passed on the board.
+   - the IOMMU: the same tables serve both windows; a second set of slots
+     for the second source's primaries.
+2. **WDDM (two VidPN sources).** StartDevice reports 2 sources. Source 0
+   stays where it is (panel today, on VP0 until the move), source 1 is
+   HDMI. Every path-taking function already iterates paths; what is
+   single-source today: `SetVidPnSourceAddress` (source 0 only), the
+   per-source state (ScanAddr, ScanAlloc, ShownSeq, FlipSeq, the copy
+   thread, visibility, SrcWidth/Height, RotDeg), the vsync (one emulated
+   tick for target 0 or `ActiveTarget`; it needs one per active target),
+   `MwScanFlip` (Esmart0 only), and IsSupportedVidPn's one-path rule
+   (clone: two paths from one source, same source mode; extend: two
+   sources). Duplicate first is cheaper: one primary, both windows on it,
+   only if the two target modes share a source size Windows accepts (it
+   scales nothing here, so in practice the panel's size on both, or the
+   VOP2's window scaler, which is not set up). Extend is the useful one.
+3. **Switch and order.** `HdmiExtend` (DWORD, default 0): 0 is today's
+   single source with `HdmiExclusive`; 1 the panel moved to VP2 and two
+   sources. Order: (a) the VP2 move alone, panel only, one source: the
+   panel must look as it does on VP0; (b) two sources, HDMI on VP0,
+   extend; (c) duplicate; (d) rotation per source.
+
+The one-shot test for (a) comes with the build that has it.
 
 ## Open risks
 

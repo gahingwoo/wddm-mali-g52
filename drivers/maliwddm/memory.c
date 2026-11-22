@@ -309,6 +309,18 @@ NTSTATUS APIENTRY MwDescribeAllocation(IN_CONST_HANDLE hAdapter, DXGKARG_DESCRIB
     if (a != NULL && a->Hdmi.Switch && (alloc->Flags & MW_ALLOC_PRIMARY) && a->Hdmi.RefDen != 0) {
         Arg->RefreshRate.Numerator = a->Hdmi.RefNum;
         Arg->RefreshRate.Denominator = a->Hdmi.RefDen;
+    } else if (a != NULL && !a->Hdmi.Switch && (alloc->Flags & MW_ALLOC_PRIMARY) &&
+               a->TimingTotalW != 0 && a->TimingTotalH != 0 &&
+               (ULONG64)a->TimingPixelRate != 60ull * a->TimingTotalW * a->TimingTotalH) {
+        /* Every other level, the same: the one target mode display.c
+         * reports (FillSignal's VSyncFreq), when it is not 60 Hz exactly.
+         * The made-up timing (the panel, a boot without EDID) is 60 by
+         * construction and keeps 60/1 as before; an HDMI boot with the
+         * firmware's EDID in the DSDT is at the EDID's rate (59.998 Hz
+         * at 2560x1440 on the AOC), where 60/1 kept DWM from flipping
+         * (board, 2026-11-22, the level 3 run that fixed it). */
+        Arg->RefreshRate.Numerator = a->TimingPixelRate;
+        Arg->RefreshRate.Denominator = a->TimingTotalW * a->TimingTotalH;
     }
     if (a != NULL && a->Hdmi.Switch) {
         InterlockedIncrement(&a->Hdmi.Describes);

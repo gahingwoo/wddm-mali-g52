@@ -91,7 +91,11 @@ void MwHpdSettings(MW_ADAPTER *A)
         H->DebounceMs = 10000;
     H->Audio = MwSetting(A, L"HdmiAudio", 1) != 0;
     H->Diag = MwSetting(A, L"HdmiDiag", 0);
-    H->Exclusive = MwSetting(A, L"HdmiExclusive", 0) != 0;
+    /* On by default since the board run of c435f07: with one VidPN source
+     * and both displays connected the session keeps the HDMI desktop black;
+     * reported one at a time it works (docs/HDMI-HPD.md). 0 to try the
+     * two-display arrangement anyway. */
+    H->Exclusive = MwSetting(A, L"HdmiExclusive", 1) != 0;
     H->LastSup = H->LastEnum = 0xFFFFFFFFu;
     H->ResMaxPixels = MwSetting(A, L"HdmiMaxPixels", 2560 * 1600);
     if (H->ResMaxPixels > MW_VP0_MAX_W * MW_VP0_MAX_H)
