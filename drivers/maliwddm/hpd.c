@@ -91,7 +91,11 @@ void MwHpdSettings(MW_ADAPTER *A)
         H->DebounceMs = 10000;
     H->Audio = MwSetting(A, L"HdmiAudio", 1) != 0;
     H->Diag = MwSetting(A, L"HdmiDiag", 0);
-    H->Exclusive = MwSetting(A, L"HdmiExclusive", 0) != 0;
+    /* On by default since the board run of c435f07: with one VidPN source
+     * and both displays connected the session keeps the HDMI desktop black;
+     * reported one at a time it works (docs/HDMI-HPD.md). 0 to try the
+     * two-display arrangement anyway. */
+    H->Exclusive = MwSetting(A, L"HdmiExclusive", 1) != 0;
     H->LastSup = H->LastEnum = 0xFFFFFFFFu;
     H->ResMaxPixels = MwSetting(A, L"HdmiMaxPixels", 2560 * 1600);
     if (H->ResMaxPixels > MW_VP0_MAX_W * MW_VP0_MAX_H)
@@ -301,6 +305,9 @@ static void Snapshot(MW_ADAPTER *A, PCWSTR Prefix)
         L"Showing", L"ScanAddr", L"Fb", L"LastFlip", L"LastWhy", L"VisOn",
         L"IsSup", L"Enum", L"RecFunc", L"Status", L"Desc",
         L"Sup0", L"Sup1", L"Sup2", L"Sup3", L"Sup4", L"Sup5", L"IntOn", L"IntOff",
+        L"PrimCreates", L"LastPrim", L"LastPrimPitch", L"Describes", L"LastDesc", L"LastDescRef",
+        L"Blts", L"Fills", L"LastPresent", L"LastPresentSrc", L"LastPresentDst", L"Ref", L"SharedRef",
+        L"ToFbFrom", L"FbSkips", L"VisOff1Ms", L"VisOff2Ms", L"VisOff3Ms", L"VisOff4Ms", L"VisOffN",
         L"Mmu0", L"Mmu1", L"Fault", L"Ms" };
     ULONG v[ARRAYSIZE(names)], fault = 0, k = 0;
     WCHAR buf[48];
@@ -338,6 +345,24 @@ static void Snapshot(MW_ADAPTER *A, PCWSTR Prefix)
         v[k++] = (ULONG)H->SupBy[r];
     v[k++] = (ULONG)H->IntOn;
     v[k++] = (ULONG)H->IntOff;
+    v[k++] = (ULONG)H->PrimCreates;
+    v[k++] = (ULONG)H->LastPrimWH;
+    v[k++] = (ULONG)H->LastPrimPitch;
+    v[k++] = (ULONG)H->Describes;
+    v[k++] = (ULONG)H->LastDescWH;
+    v[k++] = (ULONG)H->LastDescRef;
+    v[k++] = (ULONG)H->PresentBltsH;
+    v[k++] = (ULONG)H->PresentFillsH;
+    v[k++] = (ULONG)H->LastPresentFlags;
+    v[k++] = (ULONG)H->LastPresentSrcWH;
+    v[k++] = (ULONG)H->LastPresentDstWH;
+    v[k++] = H->RefDen ? (ULONG)(H->RefNum * 100ull / H->RefDen) : 0;
+    v[k++] = H->SharedPrimRefDen ? (ULONG)(H->SharedPrimRefNum * 100ull / H->SharedPrimRefDen) : 0;
+    v[k++] = (ULONG)H->ToFbFrom;
+    v[k++] = (ULONG)H->FbSkips;
+    for (ULONG i = 0; i < 4; i++)
+        v[k++] = H->VisOffMs[i];
+    v[k++] = (ULONG)H->VisOffN;
     v[k++] = MwScanMmuStatus(A, 0, &fault);
     v[k++] = MwScanMmuStatus(A, 1, &fault);
     v[k++] = fault;
@@ -980,12 +1005,42 @@ NTSTATUS MwHpdEnumVidPnCofuncModality(MW_ADAPTER *A, const DXGKARG_ENUMVIDPNCOFU
     return st == STATUS_GRAPHICS_NO_MORE_ELEMENTS_IN_DATASET ? STATUS_SUCCESS : st;
 }
 
+/* The CPU writers of A->FbVa that do not hold CopyLock: in while no switch
+ * is under way. At level 0 to 2 the framebuffer never moves and this is
+ * always TRUE with nothing counted. Any IRQL. */
+BOOLEAN MwHpdFbEnter(MW_ADAPTER *A)
+{
+    MW_HDMI *H = &A->Hdmi;
+
+    if (!H->Switch)
+        return TRUE;
+    InterlockedIncrement(&H->FbUsers);
+    if (H->FbSwitch) {
+        InterlockedDecrement(&H->FbUsers);
+        InterlockedIncrement(&H->FbSkips);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+void MwHpdFbLeave(MW_ADAPTER *A)
+{
+    if (A->Hdmi.Switch)
+        InterlockedDecrement(&A->Hdmi.FbUsers);
+}
+
 /* Which framebuffer A->Fb is: ours at W x H, or the firmware's. Under
- * CopyLock, which the copy thread holds while it writes A->FbVa. */
+ * CopyLock, which the copy thread holds while it writes A->FbVa, and with
+ * the other writers (MwHpdFbEnter) drained first: a blt present or the
+ * clear at visibility off that read the new FbVa with the old size would
+ * write past the end of the firmware's 4 MB mapping. PASSIVE_LEVEL. */
 static void UseFb(MW_ADAPTER *A, BOOLEAN Res, UINT W, UINT H2)
 {
     MW_HDMI *H = &A->Hdmi;
 
+    InterlockedExchange(&H->FbSwitch, 1);
+    for (ULONG i = 0; i < 5000 && H->FbUsers != 0; i++)
+        KeStallExecutionProcessor(10);      /* a blt is at most a frame's copy */
     ExAcquireFastMutex(&A->CopyLock);
     if (Res) {
         A->Fb.PhysicAddress = H->ResPa;
@@ -1001,7 +1056,9 @@ static void UseFb(MW_ADAPTER *A, BOOLEAN Res, UINT W, UINT H2)
     }
     H->OnRes = Res;
     A->ScanShowing = FALSE;     /* the window is on A->Fb now */
+    KeMemoryBarrier();
     ExReleaseFastMutex(&A->CopyLock);
+    InterlockedExchange(&H->FbSwitch, 0);
 }
 
 /* HdmiDiag 2: eight vertical bars (white, yellow, cyan, green, magenta,
@@ -1184,6 +1241,15 @@ NTSTATUS MwHpdCommitVidPn(MW_ADAPTER *A, const DXGKARG_COMMITVIDPN *Arg)
         return st;
     }
     H->ActiveTarget = target;
+    {
+        /* What primaries report from now on (memory.c MwDescribeAllocation). */
+        D3DKMDT_VIDEO_SIGNAL_INFO sig;
+        RtlZeroMemory(&sig, sizeof(sig));
+        Signal(A, &m[t], &sig);
+        H->RefNum = sig.VSyncFreq.Numerator;
+        H->RefDen = sig.VSyncFreq.Denominator;
+        MwLog(A, L"Hpd_Refresh", H->RefDen ? (ULONG)(H->RefNum * 100ull / H->RefDen) : 0);
+    }
     A->PathActive = TRUE;
     A->CommitsPinned++;
     if (w != A->SrcWidth || h != A->SrcHeight) {

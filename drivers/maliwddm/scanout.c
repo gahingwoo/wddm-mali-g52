@@ -218,7 +218,7 @@ void MwScanToFb(MW_ADAPTER *A)
     A->ScanShowing = FALSE;
     A->ScanToFbs++;
     if (A->Hdmi.Switch)
-        MwHpdBlackEvent(A, 2);          /* window off a primary, onto A->Fb */
+        MwHpdBlackEvent(A, 0x20 | A->Hdmi.ToFbFrom);    /* window off a primary, onto A->Fb */
 }
 
 /* Would a flip to this allocation be scanned out? Not if the driver has to
@@ -262,6 +262,7 @@ void MwScanCheck(MW_ADAPTER *A)
     if (!fault)
         return;
     InterlockedExchange(&A->ScanOn, 0);
+    A->Hdmi.ToFbFrom = 5;
     MwScanToFb(A);
     /* The rest of the frame being read can fault again before the window
      * moves: acknowledge for a little while, about a millisecond. */
@@ -378,6 +379,7 @@ void MwScanUnmap(MW_ADAPTER *A, MW_ALLOCATION *P)
         return;
     P->ScanIova = 0;
     if (A->ScanShowing)
+        A->Hdmi.ToFbFrom = 4;
         MwScanToFb(A);          /* whichever primary it was: be safe */
     /* The entries stay. The window moves at the next frame start, and
      * until then the VOP2 is still reading this primary: with the entries
@@ -425,6 +427,7 @@ NTSTATUS MwScanSet(MW_ADAPTER *A, MW_ESCAPE_SCANOUT_DATA *D)
         InterlockedExchange(&A->ScanOn, A->ScanPaging ? 1 : 0);
     } else if (D->Mode == 0 || D->Mode == 2) {
         InterlockedExchange(&A->ScanOn, 0);
+        A->Hdmi.ToFbFrom = 6;
         MwScanToFb(A);
         if (D->Mode == 2 && A->ScanPaging) {
             LARGE_INTEGER frames;

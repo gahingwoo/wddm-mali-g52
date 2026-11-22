@@ -439,13 +439,26 @@ typedef struct _MW_VP_REGS {
 /* VP0 only, progressive, RGB888 bus, no overscan: the values Vop2Init and
  * Vop2Rk3576VpComputeRegs agree on for this board. Dsi selects MIPI0's
  * output mode and pin polarity; anything else is HDMI0. */
+/* Any video port: VP0 has two pixels per clock (dclk_core / 2, no
+ * PCLK_DIV), VP1 and VP2 one (CLK_CTRL 0, PCLK_DIV set), as Vop2IfConfig
+ * and mainline rk3576_set_intf_mux have them; BG_DLY is 20 on VP0 and 16 on
+ * VP1 and VP2 (rk3576_vop2_setup_bg_dly). For the extended desktop with the
+ * panel on VP2 (docs/HDMI-HPD.md); hdmi.c uses VP0 only so far. */
+#define MW_IF_PCLK_DIV          (1u << 20)
+MW_HC_INLINE void MwVpRegsPort(const MW_TIMING *T, int Dsi, unsigned Vp, MW_VP_REGS *R);
+
 MW_HC_INLINE void MwVpRegs(const MW_TIMING *T, int Dsi, MW_VP_REGS *R)
+{
+    MwVpRegsPort(T, Dsi, 0, R);
+}
+
+MW_HC_INLINE void MwVpRegsPort(const MW_TIMING *T, int Dsi, unsigned Vp, MW_VP_REGS *R)
 {
     mwh_u32 hsync = (mwh_u32)T->HSyncEnd - T->HSyncStart;
     mwh_u32 hact_st = (mwh_u32)T->HTotal - T->HSyncStart, hact_end = hact_st + T->HDisplay;
     mwh_u32 vsync = (mwh_u32)T->VSyncEnd - T->VSyncStart;
     mwh_u32 vact_st = (mwh_u32)T->VTotal - T->VSyncStart, vact_end = vact_st + T->VDisplay;
-    mwh_u32 bg_dly = 20;        /* RK3576 VP0: 10 + 8 + 2 (Vop2PostConfig, Rk3576BgDly) */
+    mwh_u32 bg_dly = Vp == 0 ? 20u : 16u;   /* 10 + 8 + 2 on VP0, 10 + 6 on VP1/VP2 (Rk3576BgDly) */
     mwh_u32 pre_hs = hsync < 8 ? 8 : hsync;
     mwh_u32 pol;
 
@@ -466,12 +479,13 @@ MW_HC_INLINE void MwVpRegs(const MW_TIMING *T, int Dsi, MW_VP_REGS *R)
     }
     R->PreScan = (bg_dly + (T->HDisplay >> 1) - 1) << 16 | pre_hs;
     R->LineFlag = vact_end << 16 | vact_end;
-    R->ClkCtrl = 1;
+    R->ClkCtrl = Vp == 0 ? 1u : 0u;
     /* PIN_POL: HDMI from the mode's sync (Vop2IfConfig, "1 means positive");
      * MIPI0 always 3, as the firmware and Linux leave it (the TaishanPi's
      * panel stays dark otherwise, memory: project_tspi3m_uefi_linux_display_touch). */
     pol = Dsi ? 3u : ((T->PHSync ? 1u : 0u) | (T->PVSync ? 2u : 0u));
-    R->IfCtrl = MW_IF_EN | MW_IF_CLK_OUT_EN | MW_IF_CFG_DONE_IMD | MW_IF_MUX(0) | MW_IF_PIN_POL(pol);
+    R->IfCtrl = MW_IF_EN | MW_IF_CLK_OUT_EN | MW_IF_CFG_DONE_IMD | MW_IF_MUX(Vp & 3) | MW_IF_PIN_POL(pol) |
+                (Vp != 0 ? MW_IF_PCLK_DIV : 0u);
 }
 
 /* ---- InfoFrames (DwHdmiQpLib.c) ---- */
