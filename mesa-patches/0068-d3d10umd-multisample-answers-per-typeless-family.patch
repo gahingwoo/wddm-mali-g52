@@ -1,5 +1,5 @@
 diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
-index 5ac09f0..426a12e 100644
+index 5ac09f0..a71a25a 100644
 --- a/src/gallium/frontends/d3d10umd/Device.cpp
 +++ b/src/gallium/frontends/d3d10umd/Device.cpp
 @@ -47,6 +47,7 @@
@@ -10,7 +10,7 @@ index 5ac09f0..426a12e 100644
  
  #include <stdarg.h>
  #include <stdio.h>
-@@ -501,26 +502,114 @@ Flush(D3D10DDI_HDEVICE hDevice)  // IN
+@@ -501,26 +502,115 @@ Flush(D3D10DDI_HDEVICE hDevice)  // IN
   */
  
  /*
@@ -33,7 +33,8 @@ index 5ac09f0..426a12e 100644
 + * too. Then every member of it, the typeless one first, answers one quality
 + * level at 1x and at 4x (CheckMultisampleQualityLevels), and the members
 + * that are render or depth targets say multisample render target
-+ * (CheckFormatSupport; a depth format with no render target bit).
++ * (CheckFormatSupport; a depth format with no render target bit, and the
++ * depth formats' single-plane views not at all).
 + *
 + * 0066 answered format by format, by the gallium translation, and the D3D11
 + * runtime refused the device in msedge.exe (0x887A0020,
@@ -142,7 +143,7 @@ index 5ac09f0..426a12e 100644
  }
  
  /*
-@@ -606,12 +695,7 @@ CheckFormatSupportImpl(Device *pDevice,         // IN
+@@ -606,12 +696,7 @@ CheckFormatSupportImpl(Device *pDevice,         // IN
         * target, and CheckMultisampleQualityLevels below offers one sample
         * only, so nothing ever renders multisampled; with 4 it offers 4x too.
         */
@@ -156,7 +157,7 @@ index 5ac09f0..426a12e 100644
  
  #if SUPPORT_MSAA
        if (screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 4, 4,
-@@ -632,6 +716,17 @@ CheckFormatSupportImpl(Device *pDevice,         // IN
+@@ -632,6 +717,26 @@ CheckFormatSupportImpl(Device *pDevice,         // IN
        }
  #endif
     }
@@ -164,9 +165,18 @@ index 5ac09f0..426a12e 100644
 +   /* The family's answer (MsaaFormat above), the same one
 +    * CheckMultisampleQualityLevels gives, on the members that are render or
 +    * depth targets: depth formats are multisample targets with no render
-+    * target bit. */
++    * target bit. The views that read one plane of a depth format are
++    * shader resources only: they may say multisample load, never
++    * multisample render target. The runtime refused the device on
++    * R32_FLOAT_X8X24_TYPELESS answering 0x19 (CI, 2311bc2), at that
++    * CheckFormatSupport and before asking anything else. */
 +   if (MsaaFormat(pDevice, Format) && MsaaTarget(screen, Format, 4)) {
-+      *pFormatCaps |= D3D10_DDI_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET;
++      bool view_only = Format == DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS ||
++                       Format == DXGI_FORMAT_X32_TYPELESS_G8X24_UINT ||
++                       Format == DXGI_FORMAT_R24_UNORM_X8_TYPELESS ||
++                       Format == DXGI_FORMAT_X24_TYPELESS_G8_UINT;
++      if (!view_only)
++         *pFormatCaps |= D3D10_DDI_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET;
 +      if (screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 4, 4,
 +                                      PIPE_BIND_SAMPLER_VIEW))
 +         *pFormatCaps |= D3D10_DDI_FORMAT_SUPPORT_MULTISAMPLE_LOAD;
@@ -174,7 +184,7 @@ index 5ac09f0..426a12e 100644
  }
  
  
-@@ -655,16 +750,13 @@ CheckMultisampleQualityLevels(D3D10DDI_HDEVICE hDevice,        // IN
+@@ -655,16 +760,13 @@ CheckMultisampleQualityLevels(D3D10DDI_HDEVICE hDevice,        // IN
  {
     //LOG_ENTRYPOINT();
  
