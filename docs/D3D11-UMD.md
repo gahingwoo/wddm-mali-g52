@@ -94,6 +94,29 @@ Skia sees RGBA8 renderable, and nothing is ever rendered multisampled.
 before); 0 is the old behaviour. This is also what makes the no-code
 flag worth trying again on the current feature level.
 
+**On the board, 2026-11-21, 0064 broke DWM:** with `UmdMsaa` 1 in every
+process, dwm.exe's render thread failed at start (dwmcore.dll, exception
+0x8898008d, UCEERR_RENDERTHREADFAILURE; n=2 boots, Windows Update
+servicing on both), the logon screen spun, and `m5test perf` showed no
+flips, no renders and no UMD reports: DWM never got a working device on
+the Mali. With `UmdMsaa` 0 the desktop came (n=1). Not established which
+answer DWM's device fails on. Candidates: a format claiming multisample
+rendering with no count above one, which the runtime's format checks may
+hold inconsistent, or a format (64- and 128-bit, integer, depth) that
+Panfrost reports renderable but D3D does not allow to be multisampled.
+
+**U0b, Mesa patch 0065 (not run):** the answers are given only where they
+are needed and checked:
+- only in msedge.exe, chrome.exe, msedgewebview2.exe and d3dprobe.exe
+  (`UmdMsaa` 1 and 4); 2 and 5 give them to every process, for trying;
+- only for R8G8B8A8, B8G8R8A8 and B8G8R8X8, UNORM and SRGB;
+- one quality level at one sample for those, and only when they are
+  render targets; 4x only with `UmdMsaa` 4 or 5.
+DWM, LogonUI and everything else see the answers they had before 0064.
+d3dprobe prints the multisample bit and the quality levels at 1x to 8x
+for each format, and since it is on the list it shows whether the
+runtime still creates the device with them.
+
 **U0, the smallest change to 10_1 (Mesa patch 0063, done on this
 branch, not run):** `SUPPORT_D3D10_1 1`, with the D3D10.1 interface
 offered only where the KMD's answer allows it (`UmdDdi` 101; the default
@@ -143,7 +166,7 @@ step can be turned back without reinstalling:
 | `UmdDdi` | 100 until U0 has run, then 101, 110, 111 | 100: the D3D10.0 DDI as today (feature level 10_0); 101: the D3D10.1 DDI (10_1); 110: D3D11.0; 111: D3D11.1 |
 | `UmdDxgi12` | 0 until U3 has run | the DXGI 1.2 DDI and flip model |
 | `UmdVideo` | 0 | 0 none; 1 the video DDI with no profiles; 2 with the decoder's profiles |
-| `UmdMsaa` | 1 | 0: no multisampling, as before 0064; 1: multisample render targets at one sample (ANGLE and Skia need it); 4: also 4x, resolved on the GPU |
+| `UmdMsaa` | 1 | 0: no multisampling, as before 0064; 1: the 8-bit RGBA/BGRA formats are multisample render targets at one sample, in the browsers and d3dprobe only (0065); 2: the same in every process; 4 and 5: as 1 and 2, with 4x too, resolved on the GPU |
 | `UmdFeatureLevel` | 0xa000 (10_0) | the most the UMD reports |
 
 A KMD that does not answer the query means `UmdDdi` 100, so a new UMD on

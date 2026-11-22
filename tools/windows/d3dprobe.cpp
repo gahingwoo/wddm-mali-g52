@@ -47,15 +47,28 @@ static void formats(ID3D11Device *dev)
         { DXGI_FORMAT_R8_UNORM, "R8" },
         { DXGI_FORMAT_R8G8_UNORM, "R8G8" },
         { DXGI_FORMAT_B8G8R8A8_UNORM, "B8G8R8A8" },
+        { DXGI_FORMAT_R8G8B8A8_UNORM, "R8G8B8A8" },
         { DXGI_FORMAT_R10G10B10A2_UNORM, "R10G10B10A2" },
     };
     for (const auto &e : list) {
         UINT s = 0;
         HRESULT hr = dev->CheckFormatSupport(e.f, &s);
-        printf("    format %-12s %s (0x%08x)%s%s%s\n", e.n, SUCCEEDED(hr) ? "supported" : "not supported",
+        printf("    format %-12s %s (0x%08x)%s%s%s%s\n", e.n, SUCCEEDED(hr) ? "supported" : "not supported",
                s, (s & D3D11_FORMAT_SUPPORT_TEXTURE2D) ? " texture2d" : "",
                (s & D3D11_FORMAT_SUPPORT_RENDER_TARGET) ? " render-target" : "",
-               (s & D3D11_FORMAT_SUPPORT_SHADER_SAMPLE) ? " sample" : "");
+               (s & D3D11_FORMAT_SUPPORT_SHADER_SAMPLE) ? " sample" : "",
+               (s & D3D11_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET) ? " ms-render-target" : "");
+        /* What ANGLE builds its sample counts from (and Skia, through it,
+         * whether RGBA8 is renderable at all). */
+        if (s & D3D11_FORMAT_SUPPORT_RENDER_TARGET) {
+            printf("      quality levels:");
+            for (UINT n = 1; n <= 8; n *= 2) {
+                UINT q = 0;
+                HRESULT qh = dev->CheckMultisampleQualityLevels(e.f, n, &q);
+                printf(" %ux %u%s", n, q, SUCCEEDED(qh) ? "" : "(failed)");
+            }
+            printf("\n");
+        }
     }
 }
 

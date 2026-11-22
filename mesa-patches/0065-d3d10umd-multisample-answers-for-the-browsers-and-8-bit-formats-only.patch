@@ -1,0 +1,127 @@
+diff --git a/src/gallium/frontends/d3d10umd/Adapter.cpp b/src/gallium/frontends/d3d10umd/Adapter.cpp
+index 8231393..45756da 100644
+--- a/src/gallium/frontends/d3d10umd/Adapter.cpp
++++ b/src/gallium/frontends/d3d10umd/Adapter.cpp
+@@ -40,6 +40,7 @@
+ #include "util/u_memory.h"
+ 
+ #include <stddef.h>
++#include <string.h>
+ 
+ 
+ EXTERN_C struct pipe_screen *
+@@ -97,14 +98,54 @@ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL)
+          ddi = info.Ddi >= 101 ? 101 : 100;
+       if (pMsaa && SUCCEEDED(hr) && info.Magic == MALI_UMD_INFO_MAGIC &&
+           info.Size >= offsetof(MaliUmdInfo, Msaa) + sizeof(UINT))
+-         *pMsaa = info.Msaa >= 4 ? 4 : info.Msaa;
+-      DebugPrintf("OpenAdapter: KMD adapter info 0x%08lx, magic 0x%08x, UmdDdi %u, UmdMsaa %u:"
+-                  " offering D3D10.%u\n", (unsigned long)hr, info.Magic, info.Ddi,
+-                  info.Msaa, ddi == 101 ? 1 : 0);
++         *pMsaa = EffectiveMsaa(info.Msaa);
++      DebugPrintf("OpenAdapter: KMD adapter info 0x%08lx, magic 0x%08x, UmdDdi %u, UmdMsaa %u"
++                  " (here %u): offering D3D10.%u\n", (unsigned long)hr, info.Magic, info.Ddi,
++                  info.Msaa, pMsaa ? *pMsaa : 0, ddi == 101 ? 1 : 0);
+    }
+    return ddi;
+ }
+ 
++/*
++ * Whether this process gets the multisample answers (Device.cpp,
++ * CheckFormatSupport). With them on in every process, dwm.exe's render
++ * thread failed at start (0x8898008d, TaishanPi 3M, 2026-11-21) and the
++ * logon screen never came. Only ANGLE needs them, so by default they are
++ * for the browsers and d3dprobe alone: UmdMsaa 1 and 4 apply to these,
++ * 2 and 5 to every process.
++ */
++static bool
++IsMsaaProcess(void)
++{
++   static const char *const names[] = {
++      "msedge.exe", "chrome.exe", "msedgewebview2.exe", "d3dprobe.exe",
++   };
++   char path[MAX_PATH];
++   DWORD n = GetModuleFileNameA(NULL, path, sizeof path);
++   const char *base = path;
++
++   if (n == 0 || n >= sizeof path)
++      return false;
++   for (const char *c = path; *c; c++)
++      if (*c == '\\' || *c == '/')
++         base = c + 1;
++   for (unsigned i = 0; i < ARRAYSIZE(names); i++)
++      if (_stricmp(base, names[i]) == 0)
++         return true;
++   return false;
++}
++
++static unsigned
++EffectiveMsaa(unsigned setting)
++{
++   bool all = setting == 2 || setting == 5;
++   unsigned samples = setting >= 4 ? 4 : (setting ? 1 : 0);
++
++   if (!samples || !(all || IsMsaaProcess()))
++      return 0;
++   return samples;
++}
++
+ static bool
+ IsD3D10_1Interface(UINT Interface)
+ {
+diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
+index c43c200..1c37154 100644
+--- a/src/gallium/frontends/d3d10umd/Device.cpp
++++ b/src/gallium/frontends/d3d10umd/Device.cpp
+@@ -496,6 +496,31 @@ Flush(D3D10DDI_HDEVICE hDevice)  // IN
+  * ----------------------------------------------------------------------
+  */
+ 
++/*
++ * The formats that answer as multisample render targets when the device's
++ * msaa is on (Adapter.cpp, EffectiveMsaa): the 8-bit RGBA and BGRA ones,
++ * which are what ANGLE's RGBA8 and BGRA8 render to, and nothing else, so
++ * that no format claims what it was not checked for. Each answers one
++ * quality level at one sample, and at 4x only where the driver renders it.
++ */
++static bool
++MsaaFormat(const Device *pDevice, DXGI_FORMAT Format)
++{
++   if (pDevice->msaa == 0)
++      return false;
++   switch (Format) {
++   case DXGI_FORMAT_R8G8B8A8_UNORM:
++   case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
++   case DXGI_FORMAT_B8G8R8A8_UNORM:
++   case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
++   case DXGI_FORMAT_B8G8R8X8_UNORM:
++   case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
++      return true;
++   default:
++      return false;
++   }
++}
++
+ void APIENTRY
+ CheckFormatSupport(D3D10DDI_HDEVICE hDevice, // IN
+                    DXGI_FORMAT Format,       // IN
+@@ -539,7 +564,7 @@ CheckFormatSupport(D3D10DDI_HDEVICE hDevice, // IN
+        * target, and CheckMultisampleQualityLevels below offers one sample
+        * only, so nothing ever renders multisampled; with 4 it offers 4x too.
+        */
+-      if (pDevice->msaa >= 1) {
++      if (MsaaFormat(pDevice, Format)) {
+          *pFormatCaps |= D3D10_DDI_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET;
+          if (pDevice->msaa >= 4 &&
+              screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 4, 4,
+@@ -597,7 +622,9 @@ CheckMultisampleQualityLevels(D3D10DDI_HDEVICE hDevice,        // IN
+    enum pipe_format format = FormatTranslate(Format, false);
+ 
+    *pNumQualityLevels = 0;
+-   if (pDevice->msaa == 0 || format == PIPE_FORMAT_NONE)
++   if (!MsaaFormat(pDevice, Format) || format == PIPE_FORMAT_NONE ||
++       !screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 0, 0,
++                                    PIPE_BIND_RENDER_TARGET))
+       return;
+    if (SampleCount == 1) {
+       *pNumQualityLevels = 1;
