@@ -355,11 +355,64 @@ jobs:
             if ($gout -notmatch "(?m)^UNSUPPORTED +$n ") { throw "gsso.exe step $n was not UNSUPPORTED on Panfrost" }
           }
 
+      - name: The runtime's view of the multisample answers (d3dprobe, MALIKM_FAKE)
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          # The D3D11 runtime checks the UMD's format answers while it creates
+          # a device, and on the TaishanPi 3M refused it (0x887A0020) in
+          # msedge.exe, where the UMD gives multisample answers, but not in
+          # other processes. Here the runtime on the runner checks Panfrost's
+          # answers for the emulated G52, through the software driver path:
+          # D3D10UMD_UMDDDI and D3D10UMD_UMDMSAA stand in for maliwddm's
+          # UmdDdi and UmdMsaa (mesa-patches/0067).
+          $env:GALLIUM_DRIVER = 'panfrost'
+          $env:MALIKM_FAKE = '2'
+          $env:D3D10UMD_UMDDDI = '101'
+          $env:D3D10UMD_UMDMSAA = '1'
+          New-Item -ItemType Directory -Force C:\mali\log | Out-Null
+          cl /nologo /W4 /WX /O2 /EHsc tools\windows\d3dprobe.cpp d3d11.lib dxgi.lib user32.lib /Fe:out\d3dprobe.exe
+          if ($LASTEXITCODE) { throw 'd3dprobe build failed' }
+          Copy-Item out\d3dprobe.exe out\msedge.exe
+          Copy-Item out\d3dprobe.exe out\plainprobe.exe
+          $dll = (Resolve-Path out\libgallium_d3d10.dll).Path
+          $codes = @{}
+          foreach ($exe in 'msedge', 'plainprobe') {
+            $p = Start-Process -FilePath (Resolve-Path out\$exe.exe).Path -ArgumentList "`"$dll`"" -NoNewWindow -PassThru `
+                   -RedirectStandardOutput "d3dprobe-$exe.txt" -RedirectStandardError "d3dprobe-$exe.err"
+            if (-not $p.WaitForExit(240000)) { Stop-Process -Id $p.Id -Force; $codes[$exe] = 'hang' } else { $codes[$exe] = $p.ExitCode }
+            Write-Host "===== $exe.exe: exit $($codes[$exe])"
+            Get-Content "d3dprobe-$exe.txt" -ErrorAction SilentlyContinue
+          }
+          # The reference: what the runner's own adapters (WARP, the basic
+          # render driver) answer, printed only; the UMD is not loaded here.
+          Copy-Item out\d3dprobe.exe out\warpref.exe
+          $p = Start-Process -FilePath (Resolve-Path out\warpref.exe).Path -NoNewWindow -PassThru `
+                 -RedirectStandardOutput d3dprobe-warp.txt -RedirectStandardError d3dprobe-warp.err
+          if (-not $p.WaitForExit(240000)) { Stop-Process -Id $p.Id -Force }
+          Write-Host "===== warpref.exe (the runner's adapters, for reference)"
+          Get-Content d3dprobe-warp.txt -ErrorAction SilentlyContinue
+          Get-ChildItem C:\mali\log | ForEach-Object {
+            Write-Host "===== UMD log $($_.Name): format answers"
+            Copy-Item $_.FullName "umdlog-$($_.Name)"
+            Get-Content $_.FullName | Select-String 'caps:|OpenAdapter|CreateDevice' | Select-Object -First 400 | ForEach-Object { $_.Line }
+          }
+          $edge = (Get-Content d3dprobe-msedge.txt -ErrorAction SilentlyContinue) -join "`n"
+          if ($codes['plainprobe'] -ne 0) { throw "the device without multisample answers was refused ($($codes['plainprobe']))" }
+          if ($codes['msedge'] -ne 0) { throw "the device with the multisample answers (msedge.exe) was refused ($($codes['msedge']))" }
+          if ($edge -notmatch 'feature level 10_1') { throw 'msedge.exe did not get feature level 10_1' }
+          if ($edge -notmatch 'MSAA consistency: 0 disagreement') { throw 'msedge.exe: the multisample answers disagree' }
+          if ($edge -notmatch '(?m)^ +28 R8G8B8A8_UNORM .* ms-rt.* q 1 0 1 0') { throw 'msedge.exe: R8G8B8A8_UNORM is not a multisample render target at 1x and 4x' }
+          if ($edge -notmatch '(?m)^ +87 B8G8R8A8_UNORM .* ms-rt.* q 1 0 1 0') { throw 'msedge.exe: B8G8R8A8_UNORM is not a multisample render target at 1x and 4x' }
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: panfrost-fake-trace
           path: |
+            d3dprobe-*.txt
+            d3dprobe-*.err
+            umdlog-*
             fake.*
             fake-*.txt
             present.*

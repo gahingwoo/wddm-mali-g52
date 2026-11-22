@@ -1,0 +1,161 @@
+diff --git a/src/gallium/frontends/d3d10umd/Adapter.cpp b/src/gallium/frontends/d3d10umd/Adapter.cpp
+index bd21fe1..62da1c1 100644
+--- a/src/gallium/frontends/d3d10umd/Adapter.cpp
++++ b/src/gallium/frontends/d3d10umd/Adapter.cpp
+@@ -37,6 +37,7 @@
+ 
+ #include "Debug.h"
+ 
++#include "util/u_debug.h"
+ #include "util/u_memory.h"
+ 
+ #include <stddef.h>
+@@ -89,6 +90,7 @@ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL)
+    MaliUmdInfo info = {};
+    D3DDDICB_QUERYADAPTERINFO q = {};
+    unsigned ddi = 100;
++   bool kmd = false;
+ 
+    if (pMsaa)
+       *pMsaa = 0;
+@@ -97,8 +99,10 @@ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL)
+       q.pPrivateDriverData = &info;
+       q.PrivateDriverDataSize = sizeof info;
+       HRESULT hr = pOpenData->pAdapterCallbacks->pfnQueryAdapterInfoCb(pOpenData->hRTAdapter.handle, &q);
+-      if (SUCCEEDED(hr) && info.Magic == MALI_UMD_INFO_MAGIC && info.Size >= 3 * sizeof(UINT))
++      if (SUCCEEDED(hr) && info.Magic == MALI_UMD_INFO_MAGIC && info.Size >= 3 * sizeof(UINT)) {
++         kmd = true;
+          ddi = info.Ddi >= 101 ? 101 : 100;
++      }
+       if (pMsaa && SUCCEEDED(hr) && info.Magic == MALI_UMD_INFO_MAGIC &&
+           info.Size >= offsetof(MaliUmdInfo, Msaa) + sizeof(UINT))
+          *pMsaa = EffectiveMsaa(info.Msaa);
+@@ -106,6 +110,20 @@ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL)
+                   " (here %u): offering D3D10.%u\n", (unsigned long)hr, info.Magic, info.Ddi,
+                   info.Msaa, pMsaa ? *pMsaa : 0, ddi == 101 ? 1 : 0);
+    }
++
++   /*
++    * No maliwddm behind this adapter: the software driver the D3D runtime
++    * loads by path (D3D_DRIVER_TYPE_SOFTWARE), on a CI runner with
++    * MALIKM_FAKE. There D3D10UMD_UMDDDI and D3D10UMD_UMDMSAA stand in for
++    * the Device Parameters values, so the runtime's checks of these answers
++    * can be run without a board. Never read when the KMD answered.
++    */
++   if (!kmd) {
++      if (debug_get_num_option("D3D10UMD_UMDDDI", 100) >= 101)
++         ddi = 101;
++      if (pMsaa)
++         *pMsaa = EffectiveMsaa((unsigned)debug_get_num_option("D3D10UMD_UMDMSAA", 0));
++   }
+    return ddi;
+ }
+ 
+diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
+index 8e50047..5ac09f0 100644
+--- a/src/gallium/frontends/d3d10umd/Device.cpp
++++ b/src/gallium/frontends/d3d10umd/Device.cpp
+@@ -48,6 +48,9 @@
+ #include "util/u_framebuffer.h"
+ #include "util/u_debug.h"
+ 
++#include <stdarg.h>
++#include <stdio.h>
++
+ 
+ EXTERN_C struct pipe_screen *
+ d3d10_create_screen(void);
+@@ -163,6 +166,7 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+    pDevice->screen = screen;
+    pDevice->pipe = pipe;
+    pDevice->msaa = pAdapter->msaa;
++   pDevice->caps_logged = 0;
+    pDevice->cso = cso_create_context(pipe, CSO_NO_VBUF);
+ 
+    /* D3D10UMD_NO_GS=1 takes the path Panfrost takes on a screen that has
+@@ -519,16 +523,56 @@ MsaaFormat(const Device *pDevice, enum pipe_format format)
+                                                PIPE_BIND_RENDER_TARGET);
+ }
+ 
++/*
++ * Every answer the runtime got from CheckFormatSupport and
++ * CheckMultisampleQualityLevels, the first CAPS_LOG_MAX of each device, in
++ * the UMD log (C:\mali\log). The D3D11 runtime asks for them while it
++ * creates the device and may refuse the device for what it was told
++ * (DXGI_ERROR_DRIVER_INTERNAL_ERROR); then no application can ask again,
++ * and this is the only record of the answers.
++ */
++#define CAPS_LOG_MAX 1024
++
++static void
++LogCaps(Device *pDevice, const char *fmt, ...)
++{
++   char line[160];
++   va_list ap;
++
++   if (pDevice->caps_logged >= CAPS_LOG_MAX)
++      return;
++   if (++pDevice->caps_logged == CAPS_LOG_MAX) {
++      DebugPrintf("caps: %u answers logged, no more for this device\n", CAPS_LOG_MAX);
++      return;
++   }
++   va_start(ap, fmt);
++   vsnprintf(line, sizeof line, fmt, ap);
++   va_end(ap);
++   DebugPrintf("%s", line);
++}
++
++static void CheckFormatSupportImpl(Device *pDevice, DXGI_FORMAT Format, UINT *pFormatCaps);
++
+ void APIENTRY
+ CheckFormatSupport(D3D10DDI_HDEVICE hDevice, // IN
+                    DXGI_FORMAT Format,       // IN
+                    __out UINT *pFormatCaps)  // OUT
++{
++   Device *pDevice = CastDevice(hDevice);
++
++   CheckFormatSupportImpl(pDevice, Format, pFormatCaps);
++   LogCaps(pDevice, "caps: CheckFormatSupport %u -> 0x%08x (msaa %u)\n", (unsigned)Format,
++           *pFormatCaps, pDevice->msaa);
++}
++
++static void
++CheckFormatSupportImpl(Device *pDevice,         // IN
++                       DXGI_FORMAT Format,      // IN
++                       UINT *pFormatCaps)       // OUT
+ {
+    //LOG_ENTRYPOINT();
+ 
+-   Device *pDevice = CastDevice(hDevice);
+-   struct pipe_context *pipe = CastPipeContext(hDevice);
+-   struct pipe_screen *screen = pipe->screen;
++   struct pipe_screen *screen = pDevice->screen;
+ 
+    *pFormatCaps = 0;
+ 
+@@ -620,10 +664,10 @@ CheckMultisampleQualityLevels(D3D10DDI_HDEVICE hDevice,        // IN
+ 
+    *pNumQualityLevels = 0;
+    (void)screen;
+-   if (!MsaaFormat(pDevice, format))
+-      return;
+-   if (SampleCount == 1 || SampleCount == 4)
++   if (MsaaFormat(pDevice, format) && (SampleCount == 1 || SampleCount == 4))
+       *pNumQualityLevels = 1;
++   LogCaps(pDevice, "caps: CheckMultisampleQualityLevels %u x%u -> %u\n", (unsigned)Format,
++           SampleCount, *pNumQualityLevels);
+ }
+ 
+ 
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index 45edae4..e99af43 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -84,6 +84,7 @@ struct Device
+    struct pipe_screen *screen;
+    struct pipe_context *pipe;
+    unsigned msaa;               /* the adapter's (Adapter::msaa) */
++   unsigned caps_logged;        /* format answers logged so far (Device.cpp, LogCaps) */
+ 
+    struct cso_context *cso;
+    struct pipe_framebuffer_state fb;

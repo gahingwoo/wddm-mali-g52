@@ -15,7 +15,22 @@
  *     the video DDI), which hardware decode in Edge needs;
  *   - format support a video path uses (NV12, R8, R8G8, B8G8R8A8);
  *   - whether DXGI makes a flip-model swap chain on it (FLIP_SEQUENTIAL),
- *     which lets DWM compose an application's buffers without a copy.
+ *     which lets DWM compose an application's buffers without a copy;
+ *   - when the device does not come up with the full list of feature
+ *     levels, the result at 10_1 and at 10_0 alone;
+ *   - every format's support bits and quality levels at 1x, 2x, 4x and 8x
+ *     ("format table"), and where they disagree with each other or within
+ *     a typeless family ("MSAA CONSISTENCY"), which the runtime may refuse
+ *     a device for.
+ *
+ * The UMD gives its multisample answers only to some process names
+ * (msedge.exe, chrome.exe, msedgewebview2.exe, d3dprobe.exe): run this
+ * binary under such a name and under another one to see both sets.
+ *
+ *   d3dprobe            every adapter DXGI lists, then the default device
+ *   d3dprobe <dll>      only <dll>, as a D3D_DRIVER_TYPE_SOFTWARE driver
+ *                       (Mesa's d3d10umd on a CI runner); exit status 3
+ *                       when the runtime does not create that device.
  *
  * Exit status 0 when it ran; it changes nothing on the system.
  *
@@ -70,6 +85,124 @@ static void formats(ID3D11Device *dev)
             printf("\n");
         }
     }
+}
+
+/* The DXGI formats up to B8G8R8X8_UNORM_SRGB, B4G4R4A4 and the video ones
+ * a browser uses; the number is the DXGI_FORMAT value. */
+static const struct { DXGI_FORMAT f; const char *n; } all_formats[] = {
+#define F(x) { DXGI_FORMAT_##x, #x }
+    F(R32G32B32A32_TYPELESS), F(R32G32B32A32_FLOAT), F(R32G32B32A32_UINT), F(R32G32B32A32_SINT),
+    F(R32G32B32_TYPELESS), F(R32G32B32_FLOAT), F(R32G32B32_UINT), F(R32G32B32_SINT),
+    F(R16G16B16A16_TYPELESS), F(R16G16B16A16_FLOAT), F(R16G16B16A16_UNORM), F(R16G16B16A16_UINT),
+    F(R16G16B16A16_SNORM), F(R16G16B16A16_SINT),
+    F(R32G32_TYPELESS), F(R32G32_FLOAT), F(R32G32_UINT), F(R32G32_SINT),
+    F(R32G8X24_TYPELESS), F(D32_FLOAT_S8X24_UINT), F(R32_FLOAT_X8X24_TYPELESS), F(X32_TYPELESS_G8X24_UINT),
+    F(R10G10B10A2_TYPELESS), F(R10G10B10A2_UNORM), F(R10G10B10A2_UINT), F(R11G11B10_FLOAT),
+    F(R8G8B8A8_TYPELESS), F(R8G8B8A8_UNORM), F(R8G8B8A8_UNORM_SRGB), F(R8G8B8A8_UINT),
+    F(R8G8B8A8_SNORM), F(R8G8B8A8_SINT),
+    F(R16G16_TYPELESS), F(R16G16_FLOAT), F(R16G16_UNORM), F(R16G16_UINT), F(R16G16_SNORM), F(R16G16_SINT),
+    F(R32_TYPELESS), F(D32_FLOAT), F(R32_FLOAT), F(R32_UINT), F(R32_SINT),
+    F(R24G8_TYPELESS), F(D24_UNORM_S8_UINT), F(R24_UNORM_X8_TYPELESS), F(X24_TYPELESS_G8_UINT),
+    F(R8G8_TYPELESS), F(R8G8_UNORM), F(R8G8_UINT), F(R8G8_SNORM), F(R8G8_SINT),
+    F(R16_TYPELESS), F(R16_FLOAT), F(D16_UNORM), F(R16_UNORM), F(R16_UINT), F(R16_SNORM), F(R16_SINT),
+    F(R8_TYPELESS), F(R8_UNORM), F(R8_UINT), F(R8_SNORM), F(R8_SINT), F(A8_UNORM), F(R1_UNORM),
+    F(R9G9B9E5_SHAREDEXP), F(R8G8_B8G8_UNORM), F(G8R8_G8B8_UNORM),
+    F(BC1_TYPELESS), F(BC1_UNORM), F(BC1_UNORM_SRGB), F(BC2_TYPELESS), F(BC2_UNORM), F(BC2_UNORM_SRGB),
+    F(BC3_TYPELESS), F(BC3_UNORM), F(BC3_UNORM_SRGB), F(BC4_TYPELESS), F(BC4_UNORM), F(BC4_SNORM),
+    F(BC5_TYPELESS), F(BC5_UNORM), F(BC5_SNORM), F(B5G6R5_UNORM), F(B5G5R5A1_UNORM),
+    F(B8G8R8A8_UNORM), F(B8G8R8X8_UNORM), F(R10G10B10_XR_BIAS_A2_UNORM), F(B8G8R8A8_TYPELESS),
+    F(B8G8R8A8_UNORM_SRGB), F(B8G8R8X8_TYPELESS), F(B8G8R8X8_UNORM_SRGB), F(B4G4R4A4_UNORM),
+    F(NV12), F(P010), F(YUY2),
+#undef F
+};
+
+/* The typeless family (cast set) a format belongs to, by its first member;
+ * 0 for a format that is alone in its own. */
+static UINT family(DXGI_FORMAT f)
+{
+    static const UINT first[] = { 1, 5, 9, 15, 19, 23, 27, 33, 39, 44, 48, 53, 60 };
+    static const UINT last[] = { 4, 8, 14, 18, 22, 25, 32, 38, 43, 47, 52, 59, 64 };
+    for (UINT i = 0; i < ARRAYSIZE(first); i++)
+        if ((UINT)f >= first[i] && (UINT)f <= last[i])
+            return first[i];
+    switch (f) {
+    case DXGI_FORMAT_B8G8R8A8_UNORM: case DXGI_FORMAT_B8G8R8A8_TYPELESS: case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+        return DXGI_FORMAT_B8G8R8A8_TYPELESS;
+    case DXGI_FORMAT_B8G8R8X8_UNORM: case DXGI_FORMAT_B8G8R8X8_TYPELESS: case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+        return DXGI_FORMAT_B8G8R8X8_TYPELESS;
+    default:
+        return 0;
+    }
+}
+
+/*
+ * The whole table, and what in it does not agree: on a render or depth
+ * target format, a sample count above one with quality levels but no
+ * multisample render target bit, or the bit with no such count; and any
+ * member of a typeless family (but the views of one plane of a depth
+ * format) whose quality levels above 1x are not the typeless format's. The second is what the D3D11 runtime refuses a device for
+ * (0x887A0020): it asks the typeless format first and stops at the first
+ * member that answers otherwise (mesa-patches/0068). Returns the number of
+ * disagreements.
+ */
+static unsigned format_table(ID3D11Device *dev)
+{
+    static const UINT counts[] = { 1, 2, 4, 8 };
+    UINT sup[ARRAYSIZE(all_formats)], q[ARRAYSIZE(all_formats)][ARRAYSIZE(counts)];
+    unsigned bad = 0;
+
+    printf("    format table (support bits; quality levels at 1x 2x 4x 8x):\n");
+    for (UINT i = 0; i < ARRAYSIZE(all_formats); i++) {
+        DXGI_FORMAT f = all_formats[i].f;
+        sup[i] = 0;
+        if (FAILED(dev->CheckFormatSupport(f, &sup[i])))
+            sup[i] = 0;
+        for (UINT c = 0; c < ARRAYSIZE(counts); c++) {
+            q[i][c] = 0;
+            if (FAILED(dev->CheckMultisampleQualityLevels(f, counts[c], &q[i][c])))
+                q[i][c] = 0;
+        }
+        printf("      %3u %-26s 0x%08x %s%s%s%s%s%s q %u %u %u %u\n", (UINT)f, all_formats[i].n, sup[i],
+               (sup[i] & D3D11_FORMAT_SUPPORT_RENDER_TARGET) ? " rt" : "",
+               (sup[i] & D3D11_FORMAT_SUPPORT_DEPTH_STENCIL) ? " ds" : "",
+               (sup[i] & D3D11_FORMAT_SUPPORT_SHADER_SAMPLE) ? " sample" : "",
+               (sup[i] & D3D11_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET) ? " ms-rt" : "",
+               (sup[i] & D3D11_FORMAT_SUPPORT_MULTISAMPLE_RESOLVE) ? " ms-resolve" : "",
+               (sup[i] & D3D11_FORMAT_SUPPORT_MULTISAMPLE_LOAD) ? " ms-load" : "",
+               q[i][0], q[i][1], q[i][2], q[i][3]);
+    }
+    for (UINT i = 0; i < ARRAYSIZE(all_formats); i++) {
+        bool above = q[i][1] || q[i][2] || q[i][3];
+        bool msrt = (sup[i] & D3D11_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET) != 0;
+        UINT kind = D3D11_FORMAT_SUPPORT_RENDER_TARGET | D3D11_FORMAT_SUPPORT_DEPTH_STENCIL;
+        if ((sup[i] & kind) && above != msrt) {
+            printf("    MSAA CONSISTENCY: %s: %s\n", all_formats[i].n,
+                   msrt ? "multisample render target bit, but no sample count above 1"
+                        : "quality levels above 1x, but no multisample render target bit");
+            bad++;
+        }
+        UINT fam = family(all_formats[i].f);
+        /* The views of one plane of a depth format answer no sample count
+         * above 1x, whatever their typeless format says. */
+        DXGI_FORMAT f = all_formats[i].f;
+        if (!fam || (UINT)f == fam || f == DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS ||
+            f == DXGI_FORMAT_X32_TYPELESS_G8X24_UINT || f == DXGI_FORMAT_R24_UNORM_X8_TYPELESS ||
+            f == DXGI_FORMAT_X24_TYPELESS_G8_UINT)
+            continue;
+        for (UINT j = 0; j < ARRAYSIZE(all_formats); j++) {
+            if ((UINT)all_formats[j].f != fam)
+                continue;
+            /* 1x is the runtime's own answer; above it the driver's. */
+            for (UINT c = 1; c < ARRAYSIZE(counts); c++)
+                if (q[i][c] != q[j][c]) {
+                    printf("    MSAA CONSISTENCY: %ux: %s %u, its typeless %s %u\n", counts[c],
+                           all_formats[i].n, q[i][c], all_formats[j].n, q[j][c]);
+                    bad++;
+                }
+        }
+    }
+    printf("    MSAA consistency: %u disagreement(s)\n", bad);
+    return bad;
 }
 
 static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
@@ -128,7 +261,19 @@ out:
     if (xd) xd->Release();
 }
 
-static void probe(IDXGIAdapter1 *adapter, const char *label)
+/* D3D11CreateDevice on an adapter, the default hardware device (adapter
+ * null, sw null), or a software driver DLL (sw). */
+static HRESULT create(IDXGIAdapter1 *adapter, HMODULE sw, const D3D_FEATURE_LEVEL *levels, UINT n,
+                      ID3D11Device **dev, D3D_FEATURE_LEVEL *got, ID3D11DeviceContext **ctx)
+{
+    D3D_DRIVER_TYPE type = adapter ? D3D_DRIVER_TYPE_UNKNOWN : sw ? D3D_DRIVER_TYPE_SOFTWARE
+                                                                  : D3D_DRIVER_TYPE_HARDWARE;
+    return D3D11CreateDevice(adapter, type, sw, D3D11_CREATE_DEVICE_BGRA_SUPPORT, levels, n,
+                             D3D11_SDK_VERSION, dev, got, ctx);
+}
+
+/* Returns the D3D11CreateDevice result with every feature level offered. */
+static HRESULT probe(IDXGIAdapter1 *adapter, const char *label, HMODULE sw = nullptr)
 {
     static const D3D_FEATURE_LEVEL levels[] = {
         D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0,
@@ -139,17 +284,24 @@ static void probe(IDXGIAdapter1 *adapter, const char *label)
     D3D_FEATURE_LEVEL got = (D3D_FEATURE_LEVEL)0;
     HRESULT hr;
 
-    hr = D3D11CreateDevice(adapter, adapter ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE, nullptr,
-                           D3D11_CREATE_DEVICE_BGRA_SUPPORT, levels, ARRAYSIZE(levels), D3D11_SDK_VERSION,
-                           &dev, &got, &ctx);
+    hr = create(adapter, sw, levels, ARRAYSIZE(levels), &dev, &got, &ctx);
     if (hr == E_INVALIDARG) /* a runtime that does not know 11_1 */
-        hr = D3D11CreateDevice(adapter, adapter ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE, nullptr,
-                               D3D11_CREATE_DEVICE_BGRA_SUPPORT, levels + 1, ARRAYSIZE(levels) - 1,
-                               D3D11_SDK_VERSION, &dev, &got, &ctx);
+        hr = create(adapter, sw, levels + 1, ARRAYSIZE(levels) - 1, &dev, &got, &ctx);
     printf("  %s: D3D11CreateDevice 0x%08lx, feature level %s\n", label, (unsigned long)hr,
            SUCCEEDED(hr) ? fl_name(got) : "-");
-    if (FAILED(hr))
-        return;
+    if (FAILED(hr)) {
+        /* Which feature level the runtime refuses: each alone. */
+        for (UINT i = 2; i < 4; i++) {
+            ID3D11Device *d = nullptr;
+            ID3D11DeviceContext *c = nullptr;
+            D3D_FEATURE_LEVEL g;
+            HRESULT h = create(adapter, sw, &levels[i], 1, &d, &g, &c);
+            printf("    feature level %s alone: 0x%08lx\n", fl_name(levels[i]), (unsigned long)h);
+            if (c) c->Release();
+            if (d) d->Release();
+        }
+        return hr;
+    }
     if (!adapter) {
         /* Which adapter the default device landed on. */
         IDXGIDevice *xd = nullptr;
@@ -194,15 +346,31 @@ static void probe(IDXGIAdapter1 *adapter, const char *label)
                    t.DriverCommandLists);
     }
     formats(dev);
+    format_table(dev);
     flip_model(dev);
     ctx->Release();
     dev->Release();
+    return hr;
 }
 
-int main()
+int main(int argc, char **argv)
 {
     IDXGIFactory1 *f = nullptr;
     setvbuf(stdout, nullptr, _IONBF, 0);
+    {
+        char exe[MAX_PATH];
+        DWORD n = GetModuleFileNameA(nullptr, exe, sizeof exe);
+        printf("running as %s\n", n && n < sizeof exe ? exe : "?");
+    }
+    if (argc > 1) {
+        HMODULE sw = LoadLibraryA(argv[1]);
+        if (!sw) {
+            printf("LoadLibrary(%s): %lu\n", argv[1], GetLastError());
+            return 2;
+        }
+        printf("software driver %s:\n", argv[1]);
+        return FAILED(probe(nullptr, "software", sw)) ? 3 : 0;
+    }
     if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void **)&f))) {
         printf("no DXGI factory\n");
         return 2;
