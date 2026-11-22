@@ -222,10 +222,11 @@ call(int fd, DWORD code, void *buf, DWORD len)
  * the frontend (d3d10_gdi.c has the same numbers). Sums are per process, not
  * per device: the process that presents full frames is the one of interest.
  */
-#define PERF_STAGES 10
+#define PERF_STAGES 11
 static const char *const perf_names[PERF_STAGES] = {
    "flush", "readback-map", "readback-copy", "primary-copy", "present-cb",
    "rotate", "submit", "gpu-wait", "idle-in-present", "bo-create",
+   "bo-wait",  /* WAIT_BO on the BO's own submission's event (the shim's own stage) */
 };
 static struct {
    volatile LONG64 ticks;
@@ -956,11 +957,14 @@ wload(const struct wstate *s)
 }
 
 /* Under wddm_lock. */
+static void wmerge_flush(void);
+
 static void
 wselect(struct wdev *d)
 {
    if (d == wactive)
       return;
+   wmerge_flush();              /* a kept chain is the current device's */
    wsave(&wactive->st);
    wload(&d->st);
    wactive = d;
@@ -1006,6 +1010,9 @@ wselect_rt(void *hRTDevice)
    for (int i = 1; i < WDEV_MAX; i++) {
       if (wdevs[i].used && wdevs[i].rt_device == (HANDLE)hRTDevice) {
          wselect(&wdevs[i]);
+         /* The runtime's own calls (presents, primaries, shared surfaces)
+          * come after every chain this device has: a kept one goes now. */
+         wmerge_flush();
          return 1;
       }
    }
@@ -1296,6 +1303,9 @@ w_render(UINT commandLength, UINT allocations)
    unsigned long long t0 = malikm_perf_now();
    NTSTATUS st = w_render_inner(commandLength, allocations);
    malikm_perf_add(6 /* submit */, t0);
+   /* m5test perf: renders, the allocation-list entries they carried (in
+    * the bytes column) and the CPU time in pfnRenderCb, by process. */
+   mali_count_add(MW_UMD_SUBMIT, allocations, t0);
    wumd_report(0);
    return st;
 }
@@ -1329,6 +1339,159 @@ wdead_flush(void)
    wdead_n = 0;
 }
 
+/*
+ * One render for a batch's two chains (UmdMergeSubmit 1 in the KMD's
+ * Device Parameters, handed out as MW_UMD_FLAG_MERGE_SUBMIT; off without
+ * it, and off until the KMD's first answer).
+ *
+ * Panfrost submits a batch as two SUBMITs, the vertex/tiler chain and then
+ * the fragment chain, on the same thread and back to back
+ * (GENX(jm_submit_batch), pan_jm.c). The first carries out_sync 0 exactly
+ * when the second follows: the batch's syncobj goes on the fragment chain.
+ * Each SUBMIT is a pfnRenderCb with every live BO in its allocation list,
+ * a CPU event and a SignalSynchronizationObject2 call, and in the kernel a
+ * DMA buffer, a patch of every allocation and a SubmitCommand. maliwddm
+ * runs up to MW_MAX_COMMANDS chains of one render in order, so the two can
+ * be one render with two commands, which halves all of that.
+ *
+ * The vertex/tiler SUBMIT is kept here until the fragment one comes. Any
+ * other call into the shim first sends it on its own, as before: a wait,
+ * a map, a close, another device's call, a present, a fragment chain of
+ * another device, a vertex/tiler chain with an out_sync. So nothing ever
+ * waits on a chain that has not been submitted, and nothing is reordered
+ * against the calls of this device. Under wddm_lock.
+ */
+#define WMERGE_BOS_MAX 4096
+static struct {
+   int pending;
+   struct wdev *dev;            /* the device it belongs to: always wactive while pending */
+   uint64_t jc;
+   uint32_t n, cap;
+   uint32_t *bos;
+   uint32_t merged, alone;      /* for the log: merged pairs, kept chains sent alone */
+} wmerge;
+
+static int
+merge_on(void)
+{
+   uint32_t f = mali_count_flags();
+   /* ~0 is "no answer from the KMD yet". */
+   return f != 0xFFFFFFFFu && (f & MW_UMD_FLAG_VALID) && (f & MW_UMD_FLAG_MERGE_SUBMIT);
+}
+
+/* The chains of one render. */
+struct wchain {
+   uint64_t jc;
+   unsigned slot;               /* 0 fragment, 1 vertex/tiler/compute */
+   const uint32_t *bos;
+   uint32_t n;
+};
+
+static struct wbo *wddm_bo(uint32_t h);
+
+/* One render with these chains, in order: their BOs first, then every other
+ * live BO. Under wddm_lock. */
+static int
+wsubmit(const struct wchain *c, unsigned chains)
+{
+   static uint64_t mark;
+   uint32_t n = 0, named;
+   unsigned slow_slot = c[0].slot;
+   uint64_t slow_t0;
+   NTSTATUS st;
+
+   if ((size_t)chains * sizeof(MW_COMMAND) > wcmd_size)
+      return -MK_E2BIG;
+   mark++;
+   for (unsigned k = 0; k < chains; k++) {
+      for (uint32_t i = 0; i < c[k].n; i++) {
+         struct wbo *bo = wddm_bo(c[k].bos[i]);
+         if (!bo)
+            return -MK_ENOENT;
+         if (bo->listed == mark || bo->released)
+            continue;
+         if (n == walloc_size)
+            return -MK_E2BIG;
+         bo->listed = mark;
+         memset(&walloc[n], 0, sizeof(walloc[n]));
+         walloc[n].hAllocation = bo->h;
+         walloc[n].WriteOperation = 1;
+         n++;
+      }
+   }
+   /* Every other live BO too. Linux's panfrost maps a BO into the GPU
+    * VM when it is created, so a job may touch BOs it does not name,
+    * and Mesa relies on that. VidMm only pages in (and maliwddm only
+    * maps) what is in the allocation list, so such a job faulted: PE,
+    * 2026-10-17, two read translation faults (0x4002c3) at 0xa131000,
+    * the first byte of a 64 KiB BO, in every present.exe run. */
+   named = n;
+   for (uint32_t i = 0; i < wbo_cap && n < walloc_size; i++) {
+      struct wbo *bo = &wbo[i];
+      if (!bo->h || bo->released || bo->primary || bo->listed == mark)
+         continue;
+      bo->listed = mark;
+      memset(&walloc[n], 0, sizeof(walloc[n]));
+      walloc[n].hAllocation = bo->h;
+      walloc[n].WriteOperation = 1;
+      n++;
+   }
+   if (trace_on() && n != named)
+      fprintf(stderr, "malikm-wddm: submit names %u BOs, %u more listed for residency\n",
+              named, n - named);
+   MW_COMMAND *cmd = wcmd;
+   for (unsigned k = 0; k < chains; k++) {
+      cmd[k].Type = MW_CMD_JOB;
+      cmd[k].Slot = c[k].slot;
+      cmd[k].Jc = c[k].jc;
+   }
+   slow_t0 = mali_slow_now();
+   st = w_render((UINT)(chains * sizeof(MW_COMMAND)), n);
+   /* cmd is the old command buffer now; the runtime has handed out a new one. */
+   MALI_SLOW(slow_t0, "submit", "pfnRenderCb, %s, %u BOs named, %u listed",
+             chains > 1 ? "vertex/tiler and fragment chains merged" :
+             slow_slot ? "vertex/tiler chain" : "fragment chain", named, n);
+   if (st < 0) {
+      if (trace_on())
+         fprintf(stderr, "malikm-wddm: Render failed 0x%08lx\n", (unsigned long)st);
+      return -MK_EIO;
+   }
+   wseq++;
+   /* The BOs the jobs name are busy until they are done. Those listed
+    * only to keep them resident are not: nothing in the jobs touches them. */
+   for (unsigned k = 0; k < chains; k++) {
+      for (uint32_t i = 0; i < c[k].n; i++) {
+         struct wbo *bo = wddm_bo(c[k].bos[i]);
+         if (bo)
+            bo->used = wseq;
+      }
+   }
+   if (ddi.on && !ddi.last_unsignalled)
+      wring_push(wseq, ddi.last_event);
+   return 0;
+}
+
+/* Send a kept vertex/tiler chain on its own. Under wddm_lock, with its
+ * device current. */
+static void
+wmerge_flush(void)
+{
+   struct wchain c;
+   int r;
+
+   if (!wmerge.pending)
+      return;
+   wmerge.pending = 0;
+   c.jc = wmerge.jc;
+   c.slot = 1;
+   c.bos = wmerge.bos;
+   c.n = wmerge.n;
+   r = wsubmit(&c, 1);
+   wmerge.alone++;
+   if (r < 0)
+      DebugPrintf("merge: a kept vertex/tiler chain could not be submitted on its own: %d\n", r);
+}
+
 /* Everything submitted so far is done (one in-order queue in the KMD).
  * Why is for the slow-operation log: which caller waited. The wait is made
  * with wddm_lock held, so every other thread of the process that calls into
@@ -1337,7 +1500,10 @@ static int
 wddm_idle(const char *why)
 {
    int ret = 0;
-   unsigned long long t0 = malikm_perf_now();
+   unsigned long long t0;
+
+   wmerge_flush();              /* nothing is waited for that was never submitted */
+   t0 = malikm_perf_now();
    uint64_t slow_t0 = mali_slow_now();
    uint32_t slow_dead = wdead_n;
 
@@ -1814,6 +1980,9 @@ malikm_bind_d3dddi(HANDLE hRTAdapter, HANDLE hRTDevice, const void *pKTCallbacks
    if (dev->used) {
       /* Left over: its allocations went with the runtime's device. */
       wselect(dev);
+      /* A chain kept for merging dies with its device. */
+      if (wmerge.pending && wmerge.dev == dev)
+         wmerge.pending = 0;
       free(wbo);
       free(wdead);
       if (ddi.last_event)
@@ -1899,6 +2068,9 @@ malikm_unbind_d3dddi(void *hRTDevice)
          live += wbo[k].h != 0;
       DebugPrintf("unbind: runtime device %p, %u buffer(s) still open, %u waiting to be"
                   " destroyed\n", hRTDevice, live, (unsigned)wdead_n);
+      /* A chain kept for merging dies with its device. */
+      if (wmerge.pending && wmerge.dev == dev)
+         wmerge.pending = 0;
       free(wbo);
       free(wdead);
       if (ddi.last_event)
@@ -2338,7 +2510,9 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
          ev = wring_event_for(bo->used);
          if (ev && a->timeout_ns != MALIKM_TIMEOUT_INFINITE && a->timeout_ns < 10000000000ll) {
             DWORD ms = (DWORD)((a->timeout_ns + 999999) / 1000000);
+            unsigned long long wait_t0 = malikm_perf_now();
             DWORD w = WaitForSingleObject(ev, ms);
+            malikm_perf_add(10 /* bo-wait */, wait_t0);
             MALI_SLOW(slow_t0, "wait-bo", "its own submission %llu, timeout %lld ns, %s",
                       (unsigned long long)bo->used, (long long)a->timeout_ns,
                       w == WAIT_OBJECT_0 ? "ready" : "busy");
@@ -2354,71 +2528,63 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
    case MALIKM_NR_PANFROST_SUBMIT: {
       struct drm_panfrost_submit *a = (void *)b;
       const uint32_t *bos = (const uint32_t *)(b + a->bo_handles);
+      struct wchain c[2];
       if (!a->jc)
          return -MK_EINVAL;
       if (a->bo_handle_count > walloc_size || sizeof(MW_COMMAND) > wcmd_size)
          return -MK_E2BIG;
-      static uint64_t mark;
-      uint32_t n = 0;
-      mark++;
-      for (uint32_t i = 0; i < a->bo_handle_count; i++) {
-         struct wbo *bo = wddm_bo(bos[i]);
-         if (!bo)
-            return -MK_ENOENT;
-         if (bo->listed == mark || bo->released)
-            continue;
-         bo->listed = mark;
-         memset(&walloc[n], 0, sizeof(walloc[n]));
-         walloc[n].hAllocation = bo->h;
-         walloc[n].WriteOperation = 1;
-         n++;
+      c[1].jc = a->jc;
+      c[1].slot = (a->requirements & PANFROST_JD_REQ_FS) ? 0 : 1;
+      c[1].bos = bos;
+      c[1].n = a->bo_handle_count;
+      if (wmerge.pending) {
+         if (c[1].slot == 0 && wmerge.dev == wactive) {
+            /* The fragment chain of the kept vertex/tiler chain's batch. */
+            int r;
+            c[0].jc = wmerge.jc;
+            c[0].slot = 1;
+            c[0].bos = wmerge.bos;
+            c[0].n = wmerge.n;
+            wmerge.pending = 0;
+            r = wsubmit(c, 2);
+            if (r != -MK_E2BIG) {
+               wmerge.merged++;
+               if (wmerge.merged == 1 || (trace_on() && (wmerge.merged & 1023) == 0))
+                  DebugPrintf("merge: %u batches sent as one render, %u vertex/tiler chains alone\n",
+                              wmerge.merged, wmerge.alone);
+               return r;
+            }
+            /* Too many BOs for one list: one at a time, as before. */
+            r = wsubmit(&c[0], 1);
+            if (r < 0)
+               return r;
+            return wsubmit(&c[1], 1);
+         }
+         wmerge_flush();
       }
-      /* Every other live BO too. Linux's panfrost maps a BO into the GPU
-       * VM when it is created, so a job may touch BOs it does not name,
-       * and Mesa relies on that. VidMm only pages in (and maliwddm only
-       * maps) what is in the allocation list, so such a job faulted: PE,
-       * 2026-10-17, two read translation faults (0x4002c3) at 0xa131000,
-       * the first byte of a 64 KiB BO, in every present.exe run. */
-      uint32_t named = n;
-      for (uint32_t i = 0; i < wbo_cap && n < walloc_size; i++) {
-         struct wbo *bo = &wbo[i];
-         if (!bo->h || bo->released || bo->primary || bo->listed == mark)
-            continue;
-         bo->listed = mark;
-         memset(&walloc[n], 0, sizeof(walloc[n]));
-         walloc[n].hAllocation = bo->h;
-         walloc[n].WriteOperation = 1;
-         n++;
+      if (c[1].slot == 1 && a->out_sync == 0 && merge_on() && 2 * sizeof(MW_COMMAND) <= wcmd_size &&
+          a->bo_handle_count <= WMERGE_BOS_MAX) {
+         /* A fragment chain follows: keep this one for it. */
+         for (uint32_t i = 0; i < a->bo_handle_count; i++)
+            if (!wddm_bo(bos[i]))
+               return -MK_ENOENT;
+         if (a->bo_handle_count > wmerge.cap) {
+            uint32_t cap = a->bo_handle_count < 64 ? 64 : a->bo_handle_count;
+            uint32_t *nb = realloc(wmerge.bos, cap * sizeof(*nb));
+            if (!nb)
+               return wsubmit(&c[1], 1);
+            wmerge.bos = nb;
+            wmerge.cap = cap;
+         }
+         if (a->bo_handle_count)
+            memcpy(wmerge.bos, bos, a->bo_handle_count * sizeof(*bos));
+         wmerge.n = a->bo_handle_count;
+         wmerge.jc = a->jc;
+         wmerge.dev = wactive;
+         wmerge.pending = 1;
+         return 0;
       }
-      if (trace_on() && n != named)
-         fprintf(stderr, "malikm-wddm: submit names %u BOs, %u more listed for residency\n",
-                 named, n - named);
-      MW_COMMAND *c = wcmd;
-      c->Type = MW_CMD_JOB;
-      c->Slot = (a->requirements & PANFROST_JD_REQ_FS) ? 0 : 1;
-      c->Jc = a->jc;
-      unsigned slow_slot = c->Slot;
-      uint64_t slow_t0 = mali_slow_now();
-      NTSTATUS st = w_render(sizeof(*c), n);
-      /* c is the old command buffer now; the runtime has handed out a new one. */
-      MALI_SLOW(slow_t0, "submit", "pfnRenderCb, %s chain, %u BOs named, %u listed",
-                slow_slot ? "vertex/tiler" : "fragment", named, n);
-      if (st < 0) {
-         if (trace_on())
-            fprintf(stderr, "malikm-wddm: Render failed 0x%08lx\n", (unsigned long)st);
-         return -MK_EIO;
-      }
-      wseq++;
-      /* The BOs this job names are busy until it is done. Those listed
-       * only to keep them resident are not: nothing in it touches them. */
-      for (uint32_t i = 0; i < a->bo_handle_count; i++) {
-         struct wbo *bo = wddm_bo(bos[i]);
-         if (bo)
-            bo->used = wseq;
-      }
-      if (ddi.on && !ddi.last_unsignalled)
-         wring_push(wseq, ddi.last_event);
-      return 0;
+      return wsubmit(&c[1], 1);
    }
    case MALIKM_NR_GEM_CLOSE: {
       struct wbo *bo = wddm_bo(((struct drm_gem_close *)b)->handle);
@@ -2496,6 +2662,10 @@ wddm_ioctl(int fd, DWORD code, void *buf, DWORD len)
    MALI_SLOW(slow_t0, "shim-lock", "waited for it, ioctl 0x%lx nr 0x%x", (unsigned long)code,
              code == IOCTL_MALIKM_DRM ? h->Nr : 0);
    wselect_fd(fd);
+   /* A kept vertex/tiler chain goes first unless this is the SUBMIT that
+    * may join it (see wmerge). */
+   if (wmerge.pending && !(code == IOCTL_MALIKM_DRM && h->Nr == MALIKM_NR_PANFROST_SUBMIT))
+      wmerge_flush();
    switch (code) {
    case IOCTL_MALIKM_VERSION: {
       MALIKM_VERSION *v = buf;
