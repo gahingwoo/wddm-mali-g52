@@ -17,6 +17,11 @@ where the two disagree, this one says so and why.
 > on the present-path branch. P5 and P6 wait until `present-fast` is in
 > `next`.
 
+> Status, 2026-11-22 (branch `wddm2x`, on `hpd-edge`): the probe was ported
+> onto the board line and its answers to QAI 11 and 15 corrected. Section 15
+> is the decision and the fixes, section 16 the one-shot board test and how
+> to read a hang. Without `WddmProbe` the driver is WDDM 1.3 as before.
+
 The study below is kept as written.
 
 Line numbers below are those of `next`. On `main` and `umd-file-log` the
@@ -1195,6 +1200,10 @@ before you power-cycle.
 - [Driver residency in WDDM 2.0](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/driver-residency-in-wddm-2-0)
 - [DXGK_GPUMMUCAPS](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgk_gpummucaps)
 - [DXGK_PAGE_TABLE_LEVEL_DESC](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgk_page_table_level_desc)
+- [DXGK_PHYSICALADAPTERCAPS](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgk_physicaladaptercaps) (section 15)
+- [DXGK_QUERYSEGMENTOUT4](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgk_querysegmentout4) (section 15)
+- [DXGK_QUERYADAPTERINFOTYPE](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ne-d3dkmddi-_dxgk_queryadapterinfotype): 11 = QUERYSEGMENT4, 15 = PHYSICALADAPTERCAPS (section 15)
+- [DXGK_SEGMENTFLAGS](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgk_segmentflags) (section 15)
 - [WDDM 2.1 features](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/wddm-2-1-features)
 - [Features added in prior WDDM 2.x versions](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/what-s-new-for-prior-wddm-2-x-versions)
 - [What's new for Windows 11 display drivers](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/what-s-new-for-windows-11-display-and-graphics-drivers)
@@ -1226,3 +1235,275 @@ before you power-cycle.
   own: the source moved and was not read. It belongs to the D3D11.1 video
   work.
 - All effort figures are estimates.
+
+## 15. The `wddm2x` build: which 2.x first, and what was wrong
+
+Branch `wddm2x`, 2026-11-22: the seven `wddm2` commits rebased onto
+`hpd-edge` (`c445902`: d3d11, HDMI hot-plug, the Mesa 0068 Edge fix), and
+one commit on top. Nothing in it has run on a board.
+
+### 15.1 Decision: WDDM 2.0, physical mode, a CPU copy node for paging
+
+The first target is `WddmProbe 0x2000` with `Wddm2Shape 0`: WDDM 2.0, every
+engine in physical mode (allocation and patch lists as on 1.3), no GpuMmu
+and no IoMmu, and two nodes, 3D and a COPY node that is the paging node and
+whose paging buffers are done on the CPU while they are built. GpuMmu
+(`Wddm2Shape 1`) comes after that shape has booted.
+
+Why, from the evidence:
+
+- **Where the first probe stopped.** CI run 283 at 0x2000: dxgkrnl took
+  DRIVERCAPS, asked `QAI_11` (QUERYSEGMENT4, size 0x28) and `QAI_15`
+  (PHYSICALADAPTERCAPS, size 0x14), both answered with status 0, and the
+  boot hung right after (2/2). Status 0 was not the problem; what was in
+  them was (15.2). Both answers are asked of every 2.x driver whatever its
+  memory model, so they have to be right before either shape can be
+  judged.
+- **GpuMmu was never asked about.** dxgkrnl did not ask `QAI_13`
+  (GPUMMUCAPS) or `QAI_14` (PAGETABLELEVELDESC): it asks those only of a
+  driver whose DRIVERCAPS claims GpuMmu. The hang is therefore not a
+  missing GpuMmu answer, and adding GpuMmu would add page tables,
+  CreateProcess, SetRootPageTable and SubmitCommandVirtual to a boot that
+  already failed without them.
+- **Microsoft documents physical mode under WDDM 2.0.** "Individual engines
+  of a GPU can operate in either physical or virtual mode. In physical
+  mode, the scheduling model remains the same as it is with WDDM v1.x"
+  ([GPU virtual memory in WDDM 2.0](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/gpu-virtual-memory-in-wddm-2-0)),
+  and a driver must "opt-in" to GpuMmu or IoMmu through DXGK_VIDMMCAPS.
+  Whether 22631 accepts a 2.0 driver that opts into neither is not
+  documented (section 14, "not verified"). If it does not, dxgkrnl fails
+  the adapter start with event 549 and a reason, which is a clean answer
+  at the cost of one boot, not a hang.
+- **Our UMD has no virtual-mode client yet** (13.2). GpuMmu would gain
+  nothing on this board until P2, while physical mode keeps today's UMD
+  and present path unchanged.
+- **The version is 2.0, not higher.** Jamie found that dxgkrnl tears a
+  lost VidPN source down at `WDDMVersion >= 0x2300` and that 0x2200 hung at
+  LogonUI; 2.0 is what composited for him.
+
+### 15.2 What the answers got wrong, and the fixes
+
+| QAI / DDI | First probe (run 283) | Run 288 (`wddm2`) | `wddm2x` |
+|---|---|---|---|
+| 15 `NumExecutionNodes`, `PagingNodeIndex` | 1, 0 (the 3D node) | 2, 1 (COPY) | 2, 1 (COPY) |
+| 15 `DxgkPhysicalAdapterHandle` | our adapter context | our adapter context | dxgkrnl's `DeviceHandle` from StartDevice |
+| 11 count pass | decided by `pSegmentDescriptor == NULL` | same | decided by `NbSegment == 0` |
+| 11 input | not checked | not checked | `DXGK_QUERYSEGMENTIN4.PhysicalAdapterIndex` 0 |
+| 11 segment flags | aperture, CPU visible | same | same, plus non-local budget group and application target (`Wddm2Budget`, default 1) |
+| PreemptCommand, node 1 | n/a | handled as node 0 | DMA_PREEMPTED on node 1 at once |
+| BuildPagingBuffer, no room for the marker | n/a | operation done, then INSUFFICIENT_DMA_BUFFER (done twice) | INSUFFICIENT_DMA_BUFFER before anything is done |
+
+The handle is the finding of this build. Microsoft's reference for
+[DXGK_PHYSICALADAPTERCAPS](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgk_physicaladaptercaps)
+says `DxgkPhysicalAdapterHandle` is the handle "passed to the kernel mode
+driver as `DXGKRNL_INTERFACE::DeviceHandle` in DxgkDdiStartDevice", i.e.
+dxgkrnl's own, and Jamie's driver returns exactly that
+(`adapter->DxgkHandle`). Both earlier builds returned our `MW_ADAPTER`
+pointer, which dxgkrnl would then use as one of its own objects. That
+alone could hang or crash anywhere after QAI 15. If 15 is ever asked before
+StartDevice, this build answers `STATUS_DEVICE_NOT_READY` rather than make
+a handle up; the journal shows the order.
+
+[DXGK_QUERYSEGMENTOUT4](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ns-d3dkmddi-_dxgk_querysegmentout4):
+"First time, NbSegment will be set to 0. The driver should return
+STATUS_SUCCESS and set NbSegment ... without accessing any other member".
+The structure dxgkrnl 22631 passed is the 26100 header's (0x28 bytes:
+`SegmentDescriptorStride` is a `SIZE_T` at the end), and 0x14 for 15 ends
+exactly at `Flags`, so `VPRPagingNode` is not written there. Both sizes are
+`C_ASSERT`s now, so a WDK that disagrees fails the build.
+
+Checked and unchanged: `MultiEngineAware` (checked for every WDDMv2
+driver), `SupportPerEngineTDR`, `CancelCommandAware`, GetNodeMetadata's
+ordinal with the physical adapter index in the top bits, and the 3.x
+pre-start QAIs (not asked at 2.0).
+
+### 15.3 The one-shot fallback, made robust
+
+- The arming (`WddmProbeArmed`) is flushed and read back before a probe is
+  used. If it does not read back, the boot is 1.3 and
+  `WddmProbeArmFailed` says why: an unarmed 2.x boot that hangs would hang
+  every boot after it.
+- The confirm moved from the 300th Render call to the watchdog thread, at
+  PASSIVE_LEVEL: 300 renders and 120 s up and no DDI stuck. Before, a 300th
+  render at raised IRQL meant no confirm at all, and 300 renders can all
+  happen at LogonUI.
+- Every 2.x boot re-arms, a confirmed one too, so a later hang costs only
+  itself. `WddmProbeFellBackBoot` names the journal of the boot that fell.
+- The decisions are `drivers/maliwddm/wddm2plan.h`, plain C.
+  `tests/wddm2-host` (CI, Linux, ASan/UBSan) runs them over every pattern
+  of hung and good boots: no two hung 2.x boots in a row, 1.3 after a
+  fallback until the probe is set again, no probe without arming.
+
+### 15.4 The boot journal
+
+`Services\maliwddm\Probe\Boot<n % 8>` (n = `Parameters\ProbeBoots`), from
+DriverEntry on, only while a probe is in effect:
+
+- `E0001`, `E0002`, ...: `<ms since DriverEntry> <event>`.
+- An event is one of:
+  - `> <DDI> #<call> seq <n>`, written and flushed (`ZwFlushKey`) before
+    the DDI runs;
+  - `< <DDI> <status>` after it returns;
+  - `QAI <type> asked: in <n> bytes, out <n> bytes`, then the answer, field
+    by field for 1, 11, 13, 14 and 15. For 15 that includes whether the
+    handle is dxgkrnl's;
+  - `StartDevice: dxgkrnl DeviceHandle ...`;
+  - the watchdog's "still in <DDI> after N ms";
+  - `confirmed`.
+- `Last` is the newest event, and `Count` the number of events.
+  `Probe\LastBootKey` names the newest boot's subkey.
+
+So the last `> ` line on disk is the DDI a hang is in. Limits:
+
+- only at PASSIVE_LEVEL, where the registry can be written. SubmitCommand
+  at DISPATCH_LEVEL and the ISR are in the watchdog's counters instead;
+- the first 64 calls of each DDI, plus every failure;
+- at most `ProbeJournalMax` (default 1500) events per boot.
+
+The 1.3 fallback boot never writes the journal. The watchdog key
+(`Device Parameters\maliwddm\Probe2000`) and the UART (`ProbeUart 1`) are
+still there. If the hive is not yet written to disk when the adapter
+starts, the UART is the only record.
+
+### 15.5 Host checker
+
+`make -C tests/wddm2-host run`, a CI step:
+
+- the adapter rules for 1.3 and 2.x in both shapes and both budget
+  settings:
+  - the paging node is a COPY node, not node 0, and below
+    NumExecutionNodes;
+  - the VPR paging node is a real node;
+  - one GpuMmu bit everywhere;
+  - `PageTableAlignmentInBytes` is not 0, and VA bits = levels x index
+    bits + 12;
+  - the internal VA is below the G52's 35 bits;
+  - the handle is dxgkrnl's;
+  - one budget group;
+  - 1.3 is unchanged;
+- the QUERYSEGMENT4 pass table;
+- the fallback over all 256 eight-boot patterns;
+- a source lint that the driver takes each of these from `wddm2plan.h` and
+  that `(HANDLE)` of our context never comes back.
+
+A mutation (paging node 0) fails 16 checks.
+
+The rules are Microsoft's and those that Jamie (`claude-g615`) and mr4g
+(`codex-g610`) found on hardware in
+[Panorama](https://github.com/awesomefroggy29/Panorama). Both gave
+permission on 2026-11-22 to use their work in this GPL-2.0 driver with
+credit; the records are kept with the project. As before, nothing was
+copied: the code here re-implements interface facts, and code their
+repository inherits from `WoA-OpenMali/rk3588-GPU` was not used.
+
+## 16. `wddm2x` board test (one shot), reading a hang, back-out
+
+Use the `wddm-mali-g52-driver-arm64` package of the CI run for the
+`wddm2x` head (section 15). Never hot-install it, and never `pnputil
+/restart-device` a display driver: both wedge dwm. Each step is a clean
+restart.
+
+### 16.1 Bind the package at 1.3 (no probe)
+
+1. Copy the package to `C:\mali\pkg-wddm2x\` and stage it, do not install
+   it: `pnputil /add-driver C:\mali\pkg-wddm2x\maliwddm.inf`.
+2. As SYSTEM (task `malireinst`), set `ConfigFlags |= 0x20`
+   (CONFIGFLAG_REINSTALL) on
+   `HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0`. Poll until the
+   value has 0x20 in it; the task takes seconds on this board.
+3. Clean restart. Expect the usual desktop, with HDMI hot-plug and Edge as
+   on `hpd-edge`. `wddm-probe check` (from the package) shows
+   `WddmVersion 0x1300`, `WddmProbeResult 0` and no `Probe` journal key:
+   without `WddmProbe` the driver is 1.3 as before. Keep this output as the
+   baseline.
+
+### 16.2 The probe: WDDM 2.0, physical shape
+
+1. From an administrator prompt: `wddm-probe set 2000 phys uart`. If a
+   serial logger is on UART0 (1500000 8n1), start it now.
+2. Clean restart.
+3. If it hangs at the spinner, wait **at least 3 minutes**: the watchdog
+   and the journal keep writing, and the confirm needs 120 s anyway. Then
+   power off and on. The next boot is 1.3 by itself
+   (`WddmProbeFellBack 0x2000`).
+4. On whichever boot comes up (the 2.0 desktop, or the 1.3 fallback):
+   `wddm-probe check`, and send `C:\mali\probe\` and the serial log.
+
+What the output answers:
+
+- **Accepted?** `WddmProbeConfirmed 0x2000` against `WddmProbeFellBack`,
+  the device status, and the DxgKrnl Admin log (event 549 names an
+  adapter-start failure and its reason).
+- **Where it stopped:** section 2b2, the journal. `Last` of the 2.0 boot's
+  `BootN`, and in `journal-<time>.txt` the tail of its `E` lines. Look for:
+  - the `QAI 15 ... handle ... (dxgkrnl's)` line;
+  - the last `> <DDI>` line without a matching `<`;
+  - any `watchdog ... still in` line.
+- **If it came up:** dxdiag "Driver Model", `maliumd.dll` in `dwm.exe`, the
+  GPU counters by LUID against the baseline, and a photo of Task
+  Manager's Performance tab.
+
+Then, only if shape 0 came up and was confirmed: `wddm-probe off`, restart,
+`wddm-probe set 2000 gpummu uart`, restart, `check`. That is the next test,
+not part of this one.
+
+### 16.3 If Windows does not come up at all: reading the journal from Linux
+
+The fallback should make this unnecessary. If it does not (two hung boots
+in a row), the journal is in the SYSTEM hive on the eMMC's Windows
+partition. There are two ways to read it.
+
+- **From TSPI-RESCUE** (the second Windows on the eMMC):
+
+  ```
+  reg load HKLM\OFF C:\Windows\System32\config\SYSTEM
+  reg query HKLM\OFF\ControlSet001\Services\maliwddm\Probe /s
+  ```
+
+  Use the drive letter the main Windows has there. `reg load` replays the
+  hive's transaction logs itself.
+
+- **From Armbian** (SD or USB, through the UEFI boot menu):
+
+  ```
+  lsblk -f                              # the main Windows' NTFS partition
+  sudo mount -t ntfs3 -o ro,force /dev/mmcblk0pN /mnt/win
+  mkdir ~/hive && cp /mnt/win/Windows/System32/config/SYSTEM{,.LOG1,.LOG2} ~/hive/
+  sudo umount /mnt/win
+  python3 -m venv ~/rv && ~/rv/bin/pip install regipy
+  ~/rv/bin/regipy-process-transaction-logs ~/hive/SYSTEM -p ~/hive/SYSTEM.LOG1 \
+      -s ~/hive/SYSTEM.LOG2 -o ~/hive/SYSTEM.clean
+  hivexregedit --export ~/hive/SYSTEM.clean '\ControlSet001\Services\maliwddm\Probe'
+  ```
+
+  - **The transaction-log replay is required.** `ZwFlushKey` makes a write
+    durable in `SYSTEM.LOG1`/`LOG2` first, and the main file can lag behind
+    it. Without the replay, the newest lines are exactly the ones that are
+    missing.
+  - Mount read-only. A volume left dirty by the power cut needs `force`
+    with ntfs3. Copy nothing back.
+  - `hivexregedit` is in the `libwin-hivex-perl` package; `regipy-dump`
+    works as well.
+  - `Select\Current` in the same hive says whether it is `ControlSet001`.
+
+To clear the probe from there without Windows, use TSPI-RESCUE:
+`reg add HKLM\OFF\ControlSet001\Services\maliwddm\Parameters /v WddmProbe
+/t REG_DWORD /d 0 /f`, then `reg unload HKLM\OFF`. Do not write the hive
+from Linux.
+
+### 16.4 Back-out
+
+- **To 1.3 with this package:** `wddm-probe off`, then a clean restart. The
+  fallback does the same by itself after a failed boot.
+- **To the previous package:**
+  1. `pnputil /enum-drivers` and find the `oem<N>.inf` of the `hpd-edge`
+     package;
+  2. stage it again if it is gone;
+  3. `pnputil /delete-driver oem<M>.inf` for the `wddm2x` package
+     (without `/uninstall`);
+  4. `ConfigFlags |= 0x20` as in 16.1, then a clean restart.
+
+  The higher-ranked package wins, so delete the `wddm2x` one first.
+- **Leftovers:** `wddm-probe off` removes the boot-time ETW capture. The
+  journal key `Services\maliwddm\Probe` is harmless and can be deleted with
+  `reg delete ... /f` once read.
