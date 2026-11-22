@@ -104,56 +104,180 @@ so this checks the probe and the logging rather than the board's path:
 
 WARP on the same runner passes every step, swap chain included.
 
+## Board result, 2026-11-23 (DriverVer 22.7.16.475)
+
+TaishanPi 3M, HDMI only, 2560x1440, logged-in session. Package of CI
+45075872745, UMD of Mesa 45004408540 (patches 0001-0069). Files in
+`board-session-prep/edge2-22.7.16.475/`.
+
+- d3dprobe as msedge.exe and as plainprobe.exe, identical: DISCARD and
+  FLIP_SEQUENTIAL swap chains create and present. On the edge path
+  CreateSwapChainForComposition failed with 0x8007000e (UMD log:
+  `ddi-error (first): CreateResource 0x8007000e`), the device stayed
+  alive, DComp device, target, visual, Commit, CreateSurface and BeginDraw
+  all answered 0, and the first draw after BeginDraw killed the process:
+  `CRASH code 0xc0000005 at maliumd+0x19c100, reading address 0x344`.
+- Edge: `RENDERER=WebGL2 ANGLE (... Mali-G52 (WDDM) ... Direct3D11 vs_4_1
+  ps_4_1, D3D11)`, so ANGLE now has a 10_1 hardware device and WebGL2.
+  The GPU process still lost the device at its first Present1, as on
+  11-22, three times, and Edge gave up. That process wrote no UMD log.
+
+## Three UMD bugs
+
+### The crash: a draw with no input layout (patch 0070)
+
+Symbolized with the package's PDB (`llvm-symbolizer --obj=maliumd_arm64.dll
+--relative-address`, the DLL renamed to libgallium_d3d10.dll beside the
+.pdb):
+
+```
++0x19c100 panfrost_emit_vertex_data   pan_cmdstream.c:2343  (so->nr_bufs)
+          panfrost_update_state_3d    pan_cmdstream.c:3301
+          panfrost_draw_vbo           pan_cmdstream.c:3703
++0x19c02c panfrost_update_state_3d    pan_cmdstream.c:3264  (lr)
++0x1377c  Draw                        Draw.cpp:198 (util_draw_arrays)
+```
+
+`so` is `ctx->vertex`, the bound vertex elements state, and it was NULL.
+The draw is the D3D11 runtime's own: ClearRenderTargetView of a view whose
+clear is limited to the BeginDraw region of a DComp atlas surface (1024x1024
+here) becomes a scissored triangle strip of four vertices from SV_VertexID,
+with `IaSetInputLayout(NULL)` and no vertex buffer. d3d10umd's
+`update_velems` bound nothing when the layout was NULL, and the device had
+never had a layout (`velems_changed` starts false, so even that was
+skipped). Panfrost dereferences the bound state at every draw. softpipe
+does not, which is why no host test saw it.
+
+0070 binds a layout of no elements when the application sets none, and
+marks the vertex elements changed at device creation, so the first draw
+always binds something. Chromium's solid colour surfaces (the
+`SolidColorSurfacePoolCreateSurface` in Edge's log) are DComp surfaces
+cleared the same way, and ANGLE draws on SV_VertexID alone for some blits.
+
+### CreateSwapChainForComposition: a cached buffer for a shared resource (patch 0071)
+
+The failing resource: 128x96 B8G8R8A8, BindFlags 0xa8, MiscFlags 0x20002
+(SHARED and the DXGI composition bit), the same description as the two
+FLIP_SEQUENTIAL buffers made a moment before, which worked. The log says
+`shared create: ... no buffer was made on the allocation`: Panfrost issued
+no CREATE_BO while the resource was made, so malikm_drm.c had nothing to
+put on the runtime's allocation and the resource was failed with
+E_OUTOFMEMORY.
+
+Panfrost took the buffer from its BO cache. The cache refuses BOs that
+were exported (PAN_BO_SHARED), but a BO made shareable (PAN_BO_SHAREABLE,
+from PIPE_BIND_SHARED) and never exported went in like any other, and a
+fetch matches on flags and size. One came from `RotateResourceIdentities`:
+the FLIP_SEQUENTIAL buffers are not primaries, so they rotate by copy, and
+the copy's temporary was made from the first buffer's template,
+PIPE_BIND_SHARED included. It was never exported, it was freed into the
+cache, and the next shared resource in its size bucket got it. That
+happens after the first present of any flip-model swap chain, which is
+where Edge loses its device: every later shared resource of a size up to
+the swap chain's (DComp surfaces, shared images) can fail. Whether the
+runtime removes Edge's device for one of these failures has not been seen
+in a log yet (the GPU process had none); the timing fits.
+
+0071 keeps shareable BOs out of Panfrost's cache, exported or not, and
+makes the rotation's temporary without PIPE_BIND_SHARED, SCANOUT or
+DISPLAY_TARGET.
+
+### No log from Edge's GPU process (patch 0072, and an ACL)
+
+The GPU process runs with a restricted token at low integrity (Chromium's
+GPU sandbox). `C:\mali\log` made by an administrator has a medium label,
+so a low process cannot create a file in it, and the restricted SIDs need
+a grant of their own. The UMD gave up silently. Set the directory up once:
+
+```
+icacls C:\mali\log /grant *S-1-1-0:(OI)(CI)M *S-1-5-12:(OI)(CI)M *S-1-15-2-1:(OI)(CI)M *S-1-15-2-2:(OI)(CI)M
+icacls C:\mali\log /setintegritylevel (OI)(CI)low
+```
+
+S-1-1-0 is Everyone, S-1-5-12 RESTRICTED (the restricted SID Chromium's
+tokens carry), S-1-15-2-1 and S-1-15-2-2 all application packages and all
+restricted ones, for an AppContainer GPU process. `C:\mali\log\off` still
+stops new logs. 0072 writes the token as the first line of every log
+(`log on: <path>, integrity 0x1000 (low), app container 0, restricted 1`
+for Edge's GPU process), and a process that cannot open its log says so
+once through OutputDebugString (`maliumd: no log, ... (error 5)`), which
+DebugView with "Capture Global Win32" shows.
+
+## CI for these
+
+- `triangle.exe <dll> nolayout`: the triangle from SV_VertexID with no
+  input layout or vertex buffer ever set. mesa.yml runs it on softpipe
+  (pixels must be right) and on Panfrost with MALIKM_FAKE=2 (the process
+  must not die). Pushed first without the fix (2c70ec9, Mesa run 45077326907): softpipe passed, Panfrost died with 0xc0000005 (`nolayout: exit code -1073741819`), as on the board.
+- "The UMD log from a low-integrity process": triangle.exe copied to
+  lowtri.exe with a low label (so it starts at low integrity) must get a
+  log once `C:\mali\log` has the two icacls lines above, and the log's
+  first line must say `integrity 0x1000 (low)`.
+- Not on the host: 0071. The runner has no KMD, so shared resources fail
+  there before Panfrost is asked for a buffer.
+
+Runs on 2d73ab5, green: Mesa 45077995748 and CI 45077995719. On the runner
+`nolayout: exit code 2` (alive, pixels arbitrary); the low-integrity
+process had no log with the directory as made and one after the setup,
+first line `log on: C:\mali\log\lowtri.exe-3512.txt, integrity 0x1000
+(low), app container 0, restricted 0`. WARP (warpref.exe) passes every
+edge-path step on the same runner, so the probe itself is sound.
+
 ## Board test, one install
 
-One variable: the UMD. Leave `UmdDdi` 101 and `UmdMsaa` unset.
+One variable: the UMD (patches 0070-0072). The KMD and the INF are as in
+22.7.16.475. Leave `UmdDdi` 101 and `UmdMsaa` unset.
 
-Package: CI run 45004408487 (bba6a25), artifact
-`wddm-mali-g52-driver-arm64`, DriverVer 11/22/2026,8.47.18.960, with the
-UMD from Mesa run 45004408540 (patches 0068 and 0069). d3dprobe.exe is in
-the `m3test-arm64` artifact of the same run. The KMD and the HDMI work
-are hpd-edge's (c445902), unchanged.
+Package: CI run 45077995719 (2d73ab5), artifact
+`wddm-mali-g52-driver-arm64`, DriverVer 11/22/2026,22.29.38.799, UMD from
+Mesa run 45077995748 (patches 0001-0072). Test certificate SHA1
+6A15491315E605638E1E9F3077CAE3044D7602DD (new for this run). d3dprobe.exe
+is in the `m3test-arm64` artifact of the same CI run.
 
-1. Copy the package to `C:\mali\pkg-present\`, and d3dprobe.exe from the
-   same CI run's `m3test-arm64` artifact. Make the names
-   `C:\mali\fake\msedge.exe` and `C:\mali\fake\plainprobe.exe` from it.
-2. `pnputil /add-driver C:\mali\pkg-present\maliwddm.inf` (stage only).
-3. As SYSTEM (task `malireinst`), set `ConfigFlags |= 0x20` on
-   `HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0`, and poll until
-   the value has 0x20 in it.
-4. `mkdir C:\mali\log`, and delete `C:\mali\log\off` if it is there.
-   Without the directory there is no UMD log at all. Then a clean restart.
-5. After logon, in the user's session (`schtasks /it /ru woo` with a `.cmd`
-   wrapper, not over SSH), run:
+1. Copy the package to `C:\mali\pkg-edge3\` and d3dprobe.exe from the
+   same run's `m3test-arm64` artifact; make `C:\mali\fake\msedge.exe` and
+   `C:\mali\fake\plainprobe.exe` from it (replace the old copies).
+2. Import the package's new test certificate into both stores, as
+   administrator:
+   `certutil -addstore -f Root C:\mali\pkg-edge3\wddm-mali-g52-test.cer` and
+   `certutil -addstore -f TrustedPublisher C:\mali\pkg-edge3\wddm-mali-g52-test.cer`.
+3. `pnputil /add-driver C:\mali\pkg-edge3\driver\maliwddm.inf` (stage only).
+4. As SYSTEM (task `malireinst`), set `ConfigFlags |= 0x20` on
+   `HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0`; poll until the
+   value has 0x20 in it.
+5. Log directory: `mkdir C:\mali\log` if missing, delete
+   `C:\mali\log\off` if present, delete the old `*.txt` in it, then the
+   two `icacls` lines above. Then a clean restart.
+6. After logon, in the user's session (`schtasks /it /ru woo` with a `.cmd`
+   wrapper, not over SSH):
    - `C:\mali\fake\msedge.exe > C:\mali\present-msedge.txt`
    - `C:\mali\fake\plainprobe.exe > C:\mali\present-plain.txt`
-6. Edge as on 2026-11-22: separate profile, `--enable-logging --v=1`, the
-   WebGL page, then `edge://gpu`. Save the Edge log and the page.
-7. `echo > C:\mali\log\off`, then collect `C:\mali\present-*.txt`, every
-   `C:\mali\log\msedge.exe-*.txt` (one of them is the GPU process, the one
-   with `CreateDevice` lines), the Edge log and the edge://gpu page.
+7. Edge as before: separate profile, `--enable-logging --v=1`, the WebGL
+   page, then `edge://gpu`. Save the Edge log and the page.
+8. `echo > C:\mali\log\off`, collect `C:\mali\present-*.txt`, every
+   `C:\mali\log\*.txt`, the Edge log and the edge://gpu page.
 
 What to read:
 
-- present-msedge.txt, "edge path" lines: every step `device removed
-  reason 0x00000000` and `edge path: device alive`. If a step says
-  `<== REMOVED`, that is the call.
-- `C:\mali\log\msedge.exe-*.txt`: `findstr /c:"ddi-error" /c:"dxgi-result"`.
-  The `ddi-error (first)` line names the DDI and the code. With this
-  package a code that used to remove the device shows as `reported as
-  E_OUTOFMEMORY`, and Edge may then go further. A `dxgi-result: Present`
-  line with a failed code is a `pfnPresentCb` result (the kernel's
-  answer), and one of those can still remove the device.
-- The Edge log: no `Present1 failed` and no `testDeviceLost`. edge://gpu:
+- Driver version first: the `log on:` line exists in every UMD log of the
+  new package (absent: the old UMD is still loaded).
+- present-msedge.txt, edge path: CreateSwapChainForComposition 0, the
+  three frames and Present1 0, `DComp view, clear, EndDraw` reached (no
+  CRASH line in the log), and `edge path: device alive`. If
+  CreateSwapChainForComposition still fails, the log line after
+  `shared create:` says why.
+- `C:\mali\log\msedge.exe-*.txt`: now including the GPU process's, whose
+  first line says `integrity 0x1000 (low) ... restricted 1`. In it
+  `findstr /c:"ddi-error" /c:"dxgi-result" /c:"CRASH" /c:"no buffer was made"`.
+  If there is no low-integrity msedge log at all, the ACL did not take
+  (`icacls C:\mali\log` shows it).
+- The Edge log: no `Present1 failed`, no `testDeviceLost`; edge://gpu
   "Software Rendering: No".
-
-If the device is still removed and the log has no `ddi-error` or failed
-`dxgi-result` line before it, the removal did not come from a UMD error
-report. Then send the full GPU-process log.
 
 ## Not known yet
 
-- Which of the codes above Edge hit. This package logs it either way.
-- Whether a call failing with E_OUTOFMEMORY, instead of removing the
-  device, lets Edge render. That depends on which call it is: an
-  OpenResource that fails would leave Chromium without that shared image.
+- Whether Edge's removal at its first Present1 is the 0071 failure. The
+  timing fits (the first rotation puts the shareable temporary in the
+  cache); this package's GPU-process log settles it either way.
+- Whether Present1 on a composition swap chain works on maliwddm at all:
+  d3dprobe never got that far on the board.
