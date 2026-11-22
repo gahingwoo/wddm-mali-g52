@@ -721,8 +721,8 @@ static void ShowPrimary(MW_ADAPTER *A, MW_ALLOCATION *P)
     ULONG w, h, pitch;
     ULONG64 t0 = MwTick();
 
-    if (A->FbVa == NULL || P->Mdl == NULL) {
-        A->FlipCopySkips++;
+    if (A->FbVa == NULL || P->Mdl == NULL || A->Hdmi.Hold) {
+        A->FlipCopySkips++;     /* Hold: HdmiDiag 2 keeps its test pattern on the screen */
         return;
     }
     src = (PUCHAR)MmGetSystemAddressForMdlSafe(P->Mdl, NormalPagePriority | MdlMappingNoExecute);

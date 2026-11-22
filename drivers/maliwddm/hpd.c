@@ -90,6 +90,8 @@ void MwHpdSettings(MW_ADAPTER *A)
     if (H->DebounceMs > 10000)
         H->DebounceMs = 10000;
     H->Audio = MwSetting(A, L"HdmiAudio", 1) != 0;
+    H->Diag = MwSetting(A, L"HdmiDiag", 0);
+    H->LastSup = H->LastEnum = 0xFFFFFFFFu;
     H->ResMaxPixels = MwSetting(A, L"HdmiMaxPixels", 2560 * 1600);
     if (H->ResMaxPixels > MW_VP0_MAX_W * MW_VP0_MAX_H)
         H->ResMaxPixels = MW_VP0_MAX_W * MW_VP0_MAX_H;
@@ -100,6 +102,7 @@ void MwHpdSettings(MW_ADAPTER *A)
     KeInitializeEvent(&H->Wake, SynchronizationEvent, FALSE);
     MwLog(A, L"Hpd_Level", H->Level);
     MwLog(A, L"Hpd_Source", H->Source);
+    MwLog(A, L"Hpd_Diag", H->Diag);
 }
 
 /* Level 3: the framebuffer of the driver's own mode sets, allocated now,
@@ -240,6 +243,49 @@ static void Indicate(MW_ADAPTER *A, BOOLEAN Connected)
     MwLog(A, L"Hpd_Indicate", (ULONG)st);
 }
 
+/* What the flips did after a mode set, at +3 s (stage 1) and +10 s
+ * (stage 2): deltas from the moment it finished. Flips: SetVidPnSourceAddress
+ * calls; Scanned: pointed the window at a primary; Copied: copied into our
+ * framebuffer instead; NotMapped: the primary had no VOP2 address (usually a
+ * size mismatch, then Refused is its W << 16 | H); Maps: primaries entered
+ * in the IOMMU. Mmu0/1: the IOMMU status words, Fault the last fault
+ * address. VpRaw (stage 1 only): VP0's interrupt raw status, the single
+ * VOP2 read; bit 4 is POST_BUF_EMPTY. */
+static void Checkpoint(MW_ADAPTER *A, ULONG Stage)
+{
+    MW_HDMI *H = &A->Hdmi;
+    PCWSTR n[14];
+    ULONG v[14], fault = 0, k = 0;
+
+    static PCWSTR const s1[14] = {
+        L"Chk1_Flips", L"Chk1_Scanned", L"Chk1_Copied", L"Chk1_NotMapped", L"Chk1_Invisible", L"Chk1_Mismatch",
+        L"Chk1_Refused", L"Chk1_Maps", L"Chk1_Showing", L"Chk1_ScanAddr", L"Chk1_Fb", L"Chk1_Mmu0", L"Chk1_Mmu1", L"Chk1_Fault" };
+    static PCWSTR const s2[14] = {
+        L"Chk2_Flips", L"Chk2_Scanned", L"Chk2_Copied", L"Chk2_NotMapped", L"Chk2_Invisible", L"Chk2_Mismatch",
+        L"Chk2_Refused", L"Chk2_Maps", L"Chk2_Showing", L"Chk2_ScanAddr", L"Chk2_Fb", L"Chk2_Mmu0", L"Chk2_Mmu1", L"Chk2_Fault" };
+
+    RtlCopyMemory(n, Stage == 1 ? s1 : s2, sizeof(n));
+    v[k++] = A->Flips - H->BaseFlips;
+    v[k++] = A->ScanFlips - H->BaseScanFlips;
+    v[k++] = A->FlipCopies - H->BaseCopies;
+    v[k++] = A->WhyNotMapped - H->BaseNotMapped;
+    v[k++] = A->WhyInvisible - H->BaseInvisible;
+    v[k++] = A->ScanMismatch - H->BaseMismatch;
+    v[k++] = A->ScanLastW << 16 | (A->ScanLastH & 0xFFFF);
+    v[k++] = A->ScanMaps - H->BaseMaps;
+    v[k++] = (A->ScanShowing ? 1u : 0) | (A->ScanOn ? 2u : 0) | (A->ScanPaging ? 4u : 0) |
+             (A->SourceVisible ? 8u : 0) | (A->PathActive ? 16u : 0) | (H->OnRes ? 32u : 0) | A->RotDeg << 8;
+    v[k++] = A->ScanAddr.LowPart;
+    v[k++] = A->Fb.Width << 16 | (A->Fb.Height & 0xFFFF);
+    v[k++] = MwScanMmuStatus(A, 0, &fault);
+    v[k++] = MwScanMmuStatus(A, 1, &fault);
+    v[k++] = fault;
+    for (ULONG i = 0; i < k; i++)
+        MwLog(A, n[i], v[i]);
+    if (Stage == 1)
+        MwLog(A, L"Chk1_VpRaw", MwHdmiVpRawStatus(A));
+}
+
 static VOID HpdThread(PVOID Context)
 {
     MW_ADAPTER *a = (MW_ADAPTER *)Context;
@@ -254,6 +300,13 @@ static VOID HpdThread(PVOID Context)
         KeWaitForSingleObject(&H->Wake, Executive, KernelMode, FALSE, &t);
         if (H->Stop)
             break;
+        if (H->CheckStage != 0 && H->CheckStage < 3) {
+            ULONG64 due = H->MsetTick + (H->CheckStage == 1 ? 3000ull : 10000ull) * 10000;
+            if (KeQueryInterruptTime() >= due) {
+                Checkpoint(a, H->CheckStage);
+                H->CheckStage++;
+            }
+        }
         hpd = MwHdmiReadHpd(a, &raw);
         H->Polls++;
         if (raw != H->LastRaw) {
@@ -672,15 +725,31 @@ static NTSTATUS AddTargetModes(MW_ADAPTER *A, const DXGK_VIDPN_INTERFACE *V, D3D
     return st;
 }
 
+/* A VidPN decision for the trace, written only when it differs from the
+ * last one (dxgkrnl asks many times). */
+static void LogOnChange(MW_ADAPTER *A, PCWSTR Name, ULONG *Last, ULONG V)
+{
+    if (*Last == V)
+        return;
+    *Last = V;
+    MwLog(A, Name, V);
+}
+
+/* Hpd_IsSup: target | reason << 8 | supported << 16 | paths << 24. Reason:
+ * 0 fine, 1 not source 0 or more than one path (clone/extend), 2 the target
+ * has no modes, 3 the pinned source size is none of the target's (then
+ * Hpd_IsSupSize is that size), 4 the pinned target mode is not ours, 5 the
+ * pinned source and target sizes differ. */
 NTSTATUS MwHpdIsSupportedVidPn(MW_ADAPTER *A, DXGKARG_ISSUPPORTEDVIDPN *Arg)
 {
+    MW_HDMI *H = &A->Hdmi;
     const DXGK_VIDPN_INTERFACE *v;
     D3DKMDT_HVIDPNTOPOLOGY topo;
     const DXGK_VIDPNTOPOLOGY_INTERFACE *ti;
     const D3DKMDT_VIDPN_PRESENT_PATH *path = NULL, *next;
     MW_TIMING m[MW_HDMI_MODES];
-    ULONG paths = 0;
-    BOOLEAN ok = TRUE;
+    ULONG paths = 0, reason = 0, target = 0xFF;
+    UINT w = 0, h = 0;
     NTSTATUS st;
 
     Arg->IsVidPnSupported = FALSE;
@@ -697,32 +766,38 @@ NTSTATUS MwHpdIsSupportedVidPn(MW_ADAPTER *A, DXGKARG_ISSUPPORTEDVIDPN *Arg)
     st = ti->pfnAcquireFirstPathInfo(topo, &path);
     while (st == STATUS_SUCCESS && path != NULL) {
         ULONG n = TargetModes(A, path->VidPnTargetId, m);
-        UINT w = 0, h = 0;
         BOOLEAN any;
         LONG t;
 
         paths++;
-        if (path->VidPnSourceId != 0 || n == 0 || paths > 1)
-            ok = FALSE;
-        if (ok && PinnedSource(v, Arg->hDesiredVidPn, 0, &w, &h)) {
+        target = path->VidPnTargetId;
+        if (reason == 0 && (path->VidPnSourceId != 0 || paths > 1))
+            reason = 1;
+        if (reason == 0 && n == 0)
+            reason = 2;
+        if (reason == 0 && PinnedSource(v, Arg->hDesiredVidPn, 0, &w, &h)) {
             BOOLEAN size = FALSE;
             for (ULONG i = 0; i < n; i++)
                 if (m[i].HDisplay == w && m[i].VDisplay == h)
                     size = TRUE;
-            ok = size;
+            if (!size) {
+                reason = 3;
+                MwLog(A, L"Hpd_IsSupSize", w << 16 | (h & 0xFFFF));
+            }
         }
-        if (ok) {
+        if (reason == 0) {
             t = PinnedTarget(A, v, Arg->hDesiredVidPn, path->VidPnTargetId, m, n, &any);
             if (any && t < 0)
-                ok = FALSE;
-            if (any && t >= 0 && w != 0 && (m[t].HDisplay != w || m[t].VDisplay != h))
-                ok = FALSE;
+                reason = 4;
+            else if (any && w != 0 && (m[t].HDisplay != w || m[t].VDisplay != h))
+                reason = 5;
         }
         st = ti->pfnAcquireNextPathInfo(topo, path, &next);
         ti->pfnReleasePathInfo(topo, path);
         path = next;
     }
-    Arg->IsVidPnSupported = ok;
+    Arg->IsVidPnSupported = reason == 0;
+    LogOnChange(A, L"Hpd_IsSup", &H->LastSup, (target & 0xFF) | reason << 8 | (reason == 0 ? 1u : 0) << 16 | paths << 24);
     return STATUS_SUCCESS;
 }
 
@@ -755,6 +830,12 @@ NTSTATUS MwHpdEnumVidPnCofuncModality(MW_ADAPTER *A, const DXGKARG_ENUMVIDPNCOFU
         BOOLEAN srcPinned = PinnedSource(v, vp, path->VidPnSourceId, &w, &h), any;
         LONG tgt = PinnedTarget(A, v, vp, path->VidPnTargetId, m, n, &any);
         NTSTATUS r = STATUS_SUCCESS;
+
+        /* Hpd_Enum: target | source pinned << 8 | target pinned << 9 |
+         * pinned target is ours << 10 | modes << 16 | pinned source W/8 << 20. */
+        LogOnChange(A, L"Hpd_Enum", &A->Hdmi.LastEnum,
+                    (path->VidPnTargetId & 0xFF) | (srcPinned ? 1u << 8 : 0) | (any ? 1u << 9 : 0) |
+                    (tgt >= 0 ? 1u << 10 : 0) | (n & 0xF) << 16 | ((w / 8) & 0xFFF) << 20);
 
         if (!srcPivot && !srcPinned && n != 0) {
             r = AddSourceModes(A, v, vp, path->VidPnSourceId, m, n, any ? tgt : -1);
@@ -819,6 +900,37 @@ static void UseFb(MW_ADAPTER *A, BOOLEAN Res, UINT W, UINT H2)
     ExReleaseFastMutex(&A->CopyLock);
 }
 
+/* HdmiDiag 2: eight vertical bars (white, yellow, cyan, green, magenta,
+ * red, blue, black) and a white 8-pixel frame, in our framebuffer before
+ * the window is pointed at it. On the monitor: the window, its address,
+ * stride and size and the IOMMU entries of our framebuffer are right. */
+static void Pattern(PUCHAR Va, UINT W, UINT H2)
+{
+    static const ULONG bar[8] = { 0xFFFFFFFF, 0xFFFFFF00, 0xFF00FFFF, 0xFF00FF00,
+                                  0xFFFF00FF, 0xFFFF0000, 0xFF0000FF, 0xFF000000 };
+    for (UINT y = 0; y < H2; y++) {
+        PULONG row = (PULONG)(Va + (SIZE_T)y * W * 4);
+        for (UINT x = 0; x < W; x++)
+            row[x] = (x < 8 || y < 8 || x >= W - 8 || y >= H2 - 8) ? 0xFFFFFFFF : bar[x * 8 / W];
+    }
+}
+
+/* The counters the checkpoints compare against, and when to take them. */
+static void Baseline(MW_ADAPTER *A)
+{
+    MW_HDMI *H = &A->Hdmi;
+
+    H->BaseFlips = A->Flips;
+    H->BaseScanFlips = A->ScanFlips;
+    H->BaseCopies = A->FlipCopies;
+    H->BaseNotMapped = A->WhyNotMapped;
+    H->BaseInvisible = A->WhyInvisible;
+    H->BaseMismatch = A->ScanMismatch;
+    H->BaseMaps = A->ScanMaps;
+    H->MsetTick = KeQueryInterruptTime();
+    H->CheckStage = 1;
+}
+
 /* Make VP0 drive Target at T. PASSIVE_LEVEL, from CommitVidPn. */
 static NTSTATUS Apply(MW_ADAPTER *A, ULONG Target, const MW_TIMING *T)
 {
@@ -837,9 +949,11 @@ static NTSTATUS Apply(MW_ADAPTER *A, ULONG Target, const MW_TIMING *T)
             H->Restores++;
         }
         InterlockedExchange(&H->Busy, 0);
+        InterlockedExchange(&H->Hold, 0);
         Unlock(&H->HwLock);
         if (NT_SUCCESS(st))
             MwBacklightPower(A, TRUE);
+        Baseline(A);
         MwLog(A, L"Scan_Switch", NT_SUCCESS(st) ? 1 : (ULONG)st);
         return st;
     }
@@ -852,6 +966,10 @@ static NTSTATUS Apply(MW_ADAPTER *A, ULONG Target, const MW_TIMING *T)
     if (H->Dsi)
         MwBacklightPower(A, FALSE);
     RtlZeroMemory(H->ResVa, (SIZE_T)T->HDisplay * 4 * T->VDisplay);
+    if (H->Diag == 2) {
+        Pattern(H->ResVa, T->HDisplay, T->VDisplay);
+        InterlockedExchange(&H->Hold, 1);
+    }
     Lock(&H->HwLock);
     InterlockedExchange(&H->Busy, 1);
     H->ModeSets++;
@@ -874,6 +992,7 @@ static NTSTATUS Apply(MW_ADAPTER *A, ULONG Target, const MW_TIMING *T)
     Unlock(&H->HwLock);
     if (st == STATUS_DEVICE_NOT_READY && H->Dsi)
         MwBacklightPower(A, TRUE);
+    Baseline(A);
     MwLog(A, L"Scan_Switch", NT_SUCCESS(st) ? 2 : (ULONG)st);
     MwLog(A, L"Scan_FbPa", A->Fb.PhysicAddress.LowPart);
     return st;
@@ -916,6 +1035,7 @@ NTSTATUS MwHpdCommitVidPn(MW_ADAPTER *A, const DXGKARG_COMMITVIDPN *Arg)
     LONG t;
     NTSTATUS st;
 
+    MwLog(A, L"Hpd_Commits", ++H->Commits);
     st = A->Dxgk.DxgkCbQueryVidPnInterface(Arg->hFunctionalVidPn, DXGK_VIDPN_INTERFACE_VERSION_V1, &v);
     if (!NT_SUCCESS(st))
         return st;
@@ -932,6 +1052,8 @@ NTSTATUS MwHpdCommitVidPn(MW_ADAPTER *A, const DXGKARG_COMMITVIDPN *Arg)
         for (ULONG i = 0; i < n && t < 0; i++)
             if (m[i].HDisplay == w && m[i].VDisplay == h)
                 t = (LONG)i;
+    MwLog(A, L"Hpd_CommitAsk", target << 28 | (w & 0x3FFF) << 14 | (h & 0x3FFF));
+    MwLog(A, L"Hpd_CommitRot", deg);
     if (t < 0 || m[t].HDisplay != w || m[t].VDisplay != h) {
         A->CommitsNotOurs++;
         MwLog(A, L"CommitStatus", (ULONG)STATUS_GRAPHICS_INVALID_VIDPN);

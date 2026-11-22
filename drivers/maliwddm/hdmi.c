@@ -189,6 +189,11 @@ enum { M_IOC = 1, M_GPIO4 = 2, M_VO0 = 4, M_PHYGRF = 8, M_PHY = 16, M_CTL = 32, 
 #define VOP_VP0_INT_CLR         0x0A4
 #define VOP_VP0_INT_RAW         0x0AC
 #define VP_INT_DSP_HOLD_VALID   (1u << 6)
+#define VP_INT_POST_BUF_EMPTY   (1u << 4)       /* rockchip_drm_vop2.h VP_INT_POST_BUF_EMPTY */
+#define VP0_COLOR_BAR_CTRL      0xC08
+/* The value Vop2Init leaves on VP0: POST_URGENCY_EN (bit 8), THL 4 (19:16),
+ * THH 6 (23:20). Bit 0 turns the VP's own colour bars on (HdmiDiag 1). */
+#define VP0_COLOR_BAR_FW        0x00640100u
 #define VOP_MIPI0_IF_CTRL       0x180
 #define VOP_HDMI0_IF_CTRL       0x184
 #define VP0_DSP_CTRL            0xC00
@@ -937,6 +942,10 @@ static void VpProgram(MW_HDMI *H, const MW_TIMING *T, BOOLEAN Dsi, ULONG FbAddr,
     VopW(H, ESMART0_DSP_INFO, ((ULONG)T->VDisplay - 1) << 16 | (((ULONG)T->HDisplay - 1) & 0xFFFF));
     VopW(H, ESMART0_DSP_ST, 0);
     VopW(H, VOP_CFG_DONE, VOP_CFG_DONE_VP0);
+    /* POST_BUF_EMPTY cleared now, so that the one read of the raw status
+     * after the mode set (MwHdmiVpRawStatus) says whether VP0 ever ran out
+     * of pixels since. A write; the register is not read here. */
+    VopW(H, VOP_VP0_INT_CLR, (VP_INT_POST_BUF_EMPTY << 16) | VP_INT_POST_BUF_EMPTY);
     /* Vop2Enable: STANDBY clear, commit, 20 ms. Before the HDMI setup, which
      * needs the pixel clock running (memory: project_rk3576_standby_serror). */
     VopW(H, VP0_DSP_CTRL, R->DspCtrl);
@@ -1198,6 +1207,27 @@ static ULONG AudioSetup(MW_HDMI *H, const MW_TIMING *T)
 
 /* ---- the two mode sets ---- */
 
+/* Every VP0 and window value the mode set is about to write, so that the
+ * trace says what was programmed without reading the VOP2 back. */
+static void LogWritten(MW_ADAPTER *A, const MW_TIMING *T, const MW_VP_REGS *R, ULONG FbAddr, ULONG Pitch)
+{
+    MwLog(A, L"Mset_W_DspCtrl", R->DspCtrl);
+    MwLog(A, L"Mset_W_HTotalHsEnd", R->HTotalHsEnd);
+    MwLog(A, L"Mset_W_HActStEnd", R->HActStEnd);
+    MwLog(A, L"Mset_W_VTotalVsEnd", R->VTotalVsEnd);
+    MwLog(A, L"Mset_W_VActStEnd", R->VActStEnd);
+    MwLog(A, L"Mset_W_PostHAct", R->PostHAct);
+    MwLog(A, L"Mset_W_PostVAct", R->PostVAct);
+    MwLog(A, L"Mset_W_PostScl", R->PostSclFactor | R->PostSclCtrl);
+    MwLog(A, L"Mset_W_PreScan", R->PreScan);
+    MwLog(A, L"Mset_W_LineFlag", R->LineFlag);
+    MwLog(A, L"Mset_W_ClkCtrl", R->ClkCtrl);
+    MwLog(A, L"Mset_W_IfCtrl", R->IfCtrl);
+    MwLog(A, L"Mset_W_Vir", Pitch / 4);
+    MwLog(A, L"Mset_W_YrgbMst", FbAddr);
+    MwLog(A, L"Mset_W_ActInfo", ((ULONG)T->VDisplay - 1) << 16 | (((ULONG)T->HDisplay - 1) & 0xFFFF));
+}
+
 /* HDMI on VP0 at T, scanning out FbAddr. PASSIVE_LEVEL, HwLock held, flips
  * held off (Hdmi.Busy). Trace: Mset_Step (1 clocks, 2 port, 3 PLL, 4 dclk,
  * 7 SCDC, 10 lanes, 11 audio, 12 done), Mset_Status, Mset_PllStatus,
@@ -1222,6 +1252,7 @@ NTSTATUS MwHdmiModeSet(MW_ADAPTER *A, const MW_TIMING *T, ULONG FbAddr, ULONG Pi
         return STATUS_DEVICE_NOT_READY;
     }
     MwVpRegs(T, FALSE, &r);
+    LogWritten(A, T, &r, FbAddr, Pitch);
     Step(&m, 1);
     HdmiClocks(H);
     Step(&m, 2);
@@ -1245,8 +1276,30 @@ NTSTATUS MwHdmiModeSet(MW_ADAPTER *A, const MW_TIMING *T, ULONG FbAddr, ULONG Pi
     }
     if (NT_SUCCESS(st))
         Step(&m, 12);
+    /* HdmiDiag 1: the VP's colour bars in place of the windows. Bars on the
+     * monitor: VP0, the port and the HDMI side work and the window or its
+     * pixels do not; still black: it is the HDMI side (or AVMUTE). */
+    if (NT_SUCCESS(st) && H->Diag == 1) {
+        VopW(H, VP0_COLOR_BAR_CTRL, VP0_COLOR_BAR_FW | 1u);
+        VopW(H, VOP_CFG_DONE, VOP_CFG_DONE_VP0);
+        MwLog(A, L"Mset_W_ColorBar", VP0_COLOR_BAR_FW | 1u);
+    }
     MwLog(A, L"Mset_Status", (ULONG)st);
     return st;
+}
+
+/* The one VOP2 read the trace makes: VP0's interrupt raw status, the
+ * register the firmware itself reads at the end of DwHdmiQpSetup ([12b])
+ * and polls in its DSI handoff. Bit 4 POST_BUF_EMPTY: the timing generator
+ * asked for pixels and got none (window fetch failing); bit 6 DSP_HOLD.
+ * Called once, 3 s after a mode set. PASSIVE_LEVEL. */
+ULONG MwHdmiVpRawStatus(MW_ADAPTER *A)
+{
+    MW_HDMI *H = &A->Hdmi;
+
+    if (H->Vop == NULL || !MwHdmiPowered(A))
+        return 0xFFFFFFFFu;
+    return Rd(H->Vop, VOP_VP0_INT_RAW);
 }
 
 /* Back to the TaishanPi 3M's panel on MIPI0: the DSI host and the panel were
@@ -1265,6 +1318,7 @@ NTSTATUS MwHdmiDsiRestore(MW_ADAPTER *A, ULONG FbAddr, ULONG Pitch)
     }
     div = (1000000 + H->Panel.Clock - 1) / H->Panel.Clock;
     MwVpRegs(&H->Panel, TRUE, &r);
+    LogWritten(A, &H->Panel, &r, FbAddr, Pitch);
     MwLog(A, L"Dsi_Step", 1);
     MwLog(A, L"Dsi_Hold", VpStandby(H));
     DclkToCru(H, div);

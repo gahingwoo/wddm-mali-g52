@@ -141,6 +141,17 @@ typedef struct _MW_HDMI {
     ULONG ActiveTarget;
     volatile LONG Busy;         /* a mode set is writing VOP2: no flips */
 
+    /* HdmiDiag (hpd.c): 1 the VOP2's own colour bars on VP0 after a mode
+     * set; 2 a test pattern in our framebuffer, and flips kept off it
+     * (Hold). After each mode set the poll thread logs what the flips did,
+     * at +3 s and +10 s (Chk1_*, Chk2_*), against Base*. */
+    ULONG Diag;
+    volatile LONG Hold;
+    ULONG64 MsetTick;
+    ULONG CheckStage;
+    ULONG BaseFlips, BaseScanned, BaseCopies, BaseNotMapped, BaseInvisible, BaseMismatch, BaseMaps, BaseScanFlips;
+    ULONG LastSup, LastEnum, Commits;
+
     /* The firmware's framebuffer, and the one the driver scans out after a
      * mode set of its own (contiguous, below 4 GB, identity-mapped in the
      * VOP2 IOMMU like the firmware's; scanout.c). */
@@ -519,6 +530,7 @@ BOOLEAN MwScanUsable(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
 ULONG MwScanWhy(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
 void MwScanCheck(MW_ADAPTER *A);
 void MwScanPower(MW_ADAPTER *A, BOOLEAN On);
+ULONG MwScanMmuStatus(MW_ADAPTER *A, ULONG Which, ULONG *FaultAddr);
 BOOLEAN MwScanFlip(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
 UINT MwFlipDegrees(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
 void MwScanMap(MW_ADAPTER *A, struct _MW_ALLOCATION *P, PPFN_NUMBER Pfn, ULONG Pages);
@@ -538,6 +550,7 @@ BOOLEAN MwHdmiReadHpd(MW_ADAPTER *A, ULONG *Raw);
 NTSTATUS MwHdmiReadEdid(MW_ADAPTER *A, UCHAR *Buf, ULONG Max, ULONG *Len);
 NTSTATUS MwHdmiModeSet(MW_ADAPTER *A, const MW_TIMING *T, ULONG FbAddr, ULONG Pitch);
 NTSTATUS MwHdmiDsiRestore(MW_ADAPTER *A, ULONG FbAddr, ULONG Pitch);
+ULONG MwHdmiVpRawStatus(MW_ADAPTER *A);
 
 /* hpd.c: hot-plug as Windows sees it */
 void MwHpdSettings(MW_ADAPTER *A);

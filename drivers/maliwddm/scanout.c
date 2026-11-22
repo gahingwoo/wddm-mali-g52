@@ -211,7 +211,7 @@ fail:
 /* Back to the firmware framebuffer. Any IRQL. */
 void MwScanToFb(MW_ADAPTER *A)
 {
-    if (!A->ScanReady || !A->ScanShowing || A->Hdmi.Busy)
+    if (!A->ScanReady || !A->ScanShowing || A->Hdmi.Busy || A->Hdmi.Hold)
         return;
     W(A, VOP_ESMART0_YRGB_MST, A->Fb.PhysicAddress.LowPart);
     W(A, VOP_CFG_DONE, 0x00018001);
@@ -274,6 +274,20 @@ void MwScanCheck(MW_ADAPTER *A)
     A->ScanAutoOff++;
 }
 
+/* An IOMMU instance's status (0 or 1), and its last page fault address;
+ * read as MwScanCheck reads them. 0xFFFFFFFF without scan-out set up. For
+ * the HDMI hot-plug trace (hpd.c). Any IRQL. */
+ULONG MwScanMmuStatus(MW_ADAPTER *A, ULONG Which, ULONG *FaultAddr)
+{
+    ULONG m = Which ? VOP_MMU1 : VOP_MMU0;
+
+    *FaultAddr = 0;
+    if (!A->ScanReady || A->VopVa == NULL)
+        return 0xFFFFFFFFu;
+    *FaultAddr = R(A, m + VMMU_PAGE_FAULT_ADDR);
+    return R(A, m + VMMU_STATUS);
+}
+
 /* The adapter leaving D0 (shutdown, restart, sleep): the window on the
  * framebuffer and translation off, so that whatever runs next finds the
  * VOP2 reading physical addresses again; back on when it returns to D0 if
@@ -301,7 +315,7 @@ void MwScanPower(MW_ADAPTER *A, BOOLEAN On)
  * SetVidPnSourceAddress is. */
 BOOLEAN MwScanFlip(MW_ADAPTER *A, MW_ALLOCATION *P)
 {
-    if (!MwScanUsable(A, P) || A->Hdmi.Busy)
+    if (!MwScanUsable(A, P) || A->Hdmi.Busy || A->Hdmi.Hold)
         return FALSE;
     W(A, VOP_ESMART0_YRGB_MST, P->ScanIova);
     W(A, VOP_CFG_DONE, 0x00018001);

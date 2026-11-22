@@ -190,6 +190,53 @@ running system or from the rescue Windows (load the main system hive), and
 reboot. If the desktop does not come up: boot the rescue Windows, or the
 main one with the HDMI cable unplugged at level 1/2 (nothing is set there).
 
+## Board run of 0aabb35 (2026-11-22) and what the next one should split
+
+Level 1 worked as designed on the TaishanPi 3M (DSI boot, AOC 2703): HPD
+on bit 3, EDID 256 bytes in 296 ms, sink 7 (HDMI, SCDC, audio), unplug and
+replug each reported once, 1.1 s after the raw edge.
+
+Level 3, DSI boot with the monitor attached: Windows committed the HDMI
+target by itself at boot. The mode set ran to the end (step 12, PLL 0x0C,
+lanes 0x0E, SCDC 0, audio 1, `Scan_Switch` 2, our framebuffer at
+0xFEA9C000) and the monitor locked at the right timing, but the picture
+was black. `DisplaySwitch /internal` did not bring Windows back to the
+panel (no commit followed). The dump mixed values from the level 1 boot
+after it (T_* show an 800x1280 framebuffer, `CommitUnpinned` is the level 1
+VidPN's), so they say nothing about the flips on HDMI.
+
+Locked timing with a black picture is VP0 putting out its background:
+either the window is not composited, or it is and shows nothing but our
+framebuffer, which is black until a flip lands on the screen (scanned out
+or copied into it). The new build tells these apart:
+
+| Setting / value | Says |
+|---|---|
+| `HdmiDiag` 1 | VP0's own colour bars (`VP0_COLOR_BAR_CTRL` = 0x00640101, the firmware's urgency bits plus enable) after the mode set. Bars on the monitor: VP0, the port mux and all of the HDMI side work, and it is the window or its pixels. Still black: the HDMI side (data path, AVMUTE) or VP0 itself. |
+| `HdmiDiag` 2 | Eight colour bars and a white frame drawn into our framebuffer before the window points at it, and flips kept off it (no scan-out, no copy) for the whole HDMI session. Bars: the window, its address, stride, size and the IOMMU entries of our framebuffer are right, and the black came from the flips. Black: the window does not show our framebuffer. |
+| `Mset_W_*` | Every VP0 and Esmart0 value written: DSP_CTRL, the four timing words, post scaler, PRE_SCAN, line flag, CLK_CTRL, IF_CTRL, VIR, YRGB_MST, ACT_INFO (and `Mset_W_ColorBar`). Expected at 2560x1440@60: DspCtrl 0xF, HTotalHsEnd 0x0AA00020, HActStEnd 0x00700A70, VTotalVsEnd 0x05C90005, VActStEnd 0x002605C6, PreScan 0x05130020, ClkCtrl 1, IfCtrl 0x80000033, Vir 0xA00, YrgbMst = `Hpd_ReservePa`, ActInfo 0x059F09FF. |
+| `Chk1_*` (+3 s), `Chk2_*` (+10 s) | After each mode set or panel restore: Flips (SetVidPnSourceAddress calls), Scanned (window pointed at a primary), Copied (copied into our framebuffer), NotMapped, Invisible, Mismatch and Refused (a primary of another size, W << 16 \| H), Maps (primaries entered in the IOMMU), Showing (bit 0 window on a primary, 1 scan-out on, 2 IOMMU paging, 3 source visible, 4 path active, 5 on our framebuffer, 15:8 rotation), ScanAddr (last flip's address), Fb (W << 16 \| H of A->Fb), Mmu0/Mmu1 status and Fault address (the IOMMU registers MwScanCheck already reads). |
+| `Chk1_VpRaw` | The one VOP2 read: VP0's interrupt raw status (the firmware reads it at [12b]), 3 s after the mode set, with POST_BUF_EMPTY cleared just before standby was released. Bit 4 set: VP0 asked for pixels and got none (the window's fetch fails: address, IOMMU, bandwidth). |
+| `Hpd_IsSup` | Last changed IsSupportedVidPn answer: target \| reason << 8 \| supported << 16 \| paths << 24. Reasons: 1 more than one path or not source 0 (clone/extend refused), 2 no modes, 3 the pinned source size is not one of the target's (`Hpd_IsSupSize`), 4 pinned target mode not ours, 5 sizes differ. |
+| `Hpd_Enum` | Last changed cofunctional enumeration: target \| source pinned << 8 \| target pinned << 9 \| it is ours << 10 \| modes << 16 \| pinned source width / 8 << 20. |
+| `Hpd_Commits`, `Hpd_CommitAsk`, `Hpd_CommitRot` | Every commit, before any decision: target << 28 \| W << 14 \| H, and the path's rotation. |
+
+Next session, in this order, each from a clean trace (`reg delete
+"...\Device Parameters\maliwddm" /f`) and a cold boot with panel and
+monitor attached: `HdmiHpd` 3 and `HdmiDiag` 1, then `HdmiDiag` 2, then
+`HdmiDiag` 0. Report the screen and every `Mset_W_*`, `Chk1_*`, `Chk2_*`,
+`Hpd_IsSup`, `Hpd_Enum` and `Hpd_Commit*` value. With `HdmiDiag` 0, try
+`DisplaySwitch /internal` and Win+P "PC screen only" and report
+`Hpd_IsSup`/`Hpd_Enum`/`Hpd_Commits` before and after.
+
+On `DisplaySwitch /internal`: the panel child is reported as
+`D3DKMDT_VOT_INTERNAL` with `HpdAwarenessAlwaysConnected` (hpd.c
+MwHpdQueryChildRelations), which is what makes it the internal display.
+That no commit was logged means Windows either never built a panel-only
+VidPN or it was refused before the commit; `Hpd_IsSup` reason 3 with the
+HDMI size in `Hpd_IsSupSize` would mean dxgkrnl kept the 2560x1440 source
+pinned for the panel's path.
+
 ## Open risks
 
 - Nothing here has run. The first board session decides which HPD bit is
