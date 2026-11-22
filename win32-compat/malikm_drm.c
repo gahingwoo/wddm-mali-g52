@@ -1581,6 +1581,31 @@ malikm_present_target(void *hRTDevice, unsigned src_allocation, unsigned dst_all
    present_target.set = set;
 }
 
+/* The name of a runtime callback's failure, for the log. The values are
+ * the WDK's (d3dukmdt.h, MAKE_D3DHRESULT); the checks below fail the build
+ * if a name here and the header disagree. Edge's composition swap chain
+ * got 0x88760873 from pfnPresentCb on the board (2026-11-23). */
+typedef char mw_check_devremoved[(D3DDDIERR_DEVICEREMOVED == (HRESULT)0x88760870L) ? 1 : -1];
+typedef char mw_check_invalidhandle[(D3DDDIERR_INVALIDHANDLE == (HRESULT)0x88760873L) ? 1 : -1];
+typedef char mw_check_notavailable[(D3DDDIERR_NOTAVAILABLE == (HRESULT)0x8876086AL) ? 1 : -1];
+
+static const char *
+cb_result_name(HRESULT hr)
+{
+   switch (hr) {
+   case S_OK: return "S_OK";
+   case D3DDDIERR_DEVICEREMOVED: return "D3DDDIERR_DEVICEREMOVED";
+   case D3DDDIERR_INVALIDHANDLE: return "D3DDDIERR_INVALIDHANDLE";
+   case D3DDDIERR_NOTAVAILABLE: return "D3DDDIERR_NOTAVAILABLE";
+   case D3DDDIERR_WASSTILLDRAWING: return "D3DDDIERR_WASSTILLDRAWING";
+   case E_INVALIDARG: return "E_INVALIDARG";
+   case E_OUTOFMEMORY: return "E_OUTOFMEMORY";
+   case DXGI_DDI_ERR_UNSUPPORTED: return "DXGI_DDI_ERR_UNSUPPORTED";
+   case DXGI_DDI_ERR_NONEXCLUSIVEMODE: return "DXGI_DDI_ERR_NONEXCLUSIVEMODE";
+   default: return "?";
+   }
+}
+
 /* Present an allocation the runtime knows as the presented resource's, as
  * it is: a shared surface, which Panfrost has rendered into directly. The
  * HRESULT of pfnPresentCb. */
@@ -1613,8 +1638,9 @@ malikm_present_allocation(void *hRTDevice, unsigned src_allocation, unsigned dst
       DebugPrintf("ddi-error: present of allocation 0x%x not possible (bound %d, DXGI callbacks %d):"
                   " frame dropped\n", src_allocation, ddi.on, ddi.dxgi != NULL);
    else if (InterlockedIncrement(&said) <= 40 || hr < 0)
-      DebugPrintf("present: shared allocation 0x%x -> 0x%x, pfnPresentCb 0x%08lx\n",
-                  src_allocation, dst_allocation, (unsigned long)hr);
+      DebugPrintf("present: shared allocation 0x%x -> 0x%x, pfnPresentCb 0x%08lx (%s),"
+                  " DXGI context %p\n", src_allocation, dst_allocation, (unsigned long)hr,
+                  cb_result_name(hr), dxgi_context);
    ReleaseSRWLockExclusive(&wddm_lock);
    return hr;
 }

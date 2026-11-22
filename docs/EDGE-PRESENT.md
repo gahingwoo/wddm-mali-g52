@@ -223,61 +223,132 @@ first line `log on: C:\mali\log\lowtri.exe-3512.txt, integrity 0x1000
 (low), app container 0, restricted 0`. WARP (warpref.exe) passes every
 edge-path step on the same runner, so the probe itself is sound.
 
+## Board result, 2026-11-23 (DriverVer 22.29.38.799)
+
+DSI panel, HdmiHpd 1, logged in. Files in
+`board-session-prep/edge3-22.29.38.799/`.
+
+- 0070 and 0071 work: CreateSwapChainForComposition answers 0, and there
+  is no CRASH line anywhere.
+- 0072 and the ACL work: Edge's GPU processes wrote logs, first line
+  `integrity 0x1000 (low), app container 0, restricted 1`.
+- d3dprobe runs the edge path once per adapter. On adapter 0 (the Mali)
+  it fails at `frame 0: Present1 0x887a0005, removed reason 0x887a0020`
+  in both probe copies. The run that passes completely is adapter 1,
+  Microsoft Basic Render Driver, so the failure is not intermittent: it
+  happens on every composition present on the Mali.
+- Edge: unchanged, `Present1 failed ... suspended`, testDeviceLost
+  0x887A0020, three GPU-process restarts.
+
+### What the logs say
+
+Every Mali process logs the same thing at the composition swap chain's
+first present:
+
+```
+Present: flags 0x1 interval 0, src primary 0x0, dst 0000000000000000 primary 0x0
+present: shared allocation 0x40000540 -> 0x0, pfnPresentCb 0x88760873
+dxgi-result: Present 0x88760873 (failed)
+```
+
+The flip-model swap chain on a window, a moment earlier in the same
+process, presents its shared buffer the same way and pfnPresentCb answers
+0. So the UMD makes the same call both times, and the error comes back
+from the runtime callback, not from the UMD.
+
+- 0x88760873 is MAKE_D3DHRESULT(2163), D3DDDIERR_INVALIDHANDLE (2160 is
+  D3DDDIERR_DEVICEREMOVED, 0x88760870, already in State.h). From this
+  package on, the build checks that value against the WDK header and the
+  log prints the name.
+- It is not maliwddm's. The KMD trace has `Enter_Present` and no
+  `Fail_Present`, and MwPresent fails only with STATUS_INVALID_PARAMETER,
+  on a blt without private data. dxgkrnl, or the runtime's side of
+  pfnPresentCb, refuses the present before or without asking the KMD.
+- The runtime then removes the device for it (0x887A0020), and Edge's
+  next Present1 sees DEVICE_REMOVED.
+
+### The likely cause: DXGI_STATUS_NO_REDIRECTION
+
+d3d10umd's CreateDevice returns DXGI_STATUS_NO_REDIRECTION ("the driver
+is requesting that the DXGI runtime not use shared resources to
+communicate with the Desktop Window Manager"). It has done that in every
+process since patch 0023 (every `CreateDevice: done` line in these logs
+says so); only the file `C:\mali\redirect` gives S_OK instead. A
+composition swap chain has nothing to present to except DWM, through the
+shared buffers: the runtime made them SHARED (MiscFlags 0x20002) but was
+told not to hand them to DWM, and the present of one then names a
+handle the kernel has no composition binding for. A swap chain on a
+window still has the window, which is why that present works. The Basic
+Render Driver's composition presents work on the same board; whether it
+allows redirection is not visible from here, but nothing else about its
+run differs from the Mali's. This is the reading that fits every line in the logs; it has not
+been tested. The comment at the return said NO_REDIRECTION was the honest
+answer "while OpenResource is not implemented"; OpenResource has worked
+since 2026-11-13 (DWM opens LogonUI's shared surfaces).
+
+Changing the default changes every windowed application's present path
+under DWM, so the board test below first switches redirection on only for
+processes started after logon, with the existing `C:\mali\redirect` file
+(dwm.exe and the shell keep the devices they made at boot). If that makes
+the composition present work, the default follows in the next package.
+
 ## Board test, one install
 
-One variable: the UMD (patches 0070-0072). The KMD and the INF are as in
-22.7.16.475. Leave `UmdDdi` 101 and `UmdMsaa` unset.
+Two runs in one session after one install: the same probes with and
+without redirection. The package adds only logging (the callback's
+error by name, and the DXGI context pointer). The KMD is unchanged.
 
-Package: CI run 45077995719 (2d73ab5), artifact
-`wddm-mali-g52-driver-arm64`, DriverVer 11/22/2026,22.29.38.799, UMD from
-Mesa run 45077995748 (patches 0001-0072). Test certificate SHA1
-6A15491315E605638E1E9F3077CAE3044D7602DD (new for this run). d3dprobe.exe
-is in the `m3test-arm64` artifact of the same CI run.
+Package: PKG2_PLACEHOLDER
 
-1. Copy the package to `C:\mali\pkg-edge3\` and d3dprobe.exe from the
-   same run's `m3test-arm64` artifact; make `C:\mali\fake\msedge.exe` and
-   `C:\mali\fake\plainprobe.exe` from it (replace the old copies).
-2. Import the package's new test certificate into both stores, as
-   administrator:
-   `certutil -addstore -f Root C:\mali\pkg-edge3\wddm-mali-g52-test.cer` and
-   `certutil -addstore -f TrustedPublisher C:\mali\pkg-edge3\wddm-mali-g52-test.cer`.
-3. `pnputil /add-driver C:\mali\pkg-edge3\driver\maliwddm.inf` (stage only).
-4. As SYSTEM (task `malireinst`), set `ConfigFlags |= 0x20` on
-   `HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0`; poll until the
-   value has 0x20 in it.
-5. Log directory: `mkdir C:\mali\log` if missing, delete
-   `C:\mali\log\off` if present, delete the old `*.txt` in it, then the
-   two `icacls` lines above. Then a clean restart.
-6. After logon, in the user's session (`schtasks /it /ru woo` with a `.cmd`
-   wrapper, not over SSH):
-   - `C:\mali\fake\msedge.exe > C:\mali\present-msedge.txt`
-   - `C:\mali\fake\plainprobe.exe > C:\mali\present-plain.txt`
-7. Edge as before: separate profile, `--enable-logging --v=1`, the WebGL
-   page, then `edge://gpu`. Save the Edge log and the page.
-8. `echo > C:\mali\log\off`, collect `C:\mali\present-*.txt`, every
-   `C:\mali\log\*.txt`, the Edge log and the edge://gpu page.
+1. Copy the package to `C:\mali\pkg-edge4\` and d3dprobe.exe from the
+   same run's `m3test-arm64` artifact. Copy it to `C:\mali\fake\msedge.exe`
+   and `C:\mali\fake\plainprobe.exe`, replacing the old copies.
+2. Import the new test certificate into Root and TrustedPublisher, as
+   administrator (`certutil -addstore -f Root ...cer`, then the same with
+   `TrustedPublisher`).
+3. `pnputil /add-driver C:\mali\pkg-edge4\driver\maliwddm.inf` (stage only).
+4. As SYSTEM (task `malireinst`), `ConfigFlags |= 0x20` on
+   `HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0`; poll until set.
+5. `C:\mali\log`: delete `off` and the old `*.txt`; the ACL from before
+   stays. Make sure `C:\mali\redirect` does NOT exist. Clean restart.
+6. After logon, in the user's session (`schtasks /it /ru woo`, `.cmd`
+   wrapper), run A, without redirection:
+   - `C:\mali\fake\plainprobe.exe > C:\mali\present-plain-A.txt`
+7. `echo > C:\mali\redirect`, then run B, with redirection, in the same
+   session (nothing restarted):
+   - `C:\mali\fake\plainprobe.exe > C:\mali\present-plain-B.txt`
+   - `C:\mali\fake\msedge.exe > C:\mali\present-msedge-B.txt`
+   - Edge as before (separate profile, `--enable-logging --v=1`, the
+     WebGL page, edge://gpu). Start it only now, so its GPU process is new.
+8. `del C:\mali\redirect`, `echo > C:\mali\log\off`, then collect
+   `C:\mali\present-*.txt`, every `C:\mali\log\*.txt`, the Edge log and
+   the edge://gpu page.
+
+If anything on the desktop goes wrong after step 7, `del C:\mali\redirect`
+over SSH puts every new process back to the old path; processes started
+before step 7 never see the switch.
 
 What to read:
 
-- Driver version first: the `log on:` line exists in every UMD log of the
-  new package (absent: the old UMD is still loaded).
-- present-msedge.txt, edge path: CreateSwapChainForComposition 0, the
-  three frames and Present1 0, `DComp view, clear, EndDraw` reached (no
-  CRASH line in the log), and `edge path: device alive`. If
-  CreateSwapChainForComposition still fails, the log line after
-  `shared create:` says why.
-- `C:\mali\log\msedge.exe-*.txt`: now including the GPU process's, whose
-  first line says `integrity 0x1000 (low) ... restricted 1`. In it
-  `findstr /c:"ddi-error" /c:"dxgi-result" /c:"CRASH" /c:"no buffer was made"`.
-  If there is no low-integrity msedge log at all, the ACL did not take
-  (`icacls C:\mali\log` shows it).
-- The Edge log: no `Present1 failed`, no `testDeviceLost`; edge://gpu
-  "Software Rendering: No".
+- In each UMD log, `CreateDevice: done, ...`: A's says
+  DXGI_STATUS_NO_REDIRECTION, B's `S_OK (redirection allowed)`. If B's
+  does not, the process could not see the file.
+- present-plain-A.txt: as before, adapter 0 `frame 0: Present1 0x887a0005`,
+  and the log says `pfnPresentCb 0x88760873 (D3DDDIERR_INVALIDHANDLE)`.
+- present-plain-B.txt and present-msedge-B.txt, adapter 0: the three
+  `frame N: Present1` lines answer 0 and the edge path ends `device alive`.
+  That confirms the cause. If B fails the same way, NO_REDIRECTION is not
+  it, and the `DXGI context` pointer in the two logs is where to look next.
+- Edge (B): no `Present1 failed`, no testDeviceLost; edge://gpu "Software
+  Rendering: No".
+- The desktop in B: windows opened after step 7 (Notepad, a Settings page)
+  should still draw. A black window there is the price of redirection for
+  blt-model applications, and needs the redirected-present path looked at
+  before the default changes.
 
 ## Not known yet
 
-- Whether Edge's removal at its first Present1 is the 0071 failure. The
-  timing fits (the first rotation puts the shareable temporary in the
-  cache); this package's GPU-process log settles it either way.
-- Whether Present1 on a composition swap chain works on maliwddm at all:
-  d3dprobe never got that far on the board.
+- Whether NO_REDIRECTION is the cause (the test above).
+- What redirection does to blt-model windowed applications, whose
+  presents then go to a surface DWM opens; `Present` with a non-NULL
+  destination that is not a primary has not been run on the board.
