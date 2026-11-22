@@ -1507,3 +1507,79 @@ from Linux.
 - **Leftovers:** `wddm-probe off` removes the boot-time ETW capture. The
   journal key `Services\maliwddm\Probe` is harmless and can be deleted with
   `reg delete ... /f` once read.
+
+### 16.5 First run of 16.2 (build 310, `fbc785a`), and the next one shot
+
+TaishanPi 3M, 23H2, HDMI unplugged, `HdmiHpd 1`, 2026-11-22, n=1.
+
+- **16.1 (1.3):** fine. `WddmVersion 0x1300`, dxdiag WDDM 1.3.
+- **16.2 (`set 2000 phys uart`):** not a hang. The boot bugchecked with
+  0x139 KERNEL_SECURITY_CHECK_FAILURE, P1 3 (LIST_ENTRY corruption). No
+  dump: this eMMC stack cannot write one yet.
+- **Fallback:** worked. `WddmProbeFellBack 0x2000`, `WddmProbeFellBackBoot
+  1`, next boot 1.3.
+- **UART:** no lines on the firmware console capture.
+- **The journal** (`Probe\Boot1`, 48 events) got further than any earlier
+  build:
+  - StartDevice 0, dxgkrnl's handle `...B8030`, interface 0x5023;
+  - QAI 1 at 2.0 (two nodes, paging node 1, no VA);
+  - QAI 15 with dxgkrnl's handle;
+  - GetNodeMetadata for both nodes;
+  - QAI 11's count and fill passes (stride 104, flags 0x108005);
+  - QAI 10 (in 4, out 8), then QAI 16 (out 4).
+
+  The last line is QAI 16's return. No `> CreateDevice` follows: the
+  failure is inside dxgkrnl, between the end of the QAI sequence and the
+  system device.
+
+Every byte the driver wrote into dxgkrnl's memory before that point was
+checked against the size dxgkrnl passed. One answer was wrong:
+
+- **QAI 10 = HISTORYBUFFERPRECISION.** Microsoft's reference sizes its
+  output as `sizeof(DXGKARG_HISTORYBUFFERPRECISION) *
+  NbAsymetricProcessingNodes`: 8 bytes for our two nodes, as asked. The
+  driver, written when there was one node, filled only node 0. Node 1's
+  precision was whatever the buffer held. 0 would mean "call
+  DxgkDdiFormatHistoryBuffer", which this driver does not register, and
+  1 to 31 is invalid. Jamie's driver also fills only the first entry, so
+  this is a suspect, not a proven cause. It is the only answer of the
+  sequence that was incomplete.
+- **QAI 16 = DISPLAY_DRIVERCAPS_EXTENSION** (one UINT,
+  `VirtualModeSupport`): zeroed within its 4 bytes. Correct, unchanged.
+- **GetNodeMetadata:** the WDK 26100 layout is the same at every interface
+  version from 1.3 on (a `Reserved` UINT stands where 2.2's `Flags` go).
+  The driver's 76-byte write is within the structure.
+
+Build `a135ed6` answers QAI 10 for every node, with 64 bits as node 0
+always had. It also adds these journal lines:
+
+- QAI 10 and 16 field by field;
+- CreateDevice and CreateContext with their flags and node;
+- the first 64 BuildPagingBuffer operations;
+- the callbacks made at PASSIVE_LEVEL (AcquirePostDisplayOwnership,
+  IndicateChildStatus);
+- a ring of what happens above PASSIVE_LEVEL, copied in by the watchdog
+  once a second: the ISR, the DPC, and the DMA-completed, preempted and
+  vsync notifications. The first 32 of each kind are kept.
+
+**Next one shot** (one change against build 310: QAI 10):
+
+1. Bind the new package at 1.3 as in 16.1: stage, `ConfigFlags |= 0x20`
+   as SYSTEM, clean restart. Check that `WddmVersion 0x1300` comes up as
+   before.
+2. `wddm-probe set 2000 phys uart`, then a clean restart. Same conditions
+   as before: HDMI unplugged, `HdmiHpd 1`.
+3. On whatever comes up next, run `wddm-probe check`. Send:
+   - the journal of the new boot (`LastBootKey`);
+   - the `Device Parameters\maliwddm\Probe2000` key;
+   - a photo of any bugcheck.
+
+What the result says:
+
+- **The journal passes QAI 16 and shows `> CreateDevice`:** QAI 10 was it.
+  The next lines say how far the boot got.
+- **The same 0x139 after the same QAI 16 line:** QAI 10 was not it. The
+  next one shot is `wddm-probe set 2000 phys uart nobudget`, which drops
+  the only other field that differs from the 1.3 segment, the budget flags
+  (0x108005 becomes 0x5).
+- **Anything else:** the new journal lines are the starting point.
