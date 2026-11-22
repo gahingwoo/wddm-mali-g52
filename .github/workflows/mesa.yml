@@ -384,6 +384,14 @@ jobs:
             Write-Host "===== $exe.exe: exit $($codes[$exe])"
             Get-Content "d3dprobe-$exe.txt" -ErrorAction SilentlyContinue
           }
+          # The reference: what the runner's own adapters (WARP, the basic
+          # render driver) answer, printed only; the UMD is not loaded here.
+          Copy-Item out\d3dprobe.exe out\warpref.exe
+          $p = Start-Process -FilePath (Resolve-Path out\warpref.exe).Path -NoNewWindow -PassThru `
+                 -RedirectStandardOutput d3dprobe-warp.txt -RedirectStandardError d3dprobe-warp.err
+          if (-not $p.WaitForExit(240000)) { Stop-Process -Id $p.Id -Force }
+          Write-Host "===== warpref.exe (the runner's adapters, for reference)"
+          Get-Content d3dprobe-warp.txt -ErrorAction SilentlyContinue
           Get-ChildItem C:\mali\log | ForEach-Object {
             Write-Host "===== UMD log $($_.Name): format answers"
             Copy-Item $_.FullName "umdlog-$($_.Name)"
@@ -394,8 +402,8 @@ jobs:
           if ($codes['msedge'] -ne 0) { throw "the device with the multisample answers (msedge.exe) was refused ($($codes['msedge']))" }
           if ($edge -notmatch 'feature level 10_1') { throw 'msedge.exe did not get feature level 10_1' }
           if ($edge -notmatch 'MSAA consistency: 0 disagreement') { throw 'msedge.exe: the multisample answers disagree' }
-          if ($edge -notmatch '(?m)^ +28 R8G8B8A8_UNORM .* ms-rt') { throw 'msedge.exe: R8G8B8A8_UNORM is not a multisample render target' }
-          if ($edge -notmatch '(?m)^ +87 B8G8R8A8_UNORM .* ms-rt') { throw 'msedge.exe: B8G8R8A8_UNORM is not a multisample render target' }
+          if ($edge -notmatch '(?m)^ +28 R8G8B8A8_UNORM .* ms-rt.* q 1 0 1 0') { throw 'msedge.exe: R8G8B8A8_UNORM is not a multisample render target at 1x and 4x' }
+          if ($edge -notmatch '(?m)^ +87 B8G8R8A8_UNORM .* ms-rt.* q 1 0 1 0') { throw 'msedge.exe: B8G8R8A8_UNORM is not a multisample render target at 1x and 4x' }
 
       - uses: actions/upload-artifact@v4
         if: always()

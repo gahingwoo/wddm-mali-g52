@@ -136,11 +136,14 @@ static UINT family(DXGI_FORMAT f)
 }
 
 /*
- * The whole table, and what in it does not agree: a sample count above one
- * with quality levels but no multisample render target bit, or the bit
- * with no such count; members of one typeless family with different
- * quality levels at a sample count where both are render or depth
- * targets. Returns the number of disagreements.
+ * The whole table, and what in it does not agree: on a render or depth
+ * target format, a sample count above one with quality levels but no
+ * multisample render target bit, or the bit with no such count; and any
+ * member of a typeless family whose quality levels above 1x are not the
+ * typeless format's. The second is what the D3D11 runtime refuses a device for
+ * (0x887A0020): it asks the typeless format first and stops at the first
+ * member that answers otherwise (mesa-patches/0068). Returns the number of
+ * disagreements.
  */
 static unsigned format_table(ID3D11Device *dev)
 {
@@ -171,22 +174,23 @@ static unsigned format_table(ID3D11Device *dev)
     for (UINT i = 0; i < ARRAYSIZE(all_formats); i++) {
         bool above = q[i][1] || q[i][2] || q[i][3];
         bool msrt = (sup[i] & D3D11_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET) != 0;
-        if (above != msrt) {
+        UINT kind = D3D11_FORMAT_SUPPORT_RENDER_TARGET | D3D11_FORMAT_SUPPORT_DEPTH_STENCIL;
+        if ((sup[i] & kind) && above != msrt) {
             printf("    MSAA CONSISTENCY: %s: %s\n", all_formats[i].n,
                    msrt ? "multisample render target bit, but no sample count above 1"
                         : "quality levels above 1x, but no multisample render target bit");
             bad++;
         }
         UINT fam = family(all_formats[i].f);
-        UINT kind = D3D11_FORMAT_SUPPORT_RENDER_TARGET | D3D11_FORMAT_SUPPORT_DEPTH_STENCIL;
-        if (!fam || !(sup[i] & kind))
+        if (!fam || (UINT)all_formats[i].f == fam)
             continue;
-        for (UINT j = i + 1; j < ARRAYSIZE(all_formats); j++) {
-            if (family(all_formats[j].f) != fam || !(sup[j] & kind))
+        for (UINT j = 0; j < ARRAYSIZE(all_formats); j++) {
+            if ((UINT)all_formats[j].f != fam)
                 continue;
+            /* 1x is the runtime's own answer; above it the driver's. */
             for (UINT c = 1; c < ARRAYSIZE(counts); c++)
-                if (!q[i][c] != !q[j][c]) {
-                    printf("    MSAA CONSISTENCY: %ux: %s %u, %s %u (one typeless family)\n", counts[c],
+                if (q[i][c] != q[j][c]) {
+                    printf("    MSAA CONSISTENCY: %ux: %s %u, its typeless %s %u\n", counts[c],
                            all_formats[i].n, q[i][c], all_formats[j].n, q[j][c]);
                     bad++;
                 }

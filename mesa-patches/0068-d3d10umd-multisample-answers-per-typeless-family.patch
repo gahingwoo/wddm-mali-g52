@@ -1,0 +1,197 @@
+diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
+index 5ac09f0..426a12e 100644
+--- a/src/gallium/frontends/d3d10umd/Device.cpp
++++ b/src/gallium/frontends/d3d10umd/Device.cpp
+@@ -47,6 +47,7 @@
+ #include "util/u_sampler.h"
+ #include "util/u_framebuffer.h"
+ #include "util/u_debug.h"
++#include "util/format/u_format.h"
+ 
+ #include <stdarg.h>
+ #include <stdio.h>
+@@ -501,26 +502,114 @@ Flush(D3D10DDI_HDEVICE hDevice)  // IN
+  */
+ 
+ /*
+- * The formats that answer as multisample render targets when the device's
+- * msaa is on (Adapter.cpp, EffectiveMsaa): every format Panfrost renders
+- * at 4x, and each of them answers one quality level at 1x and at 4x.
+- *
+- * Both earlier forms said "multisample render target" with no count above
+- * one (0064 for every render-target format, 0065 for the 8-bit RGBA and
+- * BGRA ones only), and on the TaishanPi 3M both ended with no device: in
+- * dwm.exe (0064: render thread failure, no renders, no UMD reports) and in
+- * Edge's GPU process (0065: ANGLE's "No available renderers"). The common
+- * part is that bit without a real sample count, so now it is given only
+- * where 4x is real. ANGLE still uses one sample: it asks for 2x first,
+- * which the G52 does not have (pan_screen.c), and stops there, keeping
+- * {1}; that is all Skia needs to render to RGBA8.
++ * The multisample answers when the device's msaa is on (Adapter.cpp,
++ * EffectiveMsaa), given per typeless family (cast set): a family has them
++ * when every member Panfrost renders or depth-tests at all, it does at 4x
++ * too. Then every member of it, the typeless one first, answers one quality
++ * level at 1x and at 4x (CheckMultisampleQualityLevels), and the members
++ * that are render or depth targets say multisample render target
++ * (CheckFormatSupport; a depth format with no render target bit).
++ *
++ * 0066 answered format by format, by the gallium translation, and the D3D11
++ * runtime refused the device in msedge.exe (0x887A0020,
++ * DXGI_ERROR_DRIVER_INTERNAL_ERROR, TaishanPi 3M, 2026-11-22), while the
++ * same binary under another name came up at 10_1. The runtime asks every
++ * format while it creates the device, the typeless one of a family first,
++ * and stops at the first member whose quality levels are not the typeless
++ * one's: with 0066, R32G32B32A32_TYPELESS (no translation) said 0 at 4x and
++ * R32G32B32A32_FLOAT 1, and the device was gone there (CI, runner's
++ * runtime, the same 0x887A0020). A multisampled resource is created
++ * typeless, with one sample count for all its views, so one family has one
++ * answer. 0066 also split families by bind: D32_FLOAT none (asked as a
++ * render target) against R32_FLOAT 4x, D16_UNORM against R16_UNORM.
++ *
++ * ANGLE still uses one sample: it asks for 2x first, which the G52 does
++ * not have (pan_screen.c), and stops there, keeping {1}; that is all Skia
++ * needs to render to RGBA8.
+  */
+ static bool
+-MsaaFormat(const Device *pDevice, enum pipe_format format)
++MsaaTarget(struct pipe_screen *screen, DXGI_FORMAT Format, unsigned samples)
+ {
+-   return pDevice->msaa != 0 && format != PIPE_FORMAT_NONE &&
+-          pDevice->screen->is_format_supported(pDevice->screen, format, PIPE_TEXTURE_2D, 4, 4,
+-                                               PIPE_BIND_RENDER_TARGET);
++   /* Creation only (CheckFormatSupport answers it nothing). */
++   if (Format == DXGI_FORMAT_R10G10B10_XR_BIAS_A2_UNORM)
++      return false;
++   enum pipe_format format = FormatTranslate(Format, false);
++   if (format == PIPE_FORMAT_NONE)
++      return false;
++   if (util_format_is_depth_or_stencil(format))
++      return screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, samples, samples,
++                                         PIPE_BIND_DEPTH_STENCIL);
++   return screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, samples, samples,
++                                      PIPE_BIND_RENDER_TARGET);
++}
++
++/* The members of Format's typeless family, the typeless one first; a format
++ * alone in its family is its own. Returns the number. */
++static unsigned
++FormatFamily(DXGI_FORMAT Format, DXGI_FORMAT members[8])
++{
++   static const struct { UINT first, last; } runs[] = {
++      { DXGI_FORMAT_R32G32B32A32_TYPELESS, DXGI_FORMAT_R32G32B32A32_SINT },
++      { DXGI_FORMAT_R32G32B32_TYPELESS, DXGI_FORMAT_R32G32B32_SINT },
++      { DXGI_FORMAT_R16G16B16A16_TYPELESS, DXGI_FORMAT_R16G16B16A16_SINT },
++      { DXGI_FORMAT_R32G32_TYPELESS, DXGI_FORMAT_R32G32_SINT },
++      { DXGI_FORMAT_R32G8X24_TYPELESS, DXGI_FORMAT_X32_TYPELESS_G8X24_UINT },
++      { DXGI_FORMAT_R10G10B10A2_TYPELESS, DXGI_FORMAT_R10G10B10A2_UINT },
++      { DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_SINT },
++      { DXGI_FORMAT_R16G16_TYPELESS, DXGI_FORMAT_R16G16_SINT },
++      { DXGI_FORMAT_R32_TYPELESS, DXGI_FORMAT_R32_SINT },
++      { DXGI_FORMAT_R24G8_TYPELESS, DXGI_FORMAT_X24_TYPELESS_G8_UINT },
++      { DXGI_FORMAT_R8G8_TYPELESS, DXGI_FORMAT_R8G8_SINT },
++      { DXGI_FORMAT_R16_TYPELESS, DXGI_FORMAT_R16_SINT },
++      { DXGI_FORMAT_R8_TYPELESS, DXGI_FORMAT_R8_SINT },
++   };
++   static const DXGI_FORMAT bgra[] = {
++      DXGI_FORMAT_B8G8R8A8_TYPELESS, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
++   };
++   static const DXGI_FORMAT bgrx[] = {
++      DXGI_FORMAT_B8G8R8X8_TYPELESS, DXGI_FORMAT_B8G8R8X8_UNORM, DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
++   };
++   unsigned n = 0;
++
++   for (unsigned i = 0; i < ARRAYSIZE(runs); i++) {
++      if ((UINT)Format >= runs[i].first && (UINT)Format <= runs[i].last) {
++         for (UINT f = runs[i].first; f <= runs[i].last; f++)
++            members[n++] = (DXGI_FORMAT)f;
++         return n;
++      }
++   }
++   for (unsigned i = 0; i < ARRAYSIZE(bgra); i++) {
++      if (Format == bgra[i] || Format == bgrx[i]) {
++         const DXGI_FORMAT *set = Format == bgra[i] ? bgra : bgrx;
++         for (unsigned j = 0; j < ARRAYSIZE(bgra); j++)
++            members[n++] = set[j];
++         return n;
++      }
++   }
++   members[n++] = Format;
++   return n;
++}
++
++static bool
++MsaaFormat(const Device *pDevice, DXGI_FORMAT Format)
++{
++   DXGI_FORMAT members[8];
++   unsigned n;
++   bool any = false;
++
++   if (pDevice->msaa == 0)
++      return false;
++   n = FormatFamily(Format, members);
++   for (unsigned i = 0; i < n; i++) {
++      if (!MsaaTarget(pDevice->screen, members[i], 1))
++         continue;
++      if (!MsaaTarget(pDevice->screen, members[i], 4))
++         return false;
++      any = true;
++   }
++   /* Every member, the typeless one and those only sampled too: the
++    * runtime holds each to the typeless one's quality levels. */
++   return any;
+ }
+ 
+ /*
+@@ -606,12 +695,7 @@ CheckFormatSupportImpl(Device *pDevice,         // IN
+        * target, and CheckMultisampleQualityLevels below offers one sample
+        * only, so nothing ever renders multisampled; with 4 it offers 4x too.
+        */
+-      if (MsaaFormat(pDevice, format)) {
+-         *pFormatCaps |= D3D10_DDI_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET;
+-         if (screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 4, 4,
+-                                         PIPE_BIND_SAMPLER_VIEW))
+-            *pFormatCaps |= D3D10_DDI_FORMAT_SUPPORT_MULTISAMPLE_LOAD;
+-      }
++      /* The multisample bits themselves: below, for depth formats too. */
+ 
+ #if SUPPORT_MSAA
+       if (screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 4, 4,
+@@ -632,6 +716,17 @@ CheckFormatSupportImpl(Device *pDevice,         // IN
+       }
+ #endif
+    }
++
++   /* The family's answer (MsaaFormat above), the same one
++    * CheckMultisampleQualityLevels gives, on the members that are render or
++    * depth targets: depth formats are multisample targets with no render
++    * target bit. */
++   if (MsaaFormat(pDevice, Format) && MsaaTarget(screen, Format, 4)) {
++      *pFormatCaps |= D3D10_DDI_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET;
++      if (screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 4, 4,
++                                      PIPE_BIND_SAMPLER_VIEW))
++         *pFormatCaps |= D3D10_DDI_FORMAT_SUPPORT_MULTISAMPLE_LOAD;
++   }
+ }
+ 
+ 
+@@ -655,16 +750,13 @@ CheckMultisampleQualityLevels(D3D10DDI_HDEVICE hDevice,        // IN
+ {
+    //LOG_ENTRYPOINT();
+ 
+-   /* MSAA only as maliwddm's UmdMsaa says (CheckFormatSupport above): 0
+-    * none, as before; 1 a single sample; 4 also 4x where Panfrost can
+-    * render and sample it (ResolveSubresource resolves on the GPU). */
++   /* MSAA only as maliwddm's UmdMsaa says, and per typeless family
++    * (MsaaFormat above): one quality level at 1x and at 4x, where the
++    * family has 4x (ResolveSubresource resolves on the GPU). */
+    Device *pDevice = CastDevice(hDevice);
+-   struct pipe_screen *screen = pDevice->screen;
+-   enum pipe_format format = FormatTranslate(Format, false);
+ 
+    *pNumQualityLevels = 0;
+-   (void)screen;
+-   if (MsaaFormat(pDevice, format) && (SampleCount == 1 || SampleCount == 4))
++   if (MsaaFormat(pDevice, Format) && (SampleCount == 1 || SampleCount == 4))
+       *pNumQualityLevels = 1;
+    LogCaps(pDevice, "caps: CheckMultisampleQualityLevels %u x%u -> %u\n", (unsigned)Format,
+            SampleCount, *pNumQualityLevels);
