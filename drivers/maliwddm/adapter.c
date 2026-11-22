@@ -780,7 +780,7 @@ static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D, UINT Size)
 
 /* The GPU clock as the CRU has it now (MW_ESCAPE_PERF_DATA.ClkSel165). A
  * read of a CRU register this driver already writes (GpuClkWrite). */
-static void GpuClkRead(ULONG *Raw, ULONG *Hz)
+static void GpuClkRead(mw_u32 *Raw, mw_u32 *Hz)
 {
     static const ULONG parent[8] = { 1188000000u, 1000000000u, 0, 702000000u, 0, 0, 0, 0 };
     PHYSICAL_ADDRESS pa;
