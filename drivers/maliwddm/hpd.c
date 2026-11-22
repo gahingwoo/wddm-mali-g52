@@ -254,7 +254,7 @@ static void Indicate(MW_ADAPTER *A, BOOLEAN Connected)
 static void Checkpoint(MW_ADAPTER *A, ULONG Stage)
 {
     MW_HDMI *H = &A->Hdmi;
-    PCWSTR n[14];
+    PCWSTR const *n;
     ULONG v[14], fault = 0, k = 0;
 
     static PCWSTR const s1[14] = {
@@ -264,7 +264,7 @@ static void Checkpoint(MW_ADAPTER *A, ULONG Stage)
         L"Chk2_Flips", L"Chk2_Scanned", L"Chk2_Copied", L"Chk2_NotMapped", L"Chk2_Invisible", L"Chk2_Mismatch",
         L"Chk2_Refused", L"Chk2_Maps", L"Chk2_Showing", L"Chk2_ScanAddr", L"Chk2_Fb", L"Chk2_Mmu0", L"Chk2_Mmu1", L"Chk2_Fault" };
 
-    RtlCopyMemory(n, Stage == 1 ? s1 : s2, sizeof(n));
+    n = Stage == 1 ? s1 : s2;
     v[k++] = A->Flips - H->BaseFlips;
     v[k++] = A->ScanFlips - H->BaseScanFlips;
     v[k++] = A->FlipCopies - H->BaseCopies;
