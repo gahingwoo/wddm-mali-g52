@@ -304,6 +304,71 @@ New trace values (all level 3):
 3. Unplug HDMI, wait 15 s, note the panel; plug it back, wait 15 s.
 4. Dump the trace (all values) and the three text files.
 
+## Board run of 8bf90b7 (2026-11-22): what the numbers say
+
+The 2560x1440 primary is now scanned out (Scanned 2, Refused 0), and the
+picture is still black; the panel restore on unplug works and lights the
+panel at once.
+
+- **LastWhy 9** is "the flip came while the source was invisible".
+  `Showing` 0x36 has bit 3 (visible) clear, in both runs.
+- **Vis churn.** `Vis` packs on << 16 | off: 0x10a52 is one visibility-on
+  and 2642 visibility-off calls; 0x52abb is 5 on and about 10,000 off, some
+  50 a second. dxgkrnl keeps turning the source off and almost never on.
+  Flips are only made to a visible source, hence one flip in 88 s, and
+  `Maps` in the thousands is DWM recreating its primaries each time.
+- **What dxgkrnl keeps asking for.** In the packed `Calls` value of that
+  build, IsSupportedVidPn ran some 30 times during the black period
+  (0x..63 -> 0x..7f, 6-bit field) and `Hpd_IsSup` never changed from
+  0x2000100: target 0, reason 1, two paths, refused. `Hpd_IsSup` is written
+  only on a change, so every one of those calls was the same two-path
+  VidPN, refused for having two paths. The four calls during Win+P "PC
+  screen only" were the same.
+- **The likely cause.** With two connected targets on one VidPN source,
+  the session's display configuration asks for a two-path topology
+  (Windows' default for a second display is Extend, and clone is the other
+  two-path one), the driver refuses it, and the retry loop toggles the
+  source invisible and rebuilds DWM's swap chain, forever. On the panel
+  alone (after unplug) there is one display, nothing two-path to ask for,
+  and it works. Unproven: the next build counts it outright.
+- **Vsync** cannot be judged from that build; it is now counted.
+
+New in this build: snapshots carry separate full counters instead of the
+packed `Calls`: `_IsSup`, `_Enum`, `_RecFunc`, `_Status`, `_Desc`,
+`_Sup0`..`_Sup5` (IsSupportedVidPn answers by reason), `_Vsyncs` and
+`_VsyncTgt` (vsync interrupts sent to dxgkrnl since the mode set, and the
+target they name), `_IntOn`/`_IntOff` (vsync interrupt switches),
+`_Presents`, `_PresentFlips`, `_Creates`, `_Destroys`, `_VisOff`,
+`_VisOn`; `Showing` bit 7 is "vsync interrupt on". `Per_Sup2Path` is the
+last two-path VidPN refused: (source << 8 | target) of the first path in
+bits 31:16, of the second in 15:0. Source 0 on both is clone; sources 0
+and 1 is extend. `Blk_VisOff1Ms`..`4Ms` are the first four visibility-off
+times after the mode set.
+
+And an experiment, off by default: `HdmiExclusive` 1 (DSI boot, level 3).
+The panel child is reported hot-plug aware, and disconnected while a
+monitor is on HDMI. Windows then never has two displays, so it has nothing
+two-path to ask for. Plugging HDMI tells Windows "HDMI connected" then
+"panel gone"; unplugging, "panel back" then "HDMI gone". `Hpd_IndicatePanel`
+is the status of the panel's indication. The cost: the panel cannot be
+used while HDMI is plugged in, as on a laptop docked with the lid shut.
+A real extended desktop needs a second VidPN source and the panel on VP2,
+as Linux runs it.
+
+### The next one-shot test
+
+Two cold boots, trace cleared before each, panel and monitor attached,
+`HdmiHpd` 3, `HdmiDiag` 0:
+
+1. `HdmiExclusive` 0. Wait 90 s after the logon chime. Dump the trace.
+   Expected if the explanation holds: `Per_Sup1` climbing, `Per_Sup2Path`
+   naming the two-path VidPN, `Per_VisOff` climbing, `Per_Vsyncs` climbing
+   at about 60 a second with `Per_VsyncTgt` 1. If `Per_Vsyncs` stays near 0
+   instead, it is the vsync.
+2. `HdmiExclusive` 1. Expected: the desktop on HDMI, `Per_Flips` climbing,
+   `Per_VisOff` small. Then unplug HDMI (the panel should come back) and
+   replug (HDMI should take over again). Dump the trace.
+
 ## Open risks
 
 - Nothing here has run. The first board session decides which HPD bit is

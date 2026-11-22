@@ -146,6 +146,7 @@ typedef struct _MW_HDMI {
      * (Hold). After each mode set the poll thread logs what the flips did,
      * at +3 s and +10 s (Chk1_*, Chk2_*), against Base*. */
     ULONG Diag;
+    BOOLEAN Exclusive;          /* HdmiExclusive: the panel reported gone while HDMI is there */
     volatile LONG Hold;
     ULONG64 MsetTick;
     ULONG CheckStage;
@@ -159,6 +160,17 @@ typedef struct _MW_HDMI {
     BOOLEAN BlackLogged;
     volatile LONG VisOn, VisOff, RecFunc, IsSupCalls, EnumCalls, StatusCalls, DescCalls;
     volatile LONG LastFlipWH, LastFlipWhy;
+    /* IsSupportedVidPn answers by reason (0 supported, 1..5 hpd.c), the
+     * last VidPN of two paths (source and target of each, a byte apiece),
+     * the first four visibility-off times after a mode set (ms since
+     * boot), the vsync interrupt switches, and the bases of the counters
+     * the snapshots report as deltas. */
+    volatile LONG SupBy[6];
+    volatile LONG Sup2Path;
+    ULONG VisOffMs[4];
+    volatile LONG VisOffN;
+    volatile LONG IntOn, IntOff;
+    ULONG BaseVsyncs, BasePresents, BasePresentFlips, BaseCreates, BaseDestroys, BaseVisOff;
     ULONG BaseFlips, BaseScanned, BaseCopies, BaseNotMapped, BaseInvisible, BaseMismatch, BaseMaps, BaseScanFlips;
     ULONG LastSup, LastEnum, Commits;
 

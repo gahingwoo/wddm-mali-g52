@@ -1132,6 +1132,8 @@ NTSTATUS APIENTRY MwControlInterrupt(IN_CONST_HANDLE hAdapter, IN_CONST_DXGK_INT
 
     if (Type != DXGK_INTERRUPT_CRTC_VSYNC)
         return STATUS_SUCCESS;
+    if (a->Hdmi.Switch)
+        InterlockedIncrement(Enable ? &a->Hdmi.IntOn : &a->Hdmi.IntOff);
     if (Enable) {
         if (InterlockedExchange(&a->VsyncOn, 1) == 0) {
             LARGE_INTEGER due;

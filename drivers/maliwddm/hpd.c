@@ -91,6 +91,7 @@ void MwHpdSettings(MW_ADAPTER *A)
         H->DebounceMs = 10000;
     H->Audio = MwSetting(A, L"HdmiAudio", 1) != 0;
     H->Diag = MwSetting(A, L"HdmiDiag", 0);
+    H->Exclusive = MwSetting(A, L"HdmiExclusive", 0) != 0;
     H->LastSup = H->LastEnum = 0xFFFFFFFFu;
     H->ResMaxPixels = MwSetting(A, L"HdmiMaxPixels", 2560 * 1600);
     if (H->ResMaxPixels > MW_VP0_MAX_W * MW_VP0_MAX_H)
@@ -103,6 +104,7 @@ void MwHpdSettings(MW_ADAPTER *A)
     MwLog(A, L"Hpd_Level", H->Level);
     MwLog(A, L"Hpd_Source", H->Source);
     MwLog(A, L"Hpd_Diag", H->Diag);
+    MwLog(A, L"Hpd_Exclusive", H->Exclusive);
 }
 
 /* Level 3: the framebuffer of the driver's own mode sets, allocated now,
@@ -227,20 +229,36 @@ static void ReadEdid(MW_ADAPTER *A)
 
 /* ---- the poll thread ---- */
 
-static void Indicate(MW_ADAPTER *A, BOOLEAN Connected)
+static void IndicateOne(MW_ADAPTER *A, ULONG Child, BOOLEAN Connected, PCWSTR Name)
 {
-    MW_HDMI *H = &A->Hdmi;
     DXGK_CHILD_STATUS cs;
     NTSTATUS st;
 
-    if (!H->Expose)
-        return;
     RtlZeroMemory(&cs, sizeof(cs));
     cs.Type = StatusConnection;
-    cs.ChildUid = H->HdmiChild;
+    cs.ChildUid = Child;
     cs.HotPlug.Connected = Connected;
     st = A->Dxgk.DxgkCbIndicateChildStatus(A->Dxgk.DeviceHandle, &cs);
-    MwLog(A, L"Hpd_Indicate", (ULONG)st);
+    MwLog(A, Name, (ULONG)st);
+}
+
+/* HdmiExclusive (DSI boot): the panel is reported disconnected while a
+ * monitor is on HDMI, so that Windows never has two displays to arrange on
+ * one VidPN source. Plugged: HDMI there first, then the panel gone;
+ * unplugged: the panel back first, then HDMI gone, so that Windows always
+ * has a display to move to. */
+static void Indicate(MW_ADAPTER *A, BOOLEAN Connected)
+{
+    MW_HDMI *H = &A->Hdmi;
+    BOOLEAN excl = H->Exclusive && H->Dsi && H->Children == 2;
+
+    if (!H->Expose)
+        return;
+    if (excl && !Connected)
+        IndicateOne(A, 0, TRUE, L"Hpd_IndicatePanel");
+    IndicateOne(A, H->HdmiChild, Connected, L"Hpd_Indicate");
+    if (excl && Connected)
+        IndicateOne(A, 0, FALSE, L"Hpd_IndicatePanel");
 }
 
 /* Something that can leave the screen black, stamped once after each mode
@@ -258,25 +276,32 @@ void MwHpdBlackEvent(MW_ADAPTER *A, LONG Why)
 }
 
 /* The state of the HDMI scan-out, as registry values Prefix_<name>.
- * Flips, Scanned, Copied, NotMapped, Invisible, Mismatch, Maps: deltas
- * since the last mode set. Refused: the last primary refused at map time,
- * W << 16 | H (from any time). Showing: bit 0 window on a primary, 1
- * scan-out on, 2 IOMMU paging, 3 source visible, 4 path active, 5 on our
- * framebuffer, 6 Hold, 15:8 rotation. ScanAddr: the last flip's address.
- * Fb: A->Fb, W << 16 | H. LastFlip: that flip's primary, W << 16 | H;
- * LastWhy: why it was or was not scanned out (0 scanned, 1 scan-out off,
- * 2 not entered, 3 rotated, 4 another size, 9 source invisible). Vis:
- * visibility on << 16 | off since start. Calls: IsSupportedVidPn,
- * EnumVidPnCofuncModality, RecommendFunctionalVidPn, QueryChildStatus and
- * QueryDeviceDescriptor calls since start, 6 bits each (low to high).
- * Mmu0, Mmu1, Fault: the IOMMU registers MwScanCheck reads. Ms: interrupt
- * time in ms since boot. */
+ * Deltas since the last mode set: Flips (SetVidPnSourceAddress calls),
+ * Scanned, Copied, NotMapped, Invisible, Mismatch, Maps (primaries entered
+ * in the IOMMU), Vsyncs (vsync interrupts the driver sent dxgkrnl, all for
+ * target VsyncTgt), Presents and PresentFlips (DxgkDdiPresent, all and
+ * flips), Creates and Destroys (allocations), VisOff (visibility-off
+ * calls). Refused: the last primary refused at map time, W << 16 | H.
+ * Showing: bit 0 window on a primary, 1 scan-out on, 2 IOMMU paging, 3
+ * source visible, 4 path active, 5 our framebuffer, 6 Hold, 7 vsync
+ * interrupt on, 15:8 rotation. ScanAddr: the last flip's address. Fb:
+ * A->Fb. LastFlip: that flip's primary, LastWhy: 0 scanned, 1 scan-out
+ * off, 2 not entered, 3 rotated, 4 another size, 9 source invisible.
+ * VisOn: visibility-on calls since start. IsSup, Enum, RecFunc, Status,
+ * Desc: DDI calls since start. Sup0..Sup5: IsSupportedVidPn answers by
+ * reason since start (0 supported). IntOn, IntOff: vsync interrupt
+ * switches since start. Mmu0, Mmu1, Fault: the IOMMU registers
+ * MwScanCheck reads. Ms: ms since boot. */
 static void Snapshot(MW_ADAPTER *A, PCWSTR Prefix)
 {
     MW_HDMI *H = &A->Hdmi;
     static PCWSTR const names[] = {
         L"Flips", L"Scanned", L"Copied", L"NotMapped", L"Invisible", L"Mismatch", L"Refused", L"Maps",
-        L"Showing", L"ScanAddr", L"Fb", L"LastFlip", L"LastWhy", L"Vis", L"Calls", L"Mmu0", L"Mmu1", L"Fault", L"Ms" };
+        L"Vsyncs", L"VsyncTgt", L"Presents", L"PresentFlips", L"Creates", L"Destroys", L"VisOff",
+        L"Showing", L"ScanAddr", L"Fb", L"LastFlip", L"LastWhy", L"VisOn",
+        L"IsSup", L"Enum", L"RecFunc", L"Status", L"Desc",
+        L"Sup0", L"Sup1", L"Sup2", L"Sup3", L"Sup4", L"Sup5", L"IntOn", L"IntOff",
+        L"Mmu0", L"Mmu1", L"Fault", L"Ms" };
     ULONG v[ARRAYSIZE(names)], fault = 0, k = 0;
     WCHAR buf[48];
     UNICODE_STRING us;
@@ -289,16 +314,30 @@ static void Snapshot(MW_ADAPTER *A, PCWSTR Prefix)
     v[k++] = A->ScanMismatch - H->BaseMismatch;
     v[k++] = A->ScanLastW << 16 | (A->ScanLastH & 0xFFFF);
     v[k++] = A->ScanMaps - H->BaseMaps;
+    v[k++] = A->Vsyncs - H->BaseVsyncs;
+    v[k++] = H->ActiveTarget;
+    v[k++] = A->Presents - H->BasePresents;
+    v[k++] = A->PresentFlips - H->BasePresentFlips;
+    v[k++] = (ULONG)A->MemCreates - H->BaseCreates;
+    v[k++] = (ULONG)A->MemDestroys - H->BaseDestroys;
+    v[k++] = (ULONG)H->VisOff - H->BaseVisOff;
     v[k++] = (A->ScanShowing ? 1u : 0) | (A->ScanOn ? 2u : 0) | (A->ScanPaging ? 4u : 0) |
              (A->SourceVisible ? 8u : 0) | (A->PathActive ? 16u : 0) | (H->OnRes ? 32u : 0) |
-             (H->Hold ? 64u : 0) | A->RotDeg << 8;
+             (H->Hold ? 64u : 0) | (A->VsyncOn ? 128u : 0) | A->RotDeg << 8;
     v[k++] = A->ScanAddr.LowPart;
     v[k++] = A->Fb.Width << 16 | (A->Fb.Height & 0xFFFF);
     v[k++] = (ULONG)H->LastFlipWH;
     v[k++] = (ULONG)H->LastFlipWhy;
-    v[k++] = (ULONG)H->VisOn << 16 | ((ULONG)H->VisOff & 0xFFFF);
-    v[k++] = ((ULONG)H->IsSupCalls & 63) | ((ULONG)H->EnumCalls & 63) << 6 | ((ULONG)H->RecFunc & 63) << 12 |
-             ((ULONG)H->StatusCalls & 63) << 18 | ((ULONG)H->DescCalls & 63) << 24;
+    v[k++] = (ULONG)H->VisOn;
+    v[k++] = (ULONG)H->IsSupCalls;
+    v[k++] = (ULONG)H->EnumCalls;
+    v[k++] = (ULONG)H->RecFunc;
+    v[k++] = (ULONG)H->StatusCalls;
+    v[k++] = (ULONG)H->DescCalls;
+    for (ULONG r = 0; r < 6; r++)
+        v[k++] = (ULONG)H->SupBy[r];
+    v[k++] = (ULONG)H->IntOn;
+    v[k++] = (ULONG)H->IntOff;
     v[k++] = MwScanMmuStatus(A, 0, &fault);
     v[k++] = MwScanMmuStatus(A, 1, &fault);
     v[k++] = fault;
@@ -328,6 +367,10 @@ static void Periodic(MW_ADAPTER *A)
     }
     if (!H->BlackLogged && H->BlackTick != 0) {
         H->BlackLogged = TRUE;
+        MwLog(A, L"Blk_VisOff1Ms", H->VisOffMs[0]);
+        MwLog(A, L"Blk_VisOff2Ms", H->VisOffMs[1]);
+        MwLog(A, L"Blk_VisOff3Ms", H->VisOffMs[2]);
+        MwLog(A, L"Blk_VisOff4Ms", H->VisOffMs[3]);
         MwLog(A, L"Blk_Why", (ULONG)H->BlackWhy);
         MwLog(A, L"Blk_EventMs", (ULONG)((ULONG64)H->BlackTick / 10000));
         MwLog(A, L"Blk_AfterMs", (ULONG)(((ULONG64)H->BlackTick - H->MsetTick) / 10000));
@@ -335,6 +378,7 @@ static void Periodic(MW_ADAPTER *A)
     }
     if (now >= H->NextPer) {
         Snapshot(A, L"Per");
+        MwLog(A, L"Per_Sup2Path", (ULONG)H->Sup2Path);
         MwLog(A, L"Per_N", ++H->PerN);
         H->NextPer = now + (now - H->MsetTick < 120000ull * 10000 ? 5000ull : 30000ull) * 10000;
     }
@@ -526,7 +570,8 @@ NTSTATUS MwHpdQueryChildRelations(MW_ADAPTER *A, PDXGK_CHILD_DESCRIPTOR C, ULONG
         C[i].ChildCapabilities.Type.VideoOutput.InterfaceTechnology = panel ? D3DKMDT_VOT_INTERNAL : D3DKMDT_VOT_HDMI;
         C[i].ChildCapabilities.Type.VideoOutput.MonitorOrientationAwareness = D3DKMDT_MOA_NONE;
         C[i].ChildCapabilities.Type.VideoOutput.SupportsSdtvModes = FALSE;
-        C[i].ChildCapabilities.HpdAwareness = panel ? HpdAwarenessAlwaysConnected : HpdAwarenessInterruptible;
+        C[i].ChildCapabilities.HpdAwareness = (panel && !H->Exclusive) ? HpdAwarenessAlwaysConnected
+                                                                       : HpdAwarenessInterruptible;
         C[i].AcpiUid = 0;
         C[i].ChildUid = i;
     }
@@ -541,7 +586,10 @@ NTSTATUS MwHpdQueryChildStatus(MW_ADAPTER *A, PDXGK_CHILD_STATUS S)
     InterlockedIncrement(&H->StatusCalls);
     switch (S->Type) {
     case StatusConnection:
-        S->HotPlug.Connected = S->ChildUid == H->HdmiChild ? H->Connected : TRUE;
+        if (S->ChildUid == H->HdmiChild)
+            S->HotPlug.Connected = H->Connected;
+        else
+            S->HotPlug.Connected = !(H->Exclusive && H->Dsi && H->Children == 2 && H->Connected);
         return STATUS_SUCCESS;
     case StatusRotation:
         S->Rotation.Angle = 0;
@@ -797,7 +845,7 @@ NTSTATUS MwHpdIsSupportedVidPn(MW_ADAPTER *A, DXGKARG_ISSUPPORTEDVIDPN *Arg)
     const DXGK_VIDPNTOPOLOGY_INTERFACE *ti;
     const D3DKMDT_VIDPN_PRESENT_PATH *path = NULL, *next;
     MW_TIMING m[MW_HDMI_MODES];
-    ULONG paths = 0, reason = 0, target = 0xFF;
+    ULONG paths = 0, reason = 0, target = 0xFF, twoPath = 0;
     UINT w = 0, h = 0;
     NTSTATUS st;
 
@@ -821,6 +869,8 @@ NTSTATUS MwHpdIsSupportedVidPn(MW_ADAPTER *A, DXGKARG_ISSUPPORTEDVIDPN *Arg)
 
         paths++;
         target = path->VidPnTargetId;
+        if (paths <= 2)
+            twoPath |= ((path->VidPnSourceId & 0xFF) << 8 | (path->VidPnTargetId & 0xFF)) << (paths == 1 ? 16 : 0);
         if (reason == 0 && (path->VidPnSourceId != 0 || paths > 1))
             reason = 1;
         if (reason == 0 && n == 0)
@@ -847,6 +897,9 @@ NTSTATUS MwHpdIsSupportedVidPn(MW_ADAPTER *A, DXGKARG_ISSUPPORTEDVIDPN *Arg)
         path = next;
     }
     Arg->IsVidPnSupported = reason == 0;
+    InterlockedIncrement(&H->SupBy[reason]);
+    if (paths >= 2)
+        InterlockedExchange(&H->Sup2Path, (LONG)twoPath);
     LogOnChange(A, L"Hpd_IsSup", &H->LastSup, (target & 0xFF) | reason << 8 | (reason == 0 ? 1u : 0) << 16 | paths << 24);
     return STATUS_SUCCESS;
 }
@@ -978,6 +1031,14 @@ static void Baseline(MW_ADAPTER *A)
     H->BaseInvisible = A->WhyInvisible;
     H->BaseMismatch = A->ScanMismatch;
     H->BaseMaps = A->ScanMaps;
+    H->BaseVsyncs = A->Vsyncs;
+    H->BasePresents = A->Presents;
+    H->BasePresentFlips = A->PresentFlips;
+    H->BaseCreates = (ULONG)A->MemCreates;
+    H->BaseDestroys = (ULONG)A->MemDestroys;
+    H->BaseVisOff = (ULONG)H->VisOff;
+    InterlockedExchange(&H->VisOffN, 0);
+    RtlZeroMemory(H->VisOffMs, sizeof(H->VisOffMs));
     H->MsetTick = KeQueryInterruptTime();
     H->CheckStage = 1;
     H->NextPer = H->MsetTick + 5000ull * 10000;

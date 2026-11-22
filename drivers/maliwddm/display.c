@@ -727,8 +727,12 @@ NTSTATUS APIENTRY MwSetVidPnSourceVisibility(IN_CONST_HANDLE hAdapter,
     if (Arg->Visible) dev->VisibleOn++; else dev->VisibleOff++;
     if (dev->Hdmi.Switch) {
         InterlockedIncrement(Arg->Visible ? &dev->Hdmi.VisOn : &dev->Hdmi.VisOff);
-        if (!Arg->Visible)
+        if (!Arg->Visible) {
+            LONG n = InterlockedIncrement(&dev->Hdmi.VisOffN);
+            if (n <= 4)
+                dev->Hdmi.VisOffMs[n - 1] = (ULONG)(KeQueryInterruptTime() / 10000);
             MwHpdBlackEvent(dev, 1);
+        }
     }
     /* Invisible means blank: clear the framebuffer once, and show it if
      * the window was on a primary. HdmiDiag 2 keeps its pattern. */
