@@ -141,6 +141,7 @@ static NTSTATUS APIENTRY MwAddDevice(IN_CONST_PDEVICE_OBJECT Pdo, OUT_PPVOID Con
     MwCommandInit(a);
     /* The probe's watchdog, from here so a hang in StartDevice is seen. */
     MwProbeStart(a);
+    MwBc("AddDevice: adapter context %p", a);
     *Context = a;
     return STATUS_SUCCESS;
 }
@@ -259,6 +260,8 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
     UNREFERENCED_PARAMETER(StartInfo);
 
     a->Dxgk = *Dxgk;
+    /* PHYSICALADAPTERCAPS hands this handle back to dxgkrnl (wddm2x.c). */
+    MwBc("StartDevice: dxgkrnl DeviceHandle %p, interface version 0x%x", Dxgk->DeviceHandle, Dxgk->Version);
     {
         LARGE_INTEGER hz;
         (void)KeQueryPerformanceCounter(&hz);
@@ -388,6 +391,7 @@ static VOID APIENTRY MwResetDevice(IN_CONST_PVOID Context)
 
 static VOID APIENTRY MwUnload(VOID)
 {
+    MwBcClose();
 }
 
 /* The brightness interface, for an internal panel only (backlight.c). */
@@ -564,6 +568,8 @@ static NTSTATUS APIENTRY MwQueryAdapterInfo(IN_CONST_HANDLE hAdapter, const DXGK
     MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
     NTSTATUS st;
 
+    /* The boot journal (probe.c): which QAI, flushed before it is answered. */
+    MwBc("QAI %u asked: in %u bytes, out %u bytes", (ULONG)Info->Type, Info->InputDataSize, Info->OutputDataSize);
     switch (Info->Type) {
     case DXGKQAITYPE_DRIVERCAPS:
         st = DriverCaps(a, Info);
@@ -627,6 +633,8 @@ static NTSTATUS APIENTRY MwQueryAdapterInfo(IN_CONST_HANDLE hAdapter, const DXGK
     RtlInitEmptyUnicodeString(&us, name, sizeof(name));
     if (NT_SUCCESS(RtlUnicodeStringPrintf(&us, L"QAI_%u_Size", (ULONG)Info->Type)))
         MwLog(a, name, Info->OutputDataSize);
+    /* And what was answered, in the journal (wddm2x.c). */
+    Mw2xBcQai(a, Info, st);
     return st;
 }
 

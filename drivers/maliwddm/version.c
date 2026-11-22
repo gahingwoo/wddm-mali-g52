@@ -19,16 +19,23 @@
  * One-shot fallback. A version dxgkrnl refuses can leave the board without
  * a desktop, so a probe arms itself:
  *
- *   - DriverEntry with WddmProbe set writes WddmProbeArmed = WddmProbe.
- *   - When the adapter has done MW_PROBE_CONFIRM_RENDERS Render calls (DWM
- *     drawing for a few seconds), WddmProbeArmed goes back to 0 and
- *     WddmProbeConfirmed = WddmProbe is written.
+ *   - DriverEntry with WddmProbe set writes WddmProbeArmed = WddmProbe,
+ *     flushes it and reads it back. If it does not read back, the probe is
+ *     not used this boot (WddmProbeArmFailed, WDDM 1.3): an unarmed 2.x
+ *     boot that hangs would hang every boot after it.
+ *   - The probe's watchdog thread (probe.c) clears WddmProbeArmed and
+ *     writes WddmProbeConfirmed once the boot is good by Mw2Confirm
+ *     (wddm2plan.h): 300 renders, 120 s up and no DDI stuck.
  *   - If DriverEntry finds WddmProbeArmed equal to WddmProbe, the last boot
  *     with this value never got that far. It then deletes WddmProbe, writes
- *     WddmProbeFellBack = the refused value, and starts as WDDM 1.3.
+ *     WddmProbeFellBack = the refused value and WddmProbeFellBackBoot = the
+ *     journal number of that boot, and starts as WDDM 1.3.
+ *   - Every 2.x boot re-arms, a confirmed one too: a later boot that hangs
+ *     also costs only itself.
  *
  * So a refused version costs one boot. WddmProbeKeep = 1 turns the arming
- * off (for repeating a probe that is known to start).
+ * off (for repeating a probe that is known to start; never for a first
+ * test). The decisions are wddm2plan.h's, checked by tests/wddm2-host.
  *
  * Everything written here is in the service's Parameters key, not in the
  * device's Device Parameters: DriverEntry runs before there is a device.
@@ -38,9 +45,8 @@
 #include "maliwddm.h"
 #include "wddm2.h"
 
-/* How many Render calls count as "the desktop is up". DWM renders tens of
- * times a second on an idle desktop (PERF.md: 3.4 jobs per flip). */
-#define MW_PROBE_CONFIRM_RENDERS    300
+C_ASSERT(DXGKDDI_WDDMv1_3 == MW2_WDDM_1_3);
+C_ASSERT(DXGKDDI_WDDMv2 == MW2_WDDM_2_0);
 
 typedef struct {
     ULONG Caps;         /* DXGK_DRIVERCAPS::WDDMVersion */
@@ -74,6 +80,8 @@ ULONG MwProbeWatchdog;
 ULONG MwProbeUart;
 ULONG64 MwProbeUartBase = 0x2AD40000ULL;
 ULONG MwWddm2Shape = MW_SHAPE_PHYSICAL;
+ULONG MwWddm2Budget = 1;
+MW2_PLAN MwPlan;
 ULONG MwGpuMmuPtSegment = 1;
 ULONG MwPagingMarker = 1;
 
@@ -150,8 +158,11 @@ void MwVersionInit(PUNICODE_STRING RegistryPath)
 {
     UNICODE_STRING suffix = RTL_CONSTANT_STRING(L"\\Parameters");
     const MW_WDDM_LEVEL *level;
-    ULONG want, armed;
+    MW2_BOOT_IN in;
+    MW2_BOOT_OUT out;
+    ULONG boots;
 
+    Mw2Plan(DXGKDDI_WDDMv1_3, 0, 0, &MwPlan);
     RtlInitEmptyUnicodeString(&ParamsPath, ParamsBuf, sizeof(ParamsBuf));
     if (RegistryPath == NULL || !NT_SUCCESS(RtlAppendUnicodeStringToString(&ParamsPath, RegistryPath)) ||
         !NT_SUCCESS(RtlAppendUnicodeStringToString(&ParamsPath, &suffix))) {
@@ -165,50 +176,83 @@ void MwVersionInit(PUNICODE_STRING RegistryPath)
     MwProbeUart = ParamRead(L"ProbeUart", 0);
     MwProbeUartBase = ParamRead(L"ProbeUartBase", (ULONG)MwProbeUartBase);
     MwWddm2Shape = ParamRead(L"Wddm2Shape", MW_SHAPE_PHYSICAL);
+    MwWddm2Budget = ParamRead(L"Wddm2Budget", 1);
     MwGpuMmuPtSegment = ParamRead(L"GpuMmuPtSegment", 1);
     MwPagingMarker = ParamRead(L"PagingMarker", 1);
 
-    want = ParamRead(L"WddmProbe", 0);
-    if (want == 0 || want == DXGKDDI_WDDMv1_3) {
-        MwWddmProbeResult = MW_PROBE_NONE;
-        return;
-    }
-    level = FindLevel(want);
-    if (level == NULL) {
-        ParamWrite(L"WddmProbeUnknown", want);
-        MwWddmProbeResult = MW_PROBE_UNKNOWN;
-        return;
-    }
-    armed = ParamRead(L"WddmProbeArmed", 0);
-    if (armed == want && ParamRead(L"WddmProbeKeep", 0) == 0) {
-        /* The last boot with this version never reached the desktop. */
+    /* The decision itself is wddm2plan.h's, checked by tests/wddm2-host. */
+    in.Want = ParamRead(L"WddmProbe", 0);
+    level = in.Want != 0 ? FindLevel(in.Want) : NULL;
+    in.Known = level != NULL;
+    in.Armed = ParamRead(L"WddmProbeArmed", 0);
+    in.Keep = ParamRead(L"WddmProbeKeep", 0);
+    Mw2BootDecide(&in, &out);
+
+    if (out.Result == MW_PROBE_UNKNOWN)
+        ParamWrite(L"WddmProbeUnknown", in.Want);
+    if (out.FallBack) {
+        /* The last boot with this version never reached a confirmed
+         * desktop. The boot journal of that boot (Probe\Boot<n>) is left
+         * alone for reading. */
         ParamDelete(L"WddmProbe");
         ParamWrite(L"WddmProbeArmed", 0);
-        ParamWrite(L"WddmProbeFellBack", want);
-        MwWddmProbeResult = MW_PROBE_FELL_BACK;
-        return;
+        ParamWrite(L"WddmProbeFellBack", in.Want);
+        ParamWrite(L"WddmProbeFellBackBoot", ParamRead(L"ProbeBoots", 0));
     }
-    if (ParamRead(L"WddmProbeKeep", 0) == 0)
-        ParamWrite(L"WddmProbeArmed", want);
+    if (out.Arm) {
+        ParamWrite(L"WddmProbeArmed", in.Want);
+        out.Result = Mw2BootArmed(out.Result, out.Arm, ParamRead(L"WddmProbeArmed", 0), in.Want);
+        if (out.Result == MW_PROBE_ARM_FAILED)
+            ParamWrite(L"WddmProbeArmFailed", in.Want);
+    }
+    MwWddmProbeResult = out.Result;
+    if (out.Result != MW_PROBE_ACTIVE)
+        return;
+
     MwWddmVersion = level->Caps;
     MwDdiInterface = level->Interface;
-    MwWddmProbe = want;
-    MwWddmProbeResult = MW_PROBE_ACTIVE;
+    MwWddmProbe = in.Want;
+    Mw2Plan(MwWddmVersion, MwWddm2Shape, MwWddm2Budget, &MwPlan);
+
+    /* The boot journal (probe.c), from here on: a hang anywhere after
+     * DriverEntry leaves the last DDI it entered on disk. */
+    boots = ParamRead(L"ProbeBoots", 0) + 1;
+    ParamWrite(L"ProbeBoots", boots);
+    MwBcInit(RegistryPath, boots, ParamRead(L"ProbeJournalMax", 1500));
+    MwBc("DriverEntry: WddmProbe 0x%x armed (keep %u), interface 0x%x, shape %u, budget %u, build %u",
+         MwWddmProbe, in.Keep, MwDdiInterface, MwWddm2Shape, MwWddm2Budget, (ULONG)MW_BUILD);
+    MwBc("plan: nodes %u, paging node %u (engine %u), VPR paging node %u, GpuMmu %u, VA %u, "
+         "TDR %u, segment aperture %u cpuvisible %u apptarget %u nonlocal %u",
+         MwPlan.Nodes, MwPlan.PagingNode, MwPlan.Engine[MwPlan.PagingNode], MwPlan.VprPagingNode,
+         MwPlan.GpuMmu, MwPlan.VirtualAddressing, MwPlan.PerEngineTdr, MwPlan.SegAperture,
+         MwPlan.SegCpuVisible, MwPlan.SegApplicationTarget, MwPlan.SegNonLocalBudget);
 }
 
-/* From MwRender, at PASSIVE_LEVEL. */
+/* From MwRender. Counting only: the confirm is the watchdog's (below),
+ * which runs at PASSIVE_LEVEL. Before, the 300th render wrote it, and a
+ * 300th render at raised IRQL meant no confirm ever, on a good boot. */
 void MwVersionRendered(void)
 {
-    if (MwWddmProbe == 0 || ProbeConfirmed)
+    if (MwWddmProbe != 0)
+        InterlockedIncrement(&ProbeRenders);
+}
+
+/* From the probe's watchdog thread, once a second, at PASSIVE_LEVEL. A boot
+ * is good when wddm2plan.h's Mw2Confirm says so: renders, two minutes up,
+ * and nothing stuck. Until then WddmProbeArmed stays set, and a hang, a
+ * bugcheck or a power cut leads to 1.3 on the next boot. */
+void MwVersionConfirmCheck(ULONG Renders, ULONG Seconds, BOOLEAN Stuck)
+{
+    UNREFERENCED_PARAMETER(Renders);
+    if (MwWddmProbe == 0 || ProbeConfirmed || KeGetCurrentIrql() != PASSIVE_LEVEL)
         return;
-    if (InterlockedIncrement(&ProbeRenders) != MW_PROBE_CONFIRM_RENDERS)
+    if (!Mw2Confirm((unsigned)ProbeRenders, (unsigned)Seconds, Stuck ? 1u : 0u))
         return;
     if (InterlockedExchange(&ProbeConfirmed, 1) != 0)
         return;
-    if (KeGetCurrentIrql() != PASSIVE_LEVEL)
-        return;
     ParamWrite(L"WddmProbeArmed", 0);
     ParamWrite(L"WddmProbeConfirmed", MwWddmProbe);
+    MwBc("confirmed: %u renders, %u s up; WddmProbeArmed cleared", (ULONG)ProbeRenders, Seconds);
 }
 
 /* WDDM 2.6 makes this DDI mandatory ("Collect Diagnostic Info"). Its

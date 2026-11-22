@@ -1018,6 +1018,10 @@ NTSTATUS APIENTRY MwPreemptCommand(IN_CONST_HANDLE hAdapter, const DXGKARG_PREEM
     MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
     MW_PREEMPT p;
 
+    /* WddmProbe: the copy node answers for itself (wddm2x.c). */
+    if (Arg->NodeOrdinal == MW_COPY_NODE && MwNodeCount() > 1)
+        return MwCopyNodePreempt(a, Arg->PreemptionFenceId);
+
     /* TimeSlice 0: as before, when the INF's EnablePreemption 0 meant this
      * was never called. With EnablePreemption 1 and TimeSlice 0 the request
      * is never answered and dxgkrnl's timeout detection resets the GPU. */
@@ -1102,8 +1106,8 @@ NTSTATUS APIENTRY MwGetNodeMetadata(IN_CONST_HANDLE hAdapter, UINT NodeOrdinal,
         UINT node = DXGKNODEMETADATA_GETNODEORDINAL(NodeOrdinal);
         if (DXGKNODEMETADATA_GETPHYSICALADAPTERINDEX(NodeOrdinal) != 0 || node >= MwNodeCount())
             return STATUS_INVALID_PARAMETER;
-        Arg->GpuMmuSupported = MwGpuMmu();
-        if (node == MW_COPY_NODE) {
+        Arg->GpuMmuSupported = MwGpuMmu();     /* the same bit as DRIVERCAPS and PHYSICALADAPTERCAPS */
+        if (MwPlan.Engine[node] == MW2_ENGINE_COPY) {
             Arg->EngineType = DXGK_ENGINE_TYPE_COPY;
             (void)RtlStringCbCopyW(Arg->FriendlyName, sizeof(Arg->FriendlyName), L"Mali-G52 paging");
             return STATUS_SUCCESS;

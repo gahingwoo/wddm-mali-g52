@@ -49,14 +49,16 @@
 static volatile LONG CopyFence;     /* last fence completed on node 1 */
 static volatile LONG CopySubmits;
 
+/* Every node count, paging node and GpuMmu bit below comes from MwPlan
+ * (wddm2plan.h, set in DriverEntry), whose rules tests/wddm2-host checks. */
 ULONG MwNodeCount(void)
 {
-    return MwWddmProbe != 0 ? 2 : 1;
+    return MwPlan.Nodes != 0 ? MwPlan.Nodes : 1;
 }
 
 BOOLEAN MwGpuMmu(void)
 {
-    return MwWddmProbe != 0 && MwWddm2Shape == MW_SHAPE_GPUMMU;
+    return MwWddmProbe != 0 && MwPlan.GpuMmu != 0;
 }
 
 typedef struct {
@@ -97,59 +99,117 @@ ULONG MwCopyNodeFence(void)
     return (ULONG)CopyFence;
 }
 
+/* A preemption request on the copy node. Nothing is ever in flight there
+ * (a submission completes inside SubmitCommand), so it is answered at once:
+ * DMA_PREEMPTED with the last completed fence. Left unanswered, VidSch
+ * waits on node 1 forever; answered as if for node 0 (the 3D path), the
+ * wrong node's state moves. */
+typedef struct {
+    MW_ADAPTER *A;
+    ULONG PreemptionFence;
+} MW_COPY_PREEMPT;
+
+static BOOLEAN SyncCopyPreempt(PVOID Context)
+{
+    MW_COPY_PREEMPT *p = (MW_COPY_PREEMPT *)Context;
+    DXGKARGCB_NOTIFY_INTERRUPT_DATA n = {0};
+
+    n.InterruptType = DXGK_INTERRUPT_DMA_PREEMPTED;
+    n.DmaPreempted.PreemptionFenceId = p->PreemptionFence;
+    n.DmaPreempted.LastCompletedFenceId = (UINT)CopyFence;
+    n.DmaPreempted.NodeOrdinal = MW_COPY_NODE;
+    n.DmaPreempted.EngineOrdinal = 0;
+    p->A->Dxgk.DxgkCbNotifyInterrupt(p->A->Dxgk.DeviceHandle, &n);
+    p->A->Dxgk.DxgkCbQueueDpc(p->A->Dxgk.DeviceHandle);
+    return TRUE;
+}
+
+NTSTATUS MwCopyNodePreempt(MW_ADAPTER *A, ULONG PreemptionFence)
+{
+    MW_COPY_PREEMPT p;
+    BOOLEAN ret = FALSE;
+
+    p.A = A;
+    p.PreemptionFence = PreemptionFence;
+    return A->Dxgk.DxgkCbSynchronizeExecution(A->Dxgk.DeviceHandle, SyncCopyPreempt, &p, 0, &ret);
+}
+
 /* ---- DRIVERCAPS: what a 2.x driver adds ---- */
 
 void Mw2xDriverCaps(MW_ADAPTER *A, DXGK_DRIVERCAPS *Caps, UINT Size)
 {
+    const MW2_PLAN *p = &MwPlan;
+
     UNREFERENCED_PARAMETER(A);
     if (MwWddmProbe == 0)
         return;
     /* Two nodes, node 1 the paging node (above). */
     if (FITS(Size, DXGK_DRIVERCAPS, GpuEngineTopology))
-        Caps->GpuEngineTopology.NbAsymetricProcessingNodes = MwNodeCount();
+        Caps->GpuEngineTopology.NbAsymetricProcessingNodes = p->Nodes;
     if (FITS(Size, DXGK_DRIVERCAPS, MemoryManagementCaps))
-        Caps->MemoryManagementCaps.PagingNode = MW_COPY_NODE;
+        Caps->MemoryManagementCaps.PagingNode = p->PagingNode;
     /* Implemented in command.c (and for node 1 here); the WDDM 1.2 table
      * calls it mandatory, and both WinMali drivers set it. */
     if (FITS(Size, DXGK_DRIVERCAPS, SupportPerEngineTDR))
-        Caps->SupportPerEngineTDR = TRUE;
-    if (FITS(Size, DXGK_DRIVERCAPS, SchedulingCaps))
-        Caps->SchedulingCaps.CancelCommandAware = 1;    /* MwCancelCommand: nothing queued in hardware to cancel */
-    if (MwWddm2Shape != MW_SHAPE_GPUMMU)
-        return;
-    if (FITS(Size, DXGK_DRIVERCAPS, MemoryManagementCaps)) {
-        Caps->MemoryManagementCaps.VirtualAddressingSupported = 1;
-        Caps->MemoryManagementCaps.GpuMmuSupported = 1;
+        Caps->SupportPerEngineTDR = p->PerEngineTdr ? TRUE : FALSE;
+    if (FITS(Size, DXGK_DRIVERCAPS, SchedulingCaps)) {
+        Caps->SchedulingCaps.MultiEngineAware = p->MultiEngineAware;
+        Caps->SchedulingCaps.CancelCommandAware = p->CancelCommandAware; /* MwCancelCommand: nothing queued in hardware to cancel */
     }
+    if (FITS(Size, DXGK_DRIVERCAPS, MemoryManagementCaps)) {
+        Caps->MemoryManagementCaps.VirtualAddressingSupported = p->VirtualAddressing;
+        Caps->MemoryManagementCaps.GpuMmuSupported = p->GpuMmu;
+    }
+    if (!p->GpuMmu)
+        return;
     /* VidMm's own GPU VAs (paging process, fences) above Panfrost's range
      * (32 MB to 4 GB) and below the G52's 35-bit limit. */
     if (FITS(Size, DXGK_DRIVERCAPS, InternalGpuVirtualAddressRangeStart))
-        Caps->InternalGpuVirtualAddressRangeStart = MW_GPUVA_INTERNAL_START;
+        Caps->InternalGpuVirtualAddressRangeStart = p->InternalVaStart;
     if (FITS(Size, DXGK_DRIVERCAPS, InternalGpuVirtualAddressRangeEnd))
-        Caps->InternalGpuVirtualAddressRangeEnd = MW_GPUVA_INTERNAL_END;
+        Caps->InternalGpuVirtualAddressRangeEnd = p->InternalVaEnd;
 }
 
 /* ---- QAI ---- */
+
+/* DXGKQAITYPE_PHYSICALADAPTERCAPS (15). The first 2.0 probe (CI run 283)
+ * answered this with status 0 and two wrong values, and hung at the boot
+ * spinner right after:
+ *   - NumExecutionNodes 1 and PagingNodeIndex 0, the 3D node. Jamie found
+ *     on hardware that dxgkrnl gives up on that (WDDM2.md, section 12);
+ *   - DxgkPhysicalAdapterHandle = our own adapter context. Microsoft's
+ *     reference says it is the handle "passed to the kernel mode driver as
+ *     DXGKRNL_INTERFACE::DeviceHandle in DxgkDdiStartDevice", that is,
+ *     dxgkrnl's own handle, which dxgkrnl then uses as its own. Jamie's
+ *     driver returns that one.
+ * dxgkrnl 22631 asks with OutputDataSize 0x14, which ends at Flags: the
+ * fields after it are written only if they fit. */
+C_ASSERT(RTL_SIZEOF_THROUGH_FIELD(DXGK_PHYSICALADAPTERCAPS, Flags) == 0x14);
 
 NTSTATUS MwQueryPhysicalAdapterCaps(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info)
 {
     DXGK_PHYSICALADAPTERCAPS *c = (DXGK_PHYSICALADAPTERCAPS *)Info->pOutputData;
     UINT size = Info->OutputDataSize;
+    const MW2_PLAN *p = &MwPlan;
 
     if (c == NULL || size < RTL_SIZEOF_THROUGH_FIELD(DXGK_PHYSICALADAPTERCAPS, Flags))
         return STATUS_BUFFER_TOO_SMALL;
     if (Info->pInputData != NULL && Info->InputDataSize >= sizeof(DXGK_QUERYPHYSICALADAPTERCAPSIN) &&
         ((const DXGK_QUERYPHYSICALADAPTERCAPSIN *)Info->pInputData)->PhysicalAdapterIndex != 0)
         return STATUS_INVALID_PARAMETER;
+    /* dxgkrnl asks after StartDevice; without its handle there is no right
+     * answer, and a made-up one is what the first probe gave. */
+    if (p->HandleIsDxgkrnls && A->Dxgk.DeviceHandle == NULL)
+        return STATUS_DEVICE_NOT_READY;
     RtlZeroMemory(c, size);
-    c->NumExecutionNodes = (WORD)MwNodeCount();
-    c->PagingNodeIndex = MW_COPY_NODE;
-    c->DxgkPhysicalAdapterHandle = (HANDLE)A;
-    c->Flags.GpuMmuSupported = MwGpuMmu() ? 1 : 0;
+    c->NumExecutionNodes = (WORD)p->Nodes;
+    c->PagingNodeIndex = (WORD)p->PagingNode;
+    c->DxgkPhysicalAdapterHandle = A->Dxgk.DeviceHandle;
+    c->Flags.GpuMmuSupported = p->GpuMmu;
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_1)
     /* No video protected region; name a real node, not a phantom one. */
     if (FITS(size, DXGK_PHYSICALADAPTERCAPS, VPRPagingNode))
-        c->VPRPagingNode = MW_COPY_NODE;
+        c->VPRPagingNode = p->VprPagingNode;
 #endif
     return STATUS_SUCCESS;
 }
@@ -173,8 +233,8 @@ NTSTATUS MwQueryGpuMmuCaps(const DXGKARG_QUERYADAPTERINFO *Info)
     c->ReadOnlyMemorySupported = 1;
     c->NoExecuteMemorySupported = 1;
     c->PageTableUpdateMode = DXGK_PAGETABLEUPDATE_CPU_VIRTUAL;
-    c->VirtualAddressBitCount = MW_GPUMMU_LEVELS * MW_GPUMMU_INDEX_BITS + 12;
-    c->PageTableLevelCount = MW_GPUMMU_LEVELS;
+    c->VirtualAddressBitCount = MwPlan.VaBits;
+    c->PageTableLevelCount = MwPlan.PtLevels;
     return STATUS_SUCCESS;
 }
 
@@ -186,16 +246,16 @@ NTSTATUS MwQueryPageTableLevelDesc(const DXGKARG_QUERYADAPTERINFO *Info)
     if (!MwGpuMmu())
         return STATUS_NOT_SUPPORTED;
     if (in == NULL || Info->InputDataSize < sizeof(*in) || in->PhysicalAdapterIndex != 0 ||
-        in->LevelIndex >= MW_GPUMMU_LEVELS)
+        in->LevelIndex >= MwPlan.PtLevels)
         return STATUS_INVALID_PARAMETER;
     if (d == NULL || Info->OutputDataSize < sizeof(*d))
         return STATUS_BUFFER_TOO_SMALL;
     RtlZeroMemory(d, Info->OutputDataSize);
-    d->PageTableIndexBitCount = MW_GPUMMU_INDEX_BITS;
+    d->PageTableIndexBitCount = MwPlan.PtIndexBits;
     d->PageTableSegmentId = MwGpuMmuPtSegment;
     d->PagingProcessPageTableSegmentId = MwGpuMmuPtSegment;
-    d->PageTableSizeInBytes = PAGE_SIZE;
-    d->PageTableAlignmentInBytes = PAGE_SIZE;   /* never 0: dxgmms2 divides by it */
+    d->PageTableSizeInBytes = MwPlan.PtSize;
+    d->PageTableAlignmentInBytes = MwPlan.PtAlign;  /* never 0: dxgmms2 divides by it */
     return STATUS_SUCCESS;
 }
 
@@ -382,6 +442,73 @@ NTSTATUS Mw2xPagingFill(DXGKARG_BUILDPAGINGBUFFER *Arg)
     Arg->pDmaBuffer = (PUCHAR)Arg->pDmaBuffer + 8;
     Arg->DmaSize -= 8;
     return STATUS_SUCCESS;
+}
+
+/* For the boot journal (probe.c): what a QAI was answered, field by field
+ * for the ones a 2.x dxgkrnl decides by. From MwQueryAdapterInfo. */
+void Mw2xBcQai(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info, NTSTATUS St)
+{
+    ULONG t = (ULONG)Info->Type;
+    UINT size = Info->OutputDataSize;
+
+    if (!MwBcOn())
+        return;
+    if (!NT_SUCCESS(St) || Info->pOutputData == NULL) {
+        MwBc("QAI %u answered 0x%08x", t, (ULONG)St);
+        return;
+    }
+    switch (Info->Type) {
+    case DXGKQAITYPE_DRIVERCAPS: {
+        const DXGK_DRIVERCAPS *c = (const DXGK_DRIVERCAPS *)Info->pOutputData;
+        MwBc("QAI 1 DRIVERCAPS answered 0: WDDMVersion 0x%x, nodes %u, PagingNode %u, VA %u, GpuMmu %u, "
+             "Scheduling 0x%08x, PerEngineTDR %u, SectionBackedPrimary %u",
+             (ULONG)c->WDDMVersion, c->GpuEngineTopology.NbAsymetricProcessingNodes,
+             c->MemoryManagementCaps.PagingNode, c->MemoryManagementCaps.VirtualAddressingSupported,
+             c->MemoryManagementCaps.GpuMmuSupported, c->SchedulingCaps.Value,
+             FITS(size, DXGK_DRIVERCAPS, SupportPerEngineTDR) ? (ULONG)c->SupportPerEngineTDR : 0xFFu,
+             c->MemoryManagementCaps.SectionBackedPrimary);
+        return;
+    }
+    case DXGKQAITYPE_QUERYSEGMENT4: {
+        const DXGK_QUERYSEGMENTOUT4 *o = (const DXGK_QUERYSEGMENTOUT4 *)Info->pOutputData;
+        const DXGK_SEGMENTDESCRIPTOR4 *d = (const DXGK_SEGMENTDESCRIPTOR4 *)o->pSegmentDescriptor;
+        if (d == NULL) {
+            MwBc("QAI 11 QUERYSEGMENT4 answered 0 (count pass): NbSegment %u", o->NbSegment);
+            return;
+        }
+        MwBc("QAI 11 QUERYSEGMENT4 answered 0 (fill pass): NbSegment %u, stride %u, base 0x%I64x, "
+             "size 0x%I64x, commit 0x%I64x, flags 0x%08x, paging buffer segment %u size %u private %u",
+             o->NbSegment, (ULONG)o->SegmentDescriptorStride, d->BaseAddress.QuadPart, (ULONG64)d->Size,
+             (ULONG64)d->CommitLimit, d->Flags.Value, o->PagingBufferSegmentId, o->PagingBufferSize,
+             o->PagingBufferPrivateDataSize);
+        return;
+    }
+    case DXGKQAITYPE_PHYSICALADAPTERCAPS: {
+        const DXGK_PHYSICALADAPTERCAPS *c = (const DXGK_PHYSICALADAPTERCAPS *)Info->pOutputData;
+        MwBc("QAI 15 PHYSICALADAPTERCAPS answered 0: nodes %u, PagingNodeIndex %u, handle %p (%hs), "
+             "flags 0x%08x, out %u bytes",
+             c->NumExecutionNodes, c->PagingNodeIndex, c->DxgkPhysicalAdapterHandle,
+             c->DxgkPhysicalAdapterHandle == A->Dxgk.DeviceHandle ? "dxgkrnl's" : "NOT dxgkrnl's",
+             c->Flags.Value, size);
+        return;
+    }
+    case DXGKQAITYPE_GPUMMUCAPS: {
+        const DXGK_GPUMMUCAPS *c = (const DXGK_GPUMMUCAPS *)Info->pOutputData;
+        MwBc("QAI 13 GPUMMUCAPS answered 0: VA bits %u, levels %u, update mode %u",
+             c->VirtualAddressBitCount, c->PageTableLevelCount, (ULONG)c->PageTableUpdateMode);
+        return;
+    }
+    case DXGKQAITYPE_PAGETABLELEVELDESC: {
+        const DXGK_PAGE_TABLE_LEVEL_DESC *d = (const DXGK_PAGE_TABLE_LEVEL_DESC *)Info->pOutputData;
+        MwBc("QAI 14 PAGETABLELEVELDESC answered 0: index bits %u, segment %u, size %u, align %u",
+             d->PageTableIndexBitCount, d->PageTableSegmentId, (ULONG)d->PageTableSizeInBytes,
+             (ULONG)d->PageTableAlignmentInBytes);
+        return;
+    }
+    default:
+        MwBc("QAI %u answered 0", t);
+        return;
+    }
 }
 
 /* For the watchdog. */

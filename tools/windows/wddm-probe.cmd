@@ -10,6 +10,9 @@ rem                           a copy node as the paging node). See wddm2x.c.
 rem   wddm-probe set 2000 uart  (with or without phys/gpummu) the driver's
 rem                           watchdog also prints one line a second on the
 rem                           debug UART (1500000 8n1)
+rem   wddm-probe set 2000 nobudget  the segment without the 2.x budget flags
+rem                           (Wddm2Budget 0; default 1: non-local budget group
+rem                           and application target, as Jamie's G615 driver)
 rem   wddm-probe keep 2000    the same, without the one-shot fallback (only
 rem                           for a version already seen to start)
 rem   wddm-probe watch        on 1.3: run the driver's watchdog anyway (a
@@ -27,10 +30,16 @@ rem after the failed one (version.c); "check" then shows WddmProbeFellBack.
 rem If the screen stays black, RDP still answers, or power off, boot again,
 rem and the fallback takes it back to 1.3.
 rem
-rem A hang leaves its breadcrumbs in Device Parameters\maliwddm\Probe<version>,
-rem which the 1.3 fallback boot does not write (probe.c): per-DDI counts, the
-rem last DDI entered, "still in <DDI> after N ms", and the paging operations
-rem refused. "check" prints every Probe* key it finds.
+rem A hang leaves its breadcrumbs in two places the 1.3 fallback boot never
+rem writes (probe.c):
+rem   Services\maliwddm\Probe\Boot<n>  the boot journal: from DriverEntry on,
+rem     one flushed line per DDI entered (E0001, E0002, ...), every QAI with
+rem     what it was answered, "Last" = the newest. LastBootKey names the
+rem     newest boot's subkey.
+rem   Device Parameters\maliwddm\Probe<version>  the watchdog: per-DDI counts,
+rem     the last DDI entered, "still in <DDI> after N ms", paging operations.
+rem "check" prints both. If Windows does not come up at all, read them from
+rem Linux (docs/WDDM2.md, section 16).
 rem
 rem Run from an ADMINISTRATOR prompt. etwrec.exe next to this script is used
 rem to stop the capture if present, logman otherwise.
@@ -38,6 +47,7 @@ net session >nul 2>&1 || (echo Run this from an ADMINISTRATOR command prompt. & 
 setlocal enableextensions
 set HERE=%~dp0
 set PARAMS=HKLM\SYSTEM\CurrentControlSet\Services\maliwddm\Parameters
+set JOURNAL=HKLM\SYSTEM\CurrentControlSet\Services\maliwddm\Probe
 set DEVKEY="HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\maliwddm"
 set DEV=ACPI\RKCP7402\0
 set SESSION=wddm-mali-g52-dxgkrnl
@@ -50,18 +60,19 @@ if /i "%~1"=="keep" goto set
 if /i "%~1"=="check" goto check
 if /i "%~1"=="watch" goto watch
 if /i "%~1"=="off" goto off
-echo usage: wddm-probe set ^<2000^|2100^|...^|3100^> [phys^|gpummu] [uart] ^| keep ^<v^> [...] ^| watch ^| check ^| off
+echo usage: wddm-probe set ^<2000^|2100^|...^|3100^> [phys^|gpummu] [uart] [nobudget] ^| keep ^<v^> [...] ^| watch ^| check ^| off
 exit /b 1
 
 :set
 if "%~2"=="" (echo which version? e.g. wddm-probe set 2000 & exit /b 1)
 reg add %PARAMS% /v WddmProbe /t REG_DWORD /d 0x%~2 /f >nul || exit /b 1
-for %%v in (WddmProbeArmed WddmProbeConfirmed WddmProbeFellBack WddmProbeUnknown WddmProbeKeep ProbeUart ProbeWatchdog Wddm2Shape) do reg delete %PARAMS% /v %%v /f >nul 2>&1
+for %%v in (WddmProbeArmed WddmProbeConfirmed WddmProbeFellBack WddmProbeFellBackBoot WddmProbeArmFailed WddmProbeUnknown WddmProbeKeep ProbeUart ProbeWatchdog Wddm2Shape Wddm2Budget) do reg delete %PARAMS% /v %%v /f >nul 2>&1
 if /i "%~1"=="keep" reg add %PARAMS% /v WddmProbeKeep /t REG_DWORD /d 1 /f >nul
 set SHAPE=0
-for %%a in (%3 %4) do (
+for %%a in (%3 %4 %5) do (
   if /i "%%a"=="uart" reg add %PARAMS% /v ProbeUart /t REG_DWORD /d 1 /f >nul
   if /i "%%a"=="gpummu" set SHAPE=1
+  if /i "%%a"=="nobudget" reg add %PARAMS% /v Wddm2Budget /t REG_DWORD /d 0 /f >nul
 )
 reg add %PARAMS% /v Wddm2Shape /t REG_DWORD /d %SHAPE% /f >nul
 rem The previous run's trace values, so that this run's are its own. The
@@ -112,6 +123,7 @@ reg delete %PARAMS% /v WddmProbeKeep /f >nul 2>&1
 reg delete %PARAMS% /v ProbeWatchdog /f >nul 2>&1
 reg delete %PARAMS% /v ProbeUart /f >nul 2>&1
 reg delete %PARAMS% /v Wddm2Shape /f >nul 2>&1
+reg delete %PARAMS% /v Wddm2Budget /f >nul 2>&1
 reg delete %AUTO% /f >nul 2>&1
 echo WDDM 1.3 from the next boot. REBOOT to apply.
 exit /b 0
@@ -136,7 +148,8 @@ dir /od "%DIR%\etl-%STAMP%" >> "%OUT%" 2>&1
 
 echo == 1. what the driver decided (service Parameters) >> "%OUT%"
 reg query %PARAMS% >> "%OUT%" 2>&1
-echo   WddmProbeConfirmed = this version reached 300 Render calls (DWM drawing) >> "%OUT%"
+echo   WddmProbeConfirmed = this version reached 300 Render calls, 120 s up, nothing stuck >> "%OUT%"
+echo   WddmProbeArmFailed = the arming did not read back; the probe was not used >> "%OUT%"
 echo   WddmProbeFellBack  = this version was refused or hung; now on 1.3 >> "%OUT%"
 
 echo == 2. what the adapter reported at StartDevice, this boot (Device Parameters\maliwddm) >> "%OUT%"
@@ -147,6 +160,13 @@ echo == 2b. the probe's breadcrumbs, every Probe* key (survive the fallback boot
 echo   Wd_Stuck / Wd_WorstStuck = a DDI still in progress after 2 s >> "%OUT%"
 echo   Wd_Last = the last DDI entered; Cnt_^<ddi^> = calls; PgRefused_^<op^> = paging ops refused >> "%OUT%"
 for /f "delims=" %%k in ('reg query %DEVKEY% 2^>nul ^| findstr /i /r "\\Probe[0-9a-f]*$"') do reg query "%%k" >> "%OUT%" 2>&1
+
+echo == 2b2. the boot journal, every boot kept (Services\maliwddm\Probe) >> "%OUT%"
+echo   LastBootKey = the newest boot; in each BootN, Last = where that boot was last seen >> "%OUT%"
+reg query %JOURNAL% >> "%OUT%" 2>&1
+for /f "delims=" %%k in ('reg query %JOURNAL% 2^>nul ^| findstr /i /r "\\Boot[0-9]*$"') do reg query "%%k" /v Last >> "%OUT%" 2>&1
+reg query %JOURNAL% /s > "%DIR%\journal-%STAMP%.txt" 2>&1
+echo   full journal: %DIR%\journal-%STAMP%.txt >> "%OUT%"
 
 echo == 2c. dxgkrnl's own account: DxgKrnl Admin log (event 549 names an adapter start failure and its reason) >> "%OUT%"
 wevtutil qe Microsoft-Windows-DxgKrnl-Admin /c:40 /rd:true /f:text >> "%OUT%" 2>&1

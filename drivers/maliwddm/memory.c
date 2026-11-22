@@ -47,36 +47,61 @@ NTSTATUS MwQuerySegment(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info)
     return STATUS_SUCCESS;
 }
 
-/* The WDDM 2.x form of the same answer (DXGKQAITYPE_QUERYSEGMENT4), asked
- * of a driver that reports 2.0 or later (docs/WDDM2.md, P1). The segment is
- * the one above, field for field. The descriptors are an array of
- * SegmentDescriptorStride bytes each, sized by dxgkrnl for our interface
- * version, so only the fields that fit are written. */
+/* The WDDM 2.x form of the same answer (DXGKQAITYPE_QUERYSEGMENT4, 11),
+ * asked of a driver that reports 2.0 or later (docs/WDDM2.md). The segment
+ * is the one above, field for field, plus the budget flags MwPlan gives
+ * (wddm2plan.h, default: non-local budget, application target).
+ *
+ * Microsoft's reference for DXGK_QUERYSEGMENTOUT4: dxgkrnl calls twice.
+ * "First time, NbSegment will be set to 0. The driver should return
+ * STATUS_SUCCESS and set NbSegment to the number of GPU memory segments
+ * ... without accessing any other member of the structure." The second
+ * call has the reported count, and pSegmentDescriptor is an array of
+ * SegmentDescriptorStride-byte elements. The first probe (CI run 283) went
+ * by the pointer instead of the count; which pass is which is now
+ * Mw2SegmentPass's, checked by tests/wddm2-host.
+ *
+ * dxgkrnl 22631 asked with OutputDataSize 0x28 on the board: the 26100
+ * header's size, checked here at build time. */
+C_ASSERT(sizeof(DXGK_QUERYSEGMENTOUT4) == 0x28);
+
 NTSTATUS MwQuerySegment4(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info)
 {
     DXGK_QUERYSEGMENTOUT4 *out = (DXGK_QUERYSEGMENTOUT4 *)Info->pOutputData;
     DXGK_SEGMENTDESCRIPTOR4 *d;
+    const MW2_PLAN *p = &MwPlan;
     SIZE_T stride;
     UNREFERENCED_PARAMETER(A);
 
-    if (Info->OutputDataSize < sizeof(*out))
+    if (out == NULL || Info->OutputDataSize < sizeof(*out))
         return STATUS_BUFFER_TOO_SMALL;
-    if (out->pSegmentDescriptor == NULL) {
-        out->NbSegment = 1;
-        return STATUS_SUCCESS;
-    }
+    if (Info->pInputData != NULL && Info->InputDataSize >= sizeof(DXGK_QUERYSEGMENTIN4) &&
+        ((const DXGK_QUERYSEGMENTIN4 *)Info->pInputData)->PhysicalAdapterIndex != 0)
+        return STATUS_INVALID_PARAMETER;
     stride = out->SegmentDescriptorStride != 0 ? out->SegmentDescriptorStride : sizeof(*d);
-    if (stride < RTL_SIZEOF_THROUGH_FIELD(DXGK_SEGMENTDESCRIPTOR4, CommitLimit))
+    switch (Mw2SegmentPass(out->NbSegment, out->pSegmentDescriptor != NULL, stride,
+                           RTL_SIZEOF_THROUGH_FIELD(DXGK_SEGMENTDESCRIPTOR4, CommitLimit), p->NbSegment)) {
+    case MW2_SEG_COUNT:
+        out->NbSegment = p->NbSegment;
+        return STATUS_SUCCESS;
+    case MW2_SEG_TOO_SMALL:
         return STATUS_BUFFER_TOO_SMALL;
-    RtlZeroMemory(out->pSegmentDescriptor, stride);
+    default:
+        break;
+    }
+    RtlZeroMemory(out->pSegmentDescriptor, stride * p->NbSegment);
     d = (DXGK_SEGMENTDESCRIPTOR4 *)out->pSegmentDescriptor;
     d->BaseAddress.QuadPart = MK_VA_START;
     d->Size = MW_SEGMENT_SIZE;
     d->CommitLimit = MW_SEGMENT_SIZE;
-    d->Flags.Aperture = TRUE;
-    d->Flags.CpuVisible = TRUE;     /* the shared primary, as above */
-    d->Flags.CacheCoherent = FALSE;
-    out->PagingBufferSegmentId = MW_SEGMENT_ID;
+    d->Flags.Aperture = p->SegAperture;
+    d->Flags.CpuVisible = p->SegCpuVisible;         /* the shared primary, as above */
+    d->Flags.CacheCoherent = p->SegCacheCoherent;
+    d->Flags.ApplicationTarget = p->SegApplicationTarget;
+    d->Flags.NonLocalBudgetGroup = p->SegNonLocalBudget;
+    d->Flags.LocalBudgetGroup = p->SegLocalBudget;
+    out->NbSegment = p->NbSegment;
+    out->PagingBufferSegmentId = p->PagingBufferSegmentId;
     out->PagingBufferSize = 10 * PAGE_SIZE;
     out->PagingBufferPrivateDataSize = 0;
     return STATUS_SUCCESS;
@@ -484,6 +509,10 @@ NTSTATUS APIENTRY MwBuildPagingBuffer(IN_CONST_HANDLE hAdapter, DXGKARG_BUILDPAG
      * is bugcheck 0x10E. Map and unmap are done as before; the operations a
      * 1.3 driver never sees are taken; a failure is counted (PgRefused_<op>
      * in the probe's key) and reported as success. */
+    /* No room for the marker: ask for a new buffer before doing anything,
+     * so that the operation is not done twice. */
+    if (MwPagingMarker != 0 && Arg->pDmaBuffer != NULL && Arg->DmaSize != 0 && Arg->DmaSize < 8)
+        return STATUS_GRAPHICS_INSUFFICIENT_DMA_BUFFER;
     if (Arg->Operation == DXGK_OPERATION_MAP_APERTURE_SEGMENT ||
         Arg->Operation == DXGK_OPERATION_UNMAP_APERTURE_SEGMENT)
         st = BuildPaging1x(a, Arg);

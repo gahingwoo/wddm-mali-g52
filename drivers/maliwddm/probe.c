@@ -24,6 +24,26 @@
  * The watchdog runs when WddmProbe is in effect, or on 1.3 with
  * ProbeWatchdog = 1 (both in Services\maliwddm\Parameters, read in
  * DriverEntry by version.c).
+ *
+ * The boot journal (wddm2x build). The watchdog writes once a second from
+ * a thread of its own, which a wedged system may never run again, and its
+ * key hangs off Device Parameters, which exists only after AddDevice. So,
+ * while a probe is in effect, there is also
+ *
+ *   Services\maliwddm\Probe\Boot<n % 8>     (n = Parameters\ProbeBoots)
+ *     E0001, E0002, ...   REG_SZ, "<ms since DriverEntry> <event>"
+ *     Last                the newest event
+ *     Count               how many there are
+ *   Services\maliwddm\Probe\LastBoot, LastBootKey
+ *
+ * written from DriverEntry on. An event is "> <ddi>" before a DDI runs,
+ * "< <ddi> <status>" after it, and a line of its own for what each QAI was
+ * asked and answered. The "> " line is flushed (ZwFlushKey) before the DDI
+ * runs, so the last E value on disk names the DDI a hang is in. Only at
+ * PASSIVE_LEVEL (the registry), only the first MW_BC_PER_DDI calls of each
+ * DDI (Render would flood it) plus every failure, and at most
+ * ProbeJournalMax (default 1500) events per boot. The 1.3 fallback boot
+ * never writes there, and eight boots are kept.
  */
 #include "maliwddm.h"
 #include "wddm2.h"
@@ -34,6 +54,120 @@
 #define MW_WD_COUNTERS      20
 #define MW_WD_EVERY_S_LATE  10      /* after the first 5 min, write every 10 s
                                      * unless something changed */
+
+/* ---- the boot journal ---- */
+
+#define MW_BC_SLOTS         8
+#define MW_BC_PER_DDI       64
+
+static HANDLE BcKey;
+static volatile LONG BcCount;
+static ULONG BcMax;
+static ULONG64 BcStart;
+
+BOOLEAN MwBcOn(void)
+{
+    return BcKey != NULL;
+}
+
+static void BcPutSz(HANDLE Key, PCWSTR Name, PCWSTR Text)
+{
+    UNICODE_STRING name;
+    size_t len = 0;
+
+    RtlInitUnicodeString(&name, Name);
+    (void)RtlStringCbLengthW(Text, 2048, &len);
+    (void)ZwSetValueKey(Key, &name, 0, REG_SZ, (PVOID)Text, (ULONG)(len + sizeof(WCHAR)));
+}
+
+static void BcPutDword(HANDLE Key, PCWSTR Name, ULONG Value)
+{
+    UNICODE_STRING name;
+
+    RtlInitUnicodeString(&name, Name);
+    (void)ZwSetValueKey(Key, &name, 0, REG_DWORD, &Value, sizeof(Value));
+}
+
+static void BcWrite(BOOLEAN Flush, PCSTR Text)
+{
+    WCHAR w[512], vn[16];
+    LONG n;
+    ULONG ms;
+
+    n = InterlockedIncrement(&BcCount);
+    if ((ULONG)n > BcMax) {
+        InterlockedDecrement(&BcCount);
+        return;
+    }
+    ms = (ULONG)((KeQueryInterruptTime() - BcStart) / 10000);
+    (void)RtlStringCbPrintfW(w, sizeof(w), L"%u %hs%hs", ms, Text,
+                             (ULONG)n == BcMax ? " (journal full)" : "");
+    (void)RtlStringCbPrintfW(vn, sizeof(vn), L"E%04d", n);
+    BcPutSz(BcKey, vn, w);
+    BcPutSz(BcKey, L"Last", w);
+    BcPutDword(BcKey, L"Count", (ULONG)n);
+    if (Flush)
+        (void)ZwFlushKey(BcKey);
+}
+
+void MwBc(PCSTR Fmt, ...)
+{
+    char text[400];
+    va_list ap;
+
+    if (BcKey == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return;
+    va_start(ap, Fmt);
+    (void)RtlStringCbVPrintfA(text, sizeof(text), Fmt, ap);
+    va_end(ap);
+    BcWrite(TRUE, text);
+}
+
+/* From version.c's DriverEntry part, with a probe in effect. */
+void MwBcInit(PUNICODE_STRING RegistryPath, ULONG BootNumber, ULONG Max)
+{
+    WCHAR buf[600], slot[16];
+    UNICODE_STRING path, name;
+    OBJECT_ATTRIBUTES oa;
+    HANDLE probe, boot;
+
+    BcStart = KeQueryInterruptTime();
+    BcMax = Max;
+    if (RegistryPath == NULL || Max == 0)
+        return;
+    RtlInitEmptyUnicodeString(&path, buf, sizeof(buf));
+    if (!NT_SUCCESS(RtlAppendUnicodeStringToString(&path, RegistryPath)) ||
+        !NT_SUCCESS(RtlAppendUnicodeToString(&path, L"\\Probe")))
+        return;
+    InitializeObjectAttributes(&oa, &path, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+    if (!NT_SUCCESS(ZwCreateKey(&probe, KEY_ALL_ACCESS, &oa, 0, NULL, REG_OPTION_NON_VOLATILE, NULL)))
+        return;
+    (void)RtlStringCbPrintfW(slot, sizeof(slot), L"Boot%u", BootNumber % MW_BC_SLOTS);
+    RtlInitUnicodeString(&name, slot);
+    InitializeObjectAttributes(&oa, &name, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, probe, NULL);
+    /* The boot eight boots ago used this slot: start it empty. */
+    if (NT_SUCCESS(ZwOpenKey(&boot, KEY_ALL_ACCESS, &oa))) {
+        (void)ZwDeleteKey(boot);
+        ZwClose(boot);
+    }
+    if (NT_SUCCESS(ZwCreateKey(&boot, KEY_ALL_ACCESS, &oa, 0, NULL, REG_OPTION_NON_VOLATILE, NULL))) {
+        BcPutDword(boot, L"BootNumber", BootNumber);
+        BcPutDword(probe, L"LastBoot", BootNumber);
+        BcPutSz(probe, L"LastBootKey", slot);
+        (void)ZwFlushKey(probe);
+        BcKey = boot;
+    }
+    ZwClose(probe);
+}
+
+void MwBcClose(void)
+{
+    HANDLE k = BcKey;
+
+    BcKey = NULL;
+    if (k != NULL)
+        ZwClose(k);
+}
 
 static MW_DDI_SLOT *Slots[MW_DDI_MAX];
 static volatile LONG SlotCount;
@@ -62,6 +196,12 @@ void MwDdiEnter(MW_DDI_SLOT *S)
     InterlockedIncrement(&S->Enters);
     LastSlot = S;
     LastSeq = q;
+    /* Flushed before the DDI runs: a hang inside it leaves this line. */
+    if (BcKey != NULL && S->Enters <= MW_BC_PER_DDI && KeGetCurrentIrql() == PASSIVE_LEVEL) {
+        char t[96];
+        (void)RtlStringCbPrintfA(t, sizeof(t), "> %ws #%d seq %d", S->Name, S->Enters, q);
+        BcWrite(TRUE, t);
+    }
 }
 
 NTSTATUS MwDdiExit(MW_DDI_SLOT *S, NTSTATUS St)
@@ -70,6 +210,14 @@ NTSTATUS MwDdiExit(MW_DDI_SLOT *S, NTSTATUS St)
     if (!NT_SUCCESS(St))
         InterlockedIncrement(&S->Fails);
     InterlockedIncrement(&S->Exits);
+    /* Not flushed: the next "> " line or the watchdog flushes it. A failure
+     * is flushed at once. */
+    if (BcKey != NULL && (S->Enters <= MW_BC_PER_DDI || !NT_SUCCESS(St)) &&
+        KeGetCurrentIrql() == PASSIVE_LEVEL) {
+        char t[96];
+        (void)RtlStringCbPrintfA(t, sizeof(t), "< %ws 0x%08x", S->Name, (ULONG)St);
+        BcWrite(!NT_SUCCESS(St), t);
+    }
     return St;
 }
 
@@ -263,6 +411,15 @@ static void WatchdogTick(MW_WATCHDOG *W, ULONG Seconds)
     Mw2xCounters(&counters[12], 8);
     if (RtlCompareMemory(counters, W->Counters, sizeof(counters)) != sizeof(counters))
         changed = TRUE;
+
+    /* The one-shot fallback's confirm (version.c), at PASSIVE_LEVEL here. */
+    MwVersionConfirmCheck(A->Renders, Seconds, stuck);
+    if (stuck && !W->WasStuck)
+        MwBc("watchdog %us: %ws", Seconds, text);
+    else if (!stuck && W->WasStuck)
+        MwBc("watchdog %us: no longer stuck", Seconds);
+    if (BcKey != NULL && (Seconds % 10) == 0)
+        (void)ZwFlushKey(BcKey);
 
     write = Seconds <= 300 || (Seconds % MW_WD_EVERY_S_LATE) == 0 || changed || stuck != W->WasStuck;
     if (write && NT_SUCCESS(OpenForWatchdog(A, &key))) {

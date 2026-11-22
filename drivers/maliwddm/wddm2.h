@@ -6,6 +6,8 @@
  */
 #pragma once
 
+#include "wddm2plan.h"
+
 #ifndef MW_BUILD
 #define MW_BUILD 0
 #endif
@@ -16,14 +18,20 @@ extern ULONG MwDdiInterface;    /* DRIVER_INITIALIZATION_DATA::Version */
 extern ULONG MwWddmProbe;       /* the WddmProbe value in effect, 0 for none */
 extern ULONG MwWddmProbeResult;
 
-#define MW_PROBE_NONE       0   /* no WddmProbe: WDDM 1.3 */
-#define MW_PROBE_ACTIVE     1   /* WddmProbe in effect */
-#define MW_PROBE_FELL_BACK  2   /* the last boot with it never confirmed: 1.3 */
-#define MW_PROBE_UNKNOWN    3   /* a value that is no WDDM version: 1.3 */
-#define MW_PROBE_NO_KEY     4   /* no service key path: 1.3 */
+#define MW_PROBE_NONE       MW2_RESULT_NONE
+#define MW_PROBE_ACTIVE     MW2_RESULT_ACTIVE
+#define MW_PROBE_FELL_BACK  MW2_RESULT_FELL_BACK
+#define MW_PROBE_UNKNOWN    MW2_RESULT_UNKNOWN
+#define MW_PROBE_NO_KEY     MW2_RESULT_NO_KEY
+#define MW_PROBE_ARM_FAILED MW2_RESULT_ARM_FAILED
+
+/* What the 2.x driver says about itself (wddm2plan.h), set in DriverEntry. */
+extern MW2_PLAN MwPlan;
+extern ULONG MwWddm2Budget;     /* Wddm2Budget: segment budget flags at 2.x (default 1) */
 
 void MwVersionInit(PUNICODE_STRING RegistryPath);
 void MwVersionRendered(void);
+void MwVersionConfirmCheck(ULONG Renders, ULONG Seconds, BOOLEAN Stuck);
 DXGKDDI_COLLECTDIAGNOSTICINFO MwCollectDiagnosticInfo;
 NTSTATUS MwQueryPhysicalAdapterCaps(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info);
 
@@ -49,6 +57,15 @@ void MwProbeMirror(HANDLE Sub, PUNICODE_STRING Name, ULONG Value);
 void MwProbeStart(MW_ADAPTER *A);
 void MwProbeStop(MW_ADAPTER *A);
 
+/* probe.c: the boot journal, Services\maliwddm\Probe\Boot<n>. One REG_SZ
+ * per event, each flushed to disk before the DDI it names runs, from
+ * DriverEntry on and only while a probe is in effect. PASSIVE_LEVEL only;
+ * elsewhere a call does nothing (the watchdog's counters cover it). */
+void MwBcInit(PUNICODE_STRING RegistryPath, ULONG BootNumber, ULONG Max);
+void MwBc(PCSTR Fmt, ...);
+BOOLEAN MwBcOn(void);
+void MwBcClose(void);
+
 /* wddm2x.c: the 2.x shapes (Services\maliwddm\Parameters\Wddm2Shape). */
 #define MW_SHAPE_PHYSICAL   0   /* physical mode, a copy node as the paging node */
 #define MW_SHAPE_GPUMMU     1   /* the same and GpuMmu (VA caps, page tables) */
@@ -56,16 +73,14 @@ extern ULONG MwWddm2Shape;
 extern ULONG MwGpuMmuPtSegment;         /* GpuMmuPtSegment: segment of the page tables (default 1) */
 extern ULONG MwPagingMarker;            /* PagingMarker: 8 bytes into a paging DMA buffer (default 1) */
 
-#define MW_COPY_NODE            1
-#define MW_GPUMMU_LEVELS        4
-#define MW_GPUMMU_INDEX_BITS    9
-#define MW_GPUVA_INTERNAL_START 0x100000000ULL          /* 4 GB */
-#define MW_GPUVA_INTERNAL_END   0x7FFFFFFFFULL          /* 2^35 - 1 */
+#define MW_COPY_NODE            MW2_NODE_COPY
+#define MW_GPUMMU_INDEX_BITS    MW2_PT_INDEX_BITS
 
 ULONG MwNodeCount(void);
 BOOLEAN MwGpuMmu(void);
 NTSTATUS MwCopyNodeSubmit(MW_ADAPTER *A, ULONG Fence);
 ULONG MwCopyNodeFence(void);
+NTSTATUS MwCopyNodePreempt(MW_ADAPTER *A, ULONG PreemptionFence);
 void Mw2xDriverCaps(MW_ADAPTER *A, DXGK_DRIVERCAPS *Caps, UINT Size);
 NTSTATUS MwQueryGpuMmuCaps(const DXGKARG_QUERYADAPTERINFO *Info);
 NTSTATUS MwQueryPageTableLevelDesc(const DXGKARG_QUERYADAPTERINFO *Info);
@@ -78,6 +93,7 @@ DXGKDDI_SUBMITCOMMANDVIRTUAL MwSubmitCommandVirtual;
 BOOLEAN Mw2xPagingOp(MW_ADAPTER *A, DXGKARG_BUILDPAGINGBUFFER *Arg);
 NTSTATUS Mw2xPagingFill(DXGKARG_BUILDPAGINGBUFFER *Arg);
 void Mw2xCounters(ULONG *Out, ULONG Count);
+void Mw2xBcQai(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info, NTSTATUS St);
 
 /* memory.c */
 NTSTATUS MwQuerySegment4(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info);

@@ -153,6 +153,8 @@ jobs:
         run: make -C tests/rotate-host run
       - name: maliwddm's HDMI arithmetic against the firmware's numbers
         run: make -C tests/hdmi-host run
+      - name: maliwddm's WDDM 2.x answers and one-shot fallback (wddm2plan.h)
+        run: make -C tests/wddm2-host run
 
   umd:
     # The UMD for the package: mesa.yml's Panfrost build of the same inputs.
