@@ -1,5 +1,5 @@
 diff --git a/src/gallium/frontends/d3d10umd/Adapter.cpp b/src/gallium/frontends/d3d10umd/Adapter.cpp
-index 8231393..45756da 100644
+index 8231393..2242170 100644
 --- a/src/gallium/frontends/d3d10umd/Adapter.cpp
 +++ b/src/gallium/frontends/d3d10umd/Adapter.cpp
 @@ -40,6 +40,7 @@
@@ -10,7 +10,17 @@ index 8231393..45756da 100644
  
  
  EXTERN_C struct pipe_screen *
-@@ -97,14 +98,54 @@ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL)
+@@ -79,6 +80,9 @@ struct MaliUmdInfo {
+ };
+ #define MALI_UMD_INFO_MAGIC 0x3149574Du
+ 
++/* Below: UmdMsaa as it applies to this process. */
++static unsigned EffectiveMsaa(unsigned setting);
++
+ static unsigned
+ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL)
+ {
+@@ -97,14 +101,54 @@ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL)
           ddi = info.Ddi >= 101 ? 101 : 100;
        if (pMsaa && SUCCEEDED(hr) && info.Magic == MALI_UMD_INFO_MAGIC &&
            info.Size >= offsetof(MaliUmdInfo, Msaa) + sizeof(UINT))
