@@ -23,6 +23,7 @@ Other DWORDs, all optional:
 |---|---|---|
 | `HdmiHpdSource` | 0 | Which bit is HPD: 0 `IOC_HDMI_HPD_STATUS` bit 3 (LEVEL_INT, what mainline and the firmware's HPD wait read), 1 bit 6 (vendor's HPD_PORT_LEVEL), 2 the GPIO4_PC1 pad. |
 | `HdmiHpdPollMs` | 200 | Poll period, 50 to 2000. |
+| `HdmiExclusive` | 1 | Level 3, DSI boot: the panel is reported gone while a monitor is on HDMI (one display at a time). 0: both reported. |
 | `HdmiHpdDebounceMs` | 1000 | A level counts only after it has held this long with no edge, 300 to 10000. |
 | `HdmiAudio` | 1 | 0: no audio setup after a mode set. |
 | `HdmiMaxPixels` | 4096000 (2560x1600) | Size of the driver's own framebuffer, allocated at start at level 3. Modes larger than this are not offered. |
@@ -284,7 +285,7 @@ New trace values (all level 3):
 | Value | Meaning |
 |---|---|
 | `Per_*`, `Per_N` | Every 5 s for 2 min after the last mode set, then every 30 s: the snapshot below. |
-| `Blk_Why`, `Blk_EventMs`, `Blk_AfterMs`, `Blk_*` | The first event after a mode set that can blank the screen: 1 visibility off, 2 window moved off a primary onto A->Fb, 3 a commit with no path; when (ms since boot, and after the mode set), and the snapshot at the next poll. |
+| `Blk_Why`, `Blk_EventMs`, `Blk_AfterMs`, `Blk_*` | The first event after a mode set that can blank the screen: 1 visibility off, 0x20 + `ToFbFrom` window moved off a primary onto A->Fb (was 2 before 2722e33's successor), 3 a commit with no path; when (ms since boot, and after the mode set), and the snapshot at the next poll. |
 | snapshot `_Flips` .. `_Maps` | Since the mode set: flips, scanned, copied, not mapped, invisible, refused at map time; `_Refused` the last refused size (any time). |
 | `_Showing` | bit 0 window on a primary, 1 scan-out on, 2 paging, 3 visible, 4 path active, 5 our framebuffer, 6 Hold, 15:8 rotation. |
 | `_LastFlip`, `_LastWhy` | The last flip's primary size, and why it was (0) or was not scanned out: 1 off, 2 not entered, 3 rotated, 4 another size, 9 invisible. |
@@ -368,6 +369,157 @@ Two cold boots, trace cleared before each, panel and monitor attached,
 2. `HdmiExclusive` 1. Expected: the desktop on HDMI, `Per_Flips` climbing,
    `Per_VisOff` small. Then unplug HDMI (the panel should come back) and
    replug (HDMI should take over again). Dump the trace.
+
+## Board run of 2722e33 + 0068 (pkg 8.16.32.821), HdmiExclusive 1
+
+The two-path theory is ruled out: `Per_Sup1`..`5` 0, `Per_Sup2Path` 0,
+every IsSupportedVidPn answered yes. Vsync is fine: 3334 interrupts in
+76 s for target 1, switched on once. DWM is alive (one instance, no
+crash). Yet: 2447 visibility-off calls and 2 visibility-on, 1301
+allocations created and 1231 destroyed, 283 presents and none of them a
+flip, 2 flips in all. No DDI of ours failed (the DDI wrappers log every
+failure as `Fail_*`; there are none for Present, CreateAllocation,
+OpenAllocation, DescribeAllocation or the VidPN). So it is dxgkrnl, or
+DWM through it, that does not accept what it gets.
+
+- **Prime suspect: the primaries' refresh rate.** `MwDescribeAllocation`
+  reported 60/1 for every allocation. The panel's mode as the driver
+  reports it is exactly 60 Hz (display.c's made-up timing, 60 by
+  construction), so that never mattered. HDMI's is the EDID's:
+  241,700,000 / (2720 x 1481) = 59.998 Hz. A primary whose described
+  refresh rate is not the mode's is not one the source can be flipped to;
+  DWM then cannot set its display mode, presents by blt instead (283 blts,
+  0 flips), and keeps rebuilding its swap chain (the create/destroy pairs),
+  with dxgkrnl turning the source off around each attempt. That is the
+  same symptom as the UMD's missing SetDisplayMode in November (memory:
+  project_wddm_mali_tspi3m_2026_11_13). At level 3 a primary now reports
+  the committed target's VSyncFreq exactly (`Hpd_Refresh` is it in
+  hundredths of a Hz). Note: an HDMI boot at level 0 with the firmware's
+  EDID in the DSDT has the same 60/1 against a 59.998 Hz mode; level 0 is
+  left as it is, but if this turns out to be the cause, level 0 needs it
+  too.
+- **Why `Blk_VisOff*Ms` stayed 0.** They were written once, when the
+  `Blk_*` snapshot was taken, at the first blanking event; that was 106 ms
+  after the mode set, before any visibility-off had happened. They are now
+  in every snapshot (`Per_VisOff1Ms`..`4Ms`, `Per_VisOffN`).
+- **`Blk_Why` 2 at 23.1 s, 106 ms after the mode set**: the window was
+  moved off a primary onto our framebuffer. Not a visibility-off (that is
+  1, and none had happened yet). The callers are now told apart: `Blk_Why`
+  is 0x20 plus `ToFbFrom` (1 visibility off, 2 a blt present to the
+  primary, 3 the copy thread, 4 a primary unmapped, 5 an IOMMU fault, 6
+  scan-out switched off, 7 the bugcheck screen). A blt present to the
+  primary draws into our framebuffer and moves the window there, which is
+  what 283 blts would do.
+
+New snapshot values: `_PrimCreates`, `_LastPrim` (W << 16 \| H),
+`_LastPrimPitch`; `_Describes`, `_LastDesc` (W << 16 \| H, bit 15 primary),
+`_LastDescRef` (the refresh rate it reported, hundredths of a Hz); `_Blts`,
+`_Fills`, `_LastPresent` (the present's DXGK_PRESENTFLAGS), `_LastPresentSrc`
+and `_LastPresentDst` (W << 16 \| H, bit 15 primary); `_Ref` (the committed
+refresh rate), `_SharedRef` (the refresh rate dxgkrnl asked for when it
+created the last shared primary); `_ToFbFrom`.
+
+### The next one-shot test
+
+`HdmiHpd` 3, `HdmiDiag` 0, `HdmiExclusive` 1, trace cleared, cold boot
+with panel and monitor attached, not logged in. After 90 s, dump the trace.
+If the refresh rate was it: the LogonUI on HDMI, `Per_PresentFlips` and
+`Per_Flips` climbing, `Per_VisOff` small, `Per_LastDescRef` 5999 and
+`Per_SharedRef` 5999. If it was not: `Per_SharedRef` against
+`Per_LastDescRef` and `Per_LastPresent`/`Per_LastPresentDst` say what DWM
+is doing instead.
+
+## Memory audit after the MEMORY_MANAGEMENT (0x1A) on 2026-11-22
+
+The bugcheck came on the panel after an HDMI unplug (panel restore), at
+the on-screen keyboard, with no dump. 0x1A has happened twice on this
+board before any of this code, so it is not proven to be the driver's.
+Everything at level 3 that touches memory, checked:
+
+| What | Finding |
+|---|---|
+| Our framebuffer | One `MmAllocateContiguousMemorySpecifyCache` (MmWriteCombined) at start, freed with the same size and cache type at stop, never mapped a second time. Not touched by hot-plug. |
+| HDMI, PHY, GRF, CRU, PMU, VOP2 mappings | Mapped once at start, unmapped with the same sizes at stop (one table drives both); no mapping per plug, per mode set or per panel restore. Same cache type (no-cache) as scanout.c's VOP2 mapping. |
+| The firmware's framebuffer mapping | Kept for the whole life of the driver, unmapped once at stop; the panel restore only points A->FbVa back at it. |
+| The leak at hand-back | Only at StopDevice while HDMI is on our framebuffer; nothing in a running session. |
+| IOMMU entries of primaries | The driver locks and unlocks nothing: VidMm's pages are entered while mapped, the window leaves a primary before its pages can go (MwScanUnmap), entries are read-only for the VOP2 and stay as before. Entering primaries of any size changes only which are entered, not how; slots are freed only by MwScanUnmap of the same allocation. |
+| Pages handed back to dxgkrnl | None: no DxgkCb returns memory. The EDID buffer is pool, freed after use. |
+| **A->Fb, A->FbVa, A->FbSize changing at a mode set or panel restore** | **A race, fixed.** Two CPU writers read them without CopyLock: a blt present to the primary at submission (DoPresent) and the clear at visibility off. Reading the new A->FbVa with the old size, after a switch from our 16 MB framebuffer back to the firmware's 4 MB one or the other way, writes past the end of a mapping: system memory corruption or a fault. It needs a present or a visibility change during the commit, which is unlikely but not excluded on a panel restore. UseFb now raises FbSwitch, waits (up to 50 ms) for those writers to leave, and only then changes the three under CopyLock; a writer that arrives meanwhile is skipped and counted (`_FbSkips`). Level 0 to 2 take no part. |
+
+If it happens again, the 0x1A subtype in the first parameter says which
+kind it was; 0x41790 (a page table entry count), 0x41284/0x41287 (a PTE
+or working set inconsistency) and 0x61941 (a bad address in a
+paging operation) point elsewhere than a write past a mapping, which
+would more likely show as 0x50 or 0x1A 0x41201.
+
+## Board run of c435f07 (2026-11-22): it works
+
+DSI boot, panel and AOC attached, `HdmiHpd` 3, `HdmiExclusive` 1: LogonUI
+and the desktop on the 2560x1440 monitor, `Per_Flips` 2613 and
+`Per_PresentFlips` 2610, `Per_VisOff` 2, primaries and the shared primary
+both at the mode's refresh rate (`Hpd_Refresh`, `Per_LastDescRef`,
+`Per_SharedRef` 6000), HDMI audio playing (`Aud_Status` 1, CTS 241700).
+The refresh rate the primaries described was the cause of the black
+desktop. With `HdmiExclusive` 1 every Win+P choice shows HDMI only, as it
+must with one VidPN source.
+
+Since then:
+
+- **Level 0 gets the same refresh-rate fix**, for the one case it can
+  matter: an HDMI boot whose mode is from the firmware's EDID and is not
+  60 Hz exactly (the AOC at 2560x1440 is 59.998 Hz). A primary now
+  describes the rate display.c's target mode has; for a mode that is 60 Hz
+  exactly (the panel, a boot without EDID, CEA 1080p60) it stays 60/1, so
+  nothing changes there.
+- **`HdmiExclusive` is on by default at level 3** (`HdmiExclusive` 0 turns
+  it off). Without it, a DSI boot with HDMI attached has a black HDMI
+  desktop the session cannot get out of except by unplugging; with it,
+  HDMI and the panel take turns and both work. It only matters on a DSI
+  boot. It stays the default until the extended desktop below exists.
+
+## Plan: extend and duplicate, panel on VP2 and HDMI on VP0
+
+What Linux does on this board (Armbian 7.3.5, drm.debug): HDMI on VP0
+(Cluster0 window), the panel on VP2 (Esmart0), both running at once. The
+firmware and this driver put the panel on VP0. For two displays at once:
+
+1. **Hardware (hdmi.c), panel on VP2.** Started: `MwVpRegsPort` computes
+   any port's values (VP2: CLK_CTRL 0, BG_DLY 16, MIPI0_IF_CTRL with MUX 2
+   and PCLK_DIV, which tests/hdmi-host checks against the vendor dump's
+   0x8010003b). Still to write:
+   - dclk_vp2_src from CPLL (CLKSEL_CON147 [10:8] = 1, [7:0] = 15 - 1),
+     DCLK_VP2 on it (CON147 bit 13 = 0), gates CON61 bit 12 and CON62
+     bit 1 (Vop2IfConfig's MIPI0 branch for Vp = 2);
+   - a window for VP2: Esmart1 (0x1A00), PORT_SEL 2, AXI bus 0, read IDs
+     0x12/0x13 (Vop2SetSmartWin's table), alpha map 0xFFFFFFFF, its own
+     address, stride, size; VP2's three mixers with the firmware's four
+     values (Vop2Enable) and VP2's OVL_LAYER_SEL;
+   - the move: VP0 to standby, MIPI0 off VP0, VP2 programmed and released,
+     MIPI0 onto VP2, then VP0 free for HDMI. The DSI host and the panel
+     keep running; only the source of their pixels changes, which is the
+     same unknown the VP0 panel restore already passed on the board.
+   - the IOMMU: the same tables serve both windows; a second set of slots
+     for the second source's primaries.
+2. **WDDM (two VidPN sources).** StartDevice reports 2 sources. Source 0
+   stays where it is (panel today, on VP0 until the move), source 1 is
+   HDMI. Every path-taking function already iterates paths; what is
+   single-source today: `SetVidPnSourceAddress` (source 0 only), the
+   per-source state (ScanAddr, ScanAlloc, ShownSeq, FlipSeq, the copy
+   thread, visibility, SrcWidth/Height, RotDeg), the vsync (one emulated
+   tick for target 0 or `ActiveTarget`; it needs one per active target),
+   `MwScanFlip` (Esmart0 only), and IsSupportedVidPn's one-path rule
+   (clone: two paths from one source, same source mode; extend: two
+   sources). Duplicate first is cheaper: one primary, both windows on it,
+   only if the two target modes share a source size Windows accepts (it
+   scales nothing here, so in practice the panel's size on both, or the
+   VOP2's window scaler, which is not set up). Extend is the useful one.
+3. **Switch and order.** `HdmiExtend` (DWORD, default 0): 0 is today's
+   single source with `HdmiExclusive`; 1 the panel moved to VP2 and two
+   sources. Order: (a) the VP2 move alone, panel only, one source: the
+   panel must look as it does on VP0; (b) two sources, HDMI on VP0,
+   extend; (c) duplicate; (d) rotation per source.
+
+The one-shot test for (a) comes with the build that has it.
 
 ## Open risks
 

@@ -233,6 +233,17 @@ NTSTATUS APIENTRY MwPresent(IN_CONST_HANDLE hContext, DXGKARG_PRESENT *Arg)
     MW_ADAPTER *a = ctx->Device->Adapter;
     MW_DMA_PRIVATE *priv = (MW_DMA_PRIVATE *)Arg->pDmaBufferPrivateData;
 
+    if (a->Hdmi.Switch) {
+        MW_ALLOCATION *s_ = (MW_ALLOCATION *)Arg->pAllocationList[DXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation;
+        MW_ALLOCATION *d_ = (MW_ALLOCATION *)Arg->pAllocationList[DXGK_PRESENT_DESTINATION_INDEX].hDeviceSpecificAllocation;
+        a->Hdmi.LastPresentFlags = (LONG)Arg->Flags.Value;
+        a->Hdmi.LastPresentSrcWH = s_ != NULL ? (LONG)(s_->Width << 16 | (s_->Height & 0xFFFF) | ((s_->Flags & MW_ALLOC_PRIMARY) ? 0x8000u : 0)) : 0;
+        a->Hdmi.LastPresentDstWH = d_ != NULL ? (LONG)(d_->Width << 16 | (d_->Height & 0xFFFF) | ((d_->Flags & MW_ALLOC_PRIMARY) ? 0x8000u : 0)) : 0;
+        if (Arg->Flags.Blt)
+            InterlockedIncrement(&a->Hdmi.PresentBltsH);
+        if (Arg->Flags.ColorFill)
+            InterlockedIncrement(&a->Hdmi.PresentFillsH);
+    }
     if (Arg->Flags.Flip) {
         /* A flip is memory-mapped here (FlipOnVSyncMmIo): dxgkrnl calls
          * SetVidPnSourceAddress for it and there is nothing to put in a DMA
@@ -318,6 +329,7 @@ static void DoPresent(MW_ADAPTER *A, const MW_PRESENT_OP *Op)
 
     if (Op->Dst != NULL && (Op->Dst->Flags & MW_ALLOC_PRIMARY) && A->FbVa != NULL) {
         UINT lw, lh;
+        A->Hdmi.ToFbFrom = 2;
         MwScanToFb(A);          /* a blt goes to the framebuffer: show it */
         dst = A->FbVa;
         /* Rotated, the rectangles are the desktop's and are clipped to its
@@ -947,6 +959,7 @@ static VOID CopyThread(PVOID Context)
                 a->LastPath = 1;
             } else if (p != NULL && a->SourceVisible && !a->Stopping) {
                 ShowPrimary(a, p);
+                a->Hdmi.ToFbFrom = 3;
                 MwScanToFb(a);
             }
             a->ShownAlloc = p;
@@ -1041,7 +1054,11 @@ NTSTATUS APIENTRY MwSubmitCommand(IN_CONST_HANDLE hAdapter, const DXGKARG_SUBMIT
      * job and completes at once. */
     if (!Arg->Flags.Paging && priv != NULL && Arg->DmaBufferPrivateDataSize >= sizeof(*priv) &&
         priv->Reserved == MW_DMA_MAGIC && priv->Present.Kind != MW_PRESENT_NONE)
-        DoPresent(a, &priv->Present);
+        /* HdmiHpd 3 can move the framebuffer under it (hpd.c UseFb). */
+        if (MwHpdFbEnter(a)) {
+            DoPresent(a, &priv->Present);
+            MwHpdFbLeave(a);
+        }
     /* Paging buffers (empty: map/unmap happen on the CPU), presents and
      * anything without our private data carry no jobs. */
     if (!Arg->Flags.Paging && priv != NULL && Arg->DmaBufferPrivateDataSize >= sizeof(*priv) &&
