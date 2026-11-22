@@ -124,6 +124,16 @@ static void test_pll(void)
         CHECK((sdiv == 1 || (sdiv % 2) == 0) && fvco >= 2000000 && fvco <= 4000000, "VCO %u sdiv %u", fvco, sdiv);
     }
     CHECK(MwHdptxCanDo(2700000), "270 MHz");
+    /* 2560x1440@60 as the TaishanPi's monitor gives it (241.7 MHz, not the
+     * table's 241.5): calculated, with mainline's rk_hdptx_phy_clk_pll_calc
+     * result (Mdiv 101, sdc 312000, K/Lc 14/39, so 7000 kHz off 2424000;
+     * SDC 5, 3/13). The firmware drives this monitor at this rate through
+     * the same calculation on the CM5-IO. */
+    CHECK(MwRopllFor(2417000, &c) && c.Mdiv == 101 && c.Sdiv == 1 && c.SdmEn == 1 && c.SdmNum == 14 &&
+          c.SdmDeno == 39 && c.SdcN == 5 && c.SdcNum == 3 && c.SdcDeno == 13,
+          "2417000: Mdiv %u Sdiv %u %u/%u SDC %u %u/%u", c.Mdiv, c.Sdiv, c.SdmNum, c.SdmDeno, c.SdcN, c.SdcNum, c.SdcDeno);
+    /* 2560x1440@75, 302.13 MHz, also below 340 at 8 bpc. */
+    CHECK(MwRopllFor(3021300, &c) && c.Mdiv == 126, "3021300 Mdiv %u", c.Mdiv);
 }
 
 static void test_infoframes(void)

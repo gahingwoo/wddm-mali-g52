@@ -22,8 +22,13 @@
  * firmware's framebuffer. Flips are held off while the VOP2 is written
  * (Hdmi.Busy, scanout.c).
  *
- * HPD is polled, every HdmiHpdPollMs (500 by default), and a change is acted
- * on at its second equal reading. Unplugging is believed only after HPD has
+ * HPD is polled, every HdmiHpdPollMs (200 by default), and a level is acted
+ * on only once it has held for HdmiHpdDebounceMs (1000 by default). Linux
+ * on this board (Armbian 7.3.5, mainline dw-hdmi-qp, drm.debug) logged a
+ * replug as connected, disconnected 464 ms later, connected again 200 ms
+ * after that: 0.66 s of contact bounce. Mainline debounces 150 ms after each
+ * HPD interrupt (HOTPLUG_DEBOUNCE_MS) and only then reads the level; a poll
+ * cannot see every edge, so it waits longer. Unplugging is believed only after HPD has
  * been seen high once since the driver started: a sink without HPD that the
  * firmware lit anyway (its 5 s timeout, DwHdmiQpConnectorPreInit) is never
  * reported gone.
@@ -74,11 +79,16 @@ void MwHpdSettings(MW_ADAPTER *A)
     if (H->Level > 3)
         H->Level = 3;
     H->Source = MwSetting(A, L"HdmiHpdSource", 0);
-    H->PollMs = MwSetting(A, L"HdmiHpdPollMs", 500);
-    if (H->PollMs < 100)
-        H->PollMs = 100;
-    if (H->PollMs > 5000)
-        H->PollMs = 5000;
+    H->PollMs = MwSetting(A, L"HdmiHpdPollMs", 200);
+    if (H->PollMs < 50)
+        H->PollMs = 50;
+    if (H->PollMs > 2000)
+        H->PollMs = 2000;
+    H->DebounceMs = MwSetting(A, L"HdmiHpdDebounceMs", 1000);
+    if (H->DebounceMs < 300)
+        H->DebounceMs = 300;
+    if (H->DebounceMs > 10000)
+        H->DebounceMs = 10000;
     H->Audio = MwSetting(A, L"HdmiAudio", 1) != 0;
     H->ResMaxPixels = MwSetting(A, L"HdmiMaxPixels", 2560 * 1600);
     if (H->ResMaxPixels > MW_VP0_MAX_W * MW_VP0_MAX_H)
@@ -250,13 +260,14 @@ static VOID HpdThread(PVOID Context)
             H->LastRaw = raw;
             MwLog(a, L"Hpd_Raw", raw);
         }
-        if (hpd == H->Last) {
-            H->Same++;
-        } else {
-            H->Same = 0;
+        if (hpd != H->Last) {
+            /* An edge: start the debounce again. */
             H->Last = hpd;
+            H->LastEdge = KeQueryInterruptTime();
+            H->Edges++;
+            continue;
         }
-        if (H->Same != 1)
+        if (KeQueryInterruptTime() - H->LastEdge < (ULONG64)H->DebounceMs * 10000)
             continue;
         if (hpd)
             H->SeenHigh = TRUE;
@@ -264,6 +275,7 @@ static VOID HpdThread(PVOID Context)
             continue;
         H->Changes++;
         MwLog(a, L"Hpd_Changes", H->Changes);
+        MwLog(a, L"Hpd_Edges", H->Edges);       /* raw edges seen so far: bounce shows as more than Changes */
         MwLog(a, L"Hpd_State", hpd);
         if (hpd)
             ReadEdid(a);
@@ -328,6 +340,7 @@ void MwHpdStart(MW_ADAPTER *A)
     hpd = MwHdmiReadHpd(A, &raw);
     H->LastRaw = raw;
     H->Last = hpd;
+    H->LastEdge = KeQueryInterruptTime();
     H->SeenHigh = hpd;
     H->Connected = H->Dsi ? hpd : TRUE;
     MwLog(A, L"Hpd_Raw", raw);

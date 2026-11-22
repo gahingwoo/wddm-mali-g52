@@ -96,7 +96,7 @@ typedef struct _MW_ADAPTER MW_ADAPTER;
 typedef struct _MW_HDMI {
     ULONG Level;                /* the HdmiHpd setting */
     ULONG Source;               /* HdmiHpdSource: 0 IOC LEVEL_INT, 1 IOC PORT_LEVEL, 2 GPIO4_PC1 pad */
-    ULONG PollMs;
+    ULONG PollMs, DebounceMs;
     BOOLEAN Audio;              /* HdmiAudio, on by default at level 3 */
     BOOLEAN Dsi;                /* the firmware's screen is the DSI panel */
     BOOLEAN Expose;             /* the HDMI child is reported hot-plug aware */
@@ -119,7 +119,8 @@ typedef struct _MW_HDMI {
 
     /* HPD, the poll thread's. Connected is what Windows was last told. */
     BOOLEAN Connected, SeenHigh, Last;
-    ULONG Same, Polls, Changes, LastRaw;
+    ULONG Polls, Changes, LastRaw, Edges;
+    ULONG64 LastEdge;           /* interrupt time of the last change of the raw level */
 
     /* What DDC returned (StateLock). */
     UCHAR Edid[MW_EDID_MAX];

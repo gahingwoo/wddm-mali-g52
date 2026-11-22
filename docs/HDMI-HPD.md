@@ -13,7 +13,7 @@ Read once, when the adapter starts. Missing or 0 is today's driver.
 | `HdmiHpd` | What runs |
 |---|---|
 | 0 | Nothing. The setting is read, nothing is mapped, allocated or written. |
-| 1 | Sense only. HPD polled every 500 ms, the EDID read over the controller's DDC when a monitor appears and once at start. Everything goes to the registry trace. Windows is told nothing new. |
+| 1 | Sense only. HPD polled every 200 ms (debounced, below), the EDID read over the controller's DDC when a monitor appears and once at start. Everything goes to the registry trace. Windows is told nothing new. |
 | 2 | Report. HDMI boot: the one child is hot-plug aware, Windows is told of plug and unplug, and the child's EDID is the one just read. No mode is ever set, so only a monitor that takes the firmware's timing gets a picture. A DSI boot behaves as 1. |
 | 3 | Mode set. The driver programs VOP2 VP0, the DW-HDMI-QP controller and the HDPTX PHY itself. HDMI boot: a different monitor gets its own preferred timing. DSI boot (TaishanPi 3M panel): a second child, HDMI; Windows can show one or the other (Win+P), not both. HDMI audio is set up after each mode set. |
 
@@ -22,9 +22,71 @@ Other DWORDs, all optional:
 | Name | Default | Meaning |
 |---|---|---|
 | `HdmiHpdSource` | 0 | Which bit is HPD: 0 `IOC_HDMI_HPD_STATUS` bit 3 (LEVEL_INT, what mainline and the firmware's HPD wait read), 1 bit 6 (vendor's HPD_PORT_LEVEL), 2 the GPIO4_PC1 pad. |
-| `HdmiHpdPollMs` | 500 | Poll period, 100 to 5000. A change counts at its second equal reading. |
+| `HdmiHpdPollMs` | 200 | Poll period, 50 to 2000. |
+| `HdmiHpdDebounceMs` | 1000 | A level counts only after it has held this long with no edge, 300 to 10000. |
 | `HdmiAudio` | 1 | 0: no audio setup after a mode set. |
 | `HdmiMaxPixels` | 4096000 (2560x1600) | Size of the driver's own framebuffer, allocated at start at level 3. Modes larger than this are not offered. |
+
+## Linux on the same board (2026-11-22 reference)
+
+Armbian 7.3.5-edge through our UEFI, mainline dw-hdmi-qp and hdptx, DSI
+panel and a 2560x1440 monitor attached, one unplug and replug with
+drm.debug (files in `~/Desktop/board-session-prep/hdmi-ref/`, not in the
+repo). What it settles and what the driver now does about it:
+
+- HPD bit. Mainline's `dw_hdmi_qp_rk3576_read_hpd` returns connected iff
+  `IOC_HDMI_HPD_STATUS & BIT(3)` (LEVEL_INT). Its interrupt path is only a
+  trigger: the hard IRQ takes any non-zero status word, masks
+  (`HPD_INT_MSK`), the thread writes `HPD_INT_CLR` 1 and queues the work
+  150 ms later (`HOTPLUG_DEBOUNCE_MS`), and the work calls read_hpd. So
+  the `hpd_notify status=1/2` lines and the sysfs status are all bit 3,
+  which is `HdmiHpdSource` 0, the default. The driver never writes
+  `IOC_MISC_CON0`; the firmware leaves `HPD_INT_CLR` 1 and `MSK` 0, which
+  is what mainline's setup_hpd writes too.
+- Bounce. Replug: connected at 224.559 s, disconnected at 225.023,
+  connected at 225.223 (the 0.2 s sysfs poll caught it as 2 high, 1 low).
+  Unplug was clean. Hence the 1 s debounce on a 200 ms poll: a level is
+  used only after 1 s without an edge, so this replug is reported once, at
+  about 226.2 s. `Hpd_Edges` counts the raw edges; on that replug it would
+  go up by 3 while `Hpd_Changes` goes up by 1.
+- Timing of the rest. Linux re-read the EDID 3.05 s after the unplug
+  notify and 3.7 s after the replug; the compositor's mode set came 3.6 s
+  after the replug. The driver reads the EDID right after the debounce,
+  so Windows should hear about a monitor in about 1.2 s.
+- Modes. Our parser on the same `edid.bin`: 2560x1440@60 241.70 MHz
+  (+H +V, preferred), 2560x1440@75 302.13 MHz (+H -V), 1280x1440 156 MHz,
+  then the safe 1920x1080@60 (VIC 16) and 1280x720@60 (VIC 4); sink HDMI,
+  SCDC, basic audio, no QS. These are Linux's DTD modes with the same
+  syncs. 2560x1440@100 (397.98 MHz) is left out (above 340 MHz, no
+  scrambling here); Linux offers it with the scrambling patch. Linux's
+  extra modes from the established and standard timing blocks
+  (1680x1050, 1024x768 and so on) are not offered: only DTDs and the safe
+  pair.
+- PLL. 241.70 MHz is not a table entry (the table's QHD entry is 241.5);
+  it is calculated, and the result is what mainline's
+  `rk_hdptx_phy_clk_pll_calc` gives (Mdiv 101, SDM 14/39, SDC 5 3/13,
+  checked in tests/hdmi-host). The firmware drives this rate the same way
+  on the CM5-IO.
+- Bit depth: a deliberate difference. Linux ran 2560x1440@60 at 10 bpc
+  (`bpc=10`, TMDS 302.125 MHz = 241.7 x 1.25, `max_bpc = 10` in the
+  Rockchip glue, sink 12 bpc capable) from a Cluster0 window in XR30.
+  The driver, like the firmware, runs 8 bpc: RGB888 from an ARGB8888
+  Esmart0 window, VO0_GRF_SOC_CON8 8 bpc, PLL_PCG_CLK_SEL 0, TMDS = pixel
+  clock. That is the configuration that has put a picture on this board
+  from the firmware, and Windows' primaries are 8 bpc anyway. If 10 bpc is
+  ever added, the 340 MHz cap must apply to clock x 1.25, which drops
+  2560x1440@75 (377.7 MHz).
+- Pitch: Linux's 2560x1440 framebuffer has pitch 10240 = width x 4, as
+  the driver's own framebuffer has.
+- Ports. Linux runs the panel on VP2 (Esmart0, CRTC video_port2) and HDMI
+  on VP0 (Cluster0) at the same time; the firmware and this driver put the
+  panel on VP0. So an extended desktop is possible on this hardware by
+  moving the panel to VP2 (its own dclk from CPLL, MIPI0_IF_CTRL MUX 2 with
+  PCLK_DIV, VP2_CLK_CTRL 0, the vendor dump's 0x8010003b) and giving
+  Windows a second VidPN source. Not done here: that is the second step,
+  after single-output switching has been seen to work. It would also take
+  the DSI-to-HDMI-and-back path out, which is the least certain part of
+  this one.
 
 ## What level 3 does, in order
 
@@ -80,12 +142,14 @@ Clear it between runs: `reg delete "...\Device Parameters\maliwddm" /f`.
 Step A, level 1, DSI boot (panel attached, HDMI unplugged at power-on):
 1. Boot. Expect `Hpd_Level 1`, `Hpd_Mapped 0x3FF`, `Hpd_Powered 1`,
    `Hpd_Dsi 1`, `Hpd_State 0`, `Hpd_Children 1`. Desktop as before.
-2. Plug the monitor. Within ~1 s: `Hpd_Changes 1`, `Hpd_State 1`,
+2. Plug the monitor. Within ~1.5 s (1 s debounce, then the EDID): `Hpd_Changes 1`, `Hpd_State 1`,
    `Edid_Status 0`, `Edid_Bytes 256` (typical), `Edid_Id` = the monitor's
    manufacturer/product bytes, `Edid_Modes` > 0, `Edid_Mode0` = its native
    size as (W << 16 | H). `Hpd_Raw` shows the IOC status in bits 7:0, the
    pad in bit 8, IOC_MISC_CON0 in bits 23:16.
-3. Unplug: `Hpd_Changes 2`, `Hpd_State 0`.
+3. Unplug: `Hpd_Changes 2`, `Hpd_State 0`, about 1.2 s after the cable
+   leaves. `Hpd_Edges` larger than `Hpd_Changes` is contact bounce that
+   was filtered out, as intended.
    - If `Hpd_State` never changes but `Hpd_Raw` does: set `HdmiHpdSource`
      to 1 or 2 (whichever bit follows the cable in `Hpd_Raw`), reboot,
      repeat.
@@ -137,7 +201,7 @@ main one with the HDMI cable unplugged at level 1/2 (nothing is set there).
   second display appears on a DSI boot is its own; Win+P decides.
 - 4-pixel-unaligned widths (1366) and anything above 340 MHz are not
   offered; interlaced modes never.
-- A swap of monitors faster than two polls is not seen as an unplug.
+- A swap of monitors faster than the 1 s debounce is not seen as an unplug.
 - After a hand-back (driver disabled while on our framebuffer) that
   framebuffer is deliberately leaked so Basic Display keeps a valid one.
 - The audio driver is not told about hot-plug; it keeps streaming into a
