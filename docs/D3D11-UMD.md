@@ -117,6 +117,24 @@ d3dprobe prints the multisample bit and the quality levels at 1x to 8x
 for each format, and since it is on the list it shows whether the
 runtime still creates the device with them.
 
+**On the board, 2026-11-22, 0065:** DWM fine (logon screen, desktop,
+flips scanned out, GPU jobs; n=1). Edge with the ES3 flag: ANGLE's
+`eglInitialize: No available renderers`, three times, then software; its
+D3D11 renderer did not come up at all. 0064 in DWM and 0065 in Edge
+failed the same way, with no device, and share one thing: the
+multisample render target bit with no sample count above one. Before
+0064 there was neither, and every device came up.
+
+**U0c, Mesa patch 0066 (not run):** the bit is given only where 4x is
+real: every format Panfrost renders at 4x is a multisample render target
+(and multisample load where it samples 4x), and answers one quality level
+at 1x and at 4x, still only in the browsers and d3dprobe. The G52 has no
+2x (`pan_screen.c`: 2x only from arch 12), and ANGLE's loop asks for 2x
+first and stops, so ANGLE keeps the count {1}: nothing in Edge renders
+multisampled, and Skia sees RGBA8 renderable. `UmdMsaa` 4 and 5 now mean
+the same as 1 and 2. If the runtime still refuses the device, the bit
+was not the cause, and d3dprobe says so before Edge is tried.
+
 **U0, the smallest change to 10_1 (Mesa patch 0063, done on this
 branch, not run):** `SUPPORT_D3D10_1 1`, with the D3D10.1 interface
 offered only where the KMD's answer allows it (`UmdDdi` 101; the default
@@ -166,7 +184,7 @@ step can be turned back without reinstalling:
 | `UmdDdi` | 100 until U0 has run, then 101, 110, 111 | 100: the D3D10.0 DDI as today (feature level 10_0); 101: the D3D10.1 DDI (10_1); 110: D3D11.0; 111: D3D11.1 |
 | `UmdDxgi12` | 0 until U3 has run | the DXGI 1.2 DDI and flip model |
 | `UmdVideo` | 0 | 0 none; 1 the video DDI with no profiles; 2 with the decoder's profiles |
-| `UmdMsaa` | 1 | 0: no multisampling, as before 0064; 1: the 8-bit RGBA/BGRA formats are multisample render targets at one sample, in the browsers and d3dprobe only (0065); 2: the same in every process; 4 and 5: as 1 and 2, with 4x too, resolved on the GPU |
+| `UmdMsaa` | 1 | 0: no multisampling, as before 0064; 1: every format Panfrost renders at 4x is a multisample render target at 1x and 4x, in the browsers and d3dprobe only (0066; ANGLE uses 1x); 2: the same in every process; 4 and 5: as 1 and 2 |
 | `UmdFeatureLevel` | 0xa000 (10_0) | the most the UMD reports |
 
 A KMD that does not answer the query means `UmdDdi` 100, so a new UMD on
