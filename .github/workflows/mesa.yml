@@ -265,6 +265,9 @@ jobs:
           if ($LASTEXITCODE) { throw 'gsso build failed' }
           .\triangle.exe $dll
           if ($LASTEXITCODE) { throw "softpipe smoke test failed ($LASTEXITCODE)" }
+          # A draw with no input layout ever set (mesa-patches/0070).
+          .\triangle.exe $dll nolayout
+          if ($LASTEXITCODE) { throw "softpipe draw without an input layout failed ($LASTEXITCODE)" }
           # No Mali on the runner: Panfrost must report no device and hand
           # over to softpipe without crashing, and the triangle still draws.
           $env:GALLIUM_DRIVER = 'panfrost'
@@ -343,7 +346,17 @@ jobs:
           if (Test-Path gsso-hang.txt) { Get-Content gsso-hang.txt | Select-String -NotMatch 'NatVis|ModLoad' | Select-Object -Last 150 }
           $gout = (Get-Content gsso.out -ErrorAction SilentlyContinue) -join "`n"
 
+          # A draw with no input layout and no vertex buffer ever set on the
+          # device: the D3D11 runtime's clear of part of a DComp surface.
+          # Panfrost read a NULL vertex elements state there (+0x344) and
+          # the process died (mesa-patches/0070). Pixels are arbitrary.
+          $nl = Run-Triangle 'nolayout' 'triangle.exe' 'nolayout'
+          Get-Content nolayout.out, nolayout.err -ErrorAction SilentlyContinue | Select-String -NotMatch 'ioctl|  ->' | Select-Object -Last 10
+          if (Test-Path nolayout-crash.txt) { Get-Content nolayout-crash.txt | Select-String -NotMatch 'NatVis|ModLoad' | Select-Object -Last 60 }
+
           $all = (Get-Content fake.out, fake.err -ErrorAction SilentlyContinue) -join "`n"
+          if ($nl -eq 'hang') { throw 'triangle.exe nolayout hung' }
+          if ($nl -ne 0 -and $nl -ne 2) { throw "triangle.exe nolayout died ($nl): a draw without an input layout" }
           if ($r -eq 'hang') { throw 'triangle.exe hung' }
           if ($all -match 'using softpipe') { throw 'fell back to softpipe' }
           if ($all -notmatch 'malikm-fake: submit') { throw 'no job was submitted' }
@@ -425,6 +438,8 @@ jobs:
             present-*.txt
             gsso.*
             gsso-*.txt
+            nolayout.*
+            nolayout-*.txt
             trace.*
             trace/
 
