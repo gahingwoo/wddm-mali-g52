@@ -1,0 +1,38 @@
+Proposed for edk2-rk3576 (not applied there). Optional: the driver does not need it.
+Apply in edk2-rk3576 with: patch -p1 < 0001-gpu-asl-hdmi-blocks.patch
+
+--- a/Silicon/Rockchip/RK3576/AcpiTables/Gpu.asl	2026-11-22 19:18:12.275903185 +1300
++++ b/Silicon/Rockchip/RK3576/AcpiTables/Gpu.asl	2026-11-22 19:18:12.292149601 +1300
+@@ -88,4 +88,32 @@
+   Method (EDID, 0, Serialized) {
+     Return (EDBF)
+   }
++
++  //
++  // Where the HDMI output's blocks are, for the display driver's hot-plug
++  // and mode-set path (wddm-mali-g52, HdmiHpd >= 1), which today maps them by
++  // these same physical addresses. A private object rather than _CRS
++  // entries: GPU0's _CRS carries the GPU and, for a DSI panel, the
++  // backlight as its second memory resource, and the driver tells the two
++  // apart by position; resources added there would also be arbitrated by
++  // PnP against nothing that owns them. The driver may read this to check
++  // that it runs on the SoC it was written for and refuse otherwise.
++  //
++  // Values from mainline rk3576.dtsi. The last one is the HDMI "hpd"
++  // interrupt (GIC SPI 367, GSIV 399). It is deliberately NOT in _CRS: the
++  // driver polls HPD, its ISR does not service this line, and a level
++  // interrupt connected to an ISR that does not clear it would storm. Move
++  // it to _CRS only together with a driver that handles it.
++  //
++  Name (HDMB, Package () {
++    0x27DA0000,   // DW-HDMI-QP controller, 0x20000
++    0x2B000000,   // HDPTX PHY
++    0x26032000,   // HDPTX PHY GRF
++    0x2601A000,   // VO0 GRF
++    0x26040000,   // IOC GRF (HPD status 0xA440, IOC_MISC_CON0 0xA400)
++    0x27200000,   // CRU
++    0x27220000,   // PMU1CRU
++    0x27D00000,   // VOP2
++    399           // HDMI hpd interrupt, GSIV
++  })
+ }

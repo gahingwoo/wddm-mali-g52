@@ -287,6 +287,7 @@ void MwHpdStart(MW_ADAPTER *A)
     H->Children = 1;
     if (H->Level == 0)
         return;
+    InterlockedExchange(&H->Stop, 0);           /* a restart of the adapter */
     H->Dsi = A->BlVa != NULL;
     if (!NT_SUCCESS(MwHdmiMap(A))) {
         /* Nothing is reported or set; MwHpdDisplayStop still frees. */
@@ -368,8 +369,10 @@ void MwHpdStop(MW_ADAPTER *A)
     MwLog(A, L"Hpd_ModeSetFails", H->ModeSetFails);
     MwLog(A, L"Hpd_Restores", H->Restores);
     H->Started = FALSE;
-    /* The registers stay mapped until MwHpdDisplayStop: MwScanStop runs
-     * between the two. */
+    /* At level 3 the registers stay mapped until MwHpdDisplayStop, since
+     * MwScanStop runs between the two; below it nothing needs them. */
+    if (H->Level < 3)
+        MwHdmiUnmap(A);
 }
 
 /* From MwDisplayStop, after MwScanStop has put the window on A->Fb and
