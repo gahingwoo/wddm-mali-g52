@@ -1,0 +1,77 @@
+diff --git a/src/gallium/frontends/d3d10umd/Debug.cpp b/src/gallium/frontends/d3d10umd/Debug.cpp
+index 0412327..30e39b6 100644
+--- a/src/gallium/frontends/d3d10umd/Debug.cpp
++++ b/src/gallium/frontends/d3d10umd/Debug.cpp
+@@ -107,6 +107,46 @@ DebugCrashHandler(EXCEPTION_POINTERS *info)
+ }
+ 
+ 
++/*
++ * The token this process runs with, for the first line of its log. A
++ * sandboxed process (Edge's GPU process: a restricted token at low
++ * integrity) writes the log only where the directory's ACL grants one of
++ * its restricted SIDs and its label lets a low process write; without
++ * that it has no log, and says so only through OutputDebugString.
++ */
++#pragma comment(lib, "advapi32.lib")
++
++static void
++DebugTokenDescription(char *out, size_t size)
++{
++   HANDLE token;
++   DWORD len, rid = 0, app_container = 0;
++   BOOL restricted;
++   union {
++      TOKEN_MANDATORY_LABEL label;
++      char bytes[SECURITY_MAX_SID_SIZE + sizeof(TOKEN_MANDATORY_LABEL)];
++   } il;
++
++   if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
++      snprintf(out, size, "token not readable (%lu)", (unsigned long)GetLastError());
++      return;
++   }
++   if (GetTokenInformation(token, TokenIntegrityLevel, &il, sizeof il, &len)) {
++      PSID sid = il.label.Label.Sid;
++      rid = *GetSidSubAuthority(sid, *GetSidSubAuthorityCount(sid) - 1);
++   }
++   if (!GetTokenInformation(token, TokenIsAppContainer, &app_container,
++                            sizeof app_container, &len))
++      app_container = 0;
++   restricted = IsTokenRestricted(token);
++   CloseHandle(token);
++   snprintf(out, size, "integrity 0x%lx%s, app container %lu, restricted %d",
++            (unsigned long)rid,
++            rid < SECURITY_MANDATORY_MEDIUM_RID ? " (low)" : "",
++            (unsigned long)app_container, restricted ? 1 : 0);
++}
++
++
+ static HANDLE
+ DebugLogFile(void)
+ {
+@@ -136,6 +176,25 @@ DebugLogFile(void)
+       file = CreateFileA(path, FILE_APPEND_DATA,
+                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                          NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
++      DWORD err = GetLastError();
++      char who[128], line[MAX_PATH + 256];
++      int len;
++
++      DebugTokenDescription(who, sizeof who);
++      if (file != INVALID_HANDLE_VALUE) {
++         DWORD done;
++         len = snprintf(line, sizeof line, "%10lu %5lu log on: %s, %s\n",
++                        (unsigned long)GetTickCount(), (unsigned long)GetCurrentThreadId(),
++                        path, who);
++         if (len > 0)
++            WriteFile(file, line, (DWORD)(len < (int)sizeof line ? len : sizeof line - 1),
++                      &done, NULL);
++      } else if (tries == 0) {
++         /* Once: the reason a process has no log (docs/EDGE-PRESENT.md). */
++         snprintf(line, sizeof line, "maliumd: no log, %s not opened (error %lu), %s\n",
++                  path, (unsigned long)err, who);
++         OutputDebugStringA(line);
++      }
+    }
+    if (InterlockedIncrement(&tries) == 1) {
+       /* This DLL stays for the life of the process. consent.exe (the

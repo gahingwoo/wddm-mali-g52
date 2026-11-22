@@ -424,6 +424,47 @@ jobs:
           if ($edge -notmatch '(?m)^ +28 R8G8B8A8_UNORM .* ms-rt.* q 1 0 1 0') { throw 'msedge.exe: R8G8B8A8_UNORM is not a multisample render target at 1x and 4x' }
           if ($edge -notmatch '(?m)^ +87 B8G8R8A8_UNORM .* ms-rt.* q 1 0 1 0') { throw 'msedge.exe: B8G8R8A8_UNORM is not a multisample render target at 1x and 4x' }
 
+      - name: The UMD log from a low-integrity process (Edge's GPU process)
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          # Edge's GPU process runs at low integrity with a restricted token
+          # and wrote no UMD log on the board (2026-11-23). triangle.exe
+          # under another name, with a low label on the file, starts at low
+          # integrity; it must get a log once C:\mali\log has the ACL and
+          # label docs/EDGE-PRESENT.md sets up, and the log's first line
+          # names the token (mesa-patches/0072).
+          $env:GALLIUM_DRIVER = 'panfrost'
+          $env:MALIKM_FAKE = '2'
+          New-Item -ItemType Directory -Force C:\mali\log | Out-Null
+          Copy-Item out\triangle.exe out\lowtri.exe
+          icacls out\lowtri.exe /setintegritylevel low
+          if ($LASTEXITCODE) { throw 'icacls on lowtri.exe failed' }
+          $dll = (Resolve-Path out\libgallium_d3d10.dll).Path
+          function Run-Low($tag) {
+            $p = Start-Process -FilePath (Resolve-Path out\lowtri.exe).Path -ArgumentList "`"$dll`"" -NoNewWindow -PassThru `
+                   -RedirectStandardOutput "low-$tag.out" -RedirectStandardError "low-$tag.err"
+            if (-not $p.WaitForExit(120000)) { Stop-Process -Id $p.Id -Force; return 'hang' }
+            return $p.ExitCode
+          }
+          $c = Run-Low 'before'
+          $before = @(Get-ChildItem C:\mali\log -Filter 'lowtri.exe-*' -ErrorAction SilentlyContinue).Count
+          Write-Host "low integrity, directory as made: exit $c, $before log(s)"
+          # The setup in docs/EDGE-PRESENT.md, word for word.
+          icacls C:\mali\log /grant '*S-1-1-0:(OI)(CI)M' '*S-1-5-12:(OI)(CI)M' '*S-1-15-2-1:(OI)(CI)M' '*S-1-15-2-2:(OI)(CI)M'
+          if ($LASTEXITCODE) { throw 'icacls /grant failed' }
+          icacls C:\mali\log /setintegritylevel '(OI)(CI)low'
+          if ($LASTEXITCODE) { throw 'icacls /setintegritylevel failed' }
+          $c = Run-Low 'after'
+          $logs = @(Get-ChildItem C:\mali\log -Filter 'lowtri.exe-*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime)
+          Write-Host "low integrity, after the setup: exit $c, $($logs.Count) log(s)"
+          if ($c -eq 'hang') { throw 'lowtri.exe hung' }
+          if ($logs.Count -le $before) { throw 'no UMD log from the low-integrity process after the ACL setup' }
+          $first = Get-Content $logs[-1].FullName -TotalCount 1
+          Write-Host "first line: $first"
+          Copy-Item $logs[-1].FullName umdlog-lowtri.txt
+          if ($first -notmatch 'log on: .*integrity 0x1000 \(low\)') { throw 'the log does not name a low-integrity token' }
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -440,6 +481,8 @@ jobs:
             gsso-*.txt
             nolayout.*
             nolayout-*.txt
+            low-*.out
+            low-*.err
             trace.*
             trace/
 
