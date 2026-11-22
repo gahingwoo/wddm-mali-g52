@@ -402,6 +402,12 @@ jobs:
           if ($codes['msedge'] -ne 0) { throw "the device with the multisample answers (msedge.exe) was refused ($($codes['msedge']))" }
           if ($edge -notmatch 'feature level 10_1') { throw 'msedge.exe did not get feature level 10_1' }
           if ($edge -notmatch 'MSAA consistency: 0 disagreement') { throw 'msedge.exe: the multisample answers disagree' }
+          # Chromium's steps after CreateDevice (d3dprobe "edge path"): the
+          # device must not be removed by any of them.
+          foreach ($exe in 'msedge', 'plainprobe') {
+            $t = (Get-Content "d3dprobe-$exe.txt" -ErrorAction SilentlyContinue) -join "`n"
+            if ($t -notmatch 'edge path: device alive') { throw "${exe}.exe: the device was removed on the edge path" }
+          }
           if ($edge -notmatch '(?m)^ +28 R8G8B8A8_UNORM .* ms-rt.* q 1 0 1 0') { throw 'msedge.exe: R8G8B8A8_UNORM is not a multisample render target at 1x and 4x' }
           if ($edge -notmatch '(?m)^ +87 B8G8R8A8_UNORM .* ms-rt.* q 1 0 1 0') { throw 'msedge.exe: B8G8R8A8_UNORM is not a multisample render target at 1x and 4x' }
 

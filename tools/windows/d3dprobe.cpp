@@ -342,26 +342,34 @@ static int edge_path(ID3D11Device *dev, ID3D11DeviceContext *ctx)
         d.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
         d.AlphaMode = DXGI_ALPHA_MODE_PREMULTIPLIED;
         hr = f2->CreateSwapChainForComposition(dev, &d, nullptr, &sc);
-        if ((why = removed_reason(dev, "CreateSwapChainForComposition", hr)) != S_OK || FAILED(hr))
+        /* A software driver gets DXGI_ERROR_INVALID_CALL here (CI): the
+         * steps without the swap chain still run. */
+        if ((why = removed_reason(dev, "CreateSwapChainForComposition", hr)) != S_OK)
             goto out;
+        if (FAILED(hr))
+            sc = nullptr;
     }
 
     hr = DCompositionCreateDevice(xd, __uuidof(IDCompositionDevice), (void **)&dc);
-    if ((why = removed_reason(dev, "DCompositionCreateDevice", hr)) != S_OK || FAILED(hr))
+    if ((why = removed_reason(dev, "DCompositionCreateDevice", hr)) != S_OK)
         goto out;
+    if (FAILED(hr))
+        goto shared_step;
     hr = dc->CreateTargetForHwnd(wnd, TRUE, &target);
     if (SUCCEEDED(hr))
         hr = dc->CreateVisual(&visual);
-    if (SUCCEEDED(hr))
+    if (SUCCEEDED(hr) && sc)
         hr = visual->SetContent(sc);
     if (SUCCEEDED(hr))
         hr = target->SetRoot(visual);
     if (SUCCEEDED(hr))
         hr = dc->Commit();
-    if ((why = removed_reason(dev, "DComp target, visual, Commit", hr)) != S_OK || FAILED(hr))
+    if ((why = removed_reason(dev, "DComp target, visual, Commit", hr)) != S_OK)
         goto out;
+    if (FAILED(hr))
+        goto shared_step;
 
-    for (int frame = 0; frame < 3; frame++) {
+    for (int frame = 0; sc && frame < 3; frame++) {
         ID3D11Texture2D *buf = nullptr;
         ID3D11RenderTargetView *rtv = nullptr;
         const float colour[4] = { 0.0f, 0.25f * (float)frame, 0.5f, 1.0f };
@@ -380,14 +388,18 @@ static int edge_path(ID3D11Device *dev, ID3D11DeviceContext *ctx)
         if (rtv) rtv->Release();
         if (buf) buf->Release();
         snprintf(step, sizeof step, "frame %d: buffer, view, clear", frame);
-        if ((why = removed_reason(dev, step, hr)) != S_OK || FAILED(hr))
+        if ((why = removed_reason(dev, step, hr)) != S_OK)
             goto out;
+        if (FAILED(hr))
+            goto shared_step;
         pp.DirtyRectsCount = frame ? 1 : 0;
         pp.pDirtyRects = frame ? &dirty : nullptr;
         hr = sc->Present1(1, 0, &pp);
         snprintf(step, sizeof step, "frame %d: Present1%s", frame, frame ? " (dirty rect)" : "");
-        if ((why = removed_reason(dev, step, hr)) != S_OK || FAILED(hr))
+        if ((why = removed_reason(dev, step, hr)) != S_OK)
             goto out;
+        if (FAILED(hr))
+            goto shared_step;
     }
 
     {
@@ -397,11 +409,15 @@ static int edge_path(ID3D11Device *dev, ID3D11DeviceContext *ctx)
         const float colour[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 
         hr = dc->CreateSurface(64, 64, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_ALPHA_MODE_PREMULTIPLIED, &surface);
-        if ((why = removed_reason(dev, "DComp CreateSurface", hr)) != S_OK || FAILED(hr))
+        if ((why = removed_reason(dev, "DComp CreateSurface", hr)) != S_OK)
             goto out;
+        if (FAILED(hr))
+            goto shared_step;
         hr = surface->BeginDraw(nullptr, __uuidof(ID3D11Texture2D), (void **)&tex, &offset);
-        if ((why = removed_reason(dev, "DComp BeginDraw", hr)) != S_OK || FAILED(hr))
+        if ((why = removed_reason(dev, "DComp BeginDraw", hr)) != S_OK)
             goto out;
+        if (FAILED(hr))
+            goto shared_step;
         hr = dev->CreateRenderTargetView(tex, nullptr, &rtv);
         if (SUCCEEDED(hr)) {
             ctx->OMSetRenderTargets(1, &rtv, nullptr);
@@ -413,8 +429,10 @@ static int edge_path(ID3D11Device *dev, ID3D11DeviceContext *ctx)
         HRESULT ehr = surface->EndDraw();
         if (SUCCEEDED(hr))
             hr = ehr;
-        if ((why = removed_reason(dev, "DComp view, clear, EndDraw", hr)) != S_OK || FAILED(hr))
+        if ((why = removed_reason(dev, "DComp view, clear, EndDraw", hr)) != S_OK)
             goto out;
+        if (FAILED(hr))
+            goto shared_step;
         hr = dc->CreateVisual(&visual2);
         if (SUCCEEDED(hr))
             hr = visual2->SetContent(surface);
@@ -422,10 +440,13 @@ static int edge_path(ID3D11Device *dev, ID3D11DeviceContext *ctx)
             hr = visual->AddVisual(visual2, TRUE, nullptr);
         if (SUCCEEDED(hr))
             hr = dc->Commit();
-        if ((why = removed_reason(dev, "DComp surface visual, Commit", hr)) != S_OK || FAILED(hr))
+        if ((why = removed_reason(dev, "DComp surface visual, Commit", hr)) != S_OK)
             goto out;
+        if (FAILED(hr))
+            goto shared_step;
     }
 
+shared_step:
     if (SUCCEEDED(dev->QueryInterface(__uuidof(ID3D11Device1), (void **)&d1))) {
         D3D11_TEXTURE2D_DESC t = {};
         IDXGIResource1 *r1 = nullptr;
