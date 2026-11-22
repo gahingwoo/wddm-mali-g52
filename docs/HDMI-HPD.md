@@ -428,6 +428,29 @@ If the refresh rate was it: the LogonUI on HDMI, `Per_PresentFlips` and
 `Per_LastDescRef` and `Per_LastPresent`/`Per_LastPresentDst` say what DWM
 is doing instead.
 
+## Memory audit after the MEMORY_MANAGEMENT (0x1A) on 2026-11-22
+
+The bugcheck came on the panel after an HDMI unplug (panel restore), at
+the on-screen keyboard, with no dump. 0x1A has happened twice on this
+board before any of this code, so it is not proven to be the driver's.
+Everything at level 3 that touches memory, checked:
+
+| What | Finding |
+|---|---|
+| Our framebuffer | One `MmAllocateContiguousMemorySpecifyCache` (MmWriteCombined) at start, freed with the same size and cache type at stop, never mapped a second time. Not touched by hot-plug. |
+| HDMI, PHY, GRF, CRU, PMU, VOP2 mappings | Mapped once at start, unmapped with the same sizes at stop (one table drives both); no mapping per plug, per mode set or per panel restore. Same cache type (no-cache) as scanout.c's VOP2 mapping. |
+| The firmware's framebuffer mapping | Kept for the whole life of the driver, unmapped once at stop; the panel restore only points A->FbVa back at it. |
+| The leak at hand-back | Only at StopDevice while HDMI is on our framebuffer; nothing in a running session. |
+| IOMMU entries of primaries | The driver locks and unlocks nothing: VidMm's pages are entered while mapped, the window leaves a primary before its pages can go (MwScanUnmap), entries are read-only for the VOP2 and stay as before. Entering primaries of any size changes only which are entered, not how; slots are freed only by MwScanUnmap of the same allocation. |
+| Pages handed back to dxgkrnl | None: no DxgkCb returns memory. The EDID buffer is pool, freed after use. |
+| **A->Fb, A->FbVa, A->FbSize changing at a mode set or panel restore** | **A race, fixed.** Two CPU writers read them without CopyLock: a blt present to the primary at submission (DoPresent) and the clear at visibility off. Reading the new A->FbVa with the old size, after a switch from our 16 MB framebuffer back to the firmware's 4 MB one or the other way, writes past the end of a mapping: system memory corruption or a fault. It needs a present or a visibility change during the commit, which is unlikely but not excluded on a panel restore. UseFb now raises FbSwitch, waits (up to 50 ms) for those writers to leave, and only then changes the three under CopyLock; a writer that arrives meanwhile is skipped and counted (`_FbSkips`). Level 0 to 2 take no part. |
+
+If it happens again, the 0x1A subtype in the first parameter says which
+kind it was; 0x41790 (a page table entry count), 0x41284/0x41287 (a PTE
+or working set inconsistency) and 0x61941 (a bad address in a
+paging operation) point elsewhere than a write past a mapping, which
+would more likely show as 0x50 or 0x1A 0x41201.
+
 ## Open risks
 
 - Nothing here has run. The first board session decides which HPD bit is

@@ -969,7 +969,11 @@ NTSTATUS APIENTRY MwSubmitCommand(IN_CONST_HANDLE hAdapter, const DXGKARG_SUBMIT
      * job and completes at once. */
     if (!Arg->Flags.Paging && priv != NULL && Arg->DmaBufferPrivateDataSize >= sizeof(*priv) &&
         priv->Reserved == MW_DMA_MAGIC && priv->Present.Kind != MW_PRESENT_NONE)
-        DoPresent(a, &priv->Present);
+        /* HdmiHpd 3 can move the framebuffer under it (hpd.c UseFb). */
+        if (MwHpdFbEnter(a)) {
+            DoPresent(a, &priv->Present);
+            MwHpdFbLeave(a);
+        }
     /* Paging buffers (empty: map/unmap happen on the CPU), presents and
      * anything without our private data carry no jobs. */
     if (!Arg->Flags.Paging && priv != NULL && Arg->DmaBufferPrivateDataSize >= sizeof(*priv) &&

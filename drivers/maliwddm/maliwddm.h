@@ -183,6 +183,12 @@ typedef struct _MW_HDMI {
     volatile LONG PrimCreates, LastPrimWH, LastPrimPitch, Describes, LastDescWH, LastDescRef;
     volatile LONG PresentBltsH, PresentFillsH, LastPresentFlags, LastPresentDstWH, LastPresentSrcWH;
     ULONG SharedPrimRefNum, SharedPrimRefDen;
+    /* A->Fb/FbVa/FbSize change under the CPU writers that do not take
+     * CopyLock (a blt present at submission, which can be above
+     * PASSIVE_LEVEL, and the clear at visibility off): they count
+     * themselves in FbUsers and stay out while FbSwitch is set, and UseFb
+     * (hpd.c) waits for them to leave before it changes the three. */
+    volatile LONG FbUsers, FbSwitch, FbSkips;
     ULONG BaseFlips, BaseScanned, BaseCopies, BaseNotMapped, BaseInvisible, BaseMismatch, BaseMaps, BaseScanFlips;
     ULONG LastSup, LastEnum, Commits;
 
@@ -563,6 +569,8 @@ BOOLEAN MwScanUsable(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
 #define MW_SCAN_WHY_ROTATED     3   /* the driver has to turn it */
 #define MW_SCAN_WHY_SIZE        4   /* HdmiHpd 3: entered, but not the size VP0 shows now */
 void MwHpdBlackEvent(MW_ADAPTER *A, LONG Why);
+BOOLEAN MwHpdFbEnter(MW_ADAPTER *A);
+void MwHpdFbLeave(MW_ADAPTER *A);
 ULONG MwScanWhy(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
 void MwScanCheck(MW_ADAPTER *A);
 void MwScanPower(MW_ADAPTER *A, BOOLEAN On);

@@ -303,7 +303,7 @@ static void Snapshot(MW_ADAPTER *A, PCWSTR Prefix)
         L"Sup0", L"Sup1", L"Sup2", L"Sup3", L"Sup4", L"Sup5", L"IntOn", L"IntOff",
         L"PrimCreates", L"LastPrim", L"LastPrimPitch", L"Describes", L"LastDesc", L"LastDescRef",
         L"Blts", L"Fills", L"LastPresent", L"LastPresentSrc", L"LastPresentDst", L"Ref", L"SharedRef",
-        L"ToFbFrom", L"VisOff1Ms", L"VisOff2Ms", L"VisOff3Ms", L"VisOff4Ms", L"VisOffN",
+        L"ToFbFrom", L"FbSkips", L"VisOff1Ms", L"VisOff2Ms", L"VisOff3Ms", L"VisOff4Ms", L"VisOffN",
         L"Mmu0", L"Mmu1", L"Fault", L"Ms" };
     ULONG v[ARRAYSIZE(names)], fault = 0, k = 0;
     WCHAR buf[48];
@@ -355,6 +355,7 @@ static void Snapshot(MW_ADAPTER *A, PCWSTR Prefix)
     v[k++] = H->RefDen ? (ULONG)(H->RefNum * 100ull / H->RefDen) : 0;
     v[k++] = H->SharedPrimRefDen ? (ULONG)(H->SharedPrimRefNum * 100ull / H->SharedPrimRefDen) : 0;
     v[k++] = (ULONG)H->ToFbFrom;
+    v[k++] = (ULONG)H->FbSkips;
     for (ULONG i = 0; i < 4; i++)
         v[k++] = H->VisOffMs[i];
     v[k++] = (ULONG)H->VisOffN;
@@ -1000,12 +1001,42 @@ NTSTATUS MwHpdEnumVidPnCofuncModality(MW_ADAPTER *A, const DXGKARG_ENUMVIDPNCOFU
     return st == STATUS_GRAPHICS_NO_MORE_ELEMENTS_IN_DATASET ? STATUS_SUCCESS : st;
 }
 
+/* The CPU writers of A->FbVa that do not hold CopyLock: in while no switch
+ * is under way. At level 0 to 2 the framebuffer never moves and this is
+ * always TRUE with nothing counted. Any IRQL. */
+BOOLEAN MwHpdFbEnter(MW_ADAPTER *A)
+{
+    MW_HDMI *H = &A->Hdmi;
+
+    if (!H->Switch)
+        return TRUE;
+    InterlockedIncrement(&H->FbUsers);
+    if (H->FbSwitch) {
+        InterlockedDecrement(&H->FbUsers);
+        InterlockedIncrement(&H->FbSkips);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+void MwHpdFbLeave(MW_ADAPTER *A)
+{
+    if (A->Hdmi.Switch)
+        InterlockedDecrement(&A->Hdmi.FbUsers);
+}
+
 /* Which framebuffer A->Fb is: ours at W x H, or the firmware's. Under
- * CopyLock, which the copy thread holds while it writes A->FbVa. */
+ * CopyLock, which the copy thread holds while it writes A->FbVa, and with
+ * the other writers (MwHpdFbEnter) drained first: a blt present or the
+ * clear at visibility off that read the new FbVa with the old size would
+ * write past the end of the firmware's 4 MB mapping. PASSIVE_LEVEL. */
 static void UseFb(MW_ADAPTER *A, BOOLEAN Res, UINT W, UINT H2)
 {
     MW_HDMI *H = &A->Hdmi;
 
+    InterlockedExchange(&H->FbSwitch, 1);
+    for (ULONG i = 0; i < 5000 && H->FbUsers != 0; i++)
+        KeStallExecutionProcessor(10);      /* a blt is at most a frame's copy */
     ExAcquireFastMutex(&A->CopyLock);
     if (Res) {
         A->Fb.PhysicAddress = H->ResPa;
@@ -1021,7 +1052,9 @@ static void UseFb(MW_ADAPTER *A, BOOLEAN Res, UINT W, UINT H2)
     }
     H->OnRes = Res;
     A->ScanShowing = FALSE;     /* the window is on A->Fb now */
+    KeMemoryBarrier();
     ExReleaseFastMutex(&A->CopyLock);
+    InterlockedExchange(&H->FbSwitch, 0);
 }
 
 /* HdmiDiag 2: eight vertical bars (white, yellow, cyan, green, magenta,
