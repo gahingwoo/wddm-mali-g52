@@ -306,3 +306,160 @@ the longest job in the run was 144 ms. 27784 jobs since that boot, none
 failed. The Direct2D frame is byte for byte the same at 198, 396, 500 and
 594 MHz. The supply voltage was not measured.
 
+
+## Measure first: the second round, 2026-11-22
+
+Branch `gpu-perf`, off `hpd-edge`. Nothing here has run on a board yet.
+Everything new is either a counter or a switch that is off by default,
+so the package with no settings changed behaves as `hpd-edge` does.
+
+### What was already measured, and what was not
+
+Already in `m5test perf`: flips, copies against scan-outs and why, flip
+to shown, vsync gaps, jobs and their time (the GPU is busy that long,
+one chain runs at a time), submission to start, preemption, blt
+presents, and per process the UMD's copies, uploads, maps, read-back
+presents and waits for idle. The UMD's `perf:` lines and the slow log
+time the stages of a present and every slow operation.
+
+Not measured before this branch:
+
+- the CPU time of the driver's own DDIs, and of the interrupt and DPC;
+- what a render carries: the allocation list is every live BO of the
+  device (up to 256) on every render, and VidMm references and patches
+  each of them;
+- chain run times by slot (fragment against vertex/tiler/compute) and
+  their distribution, not only the sum;
+- submission to completion as a latency, with its distribution;
+- the driver's own bubbles: the GPU idle between a chain's end and the
+  start of one that was already queued (interrupt latency, or the poll);
+- whether the interrupt or the 1 ms poll timer collects the chains;
+- how often the UMD renders, and what a render costs it;
+- the GPU clock as the CRU has it now, and any temperature.
+
+### The new counters
+
+`m5test prof [seconds]` (default 5) reads `MW_ESCAPE_PERF` twice and
+prints the interval:
+
+| Line | Meaning |
+|---|---|
+| `GPU clock` | `CRU_CLKSEL_CON165` read now: parent and divider. 594 MHz is GPLL / 2. Any PVTPLL mux is not read |
+| `temperatures` | TSADC channels 0 to 5, with the setting `PerfTemp` 1 only, without the OTP trim (a few degrees off). Channel 3 is the GPU by the TRM |
+| `DDI CPU time` | calls a second, average and longest microseconds, and milliseconds of CPU a second, inside the driver only |
+| `renders` | allocation-list entries and chains a render carried |
+| `GPU page tables` | pages mapped a second (VidMm paging in) |
+| `GPU busy` | by slot, with a histogram of chain run times |
+| `submission to completion` | SubmitCommand to DMA_COMPLETED, submissions with jobs |
+| `bubbles` | a chain whose submission was queued when the chain before it ended: the time from that end to its start |
+| `collected by` | the interrupt (or a preemption request) against the poll timer, and how often the timer ran |
+| `completion to DPC` | DMA_COMPLETED noticed to the DPC that tells dxgkrnl |
+| `submissions` | how many were already queued in the driver when one arrived |
+
+`m5test ring [csv]` lists the last 128 chains: fence, slot, flags, status,
+and for each its submission, start and end in microseconds from the first,
+its time queued and its run time. Flag 0x400 means the poll timer found
+it, 0x800 that it was not its submission's first chain.
+
+`m5test perf` gains a UMD kind, `submit (pfnRenderCb)`: renders a
+second, BOs listed in each, and the CPU time in the runtime's render
+call, by process. The UMD's `perf:` line gains `bo-wait`, the time in
+waits on a BO's own submission.
+
+The DDI timers cost two reads of the counter and three interlocked
+operations a call; the ring and the histograms are written inside the
+queue's interrupt-level code that was already running. Reading the
+counters submits nothing.
+
+### Benchmark plan
+
+One package, then one change at a time. Each run: start the load, wait
+10 s, then `m5test prof 10 > prof-<name>-<n>.txt` and
+`m5test perf 10 > perf-<name>-<n>.txt` and `m5test ring csv > ring-<name>-<n>.csv`,
+plus the load's own score. Three runs per configuration at least; the
+desktop's numbers move by tens of percent between runs (see the table at
+the top), so one or two runs prove nothing.
+
+| Load | What it shows | Record besides the counters |
+|---|---|---|
+| idle desktop, 30 s | the floor: DDI rates with nothing happening, temperatures | nothing |
+| dragging a window for 10 s | DWM alone: renders, flips, scan-out | presents in the interval |
+| `present.exe hw` / `triangle.exe hw` (tests) | one D3D11 process, small frames | its frame count |
+| `d2dtext.exe` and `d3dparts.exe` (tools/windows) | Direct2D and D3D11 paths, CPU heavy | run time |
+| GpuTest 0.7.0 FurMark, OpenGL, 1024x640 windowed, 60 s | GPU-bound fragment load: clock and thermal | score, fps, temperatures every 10 s |
+| Edge, WebGL Aquarium (webglsamples.org/aquarium), 500 fish | browser present path plus GPU | fps shown; edge://gpu says whether it is on the Mali or SwiftShader/WARP |
+| Edge, YouTube 720p, 30 s | video: upload, readback present | dropped frames (Stats for nerds) |
+
+What to read first, in this order: `collected by` (if the poll timer
+collects most chains, interrupts are not arriving and every chain pays up
+to a poll period); `GPU busy` (above 80% the GPU or its clock is the
+limit, below 20% the CPU side is); `renders` and the `Render`, `Patch`
+and `SubmitCommand` lines (the cost of each render); `submit` per
+process; `bubbles` against the chain count (driver latency the GPU
+waits through).
+
+### Ranked tuning list
+
+Gains are estimates from the code and the 2026-11-14 measurements, not
+measurements; each item says what number will confirm it.
+
+| # | Change | Expected gain | Risk | Verify with | State |
+|---|---|---|---|---|---|
+| 1 | Measure (this branch, defaults) | none: the baseline | none | the plan above | done in code |
+| 2 | `UmdMergeSubmit` 1: a batch's vertex/tiler and fragment chains as one render | half the renders, events, signal calls, allocation lists, patches and SubmitCommands; a few percent of a core for DWM, more for apps with many batches | low: Panfrost submits the two back to back with out_sync 0 on the first exactly when the second follows; any other call sends a kept chain first | `submit` calls/s halves, `renders: 2.00 chains each`, `Render`/`Patch`/`SubmitCommand` ms per s fall, no change in jobs failed | done, off |
+| 3 | `PollMs` 4 or 10, only if the interrupt collects nearly every chain | up to 1000 timer DPCs a second fewer while the GPU works | low: the timer is the fallback and the 2 s timeout; with TimeSlice set it also paces soft-stops | `PollRuns` per second falls, `bubbles` unchanged | done, at 1 |
+| 4 | GPU clock 702 MHz from SPLL (mux 3, divider 1) | up to +18% on GPU-bound loads over 594 MHz | medium: above the 700 MHz operating point; mainline asks 775 mV from 701 to 800 MHz. Do only after the RK806 BUCK5 voltage has been read (firmware) and is at least 775 mV | FurMark score, `GPU busy`, temperature under FurMark below 85 C, JobsFailed 0 over 3 runs | not done: `GpuClkWrite` keeps its 600 MHz cap |
+| 5 | Windowed presents without the CPU: DXGI 1.2 flip model (`UmdDxgi12`, d3d11 branch) or a GPU copy into the presented surface with the KMD's blt behind the GPU queue | the largest for browsers and video: four passes over the frame, two of them reads of write-combined memory, and a GPU wait in the app's present | medium; another branch's work | `present, read back` falls to 0, `KMD blt presents` MB falls, YouTube dropped frames | not here |
+| 6 | Fewer BOs per render: list the named ones plus the others only when the set changed or every Nth render | `Render`, `Patch` and the runtime's render time scale with the entries (up to 256 a render) | medium: an allocation not in a list may be evicted under memory pressure, and a job touching it faults (the 0x4002c3 faults of 2026-10-17) | `renders: entries each` falls; JobsFailed stays 0 under memory pressure (many Edge tabs) | idea, needs item 1's numbers |
+| 7 | Mali performance counters (PRFCNT: GPU active cycles, L2 and external read/write beats) | instrumentation: says whether a GPU-bound load is shader, texture or bandwidth bound | low: GPU-side registers and a dump buffer, no clock or power change | counters against FurMark at two clocks | design only |
+| 8 | A shader disk cache on Windows | the 40 to 50 ms compiles at every process start (the hitches) | medium: Mesa's meson refuses the shader cache on Windows; needs a Mesa patch and a writable, per-build directory | slow log: `shader-compile` lines at the second start of a process | not done |
+| 9 | CPU-cached staging and read-back allocations with explicit cache maintenance | Map(READ) and read-back presents read write-combined memory today, several times slower than cached | medium to high: a missed clean or invalidate gives stale pixels or data, intermittently | `map for reading` us each, read-back present time | not done |
+| 10 | Skip the start-of-chain cache flush when the previous chain's end flush has just run | microseconds a chain; only matters for many short chains | medium: stale GPU reads if anything else filled the L2 | ring: chains under 100 us | not done |
+| 11 | Vsync from the VOP2 interrupt, not the 16 ms timer | pacing and latency, not throughput | medium: a VOP2 interrupt in the DSDT was followed by WHEA errors in October | flip to shown | not here |
+| 12 | PVTPLL with the per-chip OTP correction (firmware, TF-A) | 800 to 950 MHz on the GPU's own PLL | high: a wrong ring length gives an unstable GPU, the suspected cause of Linux's job timeouts under this firmware | glmark2 on Linux 3 cold boots, then Windows FurMark | not here |
+| 13 | Raising vdd_gpu_s0 (RK806 BUCK5) for 800 to 950 MHz | up to +60% over 594 MHz on GPU-bound loads | **can damage the chip.** Last. Limits: never above 850 mV (mainline's highest operating point) nor 950 MHz; steps of 25 mV; only with TSHUT armed and the temperature read; back to the PMIC default on any job fault | as item 4, plus the voltage read back from the PMIC | not here |
+
+Not on the list: running a vertex/tiler chain beside a fragment chain on
+the other slot. Panfrost shares one tiler heap between batches and
+relies on no other tiler job running between a batch's tiler and
+fragment jobs (`jm_submit_batch`, the submit lock); Linux's panfrost
+orders them through the shared buffers too. The gain is not there to
+take without changing how Panfrost uses the heap.
+
+The voltage is the open fact behind items 4 and 13. Nothing in the
+firmware or Windows has set BUCK5, so it is at the PMIC's power-on
+default, which nobody has read. Since the hw-rtc work the firmware has
+an I2C driver and reads the RK806 (BUCK1 and BUCK3 at 850 mV on the
+TaishanPi 3M); one log line with BUCK5's voltage decides whether 702 MHz
+is inside the operating points without touching any rail.
+
+### Board tests, one at a time
+
+The KMD changed, so the first test is a package install; the settings
+after it are registry values.
+
+1. Package: CI run (see the branch tip's commit message or the report),
+   artifact `wddm-mali-g52-driver-arm64`. Copy it to `C:\mali\pkg-perf\`
+   and `m5test.exe` from the same run's `m3test-arm64` artifact to
+   `C:\mali\`. If the clock is wrong (no RTC battery), `Set-Date` first:
+   the test certificate is new each run.
+2. Stage it, do not install it: `pnputil /add-driver C:\mali\pkg-perf\maliwddm.inf`.
+   Never install a display driver over the running one.
+3. Set `ConfigFlags |= 0x20` on
+   `HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0` as SYSTEM (task
+   `malireinst`); poll until the value has 0x20 in it; then a full
+   restart.
+4. After logon: `m5test` (no argument) for the build, then the benchmark
+   plan with no setting changed. This is the baseline; it must look like
+   `hpd-edge` in `m5test perf` (same flips, scan-outs, jobs failed 0).
+5. `PerfTemp` 1 (no restart), `m5test prof 5`: the temperatures appear.
+   Remove it if they read 100.0 C or nonsense.
+6. `UmdMergeSubmit` 1 (no restart; running processes take it within a
+   second or two, a new process from its first second on), the benchmark
+   plan again. Back with `reg delete ... /v UmdMergeSubmit /f`.
+7. Only if step 4 showed `collected by the interrupt` for nearly all
+   chains: `PollMs` 4, restart, the plan again.
+
+Send the `prof-*`, `perf-*` and `ring-*` files and the scores. A bad
+result in any step: delete that one value and restart; the package
+itself changes nothing until a value is set.
