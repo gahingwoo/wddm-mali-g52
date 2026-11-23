@@ -275,16 +275,26 @@ typedef struct _MW_ESCAPE_STATS_DATA {
 #define MW_ESCAPE_GPUCLK        6
 
 /* The GPU's clock (RK3576: clk_gpu_src_pre, CRU_CLKSEL_CON165).
- * Parent: 0 GPLL (1188 MHz), 1 CPLL (1000 MHz); Div 1 to 32.
+ * Parent: 0 GPLL (1188 MHz), 1 CPLL (1000 MHz), 3 SPLL (702 MHz); Div 1 to
+ * 32. At most 600 MHz unless the setting GpuClkHigh allows more and the
+ * supply meets the operating point (adapter.c, GpuClkWrite).
  * Mode: 0 report only; 1 set now; 2 set now and at every start; 3 forget
- * the stored setting (the firmware's rate is kept from the next start). */
+ * the stored setting (the firmware's rate is kept from the next start).
+ * A caller may send only the first six fields (MW_ESCAPE_GPUCLK_V1_SIZE). */
 typedef struct _MW_ESCAPE_GPUCLK_DATA {
     mw_u32 Code;                        /* MW_ESCAPE_GPUCLK */
     mw_u32 Mode;
     mw_u32 Parent, Div;
     mw_u32 Applied;                     /* what this driver last wrote, or 0: (Parent << 8) | Div */
     mw_u32 Stored;                      /* the setting kept for the next start, same form, or 0 */
+    mw_u32 High;                        /* the GpuClkHigh setting this start: 0 off, 1 mainline OPPs, 2 vendor slowest */
+    mw_u32 RailUv;                      /* the supply the checks use, 0 unknown */
+    mw_u32 RailSource;                  /* 1 firmware, 2 GpuRailUv, 3 both; 0x100: not a plain RK3576 */
+    mw_u32 AllowedHz;                   /* the highest operating point allowed now */
+    mw_u32 NeedUv702;                   /* what 702 MHz (SPLL / 1) needs, 0 with High 0 */
+    mw_u32 Fallbacks;                   /* clocks dropped to 594 MHz by a job fault */
 } MW_ESCAPE_GPUCLK_DATA;
+#define MW_ESCAPE_GPUCLK_V1_SIZE  24
 #define MW_MEM_PROCS            64
 
 typedef struct _MW_MEM_PROC {

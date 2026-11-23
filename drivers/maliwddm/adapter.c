@@ -149,35 +149,239 @@ static NTSTATUS APIENTRY MwAddDevice(IN_CONST_PDEVICE_OBJECT Pdo, OUT_PPVOID Con
  * OpenGL ICD had the GPU 97% busy with jobs of up to 425 ms.
  *
  * CRU_CLKSEL_CON165 (0x27200594): mux in [7:5] (0 gpll, 1 cpll, 2 aupll,
- * 3 spll), divider minus one in [4:0], write-enable mask in the top half
- * (clk-rk3576.c, CLK_GPU_SRC_PRE). The operating points up to 600 MHz ask
- * for 700 mV, the lowest; above that the supply has to rise, and this
- * driver does not touch the regulator. So it takes GPLL (1188 MHz) or CPLL
- * (1000 MHz) with a divider that keeps the result at or below 600 MHz. */
+ * 3 spll, 4 lpll), divider minus one in [4:0], [8] the PVTPLL path, [9]
+ * the PVTPLL source; write-enable mask in the top half (TRM, CRU chapter;
+ * clk-rk3576.c, CLK_GPU_SRC_PRE). The operating points up to 600 MHz ask
+ * for the lowest voltage (mainline 700 mV); above that the supply has to
+ * be higher, and this driver never touches the regulator.
+ *
+ * So by default it takes GPLL (1188 MHz) or CPLL (1000 MHz) with a divider
+ * that keeps the result at or below 600 MHz. With the setting GpuClkHigh
+ * (default 0) it also allows SPLL (702 MHz, a fixed PLL in the secure CRU:
+ * mainline's clock-spll, TF-A's SPLL_RATE) and any rate up to 950 MHz, but
+ * only a rate whose operating point the supply already meets:
+ *
+ *   GpuClkHigh 1: mainline rk3576.dtsi gpu_opp_table
+ *   GpuClkHigh 2: the vendor kernel's table for a plain RK3576 at its
+ *                 slowest PVTM level, which asks more
+ *
+ * The rate is held to the lowest operating point at or above it, so 702 MHz
+ * is held to the 800 MHz one, plus the chip's own OTP offset (gpu-opp-info)
+ * when the firmware reports one. The supply comes from the firmware's
+ * GpuRail variable (edk2-rk3576 GpuRail.c, RK806 BUCK5 read at boot) and
+ * the setting GpuRailUv (microvolts, a value verified some other way); with
+ * both, the lower counts; with neither, nothing above 600 MHz is allowed.
+ * AUPLL (audio's) and LPLL (the A53 cluster's, which moves with the CPU)
+ * are never taken, and neither is a CRU on the PVTPLL path.
+ *
+ * Above 600 MHz, a job that faults or times out puts the clock back to
+ * GPLL / 2 = 594 MHz at once (GpuClkFallbacks counts it). */
 #define MW_CRU_CLKSEL165   0x27200594u
 #define MW_GPU_MAX_HZ      600000000u
+#define MW_GPU_CEIL_HZ     950000000u   /* mainline's highest operating point */
+#define MW_GPU_SAFE_VAL    ((0xFFu << 16) | (0u << 5) | (2u - 1u))   /* GPLL / 2 */
+#define MW_RAIL_UV_MIN     550000u      /* vdd_gpu_s0 regulator-min/max-microvolt */
+#define MW_RAIL_UV_MAX     900000u
+
+static const ULONG MwGpuPll[8] = { 1188000000u, 1000000000u, 0, 702000000u, 0, 0, 0, 0 };
+
+/* MHz, mainline opp-microvolt, vendor plain-RK3576 slowest level (0: none). */
+static const struct { ULONG Mhz, Mainline, Vendor; } MwGpuOpp[] = {
+    { 300, 700000, 712500 }, { 400, 700000, 712500 }, { 500, 700000, 712500 },
+    { 600, 700000, 712500 }, { 700, 725000, 750000 }, { 800, 775000, 812500 },
+    { 900, 825000, 875000 }, { 950, 850000, 0 },
+};
+
+/* The firmware's report (edk2-rk3576 GpuRail.h, GPU_RAIL_REPORT). */
+#pragma pack(push, 1)
+typedef struct {
+    ULONG Signature;
+    USHORT Version, Size;
+    ULONG RailUv;
+    UCHAR OnVsel, SlpVsel, PowerEn1, Buck5Config;
+    UCHAR Specification, GpuLeakage, Flags, Reserved0;
+    USHORT OppInfoMinMhz, OppInfoMaxMhz;
+    UCHAR OppInfoVoltMv, OppInfoLength;
+    USHORT Reserved1;
+    ULONG ClkSel165;
+} MW_GPU_RAIL_REPORT;
+#pragma pack(pop)
+C_ASSERT(sizeof(MW_GPU_RAIL_REPORT) == 32);
+#define MW_GPU_RAIL_SIGNATURE   0x52555047u   /* 'G' 'P' 'U' 'R' */
+#define MW_GPU_RAIL_VALID       0x01u
+#define MW_GPU_RAIL_OTP_VALID   0x04u
+#define MW_GPU_RAIL_PLAIN       0x08u
+
+/* 7701c75f-f454-4aab-9445-117f09fb87cf, edk2-rk3576 GpuRail.c */
+static GUID MwGpuRailGuid = { 0x7701c75f, 0xf454, 0x4aab, { 0x94, 0x45, 0x11, 0x7f, 0x09, 0xfb, 0x87, 0xcf } };
+
+/* Once per start, at passive level, before any stored clock is applied. */
+static void GpuRailInit(MW_ADAPTER *A)
+{
+    UNICODE_STRING name = RTL_CONSTANT_STRING(L"GpuRail");
+    MW_GPU_RAIL_REPORT r;
+    ULONG len = sizeof(r), attr = 0, fw = 0, reg;
+
+    A->RailUv = 0;
+    A->RailSource = 0;
+    A->RailOtpMv = 0;
+    A->RailOtpMinMhz = A->RailOtpMaxMhz = 0;
+    A->RailNotPlain = FALSE;
+    A->GpuClkHigh = MwSetting(A, L"GpuClkHigh", 0);
+    if (A->GpuClkHigh > 2)
+        A->GpuClkHigh = 0;
+
+    RtlZeroMemory(&r, sizeof(r));
+    if (NT_SUCCESS(ExGetFirmwareEnvironmentVariable(&name, &MwGpuRailGuid, &r, &len, &attr)) &&
+        len == sizeof(r) && r.Signature == MW_GPU_RAIL_SIGNATURE && r.Version == 1 &&
+        r.Size == sizeof(r)) {
+        MwLog(A, L"GpuRailFwFlags", r.Flags);
+        if ((r.Flags & MW_GPU_RAIL_OTP_VALID) && !(r.Flags & MW_GPU_RAIL_PLAIN))
+            A->RailNotPlain = TRUE;
+        if ((r.Flags & MW_GPU_RAIL_OTP_VALID) && r.OppInfoVoltMv != 0) {
+            A->RailOtpMv = r.OppInfoVoltMv;
+            A->RailOtpMinMhz = r.OppInfoMinMhz;
+            A->RailOtpMaxMhz = r.OppInfoMaxMhz;
+        }
+        if ((r.Flags & MW_GPU_RAIL_VALID) && r.RailUv >= MW_RAIL_UV_MIN && r.RailUv <= MW_RAIL_UV_MAX)
+            fw = r.RailUv;
+        MwLog(A, L"GpuRailFwUv", fw);
+    } else {
+        MwLog(A, L"GpuRailFwUv", 0);
+    }
+    reg = MwSetting(A, L"GpuRailUv", 0);
+    if (reg < MW_RAIL_UV_MIN || reg > MW_RAIL_UV_MAX)
+        reg = 0;
+    if (fw != 0 && reg != 0) {
+        A->RailUv = fw < reg ? fw : reg;
+        A->RailSource = 3;
+    } else if (fw != 0) {
+        A->RailUv = fw;
+        A->RailSource = 1;
+    } else if (reg != 0) {
+        A->RailUv = reg;
+        A->RailSource = 2;
+    }
+    MwLog(A, L"GpuRailUv", A->RailUv);
+    MwLog(A, L"GpuClkHighSetting", A->GpuClkHigh);
+
+    /* Mapped for the whole start, so a fault can drop the clock from the
+     * interrupt (GpuClkFallback). Only when a high clock can be allowed. */
+    if (A->GpuClkHigh != 0 && A->CruClkVa == NULL) {
+        PHYSICAL_ADDRESS pa;
+        pa.QuadPart = MW_CRU_CLKSEL165 & ~0xFFFu;
+        A->CruClkVa = (PUCHAR)MmMapIoSpaceEx(pa, PAGE_SIZE, PAGE_READWRITE | PAGE_NOCACHE);
+    }
+}
+
+/* The supply the rate needs, by the table GpuClkHigh picks; 0 when no
+ * operating point covers it. */
+static ULONG GpuRequiredUv(MW_ADAPTER *A, ULONG Hz)
+{
+    ULONG mhz = (Hz + 999999u) / 1000000u;
+
+    for (ULONG i = 0; i < ARRAYSIZE(MwGpuOpp); i++) {
+        ULONG uv;
+        if (MwGpuOpp[i].Mhz < mhz)
+            continue;
+        uv = A->GpuClkHigh == 2 ? MwGpuOpp[i].Vendor : MwGpuOpp[i].Mainline;
+        if (uv != 0 && A->RailOtpMv != 0 &&
+            MwGpuOpp[i].Mhz >= A->RailOtpMinMhz && MwGpuOpp[i].Mhz <= A->RailOtpMaxMhz)
+            uv += A->RailOtpMv * 1000u;
+        return uv;
+    }
+    return 0;
+}
+
+/* The highest rate GpuClkWrite would accept now, in Hz. */
+static ULONG GpuAllowedHz(MW_ADAPTER *A)
+{
+    ULONG best = MW_GPU_MAX_HZ;
+
+    if (A->GpuClkHigh == 0 || A->RailUv == 0 || A->RailNotPlain)
+        return best;
+    for (ULONG i = 0; i < ARRAYSIZE(MwGpuOpp); i++) {
+        ULONG need = GpuRequiredUv(A, MwGpuOpp[i].Mhz * 1000000u);
+        if (need != 0 && need <= A->RailUv && MwGpuOpp[i].Mhz * 1000000u > best)
+            best = MwGpuOpp[i].Mhz * 1000000u;
+    }
+    return best;
+}
 
 static NTSTATUS GpuClkWrite(MW_ADAPTER *A, ULONG Parent, ULONG Div)
 {
-    static const ULONG pll[2] = { 1188000000u, 1000000000u };
     PHYSICAL_ADDRESS pa;
-    PULONG reg;
+    PUCHAR reg;
+    ULONG hz, cur;
+    BOOLEAN high;
 
-    if (Parent > 1 || Div < 1 || Div > 32 || pll[Parent] / Div > MW_GPU_MAX_HZ)
+    if (Parent > 7 || MwGpuPll[Parent] == 0 || Div < 1 || Div > 32)
         return STATUS_INVALID_PARAMETER;
-    pa.QuadPart = MW_CRU_CLKSEL165 & ~0xFFFu;
-    reg = (PULONG)MmMapIoSpaceEx(pa, PAGE_SIZE, PAGE_READWRITE | PAGE_NOCACHE);
-    if (reg == NULL)
-        return STATUS_INSUFFICIENT_RESOURCES;
-    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)reg + (MW_CRU_CLKSEL165 & 0xFFFu)),
+    hz = MwGpuPll[Parent] / Div;
+    high = hz > MW_GPU_MAX_HZ;
+    if (high) {
+        /* Every condition, each logged when it is the one that refuses. */
+        if (A->GpuClkHigh == 0)
+            return STATUS_INVALID_PARAMETER;
+        if (hz > MW_GPU_CEIL_HZ || A->RailUv == 0 || A->RailNotPlain || A->CruClkVa == NULL) {
+            MwLog(A, L"GpuClkRefusedHz", hz);
+            return STATUS_INVALID_PARAMETER;
+        }
+        if (GpuRequiredUv(A, hz) == 0 || GpuRequiredUv(A, hz) > A->RailUv) {
+            MwLog(A, L"GpuClkRefusedHz", hz);
+            MwLog(A, L"GpuClkNeedsUv", GpuRequiredUv(A, hz));
+            return STATUS_INVALID_PARAMETER;
+        }
+    }
+    if (A->CruClkVa != NULL) {
+        reg = A->CruClkVa;
+    } else {
+        pa.QuadPart = MW_CRU_CLKSEL165 & ~0xFFFu;
+        reg = (PUCHAR)MmMapIoSpaceEx(pa, PAGE_SIZE, PAGE_READWRITE | PAGE_NOCACHE);
+        if (reg == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    cur = READ_REGISTER_ULONG((PULONG)(reg + (MW_CRU_CLKSEL165 & 0xFFFu)));
+    if (high && (cur & 0x100u) != 0) {
+        /* On the PVTPLL path the mux written here is not the GPU's clock,
+         * and what the GPU runs at is not known. */
+        if (reg != A->CruClkVa)
+            MmUnmapIoSpace(reg, PAGE_SIZE);
+        MwLog(A, L"GpuClkRefusedPvtpll", cur);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    A->GpuClkIsHigh = FALSE;
+    WRITE_REGISTER_ULONG((PULONG)(reg + (MW_CRU_CLKSEL165 & 0xFFFu)),
                          (0xFFu << 16) | (Parent << 5) | (Div - 1));
-    MmUnmapIoSpace(reg, PAGE_SIZE);
+    if (reg != A->CruClkVa)
+        MmUnmapIoSpace(reg, PAGE_SIZE);
     A->GpuClk = (Parent << 8) | Div;
-    MwLog(A, L"GpuClkHz", pll[Parent] / Div);
+    A->GpuClkIsHigh = high;
+    MwLog(A, L"GpuClkHz", hz);
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS GpuClk(MW_ADAPTER *A, MW_ESCAPE_GPUCLK_DATA *D)
+/* From Reap, at any IRQL: a job faulted or timed out while the clock was
+ * above 600 MHz. One register write through the mapping GpuRailInit made;
+ * nothing logged here (MwLog needs passive level), the count is in the
+ * stats and GpuClkInfo. */
+static BOOLEAN GpuClkSafe(MW_ADAPTER *A)
+{
+    if (!A->GpuClkIsHigh || A->CruClkVa == NULL)
+        return FALSE;
+    WRITE_REGISTER_ULONG((PULONG)(A->CruClkVa + (MW_CRU_CLKSEL165 & 0xFFFu)), MW_GPU_SAFE_VAL);
+    A->GpuClk = (0u << 8) | 2u;
+    A->GpuClkIsHigh = FALSE;
+    return TRUE;
+}
+
+void MwGpuClkFallback(MW_ADAPTER *A)
+{
+    if (GpuClkSafe(A))
+        A->GpuClkFallbacks++;
+}
+
+static NTSTATUS GpuClk(MW_ADAPTER *A, MW_ESCAPE_GPUCLK_DATA *D, ULONG Size)
 {
     NTSTATUS st = STATUS_SUCCESS;
 
@@ -190,6 +394,14 @@ static NTSTATUS GpuClk(MW_ADAPTER *A, MW_ESCAPE_GPUCLK_DATA *D)
     }
     D->Applied = A->GpuClk;
     D->Stored = MwSetting(A, L"GpuClk", 0);
+    if (Size >= sizeof(MW_ESCAPE_GPUCLK_DATA)) {
+        D->High = A->GpuClkHigh;
+        D->RailUv = A->RailUv;
+        D->RailSource = A->RailSource | (A->RailNotPlain ? 0x100u : 0);
+        D->AllowedHz = GpuAllowedHz(A);
+        D->NeedUv702 = A->GpuClkHigh != 0 ? GpuRequiredUv(A, 702000000u) : 0;
+        D->Fallbacks = A->GpuClkFallbacks;
+    }
     return st;
 }
 
@@ -287,6 +499,7 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
     MwHpdStart(a);
 #endif
     PublishIdentity(a);
+    GpuRailInit(a);
     {
         ULONG clk = MwSetting(a, L"GpuClk", 0);
         if (a->GpuUp && clk != 0)
@@ -310,6 +523,13 @@ static void StopGpu(MW_ADAPTER *A)
         A->Gpu.Regs = NULL;
     }
     A->GpuUp = FALSE;
+    /* A clock above 600 MHz is allowed by this start's checks only: the
+     * next start (another package, the setting removed) may not allow it. */
+    (void)GpuClkSafe(A);
+    if (A->CruClkVa != NULL) {
+        MmUnmapIoSpace(A->CruClkVa, PAGE_SIZE);
+        A->CruClkVa = NULL;
+    }
 }
 
 static NTSTATUS APIENTRY MwStopDevice(IN_CONST_PVOID Context)
@@ -782,7 +1002,6 @@ static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D, UINT Size)
  * read of a CRU register this driver already writes (GpuClkWrite). */
 static void GpuClkRead(mw_u32 *Raw, mw_u32 *Hz)
 {
-    static const ULONG parent[8] = { 1188000000u, 1000000000u, 0, 702000000u, 0, 0, 0, 0 };
     PHYSICAL_ADDRESS pa;
     PUCHAR reg;
     ULONG v;
@@ -795,7 +1014,7 @@ static void GpuClkRead(mw_u32 *Raw, mw_u32 *Hz)
     v = READ_REGISTER_ULONG((PULONG)(reg + (MW_CRU_CLKSEL165 & 0xFFFu)));
     MmUnmapIoSpace(reg, PAGE_SIZE);
     *Raw = v;
-    *Hz = parent[(v >> 5) & 7] / ((v & 0x1F) + 1);
+    *Hz = MwGpuPll[(v >> 5) & 7] / ((v & 0x1F) + 1);
 }
 
 /* The TSADC's data registers, TSADC_DATA0..5 (TRM 19.4.2; the block the
@@ -900,9 +1119,12 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         GpuInfo(a, (MW_ESCAPE_GPU_INFO_DATA *)Esc->pPrivateDriverData);
         return STATUS_SUCCESS;
     case MW_ESCAPE_GPUCLK:
-        if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_GPUCLK_DATA))
+        /* The first six fields are the 2026-11-14 layout, which m5test of
+         * that time still sends; the rail fields are filled only when the
+         * caller's buffer has them. */
+        if (Esc->PrivateDriverDataSize < MW_ESCAPE_GPUCLK_V1_SIZE)
             return STATUS_INVALID_PARAMETER;
-        return GpuClk(a, (MW_ESCAPE_GPUCLK_DATA *)Esc->pPrivateDriverData);
+        return GpuClk(a, (MW_ESCAPE_GPUCLK_DATA *)Esc->pPrivateDriverData, Esc->PrivateDriverDataSize);
     case MW_ESCAPE_MEMORY:
         if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_MEMORY_DATA))
             return STATUS_INVALID_PARAMETER;

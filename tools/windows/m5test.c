@@ -684,8 +684,13 @@ int main(int argc, char **argv)
     }
     if (argc >= 2 && strcmp(argv[1], "clk") == 0) {
         /* clk: report. clk <parent> <div> [keep]: parent 0 GPLL 1188 MHz,
-         * 1 CPLL 1000 MHz; keep stores it for every start. clk forget. */
-        static const unsigned pll[2] = { 1188, 1000 };
+         * 1 CPLL 1000 MHz, 3 SPLL 702 MHz (only with GpuClkHigh and a
+         * supply that meets the operating point); keep stores it for every
+         * start. clk forget. */
+        static const unsigned pll[8] = { 1188, 1000, 0, 702, 0, 0, 0, 0 };
+        static const char *const name[8] = { "GPLL", "CPLL", "?", "SPLL", "?", "?", "?", "?" };
+        static const char *const src[4] = { "unknown", "firmware (GpuRail)", "the GpuRailUv setting",
+                                            "firmware and GpuRailUv, the lower" };
         MW_ESCAPE_GPUCLK_DATA d = {0};
         d.Code = MW_ESCAPE_GPUCLK;
         if (argc >= 3 && strcmp(argv[2], "forget") == 0)
@@ -696,17 +701,31 @@ int main(int argc, char **argv)
             d.Mode = (argc >= 5 && strcmp(argv[4], "keep") == 0) ? 2 : 1;
         }
         st = escape(adapter, 0, &d, sizeof(d));
-        if (st < 0)
-            return fail("GPU clock escape (at most 600 MHz: GPLL from /2, CPLL from /2)", st);
-        if (d.Applied)
+        if (st < 0) {
+            fail("GPU clock escape (at most 600 MHz unless GpuClkHigh allows more; see below)", st);
+            d.Mode = 0;
+            if (escape(adapter, 0, &d, sizeof(d)) < 0)
+                return 1;
+        }
+        if (d.Applied && (d.Applied & 0xFF) != 0 && pll[(d.Applied >> 8) & 7] != 0)
             printf("GPU clock: %u MHz (%s / %u), written by this driver\n",
-                   pll[(d.Applied >> 8) & 1] / (d.Applied & 0xFF), (d.Applied >> 8) ? "CPLL" : "GPLL",
+                   pll[(d.Applied >> 8) & 7] / (d.Applied & 0xFF), name[(d.Applied >> 8) & 7],
                    d.Applied & 0xFF);
         else
             printf("GPU clock: as the firmware left it (198 MHz on edk2-rk3576)\n");
-        if (d.Stored)
-            printf("  at every start: %u MHz\n", pll[(d.Stored >> 8) & 1] / (d.Stored & 0xFF));
-        return 0;
+        if (d.Stored && (d.Stored & 0xFF) != 0 && pll[(d.Stored >> 8) & 7] != 0)
+            printf("  at every start: %u MHz\n", pll[(d.Stored >> 8) & 7] / (d.Stored & 0xFF));
+        printf("  GpuClkHigh %u (%s)\n", d.High,
+               d.High == 1 ? "mainline's operating points" :
+               d.High == 2 ? "the vendor's slowest level" : "off: 600 MHz at most");
+        printf("  supply: %u uV from %s%s\n", d.RailUv, src[d.RailSource & 3],
+               (d.RailSource & 0x100) ? "; not a plain RK3576, nothing above 600 MHz" : "");
+        if (d.AllowedHz)
+            printf("  allowed now: up to %u MHz; 702 MHz (SPLL / 1) needs %u uV\n",
+                   d.AllowedHz / 1000000, d.NeedUv702);
+        if (d.Fallbacks)
+            printf("  %u times back to 594 MHz after a job fault\n", d.Fallbacks);
+        return st < 0 ? 1 : 0;
     }
     if (argc >= 2 && strcmp(argv[1], "mem") == 0)
         return mem(adapter);

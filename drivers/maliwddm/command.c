@@ -642,6 +642,8 @@ static BOOLEAN Reap(MW_ADAPTER *A, BOOLEAN CheckTimeout)
     /* A fault leaves the address space stopped: start the GPU over, and
      * drop the rest of this submission (its later chains depend on it). */
     A->JobsFailed++;
+    /* Above 600 MHz a fault may be the clock: back to 594 MHz first. */
+    MwGpuClkFallback(A);
     A->LastFaultStatus = gpu->LastMmuFault;
     A->LastFaultAddress = gpu->LastFaultAddress;
     A->Queue[A->QHead].Next = A->Queue[A->QHead].Count;

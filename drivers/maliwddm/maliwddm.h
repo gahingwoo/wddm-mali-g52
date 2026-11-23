@@ -417,6 +417,18 @@ struct _MW_ADAPTER {
     MW_UMD_PROC UmdProc[MW_UMD_PROCS];
     ULONG UmdProcNext;
     ULONG GpuClk;               /* (parent << 8) | divider last written here; 0 the firmware's */
+    /* Clocks above 600 MHz (adapter.c, GpuClkWrite): the GpuClkHigh
+     * setting, the supply as the firmware (GpuRail) and the GpuRailUv
+     * setting give it, the chip's OTP offset, and the CRU page kept mapped
+     * so a fault can drop the clock from the interrupt. */
+    ULONG GpuClkHigh;
+    ULONG RailUv;
+    ULONG RailSource;           /* 1 firmware, 2 setting, 3 both (the lower) */
+    ULONG RailOtpMv, RailOtpMinMhz, RailOtpMaxMhz;
+    BOOLEAN RailNotPlain;       /* the firmware read a J, M or S variant */
+    volatile BOOLEAN GpuClkIsHigh;
+    PUCHAR CruClkVa;
+    volatile ULONG GpuClkFallbacks;
     PKTHREAD CopyThread;
     KEVENT CopyEvent;
     FAST_MUTEX CopyLock;
@@ -606,6 +618,7 @@ DXGKDDI_CONTROLINTERRUPT MwControlInterrupt;
 DXGKDDI_GETSCANLINE MwGetScanLine;
 BOOLEAN MwJobInterrupt(MW_ADAPTER *A);    /* from the ISR, at DIRQL */
 ULONG MwSetting(MW_ADAPTER *A, PCWSTR Name, ULONG Default);
+void MwGpuClkFallback(MW_ADAPTER *A);
 void MwSetSetting(MW_ADAPTER *A, PCWSTR Name, ULONG Value);
 void MwScanStart(MW_ADAPTER *A);
 void MwScanStop(MW_ADAPTER *A);

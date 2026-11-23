@@ -408,7 +408,7 @@ measurements; each item says what number will confirm it.
 | 1 | Measure (this branch, defaults) | none: the baseline | none | the plan above | done in code |
 | 2 | `UmdMergeSubmit` 1: a batch's vertex/tiler and fragment chains as one render | half the renders, events, signal calls, allocation lists, patches and SubmitCommands; a few percent of a core for DWM, more for apps with many batches | low: Panfrost submits the two back to back with out_sync 0 on the first exactly when the second follows; any other call sends a kept chain first | `submit` calls/s halves, `renders: 2.00 chains each`, `Render`/`Patch`/`SubmitCommand` ms per s fall, no change in jobs failed | done, off |
 | 3 | `PollMs` 4 or 10, only if the interrupt collects nearly every chain | up to 1000 timer DPCs a second fewer while the GPU works | low: the timer is the fallback and the 2 s timeout; with TimeSlice set it also paces soft-stops | `PollRuns` per second falls, `bubbles` unchanged | done, at 1 |
-| 4 | GPU clock 702 MHz from SPLL (mux 3, divider 1) | up to +18% on GPU-bound loads over 594 MHz | medium: above the 700 MHz operating point; mainline asks 775 mV from 701 to 800 MHz. Do only after the RK806 BUCK5 voltage has been read (firmware) and is at least 775 mV | FurMark score, `GPU busy`, temperature under FurMark below 85 C, JobsFailed 0 over 3 runs | not done: `GpuClkWrite` keeps its 600 MHz cap |
+| 4 | GPU clock 702 MHz from SPLL (mux 3, divider 1) | up to +18% on GPU-bound loads over 594 MHz | medium: above the 700 MHz operating point; mainline asks 775 mV from 701 to 800 MHz. Do only after the RK806 BUCK5 voltage has been read (firmware) and is at least 775 mV | FurMark score, `GPU busy`, temperature under FurMark below 85 C, JobsFailed 0 over 3 runs | done, off: `GpuClkHigh` (branch `gpu-clk`, see the last section); needs the firmware's rail reading |
 | 5 | Windowed presents without the CPU: DXGI 1.2 flip model (`UmdDxgi12`, d3d11 branch) or a GPU copy into the presented surface with the KMD's blt behind the GPU queue | the largest for browsers and video: four passes over the frame, two of them reads of write-combined memory, and a GPU wait in the app's present | medium; another branch's work | `present, read back` falls to 0, `KMD blt presents` MB falls, YouTube dropped frames | not here |
 | 6 | Fewer BOs per render: list the named ones plus the others only when the set changed or every Nth render | `Render`, `Patch` and the runtime's render time scale with the entries (up to 256 a render) | medium: an allocation not in a list may be evicted under memory pressure, and a job touching it faults (the 0x4002c3 faults of 2026-10-17) | `renders: entries each` falls; JobsFailed stays 0 under memory pressure (many Edge tabs) | idea, needs item 1's numbers |
 | 7 | Mali performance counters (PRFCNT: GPU active cycles, L2 and external read/write beats) | instrumentation: says whether a GPU-bound load is shader, texture or bandwidth bound | low: GPU-side registers and a dump buffer, no clock or power change | counters against FurMark at two clocks | design only |
@@ -463,3 +463,179 @@ after it are registry values.
 Send the `prof-*`, `perf-*` and `ring-*` files and the scores. A bad
 result in any step: delete that one value and restart; the package
 itself changes nothing until a value is set.
+
+
+## Above 600 MHz: the supply first, 2026-11-23
+
+Branch `gpu-clk`, off `gpu-perf`; firmware branch `tspi3m-gpu-volt-read`
+in edk2-rk3576. Nothing here has run on a board. With no setting changed
+the driver behaves as `gpu-perf` does: 600 MHz at most.
+
+FurMark on 2026-11-23 (1024x640, 288 points, 4 frames a second at
+594 MHz) had the GPU 87.9% busy with fragment chains of 131 to 262 ms and
+every chain collected by the interrupt; on 2026-11-14 198 MHz gave 106
+points and 594 MHz 285. The load is bound by the clock and nothing else.
+
+### The operating points
+
+Mainline `arch/arm64/boot/dts/rockchip/rk3576.dtsi` (linux-next, lines
+347 to 389), `gpu_opp_table`, one voltage for every chip (target, min,
+max):
+
+| MHz | mainline | vendor, plain RK3576, slowest level (L0) | vendor, fastest level (L10) |
+|---|---|---|---|
+| 300 to 600 | 700 mV | 712.5 mV | 712.5 mV |
+| 700 | 725 mV | 750 mV | 712.5 mV |
+| 800 | 775 mV | 812.5 mV | 725 mV |
+| 900 | 825 mV | 875 mV | 762.5 mV |
+| 950 | 850 mV | no such point | no such point |
+
+The vendor columns are the vendor kernel's `rk3576.dtsi` `gpu_opp_table`
+(lines 2683 to 2839; the same numbers in `gpu_opp_table_mali`, 2865 on).
+Its maximum is 875 mV and 900 MHz; the RK3576J/M points
+(`opp-supported-hw` 0x06) ask 750 mV up to 700 MHz and 850 mV at 800 MHz,
+and the RK3576S stops at 800 MHz (837.5 mV at its slowest).
+
+How the vendor kernel picks a level (`drivers/soc/rockchip/
+rockchip_opp_select.c`): `rockchip_get_pvtm_pvtpll` (line 1049) sets the
+GPU to `rockchip,pvtm-freq` 800 MHz and the rail to `rockchip,pvtm-volt`
+750 mV, waits `pvtm-sample-time` 1100 us, reads the GPU PVTPLL's
+`GCK_CNT_AVG` at `pvtm-offset` 0x54 (a ring-oscillator count) and maps it
+through `rockchip,pvtm-voltage-sel` (705 to 724 is L1, ..., 885 and up is
+L10; a count below 705 is L0). Faster silicon counts higher and gets a
+lower voltage. Then `rockchip_adjust_opp_by_otp` (line 1880) adds the
+OTP's `gpu-opp-info` voltage (OTP 0x48: u16 min MHz, u16 max MHz, u8 mV,
+u8 length) to every point between min and max, capped at 875 mV. The
+variant comes from OTP 0x08 bits 4:0 (`rockchip_get_soc_info`, line 1321:
+0x0D M, 0x0A J, 0x13 S, anything else the plain chip). The Rockchip
+Devfreq guide (`Rockchip_Developer_Guide_Devfreq_EN.pdf`, the PVTM
+section) describes the same mechanism.
+
+The level cannot be measured from Windows or the firmware without
+changing the clock and the rail, so only two columns are usable: mainline,
+and the vendor's slowest level, which is right for any plain RK3576.
+
+### The supply
+
+`vdd_gpu_s0` is RK806 BUCK5 (`dcdc-reg5` under `pmic@23` on `&i2c1`) on
+the TaishanPi 3M (mainline `rk3576-lckfb-tspi-3m.dts:429`), the CM5
+(`rk3576-armsom-cm5.dtsi:269`) and the ROCK 4D (`rk3576-rock-4d.dts:478`):
+`regulator-boot-on`, 550 to 900 mV, ramp 12500 uV/us. The vendor
+`rk3576-rk806.dtsi` adds `regulator-init-microvolt = <750000>`, which only
+vendor U-Boot applies; nothing in edk2-rk3576 or in Windows sets the rail,
+so it is the RK806's power-on value, which nobody has read.
+
+RK806 (mainline `include/linux/mfd/rk808.h`, `rk808-regulator.c`):
+`BUCK5_ON_VSEL` 0x1E, `BUCK5_SLP_VSEL` 0x28, `BUCK5_CONFIG` 0x14,
+`POWER_EN1` 0x01 bit 0; the selector is 500 mV + 6.25 mV per step up to
+159 (`rk806_buck_voltage_ranges`), so 750 mV is 0x28, 775 mV 0x2C,
+812.5 mV 0x32, 850 mV 0x38.
+
+### The clock
+
+`CRU_CLKSEL_CON165` (TRM V1.2 part 1, CRU chapter): [4:0] divider minus
+one, [7:5] 0 GPLL, 1 CPLL, 2 AUPLL, 3 SPLL, 4 LPLL, [8] `clk_gpu_inner`:
+0 that divider, 1 the PVTPLL; [9] the PVTPLL's source, 0 deep slow, 1 the
+ring. The fixed PLLs: GPLL 1188, CPLL 1000, SPLL 702 (in the secure CRU;
+mainline's `clock-spll` fixed clock, TF-A's `SPLL_RATE`), AUPLL 786.432
+(audio's). Between 600 and 950 MHz a divider reaches only SPLL / 1 =
+702 MHz and AUPLL / 1 = 786 MHz. The driver takes SPLL and never AUPLL,
+which belongs to audio, nor LPLL, which belongs to the A53 cluster.
+
+702 MHz is above the 700 MHz point, so the 800 MHz point governs it:
+775 mV by mainline, 812.5 mV by the vendor's slowest level (plus any OTP
+offset). With the rail at 750 mV it is not allowed by either.
+
+The PVTPLL (GPU instance at 0x27268000, vendor DT `gpu_pvtpll`) is a ring
+oscillator in the GPU's own supply. TF-A's `plat/rockchip/rk3576/scmi/
+rk3576_clk.c` (`clk_gpu_set_rate`, line 849; table at 306) sets for a
+rate a ring length (900 MHz 20, 800 21, 700 21, 600 23, 500 32, 400 48,
+300 63; 200 MHz has length 0 and uses GPLL / 6), writes `GCK_LEN`,
+`GCK_CAL_CNT` 24, starts it through `GCK_CFG`, and moves bits 9 and 8 of
+CON165. The real frequency then follows the voltage: the length is the
+request, not the result. The OTP correction is not in this TF-A:
+`RK3576_GPU_OPP_INFO_OFFSET` 72 and `struct otp_opp_info` are defined and
+never used (on the RK3568 the same TF-A does read OTP and lengthen the
+ring, `rk3568_clk.c` 683 to 750). `pvtpll_volt_sel_adjust` (line 1331)
+adds length per voltage level, but no GPU entry sets `volt_sel_thr`, so
+it changes nothing. The board's BL31 is this TF-A (v2.14.0, de38734). The
+NPU's PVTPLL route through SCMI was measured to complete no job
+(edk2-rk3576 `Npu.c`), and Windows has no SCMI client. Item 12 stays as
+it was.
+
+### Temperature
+
+TSADC at 0x2AE70000. The TRM (Table 19-1) and mainline's thermal zones
+say channel 3 is the GPU and 5 the DDR; mainline's and the vendor's OTP
+trim cells put the GPU trim (OTP 0x2C) on sensor 5, and the vendor's
+`gpu-thermal` zone reads channel 5. So which channel is the GPU is not
+settled; FurMark will show which one rises. Trips: mainline `gpu-alert`
+85 C passive, `gpu-crit` 115 C; TSHUT 120 C (CRU reset). The firmware's
+thermal-safety work is on edk2-rk3576 main (761a938): TSHUT armed at
+120 C plus trim on every valid channel, ACPI `_CRT` 115 C on the CPU
+zones. `m5test prof` with `PerfTemp` 1 shows all six channels.
+
+### The steps
+
+1. Firmware (`tspi3m-gpu-volt-read`, `GpuRail.c`): reads RK806 BUCK5 and
+   the GPU OTP bytes at boot, logs them, and publishes the volatile
+   runtime variable `GpuRail` (GUID 7701c75f-f454-4aab-9445-117f09fb87cf,
+   32 bytes). It writes nothing. The log says which rates the rail meets:
+
+       GpuRail: CRU_CLKSEL_CON165 0x00000005 (mux 0, div 6)
+       GpuRail: OTP specification 0x00 (RK3576), gpu-leakage 0x.., gpu-opp-info min .. MHz max .. MHz volt +.. mV length ..
+       GpuRail: RK806 BUCK5 ON_VSEL 0x.. SLP_VSEL 0x.. CONFIG 0x.. POWER_EN1 0x.. (on)
+       GpuRail: vdd_gpu_s0 (RK806 BUCK5) ...... uV
+       GpuRail: at ...... uV mainline's OPP table allows up to ... MHz; the vendor table's slowest level up to ... MHz
+       GpuRail: 702 MHz (SPLL / 1) needs 775000 uV by mainline (...), 812500 uV by the vendor's slowest level (...)
+
+2. The rates the reading allows, from the table above. 594 MHz needs
+   700 (mainline) or 712.5 mV (vendor); 702 MHz needs 775 or 812.5 mV.
+3. Only if the rail already meets it: `GpuClkHigh` in the driver.
+4. Raising the rail stays a design (item 13): never above 850 mV (the
+   vendor's own maximum is 875, mainline's 850) nor 950 MHz, 6.25 mV
+   selector steps written one at a time with the rail read back, never
+   from Windows while the GPU runs, only with TSHUT armed and the
+   temperature read, and the PMIC default back on any job fault. Not
+   written.
+
+### The driver switch
+
+Settings in the device's `Device Parameters` key, read once per start:
+
+| Setting | Effect |
+|---|---|
+| `GpuClkHigh` 0 (default) | as before: at most 600 MHz |
+| `GpuClkHigh` 1 | allows a rate above 600 MHz when the supply meets mainline's operating point at or above it |
+| `GpuClkHigh` 2 | the same with the vendor's slowest-level voltages (stricter) |
+| `GpuRailUv` | a supply in microvolts verified some other way (the firmware log, or Linux `/sys/class/regulator/regulator.N/microvolts` for `vdd_gpu_s0`); with the firmware's reading too, the lower counts |
+
+The checks in `GpuClkWrite` (`drivers/maliwddm/adapter.c`), all of which
+must pass for anything above 600 MHz: the setting is on; a supply is
+known and inside 550 to 900 mV; the firmware did not report a J, M or S
+variant; the rate is at most 950 MHz and from GPLL, CPLL or SPLL; the
+required voltage (plus the OTP `gpu-opp-info` offset when the point is in
+its range) is at most the supply; CON165 is not on the PVTPLL path. A
+refusal is logged (`GpuClkRefusedHz`, `GpuClkNeedsUv`). Above 600 MHz any
+job fault or timeout writes GPLL / 2 back from the interrupt
+(`GpuClkFallbacks`); the adapter stopping does the same, so a later start
+with the setting off never inherits 702 MHz.
+
+`m5test clk` reports the setting, the supply and where it came from, the
+highest point allowed now and what 702 MHz needs. `m5test clk 3 1` asks
+for SPLL / 1 = 702 MHz.
+
+### Board steps
+
+1. Flash the `tspi3m-gpu-volt-read` firmware (needs the user's go-ahead;
+   keep the nvdata sectors as for every reflash). Boot, and keep the
+   serial log's `GpuRail:` lines and `CpuMaxFreq:` lines.
+2. If `vdd_gpu_s0` reads below 775 mV, stop here: 702 MHz is not allowed
+   without raising the rail, which is item 13.
+3. Otherwise, with this branch's package staged and installed as in
+   "Board tests" above: `m5test clk` (expect the supply from firmware and
+   "allowed now: up to 700" or higher), then `GpuClkHigh` 1, restart,
+   `m5test clk 3 1`, FurMark three runs with `m5test prof 10` (`PerfTemp`
+   1), JobsFailed 0, `GpuClkFallbacks` 0, the hottest of channels 3 and 5
+   below 85 C. Only then `m5test clk 3 1 keep`.
+4. Back: `m5test clk 0 2 keep` (594 MHz) or delete `GpuClkHigh`.
