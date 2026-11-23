@@ -298,7 +298,11 @@ Two runs in one session after one install: the same probes with and
 without redirection. The package adds only logging (the callback's
 error by name, and the DXGI context pointer). The KMD is unchanged.
 
-Package: PKG2_PLACEHOLDER
+Package: CI run 45086553293 (08792ec), artifact
+`wddm-mali-g52-driver-arm64`, DriverVer 11/23/2026,0.3.59.412, UMD from
+Mesa run 45086553333. Test certificate SHA1
+5A91C62ED458E1BD648758C948773D06AC58CA1A (new). d3dprobe.exe from the
+`m3test-arm64` artifact of the same CI run.
 
 1. Copy the package to `C:\mali\pkg-edge4\` and d3dprobe.exe from the
    same run's `m3test-arm64` artifact. Copy it to `C:\mali\fake\msedge.exe`
