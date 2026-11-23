@@ -149,35 +149,239 @@ static NTSTATUS APIENTRY MwAddDevice(IN_CONST_PDEVICE_OBJECT Pdo, OUT_PPVOID Con
  * OpenGL ICD had the GPU 97% busy with jobs of up to 425 ms.
  *
  * CRU_CLKSEL_CON165 (0x27200594): mux in [7:5] (0 gpll, 1 cpll, 2 aupll,
- * 3 spll), divider minus one in [4:0], write-enable mask in the top half
- * (clk-rk3576.c, CLK_GPU_SRC_PRE). The operating points up to 600 MHz ask
- * for 700 mV, the lowest; above that the supply has to rise, and this
- * driver does not touch the regulator. So it takes GPLL (1188 MHz) or CPLL
- * (1000 MHz) with a divider that keeps the result at or below 600 MHz. */
+ * 3 spll, 4 lpll), divider minus one in [4:0], [8] the PVTPLL path, [9]
+ * the PVTPLL source; write-enable mask in the top half (TRM, CRU chapter;
+ * clk-rk3576.c, CLK_GPU_SRC_PRE). The operating points up to 600 MHz ask
+ * for the lowest voltage (mainline 700 mV); above that the supply has to
+ * be higher, and this driver never touches the regulator.
+ *
+ * So by default it takes GPLL (1188 MHz) or CPLL (1000 MHz) with a divider
+ * that keeps the result at or below 600 MHz. With the setting GpuClkHigh
+ * (default 0) it also allows SPLL (702 MHz, a fixed PLL in the secure CRU:
+ * mainline's clock-spll, TF-A's SPLL_RATE) and any rate up to 950 MHz, but
+ * only a rate whose operating point the supply already meets:
+ *
+ *   GpuClkHigh 1: mainline rk3576.dtsi gpu_opp_table
+ *   GpuClkHigh 2: the vendor kernel's table for a plain RK3576 at its
+ *                 slowest PVTM level, which asks more
+ *
+ * The rate is held to the lowest operating point at or above it, so 702 MHz
+ * is held to the 800 MHz one, plus the chip's own OTP offset (gpu-opp-info)
+ * when the firmware reports one. The supply comes from the firmware's
+ * GpuRail variable (edk2-rk3576 GpuRail.c, RK806 BUCK5 read at boot) and
+ * the setting GpuRailUv (microvolts, a value verified some other way); with
+ * both, the lower counts; with neither, nothing above 600 MHz is allowed.
+ * AUPLL (audio's) and LPLL (the A53 cluster's, which moves with the CPU)
+ * are never taken, and neither is a CRU on the PVTPLL path.
+ *
+ * Above 600 MHz, a job that faults or times out puts the clock back to
+ * GPLL / 2 = 594 MHz at once (GpuClkFallbacks counts it). */
 #define MW_CRU_CLKSEL165   0x27200594u
 #define MW_GPU_MAX_HZ      600000000u
+#define MW_GPU_CEIL_HZ     950000000u   /* mainline's highest operating point */
+#define MW_GPU_SAFE_VAL    ((0xFFu << 16) | (0u << 5) | (2u - 1u))   /* GPLL / 2 */
+#define MW_RAIL_UV_MIN     550000u      /* vdd_gpu_s0 regulator-min/max-microvolt */
+#define MW_RAIL_UV_MAX     900000u
+
+static const ULONG MwGpuPll[8] = { 1188000000u, 1000000000u, 0, 702000000u, 0, 0, 0, 0 };
+
+/* MHz, mainline opp-microvolt, vendor plain-RK3576 slowest level (0: none). */
+static const struct { ULONG Mhz, Mainline, Vendor; } MwGpuOpp[] = {
+    { 300, 700000, 712500 }, { 400, 700000, 712500 }, { 500, 700000, 712500 },
+    { 600, 700000, 712500 }, { 700, 725000, 750000 }, { 800, 775000, 812500 },
+    { 900, 825000, 875000 }, { 950, 850000, 0 },
+};
+
+/* The firmware's report (edk2-rk3576 GpuRail.h, GPU_RAIL_REPORT). */
+#pragma pack(push, 1)
+typedef struct {
+    ULONG Signature;
+    USHORT Version, Size;
+    ULONG RailUv;
+    UCHAR OnVsel, SlpVsel, PowerEn1, Buck5Config;
+    UCHAR Specification, GpuLeakage, Flags, Reserved0;
+    USHORT OppInfoMinMhz, OppInfoMaxMhz;
+    UCHAR OppInfoVoltMv, OppInfoLength;
+    USHORT Reserved1;
+    ULONG ClkSel165;
+} MW_GPU_RAIL_REPORT;
+#pragma pack(pop)
+C_ASSERT(sizeof(MW_GPU_RAIL_REPORT) == 32);
+#define MW_GPU_RAIL_SIGNATURE   0x52555047u   /* 'G' 'P' 'U' 'R' */
+#define MW_GPU_RAIL_VALID       0x01u
+#define MW_GPU_RAIL_OTP_VALID   0x04u
+#define MW_GPU_RAIL_PLAIN       0x08u
+
+/* 7701c75f-f454-4aab-9445-117f09fb87cf, edk2-rk3576 GpuRail.c */
+static GUID MwGpuRailGuid = { 0x7701c75f, 0xf454, 0x4aab, { 0x94, 0x45, 0x11, 0x7f, 0x09, 0xfb, 0x87, 0xcf } };
+
+/* Once per start, at passive level, before any stored clock is applied. */
+static void GpuRailInit(MW_ADAPTER *A)
+{
+    UNICODE_STRING name = RTL_CONSTANT_STRING(L"GpuRail");
+    MW_GPU_RAIL_REPORT r;
+    ULONG len = sizeof(r), attr = 0, fw = 0, reg;
+
+    A->RailUv = 0;
+    A->RailSource = 0;
+    A->RailOtpMv = 0;
+    A->RailOtpMinMhz = A->RailOtpMaxMhz = 0;
+    A->RailNotPlain = FALSE;
+    A->GpuClkHigh = MwSetting(A, L"GpuClkHigh", 0);
+    if (A->GpuClkHigh > 2)
+        A->GpuClkHigh = 0;
+
+    RtlZeroMemory(&r, sizeof(r));
+    if (NT_SUCCESS(ExGetFirmwareEnvironmentVariable(&name, &MwGpuRailGuid, &r, &len, &attr)) &&
+        len == sizeof(r) && r.Signature == MW_GPU_RAIL_SIGNATURE && r.Version == 1 &&
+        r.Size == sizeof(r)) {
+        MwLog(A, L"GpuRailFwFlags", r.Flags);
+        if ((r.Flags & MW_GPU_RAIL_OTP_VALID) && !(r.Flags & MW_GPU_RAIL_PLAIN))
+            A->RailNotPlain = TRUE;
+        if ((r.Flags & MW_GPU_RAIL_OTP_VALID) && r.OppInfoVoltMv != 0) {
+            A->RailOtpMv = r.OppInfoVoltMv;
+            A->RailOtpMinMhz = r.OppInfoMinMhz;
+            A->RailOtpMaxMhz = r.OppInfoMaxMhz;
+        }
+        if ((r.Flags & MW_GPU_RAIL_VALID) && r.RailUv >= MW_RAIL_UV_MIN && r.RailUv <= MW_RAIL_UV_MAX)
+            fw = r.RailUv;
+        MwLog(A, L"GpuRailFwUv", fw);
+    } else {
+        MwLog(A, L"GpuRailFwUv", 0);
+    }
+    reg = MwSetting(A, L"GpuRailUv", 0);
+    if (reg < MW_RAIL_UV_MIN || reg > MW_RAIL_UV_MAX)
+        reg = 0;
+    if (fw != 0 && reg != 0) {
+        A->RailUv = fw < reg ? fw : reg;
+        A->RailSource = 3;
+    } else if (fw != 0) {
+        A->RailUv = fw;
+        A->RailSource = 1;
+    } else if (reg != 0) {
+        A->RailUv = reg;
+        A->RailSource = 2;
+    }
+    MwLog(A, L"GpuRailUv", A->RailUv);
+    MwLog(A, L"GpuClkHighSetting", A->GpuClkHigh);
+
+    /* Mapped for the whole start, so a fault can drop the clock from the
+     * interrupt (GpuClkFallback). Only when a high clock can be allowed. */
+    if (A->GpuClkHigh != 0 && A->CruClkVa == NULL) {
+        PHYSICAL_ADDRESS pa;
+        pa.QuadPart = MW_CRU_CLKSEL165 & ~0xFFFu;
+        A->CruClkVa = (PUCHAR)MmMapIoSpaceEx(pa, PAGE_SIZE, PAGE_READWRITE | PAGE_NOCACHE);
+    }
+}
+
+/* The supply the rate needs, by the table GpuClkHigh picks; 0 when no
+ * operating point covers it. */
+static ULONG GpuRequiredUv(MW_ADAPTER *A, ULONG Hz)
+{
+    ULONG mhz = (Hz + 999999u) / 1000000u;
+
+    for (ULONG i = 0; i < ARRAYSIZE(MwGpuOpp); i++) {
+        ULONG uv;
+        if (MwGpuOpp[i].Mhz < mhz)
+            continue;
+        uv = A->GpuClkHigh == 2 ? MwGpuOpp[i].Vendor : MwGpuOpp[i].Mainline;
+        if (uv != 0 && A->RailOtpMv != 0 &&
+            MwGpuOpp[i].Mhz >= A->RailOtpMinMhz && MwGpuOpp[i].Mhz <= A->RailOtpMaxMhz)
+            uv += A->RailOtpMv * 1000u;
+        return uv;
+    }
+    return 0;
+}
+
+/* The highest rate GpuClkWrite would accept now, in Hz. */
+static ULONG GpuAllowedHz(MW_ADAPTER *A)
+{
+    ULONG best = MW_GPU_MAX_HZ;
+
+    if (A->GpuClkHigh == 0 || A->RailUv == 0 || A->RailNotPlain)
+        return best;
+    for (ULONG i = 0; i < ARRAYSIZE(MwGpuOpp); i++) {
+        ULONG need = GpuRequiredUv(A, MwGpuOpp[i].Mhz * 1000000u);
+        if (need != 0 && need <= A->RailUv && MwGpuOpp[i].Mhz * 1000000u > best)
+            best = MwGpuOpp[i].Mhz * 1000000u;
+    }
+    return best;
+}
 
 static NTSTATUS GpuClkWrite(MW_ADAPTER *A, ULONG Parent, ULONG Div)
 {
-    static const ULONG pll[2] = { 1188000000u, 1000000000u };
     PHYSICAL_ADDRESS pa;
-    PULONG reg;
+    PUCHAR reg;
+    ULONG hz, cur;
+    BOOLEAN high;
 
-    if (Parent > 1 || Div < 1 || Div > 32 || pll[Parent] / Div > MW_GPU_MAX_HZ)
+    if (Parent > 7 || MwGpuPll[Parent] == 0 || Div < 1 || Div > 32)
         return STATUS_INVALID_PARAMETER;
-    pa.QuadPart = MW_CRU_CLKSEL165 & ~0xFFFu;
-    reg = (PULONG)MmMapIoSpaceEx(pa, PAGE_SIZE, PAGE_READWRITE | PAGE_NOCACHE);
-    if (reg == NULL)
-        return STATUS_INSUFFICIENT_RESOURCES;
-    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)reg + (MW_CRU_CLKSEL165 & 0xFFFu)),
+    hz = MwGpuPll[Parent] / Div;
+    high = hz > MW_GPU_MAX_HZ;
+    if (high) {
+        /* Every condition, each logged when it is the one that refuses. */
+        if (A->GpuClkHigh == 0)
+            return STATUS_INVALID_PARAMETER;
+        if (hz > MW_GPU_CEIL_HZ || A->RailUv == 0 || A->RailNotPlain || A->CruClkVa == NULL) {
+            MwLog(A, L"GpuClkRefusedHz", hz);
+            return STATUS_INVALID_PARAMETER;
+        }
+        if (GpuRequiredUv(A, hz) == 0 || GpuRequiredUv(A, hz) > A->RailUv) {
+            MwLog(A, L"GpuClkRefusedHz", hz);
+            MwLog(A, L"GpuClkNeedsUv", GpuRequiredUv(A, hz));
+            return STATUS_INVALID_PARAMETER;
+        }
+    }
+    if (A->CruClkVa != NULL) {
+        reg = A->CruClkVa;
+    } else {
+        pa.QuadPart = MW_CRU_CLKSEL165 & ~0xFFFu;
+        reg = (PUCHAR)MmMapIoSpaceEx(pa, PAGE_SIZE, PAGE_READWRITE | PAGE_NOCACHE);
+        if (reg == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    cur = READ_REGISTER_ULONG((PULONG)(reg + (MW_CRU_CLKSEL165 & 0xFFFu)));
+    if (high && (cur & 0x100u) != 0) {
+        /* On the PVTPLL path the mux written here is not the GPU's clock,
+         * and what the GPU runs at is not known. */
+        if (reg != A->CruClkVa)
+            MmUnmapIoSpace(reg, PAGE_SIZE);
+        MwLog(A, L"GpuClkRefusedPvtpll", cur);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    A->GpuClkIsHigh = FALSE;
+    WRITE_REGISTER_ULONG((PULONG)(reg + (MW_CRU_CLKSEL165 & 0xFFFu)),
                          (0xFFu << 16) | (Parent << 5) | (Div - 1));
-    MmUnmapIoSpace(reg, PAGE_SIZE);
+    if (reg != A->CruClkVa)
+        MmUnmapIoSpace(reg, PAGE_SIZE);
     A->GpuClk = (Parent << 8) | Div;
-    MwLog(A, L"GpuClkHz", pll[Parent] / Div);
+    A->GpuClkIsHigh = high;
+    MwLog(A, L"GpuClkHz", hz);
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS GpuClk(MW_ADAPTER *A, MW_ESCAPE_GPUCLK_DATA *D)
+/* From Reap, at any IRQL: a job faulted or timed out while the clock was
+ * above 600 MHz. One register write through the mapping GpuRailInit made;
+ * nothing logged here (MwLog needs passive level), the count is in the
+ * stats and GpuClkInfo. */
+static BOOLEAN GpuClkSafe(MW_ADAPTER *A)
+{
+    if (!A->GpuClkIsHigh || A->CruClkVa == NULL)
+        return FALSE;
+    WRITE_REGISTER_ULONG((PULONG)(A->CruClkVa + (MW_CRU_CLKSEL165 & 0xFFFu)), MW_GPU_SAFE_VAL);
+    A->GpuClk = (0u << 8) | 2u;
+    A->GpuClkIsHigh = FALSE;
+    return TRUE;
+}
+
+void MwGpuClkFallback(MW_ADAPTER *A)
+{
+    if (GpuClkSafe(A))
+        A->GpuClkFallbacks++;
+}
+
+static NTSTATUS GpuClk(MW_ADAPTER *A, MW_ESCAPE_GPUCLK_DATA *D, ULONG Size)
 {
     NTSTATUS st = STATUS_SUCCESS;
 
@@ -190,6 +394,14 @@ static NTSTATUS GpuClk(MW_ADAPTER *A, MW_ESCAPE_GPUCLK_DATA *D)
     }
     D->Applied = A->GpuClk;
     D->Stored = MwSetting(A, L"GpuClk", 0);
+    if (Size >= sizeof(MW_ESCAPE_GPUCLK_DATA)) {
+        D->High = A->GpuClkHigh;
+        D->RailUv = A->RailUv;
+        D->RailSource = A->RailSource | (A->RailNotPlain ? 0x100u : 0);
+        D->AllowedHz = GpuAllowedHz(A);
+        D->NeedUv702 = A->GpuClkHigh != 0 ? GpuRequiredUv(A, 702000000u) : 0;
+        D->Fallbacks = A->GpuClkFallbacks;
+    }
     return st;
 }
 
@@ -287,6 +499,7 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
     MwHpdStart(a);
 #endif
     PublishIdentity(a);
+    GpuRailInit(a);
     {
         ULONG clk = MwSetting(a, L"GpuClk", 0);
         if (a->GpuUp && clk != 0)
@@ -310,6 +523,13 @@ static void StopGpu(MW_ADAPTER *A)
         A->Gpu.Regs = NULL;
     }
     A->GpuUp = FALSE;
+    /* A clock above 600 MHz is allowed by this start's checks only: the
+     * next start (another package, the setting removed) may not allow it. */
+    (void)GpuClkSafe(A);
+    if (A->CruClkVa != NULL) {
+        MmUnmapIoSpace(A->CruClkVa, PAGE_SIZE);
+        A->CruClkVa = NULL;
+    }
 }
 
 static NTSTATUS APIENTRY MwStopDevice(IN_CONST_PVOID Context)
@@ -386,17 +606,34 @@ static NTSTATUS APIENTRY MwQueryInterface(IN_CONST_PVOID Context, IN_PQUERY_INTE
 static BOOLEAN APIENTRY MwInterruptRoutine(IN_CONST_PVOID Context, IN_ULONG MessageNumber)
 {
     MW_ADAPTER *a = (MW_ADAPTER *)Context;
+    ULONG64 t0 = MwTick();
+    BOOLEAN mine = FALSE;
     UNREFERENCED_PARAMETER(MessageNumber);
-    if (!a->GpuUp || !MkIsr(&a->Gpu))
-        return FALSE;
-    (void)MwJobInterrupt(a);
-    return TRUE;
+    if (a->GpuUp && MkIsr(&a->Gpu)) {
+        (void)MwJobInterrupt(a);
+        mine = TRUE;
+    }
+    MwProfEnd(&a->Prof[MW_DDI_ISR], t0);
+    return mine;
 }
 
 static VOID APIENTRY MwDpcRoutine(IN_CONST_PVOID Context)
 {
     MW_ADAPTER *a = (MW_ADAPTER *)Context;
+    ULONG64 t0 = MwTick();
+    LONG64 noticed = InterlockedExchange64(&a->NotifyTick, 0);
+
+    /* How long a completion waited for this DPC to tell dxgkrnl. One DPC
+     * of a device runs at a time, so the sums need no interlocks. */
+    if (noticed != 0 && t0 >= (ULONG64)noticed) {
+        ULONG64 d = t0 - (ULONG64)noticed;
+        a->DpcCount++;
+        a->DpcTicks += d;
+        if (d > a->DpcMaxTicks)
+            a->DpcMaxTicks = d;
+    }
     a->Dxgk.DxgkCbNotifyDpc(a->Dxgk.DeviceHandle);
+    MwProfEnd(&a->Prof[MW_DDI_DPC], t0);
 }
 
 /* ---- adapter information ---- */
@@ -601,6 +838,10 @@ static ULONG UmdFlags(MW_ADAPTER *A)
         f |= MW_UMD_FLAG_COPY_GPU;
     if (MwSetting(A, L"UmdReadbackOneCopy", 1) != 0)
         f |= MW_UMD_FLAG_READBACK_1;
+    /* On unless 0: three runs each way on the TaishanPi 3M on 2026-11-23
+     * cut DWM's submit CPU per job by about a third, no errors. */
+    if (MwSetting(A, L"UmdMergeSubmit", 1) != 0)
+        f |= MW_UMD_FLAG_MERGE_SUBMIT;
     return f;
 }
 
@@ -756,6 +997,105 @@ static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D, UINT Size)
     }
 }
 
+/* ---- MW_ESCAPE_PERF ---- */
+
+/* The GPU clock as the CRU has it now (MW_ESCAPE_PERF_DATA.ClkSel165). A
+ * read of a CRU register this driver already writes (GpuClkWrite). */
+static void GpuClkRead(mw_u32 *Raw, mw_u32 *Hz)
+{
+    PHYSICAL_ADDRESS pa;
+    PUCHAR reg;
+    ULONG v;
+
+    *Raw = *Hz = 0xFFFFFFFFu;
+    pa.QuadPart = MW_CRU_CLKSEL165 & ~0xFFFu;
+    reg = (PUCHAR)MmMapIoSpaceEx(pa, PAGE_SIZE, PAGE_READWRITE | PAGE_NOCACHE);
+    if (reg == NULL)
+        return;
+    v = READ_REGISTER_ULONG((PULONG)(reg + (MW_CRU_CLKSEL165 & 0xFFFu)));
+    MmUnmapIoSpace(reg, PAGE_SIZE);
+    *Raw = v;
+    *Hz = MwGpuPll[(v >> 5) & 7] / ((v & 0x1F) + 1);
+}
+
+/* The TSADC's data registers, TSADC_DATA0..5 (TRM 19.4.2; the block the
+ * firmware's ACPI thermal zones read, Thermal.asl in edk2-rk3576). Only
+ * with the setting PerfTemp 1: a firmware from before the thermal-safety
+ * work leaves the TSADC unclocked, and a read of an unclocked block on
+ * this SoC can be an SError. */
+#define MW_TSADC_PA         0x2AE70000u
+#define MW_TSADC_DATA(n)    (0x02Cu + (n) * 4u)
+
+/* mainline's rk3588_code_table, which rk3576 uses, linear between rows;
+ * no OTP trim. FALSE when the code is not a temperature. */
+static BOOLEAN TsadcToMilliC(ULONG Code, LONG *MilliC)
+{
+    if (Code > 0x1FF || Code < 215)
+        return FALSE;
+    if (Code <= 285)
+        *MilliC = -40000 + (LONG)(65000 * (Code - 215) / 70);
+    else if (Code <= 350)
+        *MilliC = 25000 + (LONG)(60000 * (Code - 285) / 65);
+    else if (Code <= 395)
+        *MilliC = 85000 + (LONG)(40000 * (Code - 350) / 45);
+    else
+        *MilliC = 125000;
+    return TRUE;
+}
+
+static void TempRead(MW_ADAPTER *A, MW_ESCAPE_PERF_DATA *D)
+{
+    PHYSICAL_ADDRESS pa;
+    PUCHAR reg;
+
+    D->TempValid = 0;
+    if (MwSetting(A, L"PerfTemp", 0) != 1)
+        return;
+    pa.QuadPart = MW_TSADC_PA;
+    reg = (PUCHAR)MmMapIoSpaceEx(pa, PAGE_SIZE, PAGE_READWRITE | PAGE_NOCACHE);
+    if (reg == NULL)
+        return;
+    for (ULONG n = 0; n < 6; n++) {
+        LONG t = 0;
+        D->TsadcCode[n] = READ_REGISTER_ULONG((PULONG)(reg + MW_TSADC_DATA(n)));
+        if (TsadcToMilliC(D->TsadcCode[n], &t)) {
+            D->TempMilliC[n] = t;
+            D->TempValid |= 1u << n;
+        }
+    }
+    MmUnmapIoSpace(reg, PAGE_SIZE);
+}
+
+static NTSTATUS EscapePerf(MW_ADAPTER *A, MW_ESCAPE_PERF_DATA *D)
+{
+    NTSTATUS st;
+
+    RtlZeroMemory((PUCHAR)D + sizeof(D->Code), sizeof(*D) - sizeof(D->Code));
+    D->Version = MW_PERF_VERSION;
+    D->PerfHz = A->PerfHz;
+    for (ULONG i = 0; i < MW_PERF_DDIS; i++) {
+        D->Ddi[i].Calls = (mw_u64)A->Prof[i].Calls;
+        D->Ddi[i].Ticks = (mw_u64)A->Prof[i].Ticks;
+        D->Ddi[i].MaxTicks = (mw_u64)A->Prof[i].MaxTicks;
+    }
+    D->RenderAllocs = (mw_u64)A->RenderAllocs;
+    D->RenderCmds = (mw_u64)A->RenderCmds;
+    D->RenderAllocsMax = (mw_u32)A->RenderAllocsMax;
+    D->RenderCmdsMax = (mw_u32)A->RenderCmdsMax;
+    D->MapPages = (mw_u64)A->MapPages;
+    D->DpcCount = A->DpcCount;
+    D->DpcTicks = A->DpcTicks;
+    D->DpcMaxTicks = A->DpcMaxTicks;
+    st = MwPerfSnapshot(A, D);
+    if (A->GpuUp)
+        GpuClkRead(&D->ClkSel165, &D->GpuHz);
+    else
+        D->ClkSel165 = D->GpuHz = 0xFFFFFFFFu;
+    TempRead(A, D);
+    D->Now = MwTick();
+    return st;
+}
+
 static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE *Esc)
 {
     MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
@@ -780,9 +1120,12 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         GpuInfo(a, (MW_ESCAPE_GPU_INFO_DATA *)Esc->pPrivateDriverData);
         return STATUS_SUCCESS;
     case MW_ESCAPE_GPUCLK:
-        if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_GPUCLK_DATA))
+        /* The first six fields are the 2026-11-14 layout, which m5test of
+         * that time still sends; the rail fields are filled only when the
+         * caller's buffer has them. */
+        if (Esc->PrivateDriverDataSize < MW_ESCAPE_GPUCLK_V1_SIZE)
             return STATUS_INVALID_PARAMETER;
-        return GpuClk(a, (MW_ESCAPE_GPUCLK_DATA *)Esc->pPrivateDriverData);
+        return GpuClk(a, (MW_ESCAPE_GPUCLK_DATA *)Esc->pPrivateDriverData, Esc->PrivateDriverDataSize);
     case MW_ESCAPE_MEMORY:
         if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_MEMORY_DATA))
             return STATUS_INVALID_PARAMETER;
@@ -792,6 +1135,10 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_SCANOUT_DATA))
             return STATUS_INVALID_PARAMETER;
         return MwScanSet(a, (MW_ESCAPE_SCANOUT_DATA *)Esc->pPrivateDriverData);
+    case MW_ESCAPE_PERF:
+        if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_PERF_DATA))
+            return STATUS_INVALID_PARAMETER;
+        return EscapePerf(a, (MW_ESCAPE_PERF_DATA *)Esc->pPrivateDriverData);
     case MW_ESCAPE_UMD:
         if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_UMD_DATA))
             return STATUS_INVALID_PARAMETER;
@@ -919,7 +1266,7 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         {
             static const PCWSTR names[MW_UMD_KINDS] = {
                 L"CopyGpu", L"CopyCpu", L"CopyCpuBuffer", L"Upload", L"MapRead", L"MapWrite",
-                L"PresentReadback", L"PresentDirect", L"GpuWait", L"Blt", L"Resolve", L"Spare",
+                L"PresentReadback", L"PresentDirect", L"GpuWait", L"Blt", L"Resolve", L"Submit",
             };
             MW_UMD_COUNT c[MW_UMD_KINDS];
             ExAcquireFastMutex(&a->UmdLock);
@@ -927,7 +1274,7 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
             ExReleaseFastMutex(&a->UmdLock);
             MwLog(a, L"T_UmdReports", a->UmdReports);
             MwLog(a, L"T_UmdFlags", UmdFlags(a));
-            for (ULONG k = 0; k < MW_UMD_KINDS - 1; k++) {
+            for (ULONG k = 0; k < MW_UMD_KINDS; k++) {
                 WCHAR n[48];
                 UNICODE_STRING us;
                 RtlInitEmptyUnicodeString(&us, n, sizeof(n));
@@ -978,17 +1325,30 @@ static NTSTATUS APIENTRY MwSetPointerShape(IN_CONST_HANDLE hAdapter, const DXGKA
         MwEnter(a_, L"Enter_" MW_W(#Name));                                    \
         return MwRet(a_, L"Fail_" MW_W(#Name), Mw##Name Args);                 \
     }
+/* The same, and the DDI's CPU time into Prof[Slot] (MW_ESCAPE_PERF). */
+#define TRACE_PROF(Name, Proto, Args, AdapterExpr, Slot)                       \
+    static NTSTATUS APIENTRY T_##Name Proto                                    \
+    {                                                                          \
+        MW_ADAPTER *a_ = (AdapterExpr);                                        \
+        ULONG64 t0_ = MwTick();                                                \
+        NTSTATUS st_;                                                          \
+        MwEnter(a_, L"Enter_" MW_W(#Name));                                    \
+        st_ = Mw##Name Args;                                                   \
+        MwProfEnd(&a_->Prof[Slot], t0_);                                       \
+        return MwRet(a_, L"Fail_" MW_W(#Name), st_);                           \
+    }
+#define TRACE_ADAPTER_P(Name, Proto, Args, Slot) TRACE_PROF(Name, Proto, Args, (MW_ADAPTER *)hAdapter, Slot)
 #define TRACE_ADAPTER(Name, Proto, Args) TRACE_WITH(Name, Proto, Args, (MW_ADAPTER *)hAdapter)
 #define TRACE_DEVICE(Name, Proto, Args) TRACE_WITH(Name, Proto, Args, ((MW_DEVICE *)hDevice)->Adapter)
 #define TRACE_CTX(Name, Proto, Args) TRACE_WITH(Name, Proto, Args, ((MW_CONTEXT *)hContext)->Device->Adapter)
 
 TRACE_ADAPTER(QueryAdapterInfo, (IN_CONST_HANDLE hAdapter, const DXGKARG_QUERYADAPTERINFO *a), (hAdapter, a))
-TRACE_ADAPTER(Escape, (IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE *a), (hAdapter, a))
-TRACE_ADAPTER(CreateAllocation, (IN_CONST_HANDLE hAdapter, DXGKARG_CREATEALLOCATION *a), (hAdapter, a))
-TRACE_ADAPTER(DestroyAllocation, (IN_CONST_HANDLE hAdapter, const DXGKARG_DESTROYALLOCATION *a), (hAdapter, a))
+TRACE_ADAPTER_P(Escape, (IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE *a), (hAdapter, a), MW_DDI_ESCAPE)
+TRACE_ADAPTER_P(CreateAllocation, (IN_CONST_HANDLE hAdapter, DXGKARG_CREATEALLOCATION *a), (hAdapter, a), MW_DDI_CREATE_ALLOC)
+TRACE_ADAPTER_P(DestroyAllocation, (IN_CONST_HANDLE hAdapter, const DXGKARG_DESTROYALLOCATION *a), (hAdapter, a), MW_DDI_DESTROY_ALLOC)
 TRACE_ADAPTER(DescribeAllocation, (IN_CONST_HANDLE hAdapter, DXGKARG_DESCRIBEALLOCATION *a), (hAdapter, a))
 TRACE_ADAPTER(GetStandardAllocationDriverData, (IN_CONST_HANDLE hAdapter, DXGKARG_GETSTANDARDALLOCATIONDRIVERDATA *a), (hAdapter, a))
-TRACE_ADAPTER(BuildPagingBuffer, (IN_CONST_HANDLE hAdapter, DXGKARG_BUILDPAGINGBUFFER *a), (hAdapter, a))
+TRACE_ADAPTER_P(BuildPagingBuffer, (IN_CONST_HANDLE hAdapter, DXGKARG_BUILDPAGINGBUFFER *a), (hAdapter, a), MW_DDI_PAGING)
 TRACE_ADAPTER(CreateDevice, (IN_CONST_HANDLE hAdapter, DXGKARG_CREATEDEVICE *a), (hAdapter, a))
 TRACE_ADAPTER(IsSupportedVidPn, (IN_CONST_HANDLE hAdapter, DXGKARG_ISSUPPORTEDVIDPN *a), (hAdapter, a))
 TRACE_ADAPTER(RecommendFunctionalVidPn, (IN_CONST_HANDLE hAdapter, const DXGKARG_RECOMMENDFUNCTIONALVIDPN *a), (hAdapter, a))
@@ -998,7 +1358,7 @@ TRACE_ADAPTER(CommitVidPn, (IN_CONST_HANDLE hAdapter, const DXGKARG_COMMITVIDPN 
 TRACE_ADAPTER(UpdateActiveVidPnPresentPath, (IN_CONST_HANDLE hAdapter, const DXGKARG_UPDATEACTIVEVIDPNPRESENTPATH *a), (hAdapter, a))
 TRACE_ADAPTER(RecommendMonitorModes, (IN_CONST_HANDLE hAdapter, const DXGKARG_RECOMMENDMONITORMODES *a), (hAdapter, a))
 TRACE_ADAPTER(QueryVidPnHWCapability, (IN_CONST_HANDLE hAdapter, DXGKARG_QUERYVIDPNHWCAPABILITY *a), (hAdapter, a))
-TRACE_ADAPTER(SetVidPnSourceAddress, (IN_CONST_HANDLE hAdapter, const DXGKARG_SETVIDPNSOURCEADDRESS *a), (hAdapter, a))
+TRACE_ADAPTER_P(SetVidPnSourceAddress, (IN_CONST_HANDLE hAdapter, const DXGKARG_SETVIDPNSOURCEADDRESS *a), (hAdapter, a), MW_DDI_SET_SOURCE)
 TRACE_ADAPTER(ResetFromTimeout, (IN_CONST_HANDLE hAdapter), (hAdapter))
 TRACE_ADAPTER(RestartFromTimeout, (IN_CONST_HANDLE hAdapter), (hAdapter))
 TRACE_ADAPTER(ResetEngine, (IN_CONST_HANDLE hAdapter, DXGKARG_RESETENGINE *a), (hAdapter, a))
@@ -1015,17 +1375,20 @@ TRACE_CONTEXT(SetPowerState, (IN_CONST_PVOID Context, IN_ULONG u, IN_DEVICE_POWE
 TRACE_CONTEXT(QueryInterface, (IN_CONST_PVOID Context, IN_PQUERY_INTERFACE q), (Context, q))
 TRACE_CONTEXT(DispatchIoRequest, (IN_CONST_PVOID Context, IN_ULONG s, IN_PVIDEO_REQUEST_PACKET v), (Context, s, v))
 TRACE_CONTEXT(StopDevice, (IN_CONST_PVOID Context), (Context))
-TRACE_DEVICE(OpenAllocation, (IN_CONST_HANDLE hDevice, const DXGKARG_OPENALLOCATION *a), (hDevice, a))
+TRACE_PROF(OpenAllocation, (IN_CONST_HANDLE hDevice, const DXGKARG_OPENALLOCATION *a), (hDevice, a),
+           ((MW_DEVICE *)hDevice)->Adapter, MW_DDI_OPEN_ALLOC)
 TRACE_DEVICE(CloseAllocation, (IN_CONST_HANDLE hDevice, const DXGKARG_CLOSEALLOCATION *a), (hDevice, a))
 TRACE_DEVICE(CreateContext, (IN_CONST_HANDLE hDevice, DXGKARG_CREATECONTEXT *a), (hDevice, a))
 TRACE_DEVICE(DestroyDevice, (IN_CONST_HANDLE hDevice), (hDevice))
 TRACE_CTX(DestroyContext, (IN_CONST_HANDLE hContext), (hContext))
-TRACE_CTX(Render, (IN_CONST_HANDLE hContext, DXGKARG_RENDER *a), (hContext, a))
-TRACE_CTX(Present, (IN_CONST_HANDLE hContext, DXGKARG_PRESENT *a), (hContext, a))
+TRACE_PROF(Render, (IN_CONST_HANDLE hContext, DXGKARG_RENDER *a), (hContext, a),
+           ((MW_CONTEXT *)hContext)->Device->Adapter, MW_DDI_RENDER)
+TRACE_PROF(Present, (IN_CONST_HANDLE hContext, DXGKARG_PRESENT *a), (hContext, a),
+           ((MW_CONTEXT *)hContext)->Device->Adapter, MW_DDI_PRESENT)
 TRACE_ADAPTER(SetPointerPosition, (IN_CONST_HANDLE hAdapter, const DXGKARG_SETPOINTERPOSITION *a), (hAdapter, a))
 TRACE_ADAPTER(SetPointerShape, (IN_CONST_HANDLE hAdapter, const DXGKARG_SETPOINTERSHAPE *a), (hAdapter, a))
-TRACE_ADAPTER(Patch, (IN_CONST_HANDLE hAdapter, const DXGKARG_PATCH *a), (hAdapter, a))
-TRACE_ADAPTER(SubmitCommand, (IN_CONST_HANDLE hAdapter, const DXGKARG_SUBMITCOMMAND *a), (hAdapter, a))
+TRACE_ADAPTER_P(Patch, (IN_CONST_HANDLE hAdapter, const DXGKARG_PATCH *a), (hAdapter, a), MW_DDI_PATCH)
+TRACE_ADAPTER_P(SubmitCommand, (IN_CONST_HANDLE hAdapter, const DXGKARG_SUBMITCOMMAND *a), (hAdapter, a), MW_DDI_SUBMIT)
 TRACE_ADAPTER(QueryCurrentFence, (IN_CONST_HANDLE hAdapter, DXGKARG_QUERYCURRENTFENCE *a), (hAdapter, a))
 TRACE_ADAPTER(CollectDbgInfo, (IN_CONST_HANDLE hAdapter, const DXGKARG_COLLECTDBGINFO *a), (hAdapter, a))
 TRACE_ADAPTER(CancelCommand, (IN_CONST_HANDLE hAdapter, const DXGKARG_CANCELCOMMAND *a), (hAdapter, a))
