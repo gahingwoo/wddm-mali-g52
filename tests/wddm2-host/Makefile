@@ -23,6 +23,8 @@ lint:
 	@grep -q 'init.DxgkDdiSetStablePowerState = T_SetStablePowerState' $(SRC)/adapter.c || { echo "FAIL: SetStablePowerState not registered"; exit 1; }
 	@grep -q 'MwAdapterStop(dev)' $(SRC)/display.c || { echo "FAIL: StopDeviceAndReleasePostDisplayOwnership does not stop the adapter"; exit 1; }
 	@grep -q 'MwCommandStop(a);' $(SRC)/adapter.c || { echo "FAIL: RemoveDevice does not stop the copy thread"; exit 1; }
+	@grep -q 'Mw2xRotationSupport(&upd.ContentTransformation.RotationSupport)' $(SRC)/display.c || { echo "FAIL: display.c paths without Offset0 at 2.x"; exit 1; }
+	@grep -q 'Mw2xRotationSupport(&upd.ContentTransformation.RotationSupport)' $(SRC)/hpd.c || { echo "FAIL: hpd.c paths without Offset0 at 2.x"; exit 1; }
 	@echo "lint: ok"
 
 run: wddm2-host lint

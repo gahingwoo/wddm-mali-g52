@@ -56,6 +56,7 @@ static void check_plan(unsigned wddm, unsigned shape, unsigned budget)
               "1.3: no 2.x caps");
         CHECK(!p.SegApplicationTarget && !p.SegNonLocalBudget, "1.3: no budget flags");
         CHECK(!p.PowerDdis, "1.3: the DDI table as before, no CalibrateGpuClock/SetStablePowerState");
+        CHECK(!p.RotationOffset0, "1.3: paths without Offset bits, as before");
         return;
     }
     /* The paging node is a COPY node of its own: naming the 3D node made
@@ -72,6 +73,8 @@ static void check_plan(unsigned wddm, unsigned shape, unsigned budget)
     /* dxgkrnl 22621.2428 DXGADAPTER::Initialize: interface >= 0x5008 without
      * both DDIs fails the start (the 2026-11-23 0x139 boots). */
     CHECK(p.PowerDdis, "2.x: CalibrateGpuClock and SetStablePowerState registered");
+    /* DMMVIDPNPRESENTPATH::SetRotationSupport: 0x113/0x1C (build 325). */
+    CHECK(p.RotationOffset0, "2.x: Offset0 on every path (path-independent rotation)");
     CHECK(p.SegApplicationTarget == (budget != 0) && p.SegNonLocalBudget == (budget != 0),
           "2.x: budget flags follow Wddm2Budget %u", budget);
     /* GpuMmu: one bit, the same in DRIVERCAPS, PHYSICALADAPTERCAPS and
@@ -230,6 +233,15 @@ int main(void)
     CHECK(Mw2NeedsPowerDdis(0x5023u), "2.0 interface 0x5023 needs CalibrateGpuClock and SetStablePowerState");
     CHECK(Mw2NeedsPowerDdis(0x5008u), "the 0x5008 boundary itself");
     CHECK(Mw2NeedsPowerDdis(0xB004u), "3.x interfaces too");
+    /* Path-independent rotation (dxgkrnl's 0x113/0x1C rule). */
+    CHECK(!Mw2PathIndependentRotation(0x4002u), "1.3 interface 0x4002 is before path-independent rotation");
+    CHECK(Mw2PathIndependentRotation(0x5023u), "2.0 interface 0x5023 is past it");
+    CHECK(Mw2RotationSupportFault(0x0Fu, 1) == 1, "build 325's 0xF on the primary path: dxgkrnl's P3 1");
+    CHECK(Mw2RotationSupportFault(0x1Fu, 1) == 0, "0x1F (Offset0) on the primary path is accepted");
+    CHECK(Mw2RotationSupportFault(0x1Fu, 0) == 0, "0x1F on a secondary clone path is accepted");
+    CHECK(Mw2RotationSupportFault(0x3Fu, 1) == 2, "Offset90 on the primary path: dxgkrnl's P3 2");
+    CHECK(Mw2RotationSupportFault(0x0Fu, 0) == 3, "no Offset bit on a secondary path is refused too");
+    CHECK(Mw2RotationSupportFault(0x0Fu | MW2_ROTATION_OFFSET0, 1) == 0, "what Mw2xRotationSupport makes of 0xF");
     check_segment_pass();
     check_per_node();
     check_fallback();

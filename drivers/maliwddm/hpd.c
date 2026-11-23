@@ -993,6 +993,7 @@ NTSTATUS MwHpdEnumVidPnCofuncModality(MW_ADAPTER *A, const DXGKARG_ENUMVIDPNCOFU
                 upd.ContentTransformation.RotationSupport.Rotate90 = 1;
                 upd.ContentTransformation.RotationSupport.Rotate180 = 1;
                 upd.ContentTransformation.RotationSupport.Rotate270 = 1;
+                Mw2xRotationSupport(&upd.ContentTransformation.RotationSupport);
             }
             r = ti->pfnUpdatePathSupportInfo(topo, &upd);
         }

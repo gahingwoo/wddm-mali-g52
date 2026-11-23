@@ -707,10 +707,12 @@ NTSTATUS APIENTRY MwEnumVidPnCofuncModality(IN_CONST_HANDLE hAdapter,
                 upd.ContentTransformation.RotationSupport.Rotate90 = 1;
                 upd.ContentTransformation.RotationSupport.Rotate180 = 1;
                 upd.ContentTransformation.RotationSupport.Rotate270 = 1;
-                /* No Offset bits: they belong to path-independent rotation,
-                 * an interface version (WDDM1_3_PATH_INDEPENDENT_ROTATION)
-                 * after the WDDM1_3 this driver registers, and there is one
-                 * path, never a clone. Identity alone has run without them. */
+                /* No Offset bits at 1.3: they belong to path-independent
+                 * rotation, an interface (WDDM1_3_PATH_INDEPENDENT_ROTATION)
+                 * after the WDDM1_3 this driver registers there. At 2.x the
+                 * interface is past it and dxgkrnl requires Offset0
+                 * (wddm2x.c). */
+                Mw2xRotationSupport(&upd.ContentTransformation.RotationSupport);
             }
             r = topoIf->pfnUpdatePathSupportInfo(topo, &upd);
         }

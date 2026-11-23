@@ -405,6 +405,16 @@ VOID APIENTRY MwSetStablePowerState(IN_CONST_HANDLE hAdapter, const DXGKARG_SETS
         InterlockedExchange(&StablePowerOn, Arg->Enabled ? 1 : 0);
 }
 
+/* ---- a path's rotation, past path-independent rotation ----
+ * From display.c and hpd.c, after Identity and Rotate90..270 are set.
+ * Offset0 on every path at 2.x (wddm2plan.h, Mw2RotationSupportFault):
+ * without it dxgkrnl bugchecks 0x113/0x1C on a test-signed system. */
+void Mw2xRotationSupport(D3DKMDT_VIDPN_PRESENT_PATH_ROTATION_SUPPORT *R)
+{
+    if (MwPlan.RotationOffset0 && Mw2PathIndependentRotation(MwDdiInterface))
+        R->Offset0 = 1;
+}
+
 /* ---- paging operations a 2.x VidMm asks for ---- */
 
 /* The legacy Mali LPAE encoding (maligpu.h): leaf pages pa | 0x2C5 (block

@@ -111,6 +111,7 @@ typedef struct {
     unsigned CancelCommandAware;
     unsigned HandleIsDxgkrnls;      /* PHYSICALADAPTERCAPS.DxgkPhysicalAdapterHandle = DeviceHandle */
     unsigned PowerDdis;             /* DxgkDdiCalibrateGpuClock and DxgkDdiSetStablePowerState registered */
+    unsigned RotationOffset0;       /* every path's RotationSupport has Offset0 (path-independent rotation) */
 
     /* GpuMmu only */
     unsigned PtLevels, PtIndexBits, PtSize, PtAlign, VaBits;
@@ -161,6 +162,7 @@ static __inline void Mw2Plan(unsigned Wddm, unsigned Shape, unsigned Budget, MW2
     P->CancelCommandAware = 1;
     P->HandleIsDxgkrnls = 1;
     P->PowerDdis = 1;           /* Mw2NeedsPowerDdis: every 2.x interface */
+    P->RotationOffset0 = 1;     /* Mw2PathIndependentRotation: every 2.x interface */
     if (Budget) {
         P->SegApplicationTarget = 1;
         P->SegNonLocalBudget = 1;
@@ -195,6 +197,36 @@ static __inline void Mw2Plan(unsigned Wddm, unsigned Shape, unsigned Budget, MW2
 static __inline unsigned Mw2NeedsPowerDdis(unsigned DdiInterface)
 {
     return DdiInterface >= MW2_DDI_WDDM2_0_M2_2_1;
+}
+
+/* ---- path-independent rotation: the Offset bits of a path ----
+ * From interface 0x4003 (DXGKDDI_INTERFACE_VERSION_WDDM1_3_PATH_INDEPENDENT_
+ * ROTATION) on, a present path's RotationSupport also carries Offset0..270,
+ * the rotation the path adds to its clone group's. dxgkrnl 10.0.22621.2428,
+ * DMMVIDPNPRESENTPATH::SetRotationSupport (pfnUpdatePathSupportInfo), with
+ * test signing on and the driver past that interface, bugchecks 0x113
+ * VIDEO_DXGKRNL_FATAL_ERROR, P1 0x1C, P2 = the RotationSupport bits:
+ *   - the primary clone path (a path alone is one) without Offset0: P3 1;
+ *   - the primary clone path with Offset90, 180 or 270: P3 2;
+ *   - any other path with no Offset bit at all: P3 0.
+ * The 2026-11-23 build 325 boot B: P2 0xF (Identity and Rotate90..270, no
+ * Offset), P3 1, inside our EnumVidPnCofuncModality. Offset0 alone satisfies
+ * all three: this driver never rotates one clone against another. 1.3's
+ * 0x4002 is below the interface, and its paths stay without Offset bits. */
+#define MW2_DDI_WDDM1_3_PATH_INDEPENDENT_ROTATION  0x4003u
+#define MW2_ROTATION_OFFSET0                       0x10u   /* bit 4 of D3DKMDT_VIDPN_PRESENT_PATH_ROTATION_SUPPORT */
+
+static __inline unsigned Mw2PathIndependentRotation(unsigned DdiInterface)
+{
+    return DdiInterface >= MW2_DDI_WDDM1_3_PATH_INDEPENDENT_ROTATION;
+}
+
+/* The rule above, on the bits as dxgkrnl tests them. 0 = accepted. */
+static __inline unsigned Mw2RotationSupportFault(unsigned Bits, unsigned PrimaryClonePath)
+{
+    if (PrimaryClonePath)
+        return !(Bits & 0x10u) ? 1u : (Bits & 0xE0u) ? 2u : 0u;
+    return (Bits & 0xF0u) ? 0u : 3u;    /* dxgkrnl's P3 0, shifted so 0 means none */
 }
 
 /* ---- DXGKQAITYPE_QUERYSEGMENT4: which of the two calls this is ----
