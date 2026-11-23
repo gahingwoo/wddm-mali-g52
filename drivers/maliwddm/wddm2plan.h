@@ -112,6 +112,7 @@ typedef struct {
     unsigned HandleIsDxgkrnls;      /* PHYSICALADAPTERCAPS.DxgkPhysicalAdapterHandle = DeviceHandle */
     unsigned PowerDdis;             /* DxgkDdiCalibrateGpuClock and DxgkDdiSetStablePowerState registered */
     unsigned RotationOffset0;       /* every path's RotationSupport has Offset0 (path-independent rotation) */
+    unsigned AcquireHandleData;     /* DxgkCbAcquireHandleData, not the WDDM 1.x DxgkCbGetHandleData */
 
     /* GpuMmu only */
     unsigned PtLevels, PtIndexBits, PtSize, PtAlign, VaBits;
@@ -163,6 +164,7 @@ static __inline void Mw2Plan(unsigned Wddm, unsigned Shape, unsigned Budget, MW2
     P->HandleIsDxgkrnls = 1;
     P->PowerDdis = 1;           /* Mw2NeedsPowerDdis: every 2.x interface */
     P->RotationOffset0 = 1;     /* Mw2PathIndependentRotation: every 2.x interface */
+    P->AcquireHandleData = 1;   /* GetHandleData returns NULL to a WDDMv2 driver (memory.c) */
     if (Budget) {
         P->SegApplicationTarget = 1;
         P->SegNonLocalBudget = 1;

@@ -25,6 +25,7 @@ lint:
 	@grep -q 'MwCommandStop(a);' $(SRC)/adapter.c || { echo "FAIL: RemoveDevice does not stop the copy thread"; exit 1; }
 	@grep -q 'Mw2xRotationSupport(&upd.ContentTransformation.RotationSupport)' $(SRC)/display.c || { echo "FAIL: display.c paths without Offset0 at 2.x"; exit 1; }
 	@grep -q 'Mw2xRotationSupport(&upd.ContentTransformation.RotationSupport)' $(SRC)/hpd.c || { echo "FAIL: hpd.c paths without Offset0 at 2.x"; exit 1; }
+	@! grep -n 'DxgkCbGetHandleData(' $(SRC)/*.c | grep -v 'MwAllocFromHandle\|return (MW_ALLOCATION \*)A->Dxgk.DxgkCbGetHandleData' || { echo "FAIL: DxgkCbGetHandleData called outside MwAllocFromHandle"; exit 1; }
 	@echo "lint: ok"
 
 run: wddm2-host lint

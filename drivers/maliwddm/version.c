@@ -86,6 +86,7 @@ ULONG MwGpuMmuPtSegment = 1;
 ULONG MwPagingMarker = 1;
 ULONG MwWddm2PowerDdis = 1;
 ULONG MwWddm2RotOffset = 1;
+ULONG MwWddm2AcquireHandle = 1;
 
 static volatile LONG ProbeRenders;
 static volatile LONG ProbeConfirmed;
@@ -183,6 +184,7 @@ void MwVersionInit(PUNICODE_STRING RegistryPath)
     MwPagingMarker = ParamRead(L"PagingMarker", 1);
     MwWddm2PowerDdis = ParamRead(L"Wddm2PowerDdis", 1);
     MwWddm2RotOffset = ParamRead(L"Wddm2RotOffset", 1);
+    MwWddm2AcquireHandle = ParamRead(L"Wddm2AcquireHandle", 1);
 
     /* The decision itself is wddm2plan.h's, checked by tests/wddm2-host. */
     in.Want = ParamRead(L"WddmProbe", 0);
@@ -225,6 +227,10 @@ void MwVersionInit(PUNICODE_STRING RegistryPath)
      * which bugchecked 0x113/0x1C in EnumVidPnCofuncModality. */
     if (MwWddm2RotOffset == 0)
         MwPlan.RotationOffset0 = 0;
+    /* Wddm2AcquireHandle 0 ("gethandledata"): DxgkCbGetHandleData as at 1.3,
+     * which build 330 showed resolving nothing at 2.0. */
+    if (MwWddm2AcquireHandle == 0)
+        MwPlan.AcquireHandleData = 0;
 
     /* The boot journal (probe.c), from here on: a hang anywhere after
      * DriverEntry leaves the last DDI it entered on disk. */
@@ -236,12 +242,12 @@ void MwVersionInit(PUNICODE_STRING RegistryPath)
     MwBc("plan: nodes %u, paging node %u (engine %u), VPR paging node %u, GpuMmu %u, VA %u, "
          "TDR %u, segment aperture %u cpuvisible %u apptarget %u nonlocal %u, "
          "CalibrateGpuClock+SetStablePowerState %u (interface needs them: %u), "
-         "rotation Offset0 %u (path-independent rotation: %u)",
+         "rotation Offset0 %u (path-independent rotation: %u), AcquireHandleData %u",
          MwPlan.Nodes, MwPlan.PagingNode, MwPlan.Engine[MwPlan.PagingNode], MwPlan.VprPagingNode,
          MwPlan.GpuMmu, MwPlan.VirtualAddressing, MwPlan.PerEngineTdr, MwPlan.SegAperture,
          MwPlan.SegCpuVisible, MwPlan.SegApplicationTarget, MwPlan.SegNonLocalBudget,
          MwPlan.PowerDdis, Mw2NeedsPowerDdis(MwDdiInterface),
-         MwPlan.RotationOffset0, Mw2PathIndependentRotation(MwDdiInterface));
+         MwPlan.RotationOffset0, Mw2PathIndependentRotation(MwDdiInterface), MwPlan.AcquireHandleData);
 }
 
 /* From MwRender. Counting only: the confirm is the watchdog's (below),

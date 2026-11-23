@@ -84,6 +84,7 @@ void MwRing(ULONG Code, ULONG64 A, ULONG64 B);
 extern ULONG MwWddm2Shape;
 extern ULONG MwGpuMmuPtSegment;         /* GpuMmuPtSegment: segment of the page tables (default 1) */
 extern ULONG MwPagingMarker;            /* PagingMarker: 8 bytes into a paging DMA buffer (default 1) */
+extern ULONG MwWddm2AcquireHandle;      /* Wddm2AcquireHandle: AcquireHandleData at 2.x (default 1) */
 extern ULONG MwWddm2RotOffset;          /* Wddm2RotOffset: Offset0 on every path at 2.x (default 1) */
 extern ULONG MwWddm2PowerDdis;          /* Wddm2PowerDdis: CalibrateGpuClock, SetStablePowerState at 2.x (default 1) */
 
@@ -113,4 +114,5 @@ void Mw2xRotationSupport(D3DKMDT_VIDPN_PRESENT_PATH_ROTATION_SUPPORT *R);
 void Mw2xBcQai(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info, NTSTATUS St);
 
 /* memory.c */
+MW_ALLOCATION *MwAllocFromHandle(MW_ADAPTER *A, D3DKMT_HANDLE H);
 NTSTATUS MwQuerySegment4(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info);

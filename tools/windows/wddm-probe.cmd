@@ -17,6 +17,9 @@ rem   wddm-probe set 2000 nopowerddi  without DxgkDdiCalibrateGpuClock and
 rem                           DxgkDdiSetStablePowerState (Wddm2PowerDdis 0):
 rem                           dxgkrnl refuses the start, as on 2026-11-23, but
 rem                           the driver now stops cleanly (WDDM2.md 16.6)
+rem   wddm-probe set 2000 gethandledata  allocations looked up with the WDDM 1.x
+rem                           DxgkCbGetHandleData (Wddm2AcquireHandle 0), which
+rem                           resolves nothing at 2.0: black panel, as build 330
 rem   wddm-probe set 2000 norotoffset  paths without Offset0 (Wddm2RotOffset
 rem                           0): dxgkrnl bugchecks 0x113/0x1C, as build 325
 rem   wddm-probe keep 2000    the same, without the one-shot fallback (only
@@ -66,21 +69,22 @@ if /i "%~1"=="keep" goto set
 if /i "%~1"=="check" goto check
 if /i "%~1"=="watch" goto watch
 if /i "%~1"=="off" goto off
-echo usage: wddm-probe set ^<2000^|2100^|...^|3100^> [phys^|gpummu] [uart] [nobudget] [nopowerddi] [norotoffset] ^| keep ^<v^> [...] ^| watch ^| check ^| off
+echo usage: wddm-probe set ^<2000^|2100^|...^|3100^> [phys^|gpummu] [uart] [nobudget] [nopowerddi] [norotoffset] [gethandledata] ^| keep ^<v^> [...] ^| watch ^| check ^| off
 exit /b 1
 
 :set
 if "%~2"=="" (echo which version? e.g. wddm-probe set 2000 & exit /b 1)
 reg add %PARAMS% /v WddmProbe /t REG_DWORD /d 0x%~2 /f >nul || exit /b 1
-for %%v in (WddmProbeArmed WddmProbeConfirmed WddmProbeFellBack WddmProbeFellBackBoot WddmProbeArmFailed WddmProbeUnknown WddmProbeKeep ProbeUart ProbeWatchdog Wddm2Shape Wddm2Budget Wddm2PowerDdis Wddm2RotOffset) do reg delete %PARAMS% /v %%v /f >nul 2>&1
+for %%v in (WddmProbeArmed WddmProbeConfirmed WddmProbeFellBack WddmProbeFellBackBoot WddmProbeArmFailed WddmProbeUnknown WddmProbeKeep ProbeUart ProbeWatchdog Wddm2Shape Wddm2Budget Wddm2PowerDdis Wddm2RotOffset Wddm2AcquireHandle) do reg delete %PARAMS% /v %%v /f >nul 2>&1
 if /i "%~1"=="keep" reg add %PARAMS% /v WddmProbeKeep /t REG_DWORD /d 1 /f >nul
 set SHAPE=0
-for %%a in (%3 %4 %5 %6 %7) do (
+for %%a in (%3 %4 %5 %6 %7 %8) do (
   if /i "%%a"=="uart" reg add %PARAMS% /v ProbeUart /t REG_DWORD /d 1 /f >nul
   if /i "%%a"=="gpummu" set SHAPE=1
   if /i "%%a"=="nobudget" reg add %PARAMS% /v Wddm2Budget /t REG_DWORD /d 0 /f >nul
   if /i "%%a"=="nopowerddi" reg add %PARAMS% /v Wddm2PowerDdis /t REG_DWORD /d 0 /f >nul
   if /i "%%a"=="norotoffset" reg add %PARAMS% /v Wddm2RotOffset /t REG_DWORD /d 0 /f >nul
+  if /i "%%a"=="gethandledata" reg add %PARAMS% /v Wddm2AcquireHandle /t REG_DWORD /d 0 /f >nul
 )
 reg add %PARAMS% /v Wddm2Shape /t REG_DWORD /d %SHAPE% /f >nul
 rem The previous run's trace values, so that this run's are its own. The
@@ -134,6 +138,7 @@ reg delete %PARAMS% /v Wddm2Shape /f >nul 2>&1
 reg delete %PARAMS% /v Wddm2Budget /f >nul 2>&1
 reg delete %PARAMS% /v Wddm2PowerDdis /f >nul 2>&1
 reg delete %PARAMS% /v Wddm2RotOffset /f >nul 2>&1
+reg delete %PARAMS% /v Wddm2AcquireHandle /f >nul 2>&1
 reg delete %AUTO% /f >nul 2>&1
 echo WDDM 1.3 from the next boot. REBOOT to apply.
 exit /b 0

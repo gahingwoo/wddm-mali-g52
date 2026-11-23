@@ -449,16 +449,57 @@ NTSTATUS APIENTRY MwGetStandardAllocationDriverData(IN_CONST_HANDLE hAdapter,
     return STATUS_SUCCESS;
 }
 
+/* Our MW_ALLOCATION (DXGK_ALLOCATIONINFO.hAllocation at CreateAllocation)
+ * for a D3DKMT allocation handle of the calling process.
+ *
+ * WDDM 1.x: DxgkCbGetHandleData. A WDDM 2.x driver may not use it: dxgkrnl
+ * 10.0.22621.2428 (DxgGetHandleDataCB) logs "WDDM2 driver calls WDDM1.x
+ * DDI!" and returns NULL for a dxgmms2 adapter once a WDDMv2 adapter
+ * exists. That was build 330 at 2.0 on the board: every OpenAllocation got
+ * a NULL device-specific handle, so all 74 presents were skipped and the
+ * panel stayed black, and the ALLOC_INFO escape failed with
+ * STATUS_INVALID_HANDLE, so every UMD fell back to softpipe. At 2.x the
+ * WDDM 2.0 pair DxgkCbAcquireHandleData/DxgkCbReleaseHandleData is used, as
+ * Microsoft's compute-only sample (CosKmDevice::OpenAllocation) does.
+ * The allocation itself lives until DestroyAllocation, which comes after
+ * every CloseAllocation, so the reference is released at once. */
+MW_ALLOCATION *MwAllocFromHandle(MW_ADAPTER *A, D3DKMT_HANDLE H)
+{
+    DXGKARGCB_GETHANDLEDATA get = {0};
+
+    get.hObject = H;
+    get.Type = DXGK_HANDLE_ALLOCATION;
+    if (MwPlan.AcquireHandleData && A->Dxgk.DxgkCbAcquireHandleData != NULL &&
+        A->Dxgk.DxgkCbReleaseHandleData != NULL) {
+        DXGKARG_RELEASE_HANDLE release = NULL;
+        DXGKARGCB_RELEASEHANDLEDATA rel = {0};
+        PVOID p;
+
+        get.Flags.DeviceSpecific = 0;
+        p = A->Dxgk.DxgkCbAcquireHandleData(&get, &release);
+        if (p != NULL) {
+            rel.ReleaseHandle = release;
+            rel.Type = DXGK_HANDLE_ALLOCATION;
+            A->Dxgk.DxgkCbReleaseHandleData(rel);
+        }
+        return (MW_ALLOCATION *)p;
+    }
+    return (MW_ALLOCATION *)A->Dxgk.DxgkCbGetHandleData(&get);
+}
+
 NTSTATUS APIENTRY MwOpenAllocation(IN_CONST_HANDLE hDevice, const DXGKARG_OPENALLOCATION *Arg)
 {
     MW_DEVICE *dev = (MW_DEVICE *)hDevice;
-    DXGKRNL_INTERFACE *dx = &dev->Adapter->Dxgk;
+    static volatile LONG opens, unresolved;
 
     for (UINT i = 0; i < Arg->NumAllocations; i++) {
-        DXGKARGCB_GETHANDLEDATA get = {0};
-        get.hObject = Arg->pOpenAllocation[i].hAllocation;
-        get.Type = DXGK_HANDLE_ALLOCATION;
-        Arg->pOpenAllocation[i].hDeviceSpecificAllocation = dx->DxgkCbGetHandleData(&get);
+        MW_ALLOCATION *a = MwAllocFromHandle(dev->Adapter, Arg->pOpenAllocation[i].hAllocation);
+        Arg->pOpenAllocation[i].hDeviceSpecificAllocation = a;
+        InterlockedIncrement(&opens);
+        if (a == NULL && InterlockedIncrement(&unresolved) <= 8)
+            MwBc("OpenAllocation: handle 0x%x not resolved (%hs), %d of %d so far",
+                 (ULONG)Arg->pOpenAllocation[i].hAllocation,
+                 MwPlan.AcquireHandleData ? "AcquireHandleData" : "GetHandleData", unresolved, opens);
     }
     return STATUS_SUCCESS;
 }
@@ -566,14 +607,11 @@ NTSTATUS APIENTRY MwBuildPagingBuffer(IN_CONST_HANDLE hAdapter, DXGKARG_BUILDPAG
 
 NTSTATUS MwEscapeAllocInfo(MW_ADAPTER *A, const DXGKARG_ESCAPE *Esc, MW_ESCAPE_ALLOC_INFO_DATA *D)
 {
-    DXGKARGCB_GETHANDLEDATA get = {0};
     MW_ALLOCATION *alloc;
 
     if (Esc->hDevice == NULL)
         return STATUS_INVALID_PARAMETER;
-    get.hObject = (D3DKMT_HANDLE)D->hAllocation;
-    get.Type = DXGK_HANDLE_ALLOCATION;
-    alloc = (MW_ALLOCATION *)A->Dxgk.DxgkCbGetHandleData(&get);
+    alloc = MwAllocFromHandle(A, (D3DKMT_HANDLE)D->hAllocation);
     if (alloc == NULL)
         return STATUS_INVALID_HANDLE;
     D->GpuVa = alloc->GpuVa;

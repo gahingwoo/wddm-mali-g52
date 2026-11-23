@@ -57,6 +57,7 @@ static void check_plan(unsigned wddm, unsigned shape, unsigned budget)
         CHECK(!p.SegApplicationTarget && !p.SegNonLocalBudget, "1.3: no budget flags");
         CHECK(!p.PowerDdis, "1.3: the DDI table as before, no CalibrateGpuClock/SetStablePowerState");
         CHECK(!p.RotationOffset0, "1.3: paths without Offset bits, as before");
+        CHECK(!p.AcquireHandleData, "1.3: DxgkCbGetHandleData as before");
         return;
     }
     /* The paging node is a COPY node of its own: naming the 3D node made
@@ -75,6 +76,8 @@ static void check_plan(unsigned wddm, unsigned shape, unsigned budget)
     CHECK(p.PowerDdis, "2.x: CalibrateGpuClock and SetStablePowerState registered");
     /* DMMVIDPNPRESENTPATH::SetRotationSupport: 0x113/0x1C (build 325). */
     CHECK(p.RotationOffset0, "2.x: Offset0 on every path (path-independent rotation)");
+    /* DxgGetHandleDataCB: NULL for a WDDMv2 driver (build 330, black panel). */
+    CHECK(p.AcquireHandleData, "2.x: allocations resolved with DxgkCbAcquireHandleData");
     CHECK(p.SegApplicationTarget == (budget != 0) && p.SegNonLocalBudget == (budget != 0),
           "2.x: budget flags follow Wddm2Budget %u", budget);
     /* GpuMmu: one bit, the same in DRIVERCAPS, PHYSICALADAPTERCAPS and
