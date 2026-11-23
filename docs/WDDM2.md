@@ -1862,3 +1862,76 @@ What the result says:
 
 The user is needed physically only to power cycle after a hang or a blue
 screen.
+
+### 16.8 Run C (build 330): WDDM 2.0 is up, the panel is black, and the next one shot
+
+TaishanPi 3M, same setup, package DriverVer 0.23.50.775 (build 330),
+2026-11-23. Files: `board-session-prep/wddm2x-330-stepC/`.
+
+**No bugcheck. WDDM 2.0 is up.**
+
+- The device status is OK and `WddmVersion` is 0x2000.
+- dwm.exe and LogonUI are running, and there was no fallback.
+- The journal (856+ events) has CommitVidPn, SetVidPnSourceAddress,
+  Present, and devices and contexts on node 0, all succeeding.
+
+The DSI panel showed backlight only:
+
+- **UMD.** `m5test` printed `DRM_IOCTL_PANFROST_CREATE_BO failed
+  (err=12)` and then "Panfrost could not create a screen ... using
+  softpipe". It also printed `Escape(ALLOC_INFO): 0xc0000008`, which is
+  STATUS_INVALID_HANDLE, not a memory error. `Fail_Escape 0xc0000008`
+  agrees. Every UMD, DWM's included, ran on softpipe.
+- **KMD.** 74 presents, all skipped ("0 blts, 0 fills, 74 skipped").
+  4 flips, 3 of them scanned out by the VOP2. No jobs.
+
+**One cause for both.** The escape and OpenAllocation found our
+allocation through `DxgkCbGetHandleData`. In dxgkrnl 22621.2428,
+`DxgGetHandleDataCB` on a dxgmms2 adapter tests a global that a WDDMv2
+adapter sets. If it is set, the call logs "WDDM2 driver calls WDDM1.x
+DDI!" and returns NULL. So at 2.0:
+
+- every OpenAllocation handed back a NULL `hDeviceSpecificAllocation`;
+- every Present saw no source and no destination (`DoPresent`: skipped);
+- `MwEscapeAllocInfo` answered STATUS_INVALID_HANDLE.
+
+Jamie's driver measured the same: 0 of 542 opens resolved. The WDDM 2.0
+replacement is `DxgkCbAcquireHandleData` with `DxgkCbReleaseHandleData`.
+Microsoft's WDDM 2.6 compute-only sample uses it in
+`CosKmDevice::OpenAllocation`.
+
+**Build 333 (`2cf66d7`):**
+
+- At 2.x, OpenAllocation and the ALLOC_INFO escape go through
+  `MwAllocFromHandle`. It calls AcquireHandleData and releases at once,
+  which is safe because the allocation lives until DestroyAllocation.
+  1.3 keeps GetHandleData.
+- `Wddm2AcquireHandle 0` (`wddm-probe ... gethandledata`) goes back to
+  GetHandleData.
+- The first 8 unresolved opens are journaled
+  (`OpenAllocation: handle ... not resolved`).
+- Package: `wddm-mali-g52-driver-arm64` of CI run 45089830454 (build 333),
+  DriverVer 0.37.30.73.
+
+**Next one shot (D).** Against C the only change is how a handle is
+resolved.
+
+1. Bind build 333 at 1.3 as in 16.1, and check `WddmVersion 0x1300`.
+2. `wddm-probe set 2000 phys uart`, then a clean restart. HDMI unplugged,
+   `HdmiHpd 1`.
+3. Run `wddm-probe check` and `m5test`. Send `C:\mali\probe\`, the m5test
+   output, and photos of the panel and of Task Manager's Performance tab.
+
+What the result says:
+
+- **The desktop on the panel, m5test without the softpipe line, no
+  `Fail_Escape`, presents counted as blts and fills, not skipped:** the
+  handle was it. Then run the 16.2 checks: dxdiag Driver Model,
+  `maliumd.dll` in dwm, the GPU counters by LUID. The watchdog confirms
+  after 120 s.
+- **Still black, with `OpenAllocation: handle ... not resolved` in the
+  journal:** AcquireHandleData does not resolve these handles either. The
+  journal lines give the handles. The next step would be Jamie's
+  private-data id, which is a UMD change.
+- **The UMD now on the Mali but GPU work failing (jobs failed, MMU
+  faults):** a new problem, in physical mode at 2.0, for the next round.
