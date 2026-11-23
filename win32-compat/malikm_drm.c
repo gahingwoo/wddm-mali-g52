@@ -725,6 +725,41 @@ struct wbo {
 };
 static struct wbo *wbo;
 static uint32_t wbo_cap;
+
+/*
+ * The last submissions of each device, for the log when the runtime removes
+ * a device (malikm_note_removed, from RelocateDeviceFuncs): a removal that
+ * no failed callback announced (DWM, 2026-11-23) leaves at least what was
+ * submitted just before it. Under wddm_lock.
+ */
+#define SUBMIT_NOTES 8
+#define SUBMIT_NOTE_SHARED 4
+static struct submit_note {
+   HANDLE device;
+   DWORD tick;
+   unsigned slot, named, listed, shared_named;
+   long status;
+   D3DKMT_HANDLE shared[SUBMIT_NOTE_SHARED];
+} submit_notes[SUBMIT_NOTES];
+static unsigned submit_note_next;
+static D3DKMT_HANDLE submit_note_shared[SUBMIT_NOTE_SHARED];
+static HANDLE ddi_device_for_notes(void);
+
+static void
+submit_note(unsigned slot, unsigned named, unsigned listed, unsigned shared_named, long status)
+{
+   struct submit_note *n = &submit_notes[submit_note_next++ % SUBMIT_NOTES];
+
+   n->device = ddi_device_for_notes();
+   n->tick = GetTickCount();
+   n->slot = slot;
+   n->named = named;
+   n->listed = listed;
+   n->shared_named = shared_named;
+   n->status = status;
+   memcpy(n->shared, submit_note_shared, sizeof(n->shared));
+   memset(submit_note_shared, 0, sizeof(submit_note_shared));
+}
 static D3DKMT_HANDLE wadapter, wdevice, wcontext;
 static void *wcmd;
 static UINT wcmd_size;
@@ -767,6 +802,12 @@ static struct {
     * early. wddm_idle() polls the KMD's fences instead while this is set. */
    int last_unsignalled;
 } ddi;
+
+static HANDLE
+ddi_device_for_notes(void)
+{
+   return ddi.device;
+}
 
 /* Which submissions are done, so that "is this BO busy" can be answered for
  * the BO that was asked about.
@@ -2092,6 +2133,44 @@ malikm_primary_rebind(void *hRTDevice, unsigned allocation, void *hRTResource)
    ReleaseSRWLockExclusive(&wddm_lock);
 }
 
+/* The runtime removed this device (it moved the device's function table,
+ * RelocateDeviceFuncs). Nothing here can learn why; what this device last
+ * submitted, and which runtime resources each submission named, goes into
+ * the log next to the line that says so. */
+void
+malikm_note_removed(void *hRTDevice)
+{
+   DWORD now = GetTickCount();
+   unsigned live = 0, shared = 0, opened_released = 0;
+
+   wlock(__func__);
+   if (wselect_rt(hRTDevice)) {
+      for (uint32_t i = 0; i < wbo_cap; i++) {
+         if (!wbo[i].h)
+            continue;
+         live++;
+         if (wbo[i].rt_resource)
+            shared++;
+         if (wbo[i].rt_resource && wbo[i].released)
+            opened_released++;
+      }
+   }
+   DebugPrintf("removed: device %p, %u BOs live (%u of runtime resources, %u of them given back"
+               " but still held)\n", hRTDevice, live, shared, opened_released);
+   for (unsigned k = 0; k < SUBMIT_NOTES; k++) {
+      const struct submit_note *n =
+         &submit_notes[(submit_note_next + k) % SUBMIT_NOTES];
+      if (!n->tick || n->device != (HANDLE)hRTDevice)
+         continue;
+      DebugPrintf("removed:   submit %lu ms before: %s chain, %u named, %u listed, %u runtime"
+                  " resources named (0x%x 0x%x 0x%x 0x%x), status 0x%08lx\n",
+                  (unsigned long)(now - n->tick), n->slot ? "vertex/tiler" : "fragment",
+                  n->named, n->listed, n->shared_named, n->shared[0], n->shared[1],
+                  n->shared[2], n->shared[3], (unsigned long)n->status);
+   }
+   ReleaseSRWLockExclusive(&wddm_lock);
+}
+
 /* Everything this device has submitted is done. For a present that may not
  * rely on the scheduler to keep a flip behind the rendering it shows. */
 int
@@ -2412,8 +2491,9 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       if (a->bo_handle_count > walloc_size || sizeof(MW_COMMAND) > wcmd_size)
          return -MK_E2BIG;
       static uint64_t mark;
-      uint32_t n = 0;
+      uint32_t n = 0, shared_named = 0;
       mark++;
+      memset(submit_note_shared, 0, sizeof(submit_note_shared));
       for (uint32_t i = 0; i < a->bo_handle_count; i++) {
          struct wbo *bo = wddm_bo(bos[i]);
          if (!bo)
@@ -2421,6 +2501,11 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
          if (bo->listed == mark || bo->released)
             continue;
          bo->listed = mark;
+         if (bo->rt_resource) {
+            if (shared_named < SUBMIT_NOTE_SHARED)
+               submit_note_shared[shared_named] = bo->h;
+            shared_named++;
+         }
          memset(&walloc[n], 0, sizeof(walloc[n]));
          walloc[n].hAllocation = bo->h;
          walloc[n].WriteOperation = 1;
@@ -2431,11 +2516,21 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
        * and Mesa relies on that. VidMm only pages in (and maliwddm only
        * maps) what is in the allocation list, so such a job faulted: PE,
        * 2026-10-17, two read translation faults (0x4002c3) at 0xa131000,
-       * the first byte of a 64 KiB BO, in every present.exe run. */
+       * the first byte of a 64 KiB BO, in every present.exe run.
+       *
+       * Not the allocations of runtime resources (shared, created here or
+       * opened from another process, and primaries): those are pipe
+       * resources, named by every job that uses them. Listed in every
+       * submission, as writes, DWM's jobs held a write reference on every
+       * application surface it had opened, and each application's jobs on
+       * every swap chain buffer DWM was composing. With redirection on
+       * (2026-11-23) DWM's device was removed within 30 ms of opening a
+       * composition buffer just presented, eight times in a row, with no
+       * failed callback in its log, and DWM gave up (0x8898008D). */
       uint32_t named = n;
       for (uint32_t i = 0; i < wbo_cap && n < walloc_size; i++) {
          struct wbo *bo = &wbo[i];
-         if (!bo->h || bo->released || bo->primary || bo->listed == mark)
+         if (!bo->h || bo->released || bo->primary || bo->rt_resource || bo->listed == mark)
             continue;
          bo->listed = mark;
          memset(&walloc[n], 0, sizeof(walloc[n]));
@@ -2453,6 +2548,7 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       unsigned slow_slot = c->Slot;
       uint64_t slow_t0 = mali_slow_now();
       NTSTATUS st = w_render(sizeof(*c), n);
+      submit_note(slow_slot, named, n, shared_named, st);
       /* c is the old command buffer now; the runtime has handed out a new one. */
       MALI_SLOW(slow_t0, "submit", "pfnRenderCb, %s chain, %u BOs named, %u listed",
                 slow_slot ? "vertex/tiler" : "fragment", named, n);
