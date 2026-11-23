@@ -292,67 +292,143 @@ processes started after logon, with the existing `C:\mali\redirect` file
 (dwm.exe and the shell keep the devices they made at boot). If that makes
 the composition present work, the default follows in the next package.
 
+## Board result, 2026-11-23 (DriverVer 0.3.59.412)
+
+Files in `board-session-prep/edge4-0.3.59.412/`.
+
+- Run A (no `C:\mali\redirect`): `DXGI_STATUS_NO_REDIRECTION`, and the
+  composition present fails with `pfnPresentCb 0x88760873
+  (D3DDDIERR_INVALIDHANDLE)`, as before.
+- Run B (`C:\mali\redirect` present): `S_OK (redirection allowed)`. Both
+  probe copies on the Mali pass the whole edge path: three Present1, the
+  DComp surface, the shared NT-handle texture, the keyed mutex, `device
+  alive`. Edge's log has no `Present1 failed` and no testDeviceLost.
+  **NO_REDIRECTION was the cause of the composition present failure.**
+- But dwm.exe crashed twice while Edge ran (1:23:41 and 1:23:54 pm):
+  dwmcore.dll 10.0.22621.2215, exception 0x8898008D at +0x1620f8. The
+  screen went black and came back each time.
+
+### What DWM's logs say
+
+0x8898008D is MILERR_NO_HARDWARE_DEVICE (winerror.h; d3dprobe now checks
+the value at compile time). DWM raises it when it has lost its D3D device
+too many times in a short while. The logs show exactly that:
+
+- The runtime calls `RelocateDeviceFuncs1` when it removes a device: it
+  follows the failed present in run A's probe log, and a device that lives
+  never gets it. dwm.exe-5940 got it eight times in 4.5 s (162.0 to
+  166.6 s). Each time DWM made a new device, opened the application
+  surfaces again, and lost the new device within about 30 ms. Then
+  dwmcore failed fast. dwm.exe-1184 made 16 devices: its boot device,
+  then 15 more from 115.7 s on.
+- The first loss is at 115.57 s, 10 ms after the run B probe presented
+  its composition buffer (115.562 s) and DWM opened that buffer
+  (allocation 0x40006b80). DWM had composed the shell's redirected
+  surfaces all session without losing a device.
+- No UMD line says why. There is no `ddi-error`, no failed `dxgi-result`
+  and no CRASH line in any DWM log, and the KMD has no `Fail_` breadcrumb
+  and no `Enter_ResetFromTimeout` (no TDR). maliwddm also never reports a
+  DMA fault to dxgkrnl, so a GPU fault does not remove a device either.
+  What is left is dxgkrnl putting the device into an error state on its
+  own (VidMm or the scheduler), which the runtime finds at its next call.
+
+### The change (352b667, patch 0073)
+
+One code change, plus logging for the cause.
+
+- Every submission listed every live BO for residency, as a write (Mesa
+  expects a job to reach BOs it does not name). That included every
+  application surface DWM had opened, in every DWM job, and in every
+  application job the swap chain buffers DWM was composing. Primaries
+  were already left out unless a job named them. The allocations of all
+  runtime resources (shared, created or opened) now are too. They are
+  pipe resources, so a job that samples or renders to one names it. This
+  is the only behaviour change, and it applies with redirection off too
+  (DWM opens LogonUI's and the shell's shared surfaces either way).
+  Whether it stops the removals is what the test below shows.
+- `RelocateDeviceFuncs` now logs `the runtime moved the function table;
+  the device is being removed`, followed by `removed:` lines: the device's
+  live BOs and its last eight submissions (BOs named and listed, which
+  runtime resources were named, the callback's status, and how long
+  before the removal).
+- The board test records dxgkrnl's own events (etwrec) around the run:
+  if a device is removed again, they say why.
+
 ## Board test, one install
 
-Two runs in one session after one install: the same probes with and
-without redirection. The package adds only logging (the callback's
-error by name, and the DXGI context pointer). The KMD is unchanged.
+The package changes one behaviour: shared surfaces stay out of the
+residency list unless a job names them. It also adds the removal
+logging. `C:\mali\redirect` stays the only switch. Without it the
+desktop behaves as in 0.3.59.412, except for that one change.
 
-Package: CI run 45086553293 (08792ec), artifact
-`wddm-mali-g52-driver-arm64`, DriverVer 11/23/2026,0.3.59.412, UMD from
-Mesa run 45086553333. Test certificate SHA1
-5A91C62ED458E1BD648758C948773D06AC58CA1A (new). d3dprobe.exe from the
-`m3test-arm64` artifact of the same CI run.
+Package: CI run 45089269914 (352b667), artifact
+`wddm-mali-g52-driver-arm64`, DriverVer 11/23/2026,0.31.38.111, UMD from
+Mesa run 45089269899 (patches 0001-0073). Test certificate SHA1
+DDE0EFE9956EE80FD1053C043B64707E13752530 (new). d3dprobe.exe, etwrec.exe
+and m5test.exe are in the `m3test-arm64` artifact of the same CI run.
 
-1. Copy the package to `C:\mali\pkg-edge4\` and d3dprobe.exe from the
-   same run's `m3test-arm64` artifact. Copy it to `C:\mali\fake\msedge.exe`
-   and `C:\mali\fake\plainprobe.exe`, replacing the old copies.
+1. Copy the package to `C:\mali\pkg-edge5\`. From the same run's
+   `m3test-arm64` artifact take d3dprobe.exe (copy it over
+   `C:\mali\fake\msedge.exe` and `C:\mali\fake\plainprobe.exe`),
+   etwrec.exe and m5test.exe, to `C:\mali\`. Copy
+   `C:\Windows\System32\drivers\dxgkrnl.sys` to `C:\mali\` as well, to
+   decode the trace with.
 2. Import the new test certificate into Root and TrustedPublisher, as
-   administrator (`certutil -addstore -f Root ...cer`, then the same with
+   administrator (`certutil -addstore -f Root ...cer`, then
    `TrustedPublisher`).
-3. `pnputil /add-driver C:\mali\pkg-edge4\driver\maliwddm.inf` (stage only).
+3. `pnputil /add-driver C:\mali\pkg-edge5\driver\maliwddm.inf` (stage only).
 4. As SYSTEM (task `malireinst`), `ConfigFlags |= 0x20` on
    `HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0`; poll until set.
-5. `C:\mali\log`: delete `off` and the old `*.txt`; the ACL from before
-   stays. Make sure `C:\mali\redirect` does NOT exist. Clean restart.
-6. After logon, in the user's session (`schtasks /it /ru woo`, `.cmd`
-   wrapper), run A, without redirection:
-   - `C:\mali\fake\plainprobe.exe > C:\mali\present-plain-A.txt`
-7. `echo > C:\mali\redirect`, then run B, with redirection, in the same
-   session (nothing restarted):
-   - `C:\mali\fake\plainprobe.exe > C:\mali\present-plain-B.txt`
-   - `C:\mali\fake\msedge.exe > C:\mali\present-msedge-B.txt`
+5. `C:\mali\log`: delete `off` and the old `*.txt`; the ACL stays.
+   `C:\mali\redirect` must NOT exist. Clean restart.
+6. After logon, without redirection: wait 30 s, then open Notepad, type a
+   line, move the window, close it. Photo if anything looks wrong. This
+   checks the residency change with the desktop as it always was.
+7. As administrator: `C:\mali\etwrec.exe start C:\mali\dxgkrnl.etl`. Then
+   `echo > C:\mali\redirect`.
+8. In the user's session (`schtasks /it /ru woo`, `.cmd` wrapper), with
+   redirection, one at a time, about 20 s each, watching the screen:
+   - `C:\mali\fake\plainprobe.exe > C:\mali\present-plain-C.txt`
+   - Notepad: open, type, move, resize, close.
+   - A windowed D3D application: `C:\mali\fake\plainprobe.exe` is not
+     one (it closes at once), so use the DirectX one already on the board
+     if there is one, or Settings (WinUI, D3D) and the Edge window itself.
    - Edge as before (separate profile, `--enable-logging --v=1`, the
-     WebGL page, edge://gpu). Start it only now, so its GPU process is new.
-8. `del C:\mali\redirect`, `echo > C:\mali\log\off`, then collect
-   `C:\mali\present-*.txt`, every `C:\mali\log\*.txt`, the Edge log and
-   the edge://gpu page.
+     WebGL page, then edge://gpu with a screenshot). Leave it open 60 s.
+9. As administrator: `C:\mali\etwrec.exe stop`, then
+   `C:\mali\m5test.exe mem > C:\mali\m5-mem.txt`. Then
+   `del C:\mali\redirect`, `echo > C:\mali\log\off`.
+10. Collect `C:\mali\present-*.txt`, `C:\mali\m5-mem.txt`,
+    `C:\mali\dxgkrnl.etl`, `C:\mali\dxgkrnl.sys`, every
+    `C:\mali\log\*.txt`, the Application and System event logs from the
+    last hour (all providers this time, not only Kernel-General), the Edge
+    log, the edge://gpu screenshot, and the times the screen went black, if
+    it did.
 
-If anything on the desktop goes wrong after step 7, `del C:\mali\redirect`
-over SSH puts every new process back to the old path; processes started
-before step 7 never see the switch.
+If the desktop goes black and stays black, `del C:\mali\redirect` over
+SSH. A new dwm.exe then starts without redirection.
 
 What to read:
 
-- In each UMD log, `CreateDevice: done, ...`: A's says
-  DXGI_STATUS_NO_REDIRECTION, B's `S_OK (redirection allowed)`. If B's
-  does not, the process could not see the file.
-- present-plain-A.txt: as before, adapter 0 `frame 0: Present1 0x887a0005`,
-  and the log says `pfnPresentCb 0x88760873 (D3DDDIERR_INVALIDHANDLE)`.
-- present-plain-B.txt and present-msedge-B.txt, adapter 0: the three
-  `frame N: Present1` lines answer 0 and the edge path ends `device alive`.
-  That confirms the cause. If B fails the same way, NO_REDIRECTION is not
-  it, and the `DXGI context` pointer in the two logs is where to look next.
-- Edge (B): no `Present1 failed`, no testDeviceLost; edge://gpu "Software
+- The Application log: no dwm.exe APPCRASH with 0x8898008D. That, and no
+  black screen in step 8, means the residency change was the fix.
+- `findstr /c:"device is being removed" C:\mali\log\*.txt`: no lines.
+  If there are any, the `removed:` lines after each say what that device
+  last submitted. Then decode the trace:
+  `tools/etw/make-events-json.py dxgkrnl.sys > events.json`, then
+  `tools/etw/dxgk-decode.py events.json dxgkrnl.etl` around the removal
+  times.
+- present-plain-C.txt: the edge path on the Mali passes, as in run B.
+- Edge: no `Present1 failed`, no testDeviceLost; edge://gpu "Software
   Rendering: No".
-- The desktop in B: windows opened after step 7 (Notepad, a Settings page)
-  should still draw. A black window there is the price of redirection for
-  blt-model applications, and needs the redirected-present path looked at
-  before the default changes.
+- Step 6 (no redirection): Notepad and the desktop as before. If not, the
+  residency change broke something without redirection: look for a GPU
+  fault in `m5-mem.txt` and in the KMD trace (JobsFailed, LastFaultStatus).
 
 ## Not known yet
 
-- Whether NO_REDIRECTION is the cause (the test above).
-- What redirection does to blt-model windowed applications, whose
-  presents then go to a surface DWM opens; `Present` with a non-NULL
-  destination that is not a primary has not been run on the board.
+- Why dxgkrnl removed DWM's devices. The residency change is the best
+  guess, not a finding; the trace and the `removed:` lines are what settle
+  it if the removals happen again.
+- Redirected presents of blt-model windowed applications (Notepad) have
+  not run on the board yet.
