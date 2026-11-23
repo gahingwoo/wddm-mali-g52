@@ -1340,9 +1340,9 @@ wdead_flush(void)
 }
 
 /*
- * One render for a batch's two chains (UmdMergeSubmit 1 in the KMD's
- * Device Parameters, handed out as MW_UMD_FLAG_MERGE_SUBMIT; off without
- * it, and off until the KMD's first answer).
+ * One render for a batch's two chains (UmdMergeSubmit in the KMD's
+ * Device Parameters, on unless 0, handed out as MW_UMD_FLAG_MERGE_SUBMIT;
+ * off until the KMD's first answer, and off with a KMD that predates it).
  *
  * Panfrost submits a batch as two SUBMITs, the vertex/tiler chain and then
  * the fragment chain, on the same thread and back to back

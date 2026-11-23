@@ -115,12 +115,12 @@ typedef struct _MW_UMD_COUNT {
 } MW_UMD_COUNT;
 
 /* MW_ESCAPE_UMD: in, the UMD's counts since its previous report; out, the
- * switches the KMD's settings give (UmdCopyOnGpu, UmdReadbackOneCopy in
- * Device Parameters, each on unless 0). */
+ * switches the KMD's settings give (UmdCopyOnGpu, UmdReadbackOneCopy,
+ * UmdMergeSubmit in Device Parameters, each on unless 0). */
 #define MW_ESCAPE_UMD           7
 #define MW_UMD_FLAG_COPY_GPU    0x1     /* copies between textures may run on the GPU */
 #define MW_UMD_FLAG_READBACK_1  0x2     /* a read-back present copies once, straight into the surface */
-#define MW_UMD_FLAG_MERGE_SUBMIT 0x4    /* UmdMergeSubmit 1 (off unless 1): a batch's vertex/tiler
+#define MW_UMD_FLAG_MERGE_SUBMIT 0x4    /* UmdMergeSubmit (on unless 0): a batch's vertex/tiler
                                          * chain and the fragment chain Panfrost submits right
                                          * after it go to the KMD as one render with two commands */
 #define MW_UMD_FLAG_VALID       0x80000000u

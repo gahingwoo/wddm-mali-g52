@@ -309,9 +309,11 @@ failed. The Direct2D frame is byte for byte the same at 198, 396, 500 and
 
 ## Measure first: the second round, 2026-11-22
 
-Branch `gpu-perf`, off `hpd-edge`. Nothing here has run on a board yet.
-Everything new is either a counter or a switch that is off by default,
-so the package with no settings changed behaves as `hpd-edge` does.
+Branch `gpu-perf`, off `hpd-edge`. Everything new is either a counter or
+a switch that was off by default, so the package with no settings changed
+behaves as `hpd-edge` does. The board ran it on 2026-11-23 (see "Board
+results, 2026-11-23" below); since then `UmdMergeSubmit` is on by default
+(branch `merge-submit-default`).
 
 ### What was already measured, and what was not
 
@@ -406,9 +408,9 @@ measurements; each item says what number will confirm it.
 | # | Change | Expected gain | Risk | Verify with | State |
 |---|---|---|---|---|---|
 | 1 | Measure (this branch, defaults) | none: the baseline | none | the plan above | done in code |
-| 2 | `UmdMergeSubmit` 1: a batch's vertex/tiler and fragment chains as one render | half the renders, events, signal calls, allocation lists, patches and SubmitCommands; a few percent of a core for DWM, more for apps with many batches | low: Panfrost submits the two back to back with out_sync 0 on the first exactly when the second follows; any other call sends a kept chain first | `submit` calls/s halves, `renders: 2.00 chains each`, `Render`/`Patch`/`SubmitCommand` ms per s fall, no change in jobs failed | done, off |
+| 2 | `UmdMergeSubmit` 1: a batch's vertex/tiler and fragment chains as one render | half the renders, events, signal calls, allocation lists, patches and SubmitCommands; a few percent of a core for DWM, more for apps with many batches | low: Panfrost submits the two back to back with out_sync 0 on the first exactly when the second follows; any other call sends a kept chain first | `submit` calls/s halves, `renders: 2.00 chains each`, `Render`/`Patch`/`SubmitCommand` ms per s fall, no change in jobs failed | done; board 2026-11-23: DWM submit CPU per job down about a third, 0 errors; on by default (0 turns it off) |
 | 3 | `PollMs` 4 or 10, only if the interrupt collects nearly every chain | up to 1000 timer DPCs a second fewer while the GPU works | low: the timer is the fallback and the 2 s timeout; with TimeSlice set it also paces soft-stops | `PollRuns` per second falls, `bubbles` unchanged | done, at 1 |
-| 4 | GPU clock 702 MHz from SPLL (mux 3, divider 1) | up to +18% on GPU-bound loads over 594 MHz | medium: above the 700 MHz operating point; mainline asks 775 mV from 701 to 800 MHz. Do only after the RK806 BUCK5 voltage has been read (firmware) and is at least 775 mV | FurMark score, `GPU busy`, temperature under FurMark below 85 C, JobsFailed 0 over 3 runs | done, off: `GpuClkHigh` (branch `gpu-clk`, see the last section); needs the firmware's rail reading |
+| 4 | GPU clock 702 MHz from SPLL (mux 3, divider 1) | up to +18% on GPU-bound loads over 594 MHz | medium: above the 700 MHz operating point; mainline asks 775 mV from 701 to 800 MHz. Do only after the RK806 BUCK5 voltage has been read (firmware) and is at least 775 mV | FurMark score, `GPU busy`, temperature under FurMark below 85 C, JobsFailed 0 over 3 runs | done, off: `GpuClkHigh` (branch `gpu-clk`, see the last section); the rail read 750 mV, firmware `tspi3m-gpu-volt-read` 537ea09 raises it to 775 mV (read back on the board); 702 MHz not run yet |
 | 5 | Windowed presents without the CPU: DXGI 1.2 flip model (`UmdDxgi12`, d3d11 branch) or a GPU copy into the presented surface with the KMD's blt behind the GPU queue | the largest for browsers and video: four passes over the frame, two of them reads of write-combined memory, and a GPU wait in the app's present | medium; another branch's work | `present, read back` falls to 0, `KMD blt presents` MB falls, YouTube dropped frames | not here |
 | 6 | Fewer BOs per render: list the named ones plus the others only when the set changed or every Nth render | `Render`, `Patch` and the runtime's render time scale with the entries (up to 256 a render) | medium: an allocation not in a list may be evicted under memory pressure, and a job touching it faults (the 0x4002c3 faults of 2026-10-17) | `renders: entries each` falls; JobsFailed stays 0 under memory pressure (many Edge tabs) | idea, needs item 1's numbers |
 | 7 | Mali performance counters (PRFCNT: GPU active cycles, L2 and external read/write beats) | instrumentation: says whether a GPU-bound load is shader, texture or bandwidth bound | low: GPU-side registers and a dump buffer, no clock or power change | counters against FurMark at two clocks | design only |
@@ -426,12 +428,10 @@ fragment jobs (`jm_submit_batch`, the submit lock); Linux's panfrost
 orders them through the shared buffers too. The gain is not there to
 take without changing how Panfrost uses the heap.
 
-The voltage is the open fact behind items 4 and 13. Nothing in the
-firmware or Windows has set BUCK5, so it is at the PMIC's power-on
-default, which nobody has read. Since the hw-rtc work the firmware has
-an I2C driver and reads the RK806 (BUCK1 and BUCK3 at 850 mV on the
-TaishanPi 3M); one log line with BUCK5's voltage decides whether 702 MHz
-is inside the operating points without touching any rail.
+The voltage was the open fact behind items 4 and 13. Nothing in the
+firmware or Windows had set BUCK5, so it was at the PMIC's power-on
+default. The firmware's read on 2026-11-23 gave 750 mV (see "Board
+results, 2026-11-23"), below the 775 mV that 702 MHz needs.
 
 ### Board tests, one at a time
 
@@ -456,7 +456,9 @@ after it are registry values.
    Remove it if they read 100.0 C or nonsense.
 6. `UmdMergeSubmit` 1 (no restart; running processes take it within a
    second or two, a new process from its first second on), the benchmark
-   plan again. Back with `reg delete ... /v UmdMergeSubmit /f`.
+   plan again. Back with `reg delete ... /v UmdMergeSubmit /f`. (On
+   `merge-submit-default` and later the default is on; the baseline there
+   needs `UmdMergeSubmit` 0 and the delete turns it back on.)
 7. Only if step 4 showed `collected by the interrupt` for nearly all
    chains: `PollMs` 4, restart, the plan again.
 
@@ -464,12 +466,58 @@ Send the `prof-*`, `perf-*` and `ring-*` files and the scores. A bad
 result in any step: delete that one value and restart; the package
 itself changes nothing until a value is set.
 
+## Board results, 2026-11-23
+
+TaishanPi 3M on the DSI panel, package 23.47.19.748 from `gpu-perf`
+(76f677b), the board tests above in order. Clock 594 MHz (GPLL / 2)
+throughout.
+
+Idle desktop, three samples: GPU 0% busy, 594 MHz.
+
+FurMark (GpuTest, 1024x640 windowed, 60 s), two runs: 288 and 290
+points, 4 frames a second (285 at the same clock on 2026-11-14).
+`m5test prof`: GPU busy 87.9%, fragment chains 131 to 262 ms,
+vertex/tiler chains 33 to 65 ms, the driver's own CPU time small, every
+chain collected by the interrupt, bubbles 8 us. Bound by the GPU clock;
+the CPU side has nothing left to give here.
+
+Window drag, three runs each way:
+
+| | flips a second | GPU busy | DWM renders a second | DWM submit CPU per job | errors |
+|---|---|---|---|---|---|
+| baseline (`UmdMergeSubmit` unset) | 40, 36, 59 | 12 to 13% | about 550 to 660, 290 to 330 us each, 220 to 240 BOs each | 0.29 to 0.33 ms | 0 |
+| `UmdMergeSubmit` 1 (no restart) | 46, 57, 36 | about 15.5% | 284 to 386, 2 chains each | 0.20 to 0.23 ms | 0 jobs failed, 0 timeouts |
+
+The drag is bound by the CPU's submit path, not the GPU. Merging the two
+chains of a batch halved DWM's renders and cut its submit CPU per job by
+about 35%. The flip rate moves too much between runs of the same setting
+to show a change with three runs. The board kept `UmdMergeSubmit` 1, and
+it became the default on `merge-submit-default`.
+
+The GPU's supply, read by the firmware (`tspi3m-gpu-volt-read`, read only
+at that point) on the serial log: `vdd_gpu_s0` is RK806 BUCK5, ON_VSEL
+0x28 = 750 mV, the PMIC's default, which nothing sets. CRU_CLKSEL_CON165
+0x5 at boot (GPLL / 6, 198 MHz until the driver raises it). OTP
+specification 0x01 (plain RK3576), gpu-leakage 0x05, gpu-opp-info empty.
+At 750 mV 702 MHz is outside both mainline's (775 mV) and the vendor's
+slowest level (812.5 mV).
+
+edk2-rk3576 537ea09 (same branch) then raises BUCK5 to 775 mV on the
+TaishanPi 3M only, in four 6.25 mV steps each read back, never above
+0x2C, and only with TSHUT armed. The board read the rail back at 775 mV.
+702 MHz with `GpuClkHigh` has not been run yet ("Board steps" below).
+
+Next, from the ranked list: fewer BOs per render (item 6), and the clock
+(item 4, then 12 and 13).
+
 
 ## Above 600 MHz: the supply first, 2026-11-23
 
 Branch `gpu-clk`, off `gpu-perf`; firmware branch `tspi3m-gpu-volt-read`
-in edk2-rk3576. Nothing here has run on a board. With no setting changed
-the driver behaves as `gpu-perf` does: 600 MHz at most.
+in edk2-rk3576. The firmware's rail reading and the raise to 775 mV have
+run on the board ("Board results, 2026-11-23"); the driver's clock above
+600 MHz has not. With no setting changed the driver behaves as `gpu-perf`
+does: 600 MHz at most.
 
 FurMark on 2026-11-23 (1024x640, 288 points, 4 frames a second at
 594 MHz) had the GPU 87.9% busy with fragment chains of 131 to 262 ms and
@@ -522,8 +570,9 @@ the TaishanPi 3M (mainline `rk3576-lckfb-tspi-3m.dts:429`), the CM5
 (`rk3576-armsom-cm5.dtsi:269`) and the ROCK 4D (`rk3576-rock-4d.dts:478`):
 `regulator-boot-on`, 550 to 900 mV, ramp 12500 uV/us. The vendor
 `rk3576-rk806.dtsi` adds `regulator-init-microvolt = <750000>`, which only
-vendor U-Boot applies; nothing in edk2-rk3576 or in Windows sets the rail,
-so it is the RK806's power-on value, which nobody has read.
+vendor U-Boot applies; nothing in edk2-rk3576 before 537ea09 or in
+Windows sets the rail, so it is the RK806's power-on value: 750 mV, read
+on the TaishanPi 3M on 2026-11-23.
 
 RK806 (mainline `include/linux/mfd/rk808.h`, `rk808-regulator.c`):
 `BUCK5_ON_VSEL` 0x1E, `BUCK5_SLP_VSEL` 0x28, `BUCK5_CONFIG` 0x14,
@@ -544,7 +593,9 @@ which belongs to audio, nor LPLL, which belongs to the A53 cluster.
 
 702 MHz is above the 700 MHz point, so the 800 MHz point governs it:
 775 mV by mainline, 812.5 mV by the vendor's slowest level (plus any OTP
-offset). With the rail at 750 mV it is not allowed by either.
+offset). With the rail at its 750 mV default it is allowed by neither;
+at 775 mV (537ea09) mainline's point is met and the vendor's slowest
+level is not, so `GpuClkHigh` 1 allows it and 2 does not.
 
 The PVTPLL (GPU instance at 0x27268000, vendor DT `gpu_pvtpll`) is a ring
 oscillator in the GPU's own supply. TF-A's `plat/rockchip/rk3576/scmi/
@@ -592,12 +643,13 @@ zones. `m5test prof` with `PerfTemp` 1 shows all six channels.
 2. The rates the reading allows, from the table above. 594 MHz needs
    700 (mainline) or 712.5 mV (vendor); 702 MHz needs 775 or 812.5 mV.
 3. Only if the rail already meets it: `GpuClkHigh` in the driver.
-4. Raising the rail stays a design (item 13): never above 850 mV (the
-   vendor's own maximum is 875, mainline's 850) nor 950 MHz, 6.25 mV
-   selector steps written one at a time with the rail read back, never
-   from Windows while the GPU runs, only with TSHUT armed and the
-   temperature read, and the PMIC default back on any job fault. Not
-   written.
+4. Raising the rail: 537ea09 raises it to 775 mV on the TaishanPi 3M,
+   approved for that board and that value only, and
+   nothing higher. Anything beyond stays a design (item 13): never above
+   850 mV (the vendor's own maximum is 875, mainline's 850) nor 950 MHz,
+   6.25 mV selector steps written one at a time with the rail read back,
+   never from Windows while the GPU runs, only with TSHUT armed and the
+   temperature read, and the PMIC default back on any job fault.
 
 ### The driver switch
 

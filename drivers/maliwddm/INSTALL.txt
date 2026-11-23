@@ -214,7 +214,7 @@ Profiling (m5test prof, m5test ring; docs/PERF.md)
   and the CPU time in the runtime's render call, by process.
 
   Settings, DWORDs in Device Parameters, each off (today's behaviour)
-  unless set:
+  unless set, except UmdMergeSubmit, which is on unless 0:
 
     PerfTemp 1         m5test prof reads TSADC_DATA0..5. Only on firmware
                        that starts the TSADC (edk2-rk3576 with the
@@ -224,13 +224,15 @@ Profiling (m5test prof, m5test ring; docs/PERF.md)
                        (default 1). Raise it only when m5test prof shows
                        the interrupt collecting the chains. Read at the
                        adapter's start: reboot.
-    UmdMergeSubmit 1   the UMD sends a batch's vertex/tiler and fragment
-                       chains as one render instead of two (half the
-                       renders, events and allocation lists). Running
-                       processes pick it up within a second or two; 0 or
-                       deleting it goes back.
+    UmdMergeSubmit 0   turns off the default: the UMD sends a batch's
+                       vertex/tiler and fragment chains as one render
+                       instead of two (half the renders, events and
+                       allocation lists). On by default since 2026-11-23,
+                       after three board runs each way. Running processes
+                       pick a change up within a second or two; deleting
+                       the value, or any value but 0, turns it back on.
 
-       reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters" /v UmdMergeSubmit /t REG_DWORD /d 1 /f
+       reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters" /v UmdMergeSubmit /t REG_DWORD /d 0 /f
 
 Replacing only the UMD while testing
 
