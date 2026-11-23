@@ -1780,3 +1780,85 @@ module's base in its log. It did that for the CM5-IO WHEA bugcheck on
 
 KD changes boot timing, and on CM5-IO it starved USB enumeration. Use it
 only if run A disagrees with the prediction.
+
+### 16.7 Runs A and B of 16.6 (build 325), the 0x113, and the next one shot
+
+TaishanPi 3M, same setup, package DriverVer 23.57.31.401 (build 325),
+2026-11-23. Files: `board-session-prep/wddm2x-23.57.31.401/`.
+
+- **A, `set 2000 phys uart nopowerddi`: as predicted.** There was no
+  bugcheck. Basic Display came up and the adapter showed Error, code 43.
+  The journal after QAI 16: `> StopDeviceAndReleasePostDisplayOwnership`,
+  `<` 0, `> RemoveDevice`, `RemoveDevice: already stopped`, `<` 0. This
+  confirms both halves of 16.6: the refusal point, and that the 0x139 was
+  our teardown.
+- **`wddm-probe off`:** 1.3 back, fine.
+- **B, `set 2000 phys uart`, power DDIs on:** the start went past the
+  check. The journal (`Boot5`), after QAI 16:
+  - `CreateDevice` twice (system device), then `CreateContext` on node 1;
+  - `BuildPagingBuffer` op 5 (MAP_APERTURE_SEGMENT, done on the CPU, no
+    DMA buffer, as at 1.3) twice;
+  - QueryInterface, QueryDeviceDescriptor, RecommendMonitorModes, and
+    three IsSupportedVidPn calls, all 0;
+  - last, `> EnumVidPnCofuncModality #1` with no exit.
+
+  Then bugcheck 0x113 VIDEO_DXGKRNL_FATAL_ERROR (0x1C, 0xF, 0x1, 0).
+
+  `CalibrateGpuClock` was called twice (`Cnt_CalibrateGpuClock 2`, seq 31
+  and 32). It is not in the journal because dxgkrnl calls it at
+  DISPATCH_LEVEL, where the journal does not write.
+
+**0x113 subcode 0x1C.** dxgkrnl 10.0.22621.2428 raises it at one place
+(`tools/re`, `WdLogSingleEntry5(0, 0x113, 0x1C, ...)`): in
+`DMMVIDPNPRESENTPATH::SetRotationSupport`, which is what our
+`pfnUpdatePathSupportInfo` call in EnumVidPnCofuncModality reaches. The
+check applies only when two things hold: the driver supports
+path-independent rotation (interface 0x4003 or later), and test signing is
+on. It then requires the RotationSupport Offset bits:
+
+| path | rule | P3 if broken |
+|---|---|---|
+| the primary clone path (a path alone is one) | Offset0 set | 1 |
+| the same | no Offset90, 180 or 270 | 2 |
+| any other path | at least one Offset bit | 0 |
+
+P2 is the bits we reported: 0xF, which is Identity plus Rotate90, 180
+and 270, with no offset. The interface at 1.3 is 0x4002, below the rule,
+so it never fired there.
+
+**Build 330 (`4d1400d`):**
+
+- At 2.x every path we update in EnumVidPnCofuncModality (display.c and
+  hpd.c) also carries Offset0, so 0xF becomes 0x1F. This driver never
+  rotates one clone against another, and Offset0 satisfies all three
+  rows. 1.3's paths are unchanged.
+- `Wddm2RotOffset 0` (`wddm-probe ... norotoffset`) reproduces build 325.
+- `tests/wddm2-host` checks the rule on the bits (build 325's 0xF gives
+  P3 1, 0x1F passes) and that both files apply it.
+- Package: `wddm-mali-g52-driver-arm64` of CI run 45088503229 (build 330),
+  DriverVer 0.23.50.775.
+
+**Next one shot (C).** Against B the only change is Offset0.
+
+1. Bind build 330 at 1.3 as in 16.1, and check `WddmVersion 0x1300`.
+2. `wddm-probe set 2000 phys uart`, then a clean restart. HDMI unplugged,
+   `HdmiHpd 1`, as before.
+3. On whatever comes up, run `wddm-probe check`. Send `C:\mali\probe\` and
+   a photo of anything blue.
+
+What the result says:
+
+- **The journal passes `< EnumVidPnCofuncModality`:** Offset0 was it. The
+  next lines are the first mode set at 2.0: CommitVidPn,
+  SetVidPnSourceAddress, then the first Present or Render. If the
+  desktop comes up, run the 16.2 checks, and after 120 s the watchdog
+  confirms.
+- **The same 0x113 0x1C:** the change did not reach the path. Look for a
+  `Fail_` value in the device key.
+- **Another bugcheck:** photograph its four parameters. A new 0x113
+  subcode can be looked up the same way: in `tools/re` output for
+  dxgkrnl 22621.2428, search `dis.txt` for `mov edx, 0x113` followed by
+  `r8d` set to the subcode.
+
+The user is needed physically only to power cycle after a hang or a blue
+screen.
