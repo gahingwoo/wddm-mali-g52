@@ -22,6 +22,11 @@ where the two disagree, this one says so and why.
 > is the decision and the fixes, section 16 the one-shot board test and how
 > to read a hang. Without `WddmProbe` the driver is WDDM 1.3 as before.
 
+> Status, 2026-11-23: two 2.0 boots bugchecked (0x139) after QAI 16. dxgkrnl's
+> own code says why it refused the start: two DDIs every 2.x interface must
+> fill in. The bugcheck was most likely our teardown after the refusal.
+> Both are fixed; section 16.6 has the evidence and the next two boots.
+
 The study below is kept as written.
 
 Line numbers below are those of `next`. On `main` and `umd-file-log` the
@@ -1583,3 +1588,195 @@ What the result says:
   the only other field that differs from the 1.3 segment, the budget flags
   (0x108005 becomes 0x5).
 - **Anything else:** the new journal lines are the starting point.
+
+### 16.6 Runs 2 and 3 of 16.2 (build 318), what dxgkrnl did, and the next one shot
+
+TaishanPi 3M, 23H2 (22631.2428), DSI panel, HDMI unplugged, `HdmiHpd 1`,
+package DriverVer 22.17.7.389 (CI run 45076819707, build 318), 2026-11-23.
+
+| | 1.3 | `set 2000 phys uart` | `set 2000 phys uart nobudget` |
+|---|---|---|---|
+| boot | fine, `WddmVersion 0x1300` | bugcheck 0x139, P1 3 | bugcheck 0x139, P1 3 |
+| P2 / P3 | | `FFFFF803BA3C8600` / `...84B8` | `FFFFF801C5E88600` / `...84B8` |
+| journal | | `Boot2`, 49 events | `Boot3`, 49 events, the same |
+| last line | | `< QueryAdapterInfo` (QAI 16) at 7363 ms | the same at 7444 ms |
+| `Wd_Seconds` | | 8 | 8 |
+| fallback | | 1.3 on the next boot | 1.3 on the next boot |
+
+So the QAI 10 fix (`a135ed6`) and the budget flags changed nothing: the
+journal is the same line for line, QAI 10 now answered for both nodes.
+
+**Timing.** The watchdog starts at AddDevice (18 ms) and writes
+`Wd_Seconds` every second, flushed. Its last value, 8, was written at about
+8.0 s, after QAI 16 returned (7.36 s and 7.44 s); the write at about 9 s
+never reached the disk. So the system ran for 0.6 to 1.7 s after QAI 16
+with no DDI entered, no ISR, DPC or vsync in the ring, and then
+bugchecked. P2 (the trap frame) and P3 (the exception record) of 0x139 lie
+in the `FFFFF80x` range, at the same page offset (`0x600`) on both boots:
+not an ordinary thread stack. Processor 0's boot-time DPC stack is mapped
+there, which fits a timer or DPC, not the adapter-start thread. That part
+is inference; no stack was seen.
+
+#### What dxgkrnl does after QAI 16 (read from its code)
+
+The board's dxgkrnl is 10.0.22621.2428 (the same binary serves 22631).
+`tools/re/dxgk-annotate.py` fetched the amd64 build of that version and
+its public symbols (`--winbindex dxgkrnl.sys 10.0.22621.2428`; the ARM64
+code is the same source) and disassembled it. In
+`DXGADAPTER::Initialize`:
+
+1. `ADAPTER_RENDER::CreateRenderCore`: the QAI 15, GetNodeMetadata,
+   QAI 11 and QAI 10 of the journal.
+2. `ADAPTER_DISPLAY::CreateDisplayCore` -> `ADAPTER_DISPLAY::Initialize`:
+   QAI 16 (`Type 0x10`), then sources, monitor manager, VidPN manager;
+   no DDI.
+3. Then, for a dxgmms2 adapter with a render core:
+
+   ```
+   cmp r13d, 0x5008            ; DRIVER_INITIALIZATION_DATA.Version
+   jb  ok
+   cmp [adapter+0x388], 0      ; pfnCalibrateGpuClock
+   je  fail
+   cmp [adapter+0x3e8], 0      ; pfnSetStablePowerState
+   jne ok
+   fail: "Driver is compiled against DXGKDDI_INTERFACE_VERSION_WDDM2_0_M2_2_1
+          or greater, but does not fill in the pfnCalibrateGpuClock or
+          pfnSetStablePowerState DDI."   -> STATUS_INVALID_PARAMETER
+   ```
+
+   We claim 0x5023 and registered neither. 1.3 (0x4002) is below the
+   test, which is why 1.3 never met it.
+4. `DpiFdoStartAdapter` sees `DxgkAddAdapter` fail and unwinds: when it
+   owns the POST display it calls `DxgkDdiStopDeviceAndReleasePostDisplayOwnership`
+   (and `DxgkDdiStopDevice` only if that fails), and the failed start
+   leads PnP to `DxgkDdiRemoveDevice`.
+
+Our `StopDeviceAndReleasePostDisplayOwnership` stopped only the scan-out,
+and `RemoveDevice` then freed `MW_ADAPTER`. The HPD thread (a 200 ms
+`KeWaitForSingleObject` on an event inside it) and the copy thread (an
+event inside it) were still running. A wait that times out unlinks its
+wait block from the event's list in freed pool: a `LIST_ENTRY` check,
+0x139 P1 3, from timer expiry on a DPC stack. Neither DDI was journaled,
+which is why nothing showed after QAI 16.
+
+#### Candidates, ranked
+
+1. **pfnCalibrateGpuClock and pfnSetStablePowerState missing at interface
+   0x5023.** Proven as the refusal: the condition, the message and its
+   place right after QAI 16 are in dxgkrnl's code, and nothing of ours
+   runs between QAI 16 and it. Jamie's driver registers both.
+2. **Use after free in our teardown after a refused start.** Most likely
+   cause of the 0x139: timing, the trap frame's address range, and the
+   code. Not seen on a stack.
+3. Checked and cleared for this point:
+   - QAI 10 and 16: answered within the sizes asked; changing QAI 10 did
+     not move anything.
+   - The segment (stride 104, flags `0x108005` or `0x5`): `nobudget` gave
+     the same journal.
+   - DRIVERCAPS, PHYSICALADAPTERCAPS and GetNodeMetadata: read before
+     the refusal, within their sizes, and the start went past them.
+   - SupportPerEngineTDR's DDIs (ResetEngine, QueryEngineStatus,
+     QueryDependentEngineGroup): checked in `ADAPTER_RENDER`, which passed.
+   - CreateProcess, SetRootPageTable, GetRootPageTableSize,
+     SubmitCommandVirtual: GpuMmu only, not reached in physical mode.
+   - SignalMonitoredFence is a callback, not a DDI. CollectDbgInfo is
+     registered.
+
+   Still unknown after the check: dxgmms2's paging process and system
+   devices (`VidMmInitializePagingProcess` -> `VidSchCreateSystemDevices`),
+   where the first `CreateDevice` of a 2.0 adapter comes from.
+
+#### What changed (`0e06f76`)
+
+- `DxgkDdiCalibrateGpuClock` (GPU time modelled as the performance
+  counter: no GPU timestamps are written) and `DxgkDdiSetStablePowerState`
+  (nothing to pin) at every 2.x interface. `Wddm2PowerDdis 0`
+  (`wddm-probe set 2000 ... nopowerddi`) leaves them out. 1.3's table is
+  unchanged.
+- `StopDeviceAndReleasePostDisplayOwnership` does all of StopDevice's work
+  (`MwAdapterStop`, once per start). `RemoveDevice` without a stop first
+  stops the copy and HPD threads and the backlight timer.
+- Journaled now: `RemoveDevice`, `StopDeviceAndReleasePostDisplayOwnership`,
+  `CalibrateGpuClock`, `SetStablePowerState`, and RemoveDevice's
+  "already stopped" or not.
+- `tests/wddm2-host`: the 0x5008 rule, and that the driver registers from
+  `MwPlan`.
+
+Package: `wddm-mali-g52-driver-arm64` of CI run 45085983678 (build 325),
+DriverVer 23.57.31.401. Later commits on `wddm2x` that touch only docs do
+not change the driver; use this run's package for 16.6.
+
+#### Next one shot: two boots, one variable each
+
+Bind the new package at 1.3 first (16.1: stage, `ConfigFlags |= 0x20` as
+SYSTEM, clean restart, `WddmVersion 0x1300`). No serial logger and no
+kernel debugger are needed. The user is needed physically only if a boot
+hangs (power cycle); a bugcheck stops at the blue screen (`AutoReboot 0`)
+and needs a power cycle too.
+
+**A. The diagnosis.** `wddm-probe set 2000 phys uart nopowerddi`, clean
+restart. Against build 318, the only change is the teardown.
+
+- Expected: no bugcheck. Windows comes up, the adapter with a problem code
+  and the screen on Basic Display (or left as it was). Then
+  `wddm-probe check`. The journal ends: `< QueryAdapterInfo` (QAI 16),
+  `> StopDeviceAndReleasePostDisplayOwnership` (or `> StopDevice` if
+  dxgkrnl does not own the POST display), its `<` line, then
+  `> RemoveDevice` and `RemoveDevice: already stopped`.
+- That confirms both the refusal point and that the 0x139 was ours.
+- A 0x139 again means the teardown is not the cause: use the kernel
+  debugger (below) on the same setting.
+
+**B. The fix.** `wddm-probe off`, restart (1.3), then
+`wddm-probe set 2000 phys uart`, clean restart. Against A, the only change
+is the two DDIs.
+
+- Expected: the journal passes QAI 16 with no stop or remove after it.
+  Whatever comes next is new ground: `CalibrateGpuClock` calls, then
+  dxgmms2's paging process, the first `> CreateDevice` (the system device),
+  `CreateContext` on node 1 and the first `BuildPagingBuffer`.
+- If the desktop comes up: the 16.2 checks (dxdiag Driver Model,
+  `maliumd.dll` in dwm, the GPU counters), and the watchdog confirms after
+  120 s.
+- If it stops: the last journal lines, and with this build a refusal ends
+  in a clean stop rather than a bugcheck.
+
+Send `C:\mali\probe\` after each, plus photos of anything blue.
+
+**Already on the board, no reboot needed:** both crashed boots left a
+DxgKrnl ETW file, `C:\mali\probe\etl-20261123-122639\boot.etl.001` and
+`C:\mali\probe\etl-20261123-123740\boot.etl.001` (flushed every second).
+Copy them off; `tools/etw/dxgk-decode.py` decodes them with an
+`events.json` made from dxgkrnl 22621.2428 (`make-events-json.py`). Any
+event dxgkrnl wrote about the refused start, before the bugcheck, is in
+there.
+
+#### If a stack is ever needed: the kernel debugger over UART0
+
+`scripts/kd-listen.py` in edk2-rk3576 is a minimal KDCOM peer. Since
+`99496f6` it answers a `Fatal System Error` by reading the register context
+and 48 KB of stack and saving them to `kd-dump-<time>.bin`, with every
+module's base in its log. It did that for the CM5-IO WHEA bugcheck on
+2026-10-03. On the TaishanPi:
+
+1. On the host, `/dev/ttyACM0` (the Raspberry Pi Debug Probe on UART0) must
+   have one reader. Start
+   `scripts/kd-resilient.sh <raw-file> <log-file>` (1500000 baud, finds the
+   probe by USB id), then stop the console logger, so that the reader
+   count never drops to zero.
+2. On the board, as administrator:
+   `bcdedit /dbgsettings serial debugport:1 baudrate:1500000`,
+   `bcdedit /debug on`. UART0 is the DBG2 port (`0x2AD40000`). The rate is
+   UEFI's whatever the BCD says: SPCR's BaudRate is 0.
+3. Set the probe **without `uart`**. The driver's watchdog writes to the
+   same UART0 and would corrupt KDCOM packets.
+4. Restart with the listener already running. With `debug on` and nobody
+   answering, Windows waits on every packet and the boot crawls.
+5. Afterwards: `bcdedit /debug off`. Copy `dxgkrnl.sys`, `dxgmms2.sys` and
+   `ntoskrnl.exe` from `C:\Windows\System32` (and `drivers\`). Then
+   `tools/re/dxgk-annotate.py <dir> --local <file>` names the return
+   addresses in the dump: subtract each module's base, then look the
+   offset up in `syms.txt`.
+
+KD changes boot timing, and on CM5-IO it starved USB enumeration. Use it
+only if run A disagrees with the prediction.
