@@ -1601,7 +1601,9 @@ cb_result_name(HRESULT hr)
    case E_INVALIDARG: return "E_INVALIDARG";
    case E_OUTOFMEMORY: return "E_OUTOFMEMORY";
    case DXGI_DDI_ERR_UNSUPPORTED: return "DXGI_DDI_ERR_UNSUPPORTED";
+#ifdef DXGI_DDI_ERR_NONEXCLUSIVEMODE
    case DXGI_DDI_ERR_NONEXCLUSIVEMODE: return "DXGI_DDI_ERR_NONEXCLUSIVEMODE";
+#endif
    default: return "?";
    }
 }
