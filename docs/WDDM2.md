@@ -2201,3 +2201,44 @@ What the result says:
   debugger stack would name it.
 - **To A/B on one install:** `wddm-probe set 2000 phys uart
   nonlocalbudget` must give run F's 0x7E.
+
+### 16.12 Run G (build 350): the first WDDM 2.0 desktop
+
+TaishanPi 3M, 2026-11-24, HDMI only (2560x1440). Package DriverVer
+5.16.3.6, CI run 45332054667 (build 350, `6942c21`; the driver code is
+build 349's, 16.11). Files: `board-session-prep/wddm2x-stepG/`
+(`journal-20261124-183425.txt` has boots 8, 9 and 0xa; `m5test.txt`,
+`drag-13.txt`, `dxdiag-*.txt`, photos, `log/`).
+
+**Passed.**
+
+- The journal has `plan: ... nonlocal 0 local 1 (flags 0x88005)` and the
+  QUERYSEGMENT4 fill pass `flags 0x00088005`, size 0x40000000.
+- No bugcheck. LogonUI and the desktop on HDMI, `renders` above 12000 at
+  t=88 s.
+- `m5test`: `PASS: the Mali ran a job submitted through WDDM`.
+- Task Manager: "Rockchip RK3576 Mali-G52 (WDDM)", 1.0 GB GPU memory.
+  dxdiag: Driver Model WDDM 2.0, feature levels 10_1 down to 9_1.
+- The same package at 1.3 boots to the desktop as before.
+
+**Corrected prediction.** 16.11 expected the 1 GB to show as dedicated.
+dxdiag reports `Dedicated Memory: 0 MB, Shared Memory: 1024 MB` with the
+segment in the local group: the dedicated figure follows the segment
+type (aperture), not the budget group. What mattered was only that the
+local group is not empty.
+
+**Drag, 15 s, HDMI, n=1 per mode:**
+
+| | total CPU | dwm CPU |
+|---|---|---|
+| 2.0 | about 20% | 7.1 s |
+| 1.3 | about 26% | 15.2 s |
+
+n=1 each, so not yet a result. In both modes dwm does thousands of GPU
+copies of about 1 ms each (`gpucopy` in the UMD log): a cost of the
+current UMD, not of 2.0.
+
+**Next.** `wddm2x` is merged with `main` (1.3 stays what `main` does; 2.x
+stays behind `WddmProbe`). Before 2.0 can be a default: repeat the drag
+with n of at least 3 per mode, run the watchdog confirm over a longer
+session, and check suspend, HDMI hot-plug and TDR at 2.0.
