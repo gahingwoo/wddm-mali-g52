@@ -285,25 +285,54 @@ flips at 75 Hz in a 75 Hz mode.
   1/100 Hz, clock in kHz, up to 24), `Hpd_Refresh`, `Mset_Status`,
   `Mset_Restore`, `Mset_RestoreMode`, `Hpd_RestoreOk`.
 
-### Default: stays behind the switch
+### Board result (2026-11-24)
 
-`HdmiHpd` stays 0 by default; refresh rates need `HdmiHpd` 3. At 0 to 2,
-`ScaledModes` gives resolutions without touching the link. Why not flip it
-now:
+TaishanPi 3M, AOC Q27B3S2 on HDMI, package 6.49.58.348 (`34aff0f`),
+`HdmiHpd` 3 set by hand:
 
-- Level 3 has run on the board only on a DSI boot with HDMI plugged
-  (2026-11-22 and 2026-11-23). A mode change from Settings on an HDMI boot
-  at level 3, the 30-mode list, and the restore have never run.
-- Level 3 changes every boot, not only a mode change: the hot-plug thread,
-  a 16 MB contiguous framebuffer reserved at start, the children and the
-  VidPN all go through `hpd.c`. A fault there costs the user a rescue
-  boot; an opt-in costs a registry value.
-- On a DSI boot level 3 adds the HDMI child next to the panel (the
-  exclusive arrangement), which the panel path must not get by default.
+- Settings offered 60 and 75 Hz at 2560x1440.
+- 75 Hz took: `Hpd_Refresh` 7500, and the monitor showed 75 Hz.
+- It was kept across a reboot: Desktop mode and Active signal mode both
+  2560x1440 at 75 Hz.
+- HDMI hot-plug and the 15 s revert both worked (the user's report).
 
-Flip it for HDMI boots only (the panel keeps today's path) once the board
-test below passes on three separate boots, revert and hot-plug included,
-since one good boot in four has looked like proof here before.
+Merged to main as `d4b1e8f`, still behind the switch.
+
+### Default: on for HDMI boots (branch `hdmi-retime-default`)
+
+Without an `HdmiHpd` value the level is now 3 on an HDMI boot and 0 when the
+firmware handed over the DSI panel (`MwHpdLevelFor`, `hdmi_calc.h`; the
+panel is known by GPU0's second memory resource, which the firmware adds
+only for a lit DSI panel, read before anything is mapped). A value, any
+value, wins: 0 or 1 to go back. The trace says which it was:
+`Hpd_LevelFrom` 0 from the value, 1 the HDMI default, 2 the panel's.
+
+| Boot | No value | `HdmiHpd` set |
+|---|---|---|
+| HDMI | 3: the monitor's own modes and refresh rates | the value |
+| DSI panel (with or without HDMI) | 0, as before | the value |
+
+What changes on an HDMI boot with no value: the hot-plug thread runs, 16 MB
+of contiguous memory is reserved at start for the driver's framebuffer,
+the HDMI child is hot-plug aware, and Display resolution lists the
+monitor's real modes instead of `ScaledModes`' scaled ones (`ScaledModes`
+applies below level 3 only, so it stays for the panel and for anyone who
+goes back to 0 to 2).
+
+The board evidence is one install and one reboot, plus hot-plug and the
+revert; the default was the user's decision on that. The first boot with
+the value deleted is the check that the default itself is read the same
+way as the value was.
+
+**To go back** (administrator prompt, then reboot):
+
+    reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters" /v HdmiHpd /t REG_DWORD /d 0 /f
+
+0 is the driver as it was before hot-plug existed (`ScaledModes` gives
+smaller resolutions at the monitor's timing); 1 also logs HPD and the EDID.
+With no usable picture: the same over SSH, or from the rescue Windows with
+the main Windows' SYSTEM hive loaded. Deleting the value returns to the
+default.
 
 ### HDMI 2.0 scrambling (not done)
 
@@ -319,11 +348,12 @@ from there once it has landed.
 
 TaishanPi 3M, HDMI only, the AOC. The package from `display-retime`.
 
-1. Install, then:
+1. Install, then delete any `HdmiHpd` value (the default is 3 on an HDMI
+   boot since `hdmi-retime-default`; before that, set it to 3):
 
-       reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters" /v HdmiHpd /t REG_DWORD /d 3 /f
+       reg delete "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters" /v HdmiHpd /f
 
-   and reboot. The desktop comes up on HDMI as before.
+   and reboot. `Hpd_LevelFrom` 1 says the default was used. The desktop comes up on HDMI as before.
    `reg query "...\Device Parameters\maliwddm" | findstr /i "Hpd_Level Hpd_Switch Edid_"`:
    `Hpd_Level` 3, `Hpd_Switch` 1, `Edid_Modes` about 30, `Edid_M00`
    0x0A0005A0 with `Edid_R00` 6000, and a 2560x1440 entry with `Edid_R` 7500.
@@ -344,8 +374,7 @@ TaishanPi 3M, HDMI only, the AOC. The package from `display-retime`.
 7. **Reboot persistence.** Set 2560x1440 at 75 Hz, restart. The firmware's
    boot screen is at 60 Hz (the firmware's choice); after login the OSD
    says 75 Hz again.
-8. Back to 2560x1440 at 60 Hz. To leave the board as it was: `HdmiHpd` 1,
-   reboot.
+8. Back to 2560x1440 at 60 Hz.
 
 A failed mode set shows as `Mset_Status` non-zero with `Mset_Restore` 0
 and the old mode back on the monitor; nothing in this test forces one.

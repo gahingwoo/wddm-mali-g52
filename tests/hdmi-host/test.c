@@ -421,6 +421,11 @@ int main(void)
     test_infoframes();
     test_edid();
     test_modes();
+    /* The HdmiHpd level: an explicit value wins, none is 3 on HDMI, 0 on the panel. */
+    CHECK(MwHpdLevelFor(MW_HPD_UNSET, 0) == 3 && MwHpdLevelFor(MW_HPD_UNSET, 1) == 0, "defaults");
+    for (unsigned v = 0; v <= 3; v++)
+        CHECK(MwHpdLevelFor(v, 0) == v && MwHpdLevelFor(v, 1) == v, "explicit %u", v);
+    CHECK(MwHpdLevelFor(7, 0) == 3 && MwHpdLevelFor(7, 1) == 3, "above 3 is 3");
     printf("%d checks, %d failures\n", checks, fails);
     return fails != 0;
 }
