@@ -35,7 +35,8 @@
 #define MW_DMA_BUFFER_SIZE      (16 * 1024)
 #define MW_LIST_SIZE            256     /* Panfrost submits reference many BOs */
 #define MW_JOB_TIMEOUT_MS       2000
-#define MW_POLL_MS              1
+#define MW_POLL_MS              1       /* the default of the setting PollMs */
+#define MW_POLL_MAX_MS          50
 #define MW_STOP_SLOW_MS         100     /* a soft-stop not taken by then is counted */
 #define MW_SLICE_MAX_MS         1000
 
@@ -51,7 +52,67 @@ void MwCommandSettings(MW_ADAPTER *A)
         return;
     v = MwSetting(A, L"TimeSlice", 0);
     A->Slice = v > MW_SLICE_MAX_MS ? MW_SLICE_MAX_MS : v;
+    /* PollMs: how often the timer looks at the job status while work is in
+     * flight. It finds chains whose interrupt never came, times them out
+     * and takes a preemption's soft-stop. With interrupts working it only
+     * runs; 1 is what the driver always did. m5test prof says who
+     * collected the chains (ReapIsr against ReapPoll) before this is
+     * raised. */
+    v = MwSetting(A, L"PollMs", MW_POLL_MS);
+    A->PollMs = v < 1 ? 1 : v > MW_POLL_MAX_MS ? MW_POLL_MAX_MS : v;
     A->SliceRead = TRUE;
+}
+
+/* ---- timing (MW_ESCAPE_PERF) ---- */
+
+/* The histogram bucket of a duration: 2^b to 2^(b+1) - 1 us. */
+static ULONG Bucket(const MW_ADAPTER *A, ULONG64 Ticks)
+{
+    ULONG64 us = A->PerfHz != 0 ? Ticks * 1000000ULL / A->PerfHz : 0;
+    ULONG b = 0;
+
+    while (us > 1 && b < MW_PERF_BUCKETS - 1) {
+        us >>= 1;
+        b++;
+    }
+    return b;
+}
+
+static void Sample(const MW_ADAPTER *A, ULONG64 D, ULONG64 *Count, ULONG64 *Sum, ULONG64 *Max, ULONG *Hist)
+{
+    (*Count)++;
+    *Sum += D;
+    if (D > *Max)
+        *Max = D;
+    Hist[Bucket(A, D)]++;
+}
+
+/* The running chain has been collected: Flags are MW_PERF_JOB_* and the
+ * slot's status. Interrupt level, before the queue moves on. */
+static void JobEnded(MW_ADAPTER *A, ULONG Flags, BOOLEAN ByPoll)
+{
+    ULONG64 now = MwTick(), d = now - A->JobStartTick;
+    const MW_SUBMISSION *s = &A->Queue[A->QHead];
+    ULONG slot = A->RunningSlot & 1;
+    MW_PERF_JOB *r = &A->Ring[A->RingNext % MW_PERF_RING];
+
+    A->SlotJobs[slot]++;
+    A->SlotTicks[slot] += d;
+    if (d > A->SlotMaxTicks[slot])
+        A->SlotMaxTicks[slot] = d;
+    A->SlotHist[slot][Bucket(A, d)]++;
+    r->Fence = s->FenceId;
+    r->SlotFlags = (slot << 16) | Flags | (ByPoll ? MW_PERF_JOB_BY_POLL : 0) |
+                   (s->Next > 1 ? MW_PERF_JOB_SECOND : 0);
+    r->SubmitTick = s->SubmitTick;
+    r->StartTick = A->JobStartTick;
+    r->EndTick = now;
+    A->RingNext++;
+    A->LastJobEndTick = now;
+    if (ByPoll)
+        A->ReapPoll++;
+    else
+        A->ReapIsr++;
 }
 
 /* ---- devices and contexts ---- */
@@ -152,7 +213,14 @@ NTSTATUS APIENTRY MwRender(IN_CONST_HANDLE hContext, DXGKARG_RENDER *Arg)
 
     PatchEveryAllocation(Arg->AllocationListSize, &Arg->pPatchLocationListOut, Arg->PatchLocationListOutSize);
     MarkDmaBuffer(&Arg->pDmaBuffer);
-    ctx->Device->Adapter->Renders++;
+    {
+        MW_ADAPTER *a = ctx->Device->Adapter;
+        a->Renders++;
+        InterlockedAdd64(&a->RenderAllocs, Arg->AllocationListSize);
+        InterlockedAdd64(&a->RenderCmds, count);
+        MwMaxLong(&a->RenderAllocsMax, (LONG)Arg->AllocationListSize);
+        MwMaxLong(&a->RenderCmdsMax, (LONG)count);
+    }
     MwVersionRendered();    /* confirms a WddmProbe once DWM is drawing */
     return STATUS_SUCCESS;
 }
@@ -379,6 +447,7 @@ static void NotifyCompleted(MW_ADAPTER *A, ULONG Fence)
     A->Dxgk.DxgkCbNotifyInterrupt(A->Dxgk.DeviceHandle, &n);
     A->LastCompletedFence = Fence;
     A->NeedDpc = TRUE;
+    (void)InterlockedCompareExchange64(&A->NotifyTick, (LONG64)MwTick(), 0);
 }
 
 /* Fence A was submitted before fence B (fences increase, and wrap). */
@@ -438,6 +507,9 @@ static void Kick(MW_ADAPTER *A)
         MW_SUBMISSION *s = &A->Queue[A->QHead];
 
         if (!A->GpuUp || s->Next >= s->Count) {
+            if (s->Count != 0 && s->SubmitTick != 0)
+                Sample(A, MwTick() - s->SubmitTick, &A->FenceCount, &A->FenceTicks, &A->FenceMaxTicks,
+                       A->FenceHist);
             NotifyCompleted(A, s->FenceId);
             A->QHead = (A->QHead + 1) % MW_QUEUE_DEPTH;
             A->QCount--;
@@ -472,6 +544,11 @@ static void Kick(MW_ADAPTER *A)
         A->Running = TRUE;
         A->JobStart = KeQueryInterruptTime();
         A->JobStartTick = MwTick();
+        /* A bubble: this chain could have started when the last one ended. */
+        if (A->LastJobEndTick != 0 && s->SubmitTick != 0 && s->SubmitTick <= A->LastJobEndTick)
+            Sample(A, A->JobStartTick - A->LastJobEndTick, &A->GapCount, &A->GapTicks, &A->GapMaxTicks,
+                   A->GapHist);
+        A->LastJobEndTick = 0;
         (void)MkJobTakeStatus(&A->Gpu, c->Slot);
         InterlockedExchange(&A->Gpu.MmuIrqStatus, 0);
         MkJobStart(&A->Gpu, c->Slot, jc, A->RunningFlag);
@@ -536,6 +613,7 @@ static BOOLEAN Reap(MW_ADAPTER *A, BOOLEAN CheckTimeout)
                     A->StopBadTail++;
                 } else {
                     MW_SUBMISSION *s = &A->Queue[A->QHead];
+                    JobEnded(A, MW_PERF_JOB_STOPPED | JS_STATUS_STOPPED, CheckTimeout);
                     A->Running = FALSE;
                     A->StopAsked = FALSE;
                     MwTickAdd(&A->JobTicks, &A->JobMaxTicks, A->JobStartTick);
@@ -559,6 +637,7 @@ static BOOLEAN Reap(MW_ADAPTER *A, BOOLEAN CheckTimeout)
         return FALSE;
     }
 
+    JobEnded(A, failed ? MW_PERF_JOB_FAILED | (A->LastJsStatus & 0xFF) : JS_STATUS_DONE, CheckTimeout);
     A->Running = FALSE;
     A->StopAsked = FALSE;
     MwTickAdd(&A->JobTicks, &A->JobMaxTicks, A->JobStartTick);
@@ -569,6 +648,8 @@ static BOOLEAN Reap(MW_ADAPTER *A, BOOLEAN CheckTimeout)
     /* A fault leaves the address space stopped: start the GPU over, and
      * drop the rest of this submission (its later chains depend on it). */
     A->JobsFailed++;
+    /* Above 600 MHz a fault may be the clock: back to 594 MHz first. */
+    MwGpuClkFallback(A);
     A->LastFaultStatus = gpu->LastMmuFault;
     A->LastFaultAddress = gpu->LastFaultAddress;
     A->Queue[A->QHead].Next = A->Queue[A->QHead].Count;
@@ -609,6 +690,11 @@ static BOOLEAN SyncSubmit(PVOID Context)
     MW_SUBMISSION *q = &a->Queue[(a->QHead + a->QCount) % MW_QUEUE_DEPTH];
     MW_CONTEXT *c = s->New->Ctx;
 
+    a->Submissions++;
+    a->QueueDepthSum += a->QCount;
+    if (a->QCount > a->QueueDepthMax)
+        a->QueueDepthMax = a->QCount;
+
     *q = *s->New;
     q->BehindOther = a->Running && a->RunningCtx != c;
     /* The resubmission of a submission preempted part way: the context's
@@ -644,6 +730,7 @@ static BOOLEAN SyncPoll(PVOID Context)
 {
     MW_ADAPTER *a = (MW_ADAPTER *)Context;
 
+    a->PollRuns++;
     if (Reap(a, TRUE))
         Kick(a);
     MaybeStop(a);
@@ -688,7 +775,7 @@ static VOID PollDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
 void MwArmPoll(MW_ADAPTER *A)
 {
     LARGE_INTEGER due;
-    due.QuadPart = -10000LL * MW_POLL_MS;
+    due.QuadPart = -10000LL * (A->PollMs != 0 ? A->PollMs : MW_POLL_MS);
     KeSetTimer(&A->PollTimer, due, &A->PollDpc);
 }
 
@@ -1227,5 +1314,83 @@ NTSTATUS APIENTRY MwQueryDependentEngineGroup(IN_CONST_HANDLE hAdapter,
 {
     UNREFERENCED_PARAMETER(hAdapter);
     Arg->DependentNodeOrdinalMask = 0;
+    return STATUS_SUCCESS;
+}
+
+/* ---- MW_ESCAPE_PERF: the queue's part ---- */
+
+typedef struct {
+    MW_ADAPTER *A;
+    MW_ESCAPE_PERF_DATA *D;     /* non-paged: written at interrupt level */
+} MW_PERF_SNAP;
+
+static BOOLEAN SyncPerf(PVOID Context)
+{
+    MW_PERF_SNAP *p = (MW_PERF_SNAP *)Context;
+    MW_ADAPTER *a = p->A;
+    MW_ESCAPE_PERF_DATA *d = p->D;
+
+    for (ULONG i = 0; i < 2; i++) {
+        d->SlotJobs[i] = a->SlotJobs[i];
+        d->SlotTicks[i] = a->SlotTicks[i];
+        d->SlotMaxTicks[i] = a->SlotMaxTicks[i];
+        RtlCopyMemory(d->SlotHist[i], a->SlotHist[i], sizeof(d->SlotHist[i]));
+    }
+    d->FenceCount = a->FenceCount;
+    d->FenceTicks = a->FenceTicks;
+    d->FenceMaxTicks = a->FenceMaxTicks;
+    RtlCopyMemory(d->FenceHist, a->FenceHist, sizeof(d->FenceHist));
+    d->GapCount = a->GapCount;
+    d->GapTicks = a->GapTicks;
+    d->GapMaxTicks = a->GapMaxTicks;
+    RtlCopyMemory(d->GapHist, a->GapHist, sizeof(d->GapHist));
+    d->ReapIsr = a->ReapIsr;
+    d->ReapPoll = a->ReapPoll;
+    d->PollRuns = a->PollRuns;
+    d->QueueDepthSum = a->QueueDepthSum;
+    d->QueueDepthMax = a->QueueDepthMax;
+    d->Submissions = a->Submissions;
+    d->RingNext = a->RingNext;
+    RtlCopyMemory(d->Ring, a->Ring, sizeof(d->Ring));
+    return TRUE;
+}
+
+/* The queue's counters, copied at its interrupt level so one reading is
+ * consistent, into D (the escape's buffer, which may be paged: the copy
+ * goes through non-paged pool). PASSIVE_LEVEL. */
+NTSTATUS MwPerfSnapshot(MW_ADAPTER *A, MW_ESCAPE_PERF_DATA *D)
+{
+    MW_PERF_SNAP p;
+    MW_ESCAPE_PERF_DATA *tmp = (MW_ESCAPE_PERF_DATA *)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(*tmp), MW_TAG);
+
+    if (tmp == NULL)
+        return STATUS_NO_MEMORY;
+    p.A = A;
+    p.D = tmp;
+    (void)Synchronize(A, SyncPerf, &p);
+    for (ULONG i = 0; i < 2; i++) {
+        D->SlotJobs[i] = tmp->SlotJobs[i];
+        D->SlotTicks[i] = tmp->SlotTicks[i];
+        D->SlotMaxTicks[i] = tmp->SlotMaxTicks[i];
+        RtlCopyMemory(D->SlotHist[i], tmp->SlotHist[i], sizeof(D->SlotHist[i]));
+    }
+    D->FenceCount = tmp->FenceCount;
+    D->FenceTicks = tmp->FenceTicks;
+    D->FenceMaxTicks = tmp->FenceMaxTicks;
+    RtlCopyMemory(D->FenceHist, tmp->FenceHist, sizeof(D->FenceHist));
+    D->GapCount = tmp->GapCount;
+    D->GapTicks = tmp->GapTicks;
+    D->GapMaxTicks = tmp->GapMaxTicks;
+    RtlCopyMemory(D->GapHist, tmp->GapHist, sizeof(D->GapHist));
+    D->ReapIsr = tmp->ReapIsr;
+    D->ReapPoll = tmp->ReapPoll;
+    D->PollRuns = tmp->PollRuns;
+    D->QueueDepthSum = tmp->QueueDepthSum;
+    D->QueueDepthMax = tmp->QueueDepthMax;
+    D->Submissions = tmp->Submissions;
+    D->RingNext = tmp->RingNext;
+    RtlCopyMemory(D->Ring, tmp->Ring, sizeof(D->Ring));
+    D->PollMs = A->PollMs;
+    ExFreePoolWithTag(tmp, MW_TAG);
     return STATUS_SUCCESS;
 }

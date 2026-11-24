@@ -1,0 +1,168 @@
+diff --git a/src/gallium/frontends/d3d10umd/DxgiFns.cpp b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+index 3ee9b95..32aaa8c 100644
+--- a/src/gallium/frontends/d3d10umd/DxgiFns.cpp
++++ b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+@@ -43,6 +43,10 @@
+ #include "util/mali_count.h"
+ 
+ 
++static HRESULT PresentImpl(DXGI_DDI_ARG_PRESENT *pPresentData);
++static HRESULT SetDisplayModeImpl(DXGI_DDI_ARG_SETDISPLAYMODE *SetDisplayMode);
++static HRESULT RotateResourceIdentitiesImpl(DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *Rotate);
++
+ /*
+  * ----------------------------------------------------------------------
+  *
+@@ -54,8 +58,8 @@
+  * ----------------------------------------------------------------------
+  */
+ 
+-HRESULT APIENTRY
+-_Present(DXGI_DDI_ARG_PRESENT *pPresentData)
++static HRESULT
++PresentImpl(DXGI_DDI_ARG_PRESENT *pPresentData)
+ {
+ 
+    LOG_ENTRYPOINT();
+@@ -186,8 +190,8 @@ _GetGammaCaps( DXGI_DDI_ARG_GET_GAMMA_CONTROL_CAPS *GetCaps )
+  * ----------------------------------------------------------------------
+  */
+ 
+-HRESULT APIENTRY
+-_SetDisplayMode( DXGI_DDI_ARG_SETDISPLAYMODE *SetDisplayMode )
++static HRESULT
++SetDisplayModeImpl( DXGI_DDI_ARG_SETDISPLAYMODE *SetDisplayMode )
+ {
+    LOG_ENTRYPOINT();
+ 
+@@ -366,8 +370,8 @@ RotateByExchangingBuffers(DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *Rotate)
+ }
+ 
+ 
+-HRESULT APIENTRY
+-_RotateResourceIdentities( DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *RotateResourceIdentities )
++static HRESULT
++RotateResourceIdentitiesImpl( DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *RotateResourceIdentities )
+ {
+    LOG_ENTRYPOINT();
+ 
+@@ -505,3 +509,42 @@ _Blt(DXGI_DDI_ARG_BLT *Blt)
+ 
+    return S_OK;
+ }
++
++
++/*
++ * What the DXGI DDI functions return, in the UMD log when it is not S_OK:
++ * a failure here is passed to the application (Present1), and one the
++ * runtime does not expect from the driver removes the device. Edge's GPU
++ * process on the TaishanPi 3M (2026-11-22) saw Present1 fail with
++ * DXGI_ERROR_DEVICE_REMOVED, reason 0x887A0020, and left no record of the
++ * call that started it; with this and SetError (State.h) it does.
++ */
++static HRESULT
++DxgiResult(const char *ddi, HRESULT hr)
++{
++   static volatile LONG said = 0;
++
++   if (hr != S_OK && InterlockedIncrement(&said) <= 256)
++      DebugPrintf("dxgi-result: %s 0x%08lx%s\n", ddi, (unsigned long)hr,
++                  FAILED(hr) ? " (failed)" : "");
++   return hr;
++}
++
++HRESULT APIENTRY
++_Present(DXGI_DDI_ARG_PRESENT *pPresentData)
++{
++   return DxgiResult("Present", PresentImpl(pPresentData));
++}
++
++HRESULT APIENTRY
++_SetDisplayMode(DXGI_DDI_ARG_SETDISPLAYMODE *SetDisplayMode)
++{
++   return DxgiResult("SetDisplayMode", SetDisplayModeImpl(SetDisplayMode));
++}
++
++HRESULT APIENTRY
++_RotateResourceIdentities(DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *RotateResourceIdentities)
++{
++   return DxgiResult("RotateResourceIdentities",
++                     RotateResourceIdentitiesImpl(RotateResourceIdentities));
++}
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index e99af43..273f5e7 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -85,6 +85,8 @@ struct Device
+    struct pipe_context *pipe;
+    unsigned msaa;               /* the adapter's (Adapter::msaa) */
+    unsigned caps_logged;        /* format answers logged so far (Device.cpp, LogCaps) */
++   unsigned errors_logged;      /* errors reported to the runtime so far (SetError) */
++   unsigned stilldrawing_logged; /* of them DXGI_DDI_ERR_WASSTILLDRAWING, an answer */
+ 
+    struct cso_context *cso;
+    struct pipe_framebuffer_state fb;
+@@ -177,13 +179,60 @@ CastPipeDevice(DXGI_DDI_HDEVICE hDevice)
+ }
+ 
+ 
++/*
++ * The only codes pfnSetErrorCb takes as an error of the call. For any other
++ * the runtime decides a critical error occurred and removes the device: the
++ * application then sees DXGI_ERROR_DEVICE_REMOVED on its next Present and
++ * GetDeviceRemovedReason says DXGI_ERROR_DRIVER_INTERNAL_ERROR (0x887A0020),
++ * which is what Edge's GPU process got on the TaishanPi 3M (2026-11-22), with
++ * no TDR and nothing from the KMD.
++ */
++#ifndef D3DDDIERR_DEVICEREMOVED
++#define D3DDDIERR_DEVICEREMOVED ((HRESULT)0x88760870L)
++#endif
++#ifndef DXGI_DDI_ERR_NONEXCLUSIVEMODE
++#define DXGI_DDI_ERR_NONEXCLUSIVEMODE ((HRESULT)0x887B0003L)
++#endif
++
++static inline bool
++ErrorTheRuntimeTakes(HRESULT hr)
++{
++   return hr == E_OUTOFMEMORY || hr == DXGI_DDI_ERR_WASSTILLDRAWING ||
++          hr == DXGI_DDI_ERR_UNSUPPORTED || hr == DXGI_DDI_ERR_NONEXCLUSIVEMODE ||
++          hr == D3DDDIERR_DEVICEREMOVED;
++}
++
++/*
++ * Every error a DDI reports, with the DDI's name, goes into the UMD log
++ * (C:\mali\log), the first of each device marked, so that a device the
++ * runtime removed shows the call that did it. A code the runtime would
++ * remove the device for is logged as such and reported as E_OUTOFMEMORY:
++ * the call fails, the device lives (E_FAIL from a map that returned no
++ * pointer, E_INVALIDARG from OpenResource of a surface this driver did not
++ * make, E_NOTIMPL from a render target view of a buffer).
++ */
++#define SetError(hDevice, hr) SetErrorAt((hDevice), (hr), __func__)
++
+ static inline void
+-SetError(D3D10DDI_HDEVICE hDevice, HRESULT hr)
++SetErrorAt(D3D10DDI_HDEVICE hDevice, HRESULT hr, const char *ddi)
+ {
+    if (FAILED(hr)) {
+       Device *pDevice = CastDevice(hDevice);
+-      DebugPrintf("SetError 0x%08lx\n", (unsigned long)hr);
+-      pDevice->UMCallbacks.pfnSetErrorCb(pDevice->hRTCoreLayer, hr);
++      HRESULT reported = ErrorTheRuntimeTakes(hr) ? hr : E_OUTOFMEMORY;
++      /* WASSTILLDRAWING is an answer, not a failure: the first few only,
++       * and on a count of their own. */
++      bool still = hr == DXGI_DDI_ERR_WASSTILLDRAWING;
++      unsigned n = still ? ++pDevice->stilldrawing_logged : ++pDevice->errors_logged;
++      if (n <= (still ? 4u : 256u)) {
++         if (reported != hr)
++            DebugPrintf("ddi-error%s: %s 0x%08lx, a code the runtime removes the device for;"
++                        " reported as E_OUTOFMEMORY\n", n == 1 && !still ? " (first)" : "", ddi,
++                        (unsigned long)hr);
++         else
++            DebugPrintf("ddi-error%s: %s 0x%08lx\n", n == 1 && !still ? " (first)" : "", ddi,
++                        (unsigned long)hr);
++      }
++      pDevice->UMCallbacks.pfnSetErrorCb(pDevice->hRTCoreLayer, reported);
+    }
+ }
+ 

@@ -18,6 +18,10 @@
  *     which lets DWM compose an application's buffers without a copy;
  *   - when the device does not come up with the full list of feature
  *     levels, the result at 10_1 and at 10_0 alone;
+ *   - what Edge's GPU process does next ("edge path": a composition swap
+ *     chain under DirectComposition with Present1, a DComp surface, a
+ *     shared NT-handle texture with a keyed mutex), with the device's
+ *     removed reason after each step;
  *   - every format's support bits and quality levels at 1x, 2x, 4x and 8x
  *     ("format table"), and where they disagree with each other or within
  *     a typeless family ("MSAA CONSISTENCY"), which the runtime may refuse
@@ -35,11 +39,15 @@
  * Exit status 0 when it ran; it changes nothing on the system.
  *
  * Build: cl /W4 /EHsc tools\windows\d3dprobe.cpp d3d11.lib dxgi.lib user32.lib
+ * (dcomp.lib through a pragma)
  */
 #include <windows.h>
 #include <d3d11_1.h>
 #include <dxgi1_2.h>
+#include <dcomp.h>
 #include <stdio.h>
+
+#pragma comment(lib, "dcomp.lib")
 
 static const char *fl_name(D3D_FEATURE_LEVEL f)
 {
@@ -261,6 +269,250 @@ out:
     if (xd) xd->Release();
 }
 
+/*
+ * What Edge's GPU process does with a device once it has one, step by step,
+ * with the device's removed reason after each: on the TaishanPi 3M
+ * (2026-11-22, maliwddm 8.16.32.821) Present1 on its composition swap chain
+ * failed with DXGI_ERROR_DEVICE_REMOVED, reason 0x887A0020, about 1.4 s
+ * into the GPU process. The first step whose reason is not 0 is where the
+ * UMD log (C:\mali\log, "ddi-error" lines) shows the DDI that failed.
+ *
+ *   1. a swap chain for composition (FLIP_SEQUENTIAL, BGRA8, two buffers,
+ *      premultiplied alpha), as Chromium's DXGISwapChainImageBacking;
+ *   2. DirectComposition: device on this D3D device, target on a window,
+ *      a visual with the swap chain as content, Commit;
+ *   3. three frames: clear a buffer, Present1 with a dirty rectangle;
+ *   4. a DComp surface, BeginDraw, clear, EndDraw, Commit (the solid
+ *      colour surfaces of Chromium's DCompPresenter);
+ *   5. a texture shared by NT handle with a keyed mutex, opened again on
+ *      the same device, acquired and released (Chromium's shared images).
+ *
+ * Returns 1 when the device ended up removed.
+ */
+static HRESULT removed_reason(ID3D11Device *dev, const char *step, HRESULT hr)
+{
+    HRESULT why = dev->GetDeviceRemovedReason();
+    printf("    edge path: %-34s 0x%08lx, device removed reason 0x%08lx%s\n", step, (unsigned long)hr,
+           (unsigned long)why, why != S_OK ? "  <== REMOVED" : "");
+    return why;
+}
+
+static int edge_path(ID3D11Device *dev, ID3D11DeviceContext *ctx)
+{
+    IDXGIDevice *xd = nullptr;
+    IDXGIAdapter *ad = nullptr;
+    IDXGIFactory2 *f2 = nullptr;
+    IDXGISwapChain1 *sc = nullptr;
+    IDCompositionDevice *dc = nullptr;
+    IDCompositionTarget *target = nullptr;
+    IDCompositionVisual *visual = nullptr, *visual2 = nullptr;
+    IDCompositionSurface *surface = nullptr;
+    ID3D11Device1 *d1 = nullptr;
+    ID3D11Texture2D *shared = nullptr, *opened = nullptr;
+    HWND wnd = nullptr;
+    WNDCLASSW wc = {};
+    HRESULT hr, why = S_OK;
+
+    printf("    edge path (Chromium's GPU process: composition swap chain, DComp, shared images):\n");
+    if (FAILED(dev->QueryInterface(__uuidof(IDXGIDevice), (void **)&xd)) || FAILED(xd->GetAdapter(&ad)) ||
+        FAILED(ad->GetParent(__uuidof(IDXGIFactory2), (void **)&f2))) {
+        printf("    edge path: no IDXGIFactory2\n");
+        goto out;
+    }
+    wc.lpfnWndProc = wndproc;
+    wc.hInstance = GetModuleHandleW(nullptr);
+    wc.lpszClassName = L"d3dprobe-edge";
+    RegisterClassW(&wc);
+    wnd = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, L"d3dprobe-edge", L"d3dprobe edge path",
+                          WS_OVERLAPPEDWINDOW | WS_VISIBLE, 0, 0, 200, 160, nullptr, nullptr, wc.hInstance,
+                          nullptr);
+    if (!wnd) {
+        printf("    edge path: no window (0x%08lx)\n", GetLastError());
+        goto out;
+    }
+
+    {
+        DXGI_SWAP_CHAIN_DESC1 d = {};
+        d.Width = 128;
+        d.Height = 96;
+        d.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        d.SampleDesc.Count = 1;
+        d.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_SHADER_INPUT;
+        d.BufferCount = 2;
+        d.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+        d.AlphaMode = DXGI_ALPHA_MODE_PREMULTIPLIED;
+        hr = f2->CreateSwapChainForComposition(dev, &d, nullptr, &sc);
+        /* A software driver gets DXGI_ERROR_INVALID_CALL here (CI): the
+         * steps without the swap chain still run. */
+        if ((why = removed_reason(dev, "CreateSwapChainForComposition", hr)) != S_OK)
+            goto out;
+        if (FAILED(hr))
+            sc = nullptr;
+    }
+
+    hr = DCompositionCreateDevice(xd, __uuidof(IDCompositionDevice), (void **)&dc);
+    if ((why = removed_reason(dev, "DCompositionCreateDevice", hr)) != S_OK)
+        goto out;
+    if (FAILED(hr))
+        goto shared_step;
+    hr = dc->CreateTargetForHwnd(wnd, TRUE, &target);
+    if (SUCCEEDED(hr))
+        hr = dc->CreateVisual(&visual);
+    if (SUCCEEDED(hr) && sc)
+        hr = visual->SetContent(sc);
+    if (SUCCEEDED(hr))
+        hr = target->SetRoot(visual);
+    if (SUCCEEDED(hr))
+        hr = dc->Commit();
+    if ((why = removed_reason(dev, "DComp target, visual, Commit", hr)) != S_OK)
+        goto out;
+    if (FAILED(hr))
+        goto shared_step;
+
+    for (int frame = 0; sc && frame < 3; frame++) {
+        ID3D11Texture2D *buf = nullptr;
+        ID3D11RenderTargetView *rtv = nullptr;
+        const float colour[4] = { 0.0f, 0.25f * (float)frame, 0.5f, 1.0f };
+        RECT dirty = { 0, 0, 64, 48 };
+        DXGI_PRESENT_PARAMETERS pp = {};
+        char step[48];
+
+        hr = sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void **)&buf);
+        if (SUCCEEDED(hr))
+            hr = dev->CreateRenderTargetView(buf, nullptr, &rtv);
+        if (SUCCEEDED(hr)) {
+            ctx->OMSetRenderTargets(1, &rtv, nullptr);
+            ctx->ClearRenderTargetView(rtv, colour);
+            ctx->OMSetRenderTargets(0, nullptr, nullptr);
+        }
+        if (rtv) rtv->Release();
+        if (buf) buf->Release();
+        snprintf(step, sizeof step, "frame %d: buffer, view, clear", frame);
+        if ((why = removed_reason(dev, step, hr)) != S_OK)
+            goto out;
+        if (FAILED(hr))
+            goto shared_step;
+        pp.DirtyRectsCount = frame ? 1 : 0;
+        pp.pDirtyRects = frame ? &dirty : nullptr;
+        hr = sc->Present1(1, 0, &pp);
+        snprintf(step, sizeof step, "frame %d: Present1%s", frame, frame ? " (dirty rect)" : "");
+        if ((why = removed_reason(dev, step, hr)) != S_OK)
+            goto out;
+        if (FAILED(hr))
+            goto shared_step;
+    }
+
+    {
+        ID3D11Texture2D *tex = nullptr;
+        ID3D11RenderTargetView *rtv = nullptr;
+        POINT offset = {};
+        const float colour[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+
+        hr = dc->CreateSurface(64, 64, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_ALPHA_MODE_PREMULTIPLIED, &surface);
+        if ((why = removed_reason(dev, "DComp CreateSurface", hr)) != S_OK)
+            goto out;
+        if (FAILED(hr))
+            goto shared_step;
+        hr = surface->BeginDraw(nullptr, __uuidof(ID3D11Texture2D), (void **)&tex, &offset);
+        if ((why = removed_reason(dev, "DComp BeginDraw", hr)) != S_OK)
+            goto out;
+        if (FAILED(hr))
+            goto shared_step;
+        hr = dev->CreateRenderTargetView(tex, nullptr, &rtv);
+        if (SUCCEEDED(hr)) {
+            ctx->OMSetRenderTargets(1, &rtv, nullptr);
+            ctx->ClearRenderTargetView(rtv, colour);
+            ctx->OMSetRenderTargets(0, nullptr, nullptr);
+            rtv->Release();
+        }
+        tex->Release();
+        HRESULT ehr = surface->EndDraw();
+        if (SUCCEEDED(hr))
+            hr = ehr;
+        if ((why = removed_reason(dev, "DComp view, clear, EndDraw", hr)) != S_OK)
+            goto out;
+        if (FAILED(hr))
+            goto shared_step;
+        hr = dc->CreateVisual(&visual2);
+        if (SUCCEEDED(hr))
+            hr = visual2->SetContent(surface);
+        if (SUCCEEDED(hr))
+            hr = visual->AddVisual(visual2, TRUE, nullptr);
+        if (SUCCEEDED(hr))
+            hr = dc->Commit();
+        if ((why = removed_reason(dev, "DComp surface visual, Commit", hr)) != S_OK)
+            goto out;
+        if (FAILED(hr))
+            goto shared_step;
+    }
+
+shared_step:
+    if (SUCCEEDED(dev->QueryInterface(__uuidof(ID3D11Device1), (void **)&d1))) {
+        D3D11_TEXTURE2D_DESC t = {};
+        IDXGIResource1 *r1 = nullptr;
+        IDXGIKeyedMutex *km = nullptr;
+        HANDLE nt = nullptr;
+
+        t.Width = 64;
+        t.Height = 64;
+        t.MipLevels = 1;
+        t.ArraySize = 1;
+        t.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        t.SampleDesc.Count = 1;
+        t.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        t.MiscFlags = D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+        hr = dev->CreateTexture2D(&t, nullptr, &shared);
+        if ((why = removed_reason(dev, "shared texture (NT handle, keyed mutex)", hr)) != S_OK)
+            goto out;
+        if (FAILED(hr)) {
+            t.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+            hr = dev->CreateTexture2D(&t, nullptr, &shared);
+            if ((why = removed_reason(dev, "shared texture (legacy handle)", hr)) != S_OK || FAILED(hr))
+                goto out;
+        }
+        if (t.MiscFlags & D3D11_RESOURCE_MISC_SHARED_NTHANDLE) {
+            hr = shared->QueryInterface(__uuidof(IDXGIResource1), (void **)&r1);
+            if (SUCCEEDED(hr))
+                hr = r1->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
+                                            nullptr, &nt);
+            if (SUCCEEDED(hr))
+                hr = d1->OpenSharedResource1(nt, __uuidof(ID3D11Texture2D), (void **)&opened);
+            if (r1) r1->Release();
+            if (nt) CloseHandle(nt);
+            if ((why = removed_reason(dev, "CreateSharedHandle, OpenSharedResource1", hr)) != S_OK ||
+                FAILED(hr))
+                goto out;
+            hr = opened->QueryInterface(__uuidof(IDXGIKeyedMutex), (void **)&km);
+            if (SUCCEEDED(hr))
+                hr = km->AcquireSync(0, 1000);
+            if (SUCCEEDED(hr))
+                hr = km->ReleaseSync(0);
+            if (km) km->Release();
+            if ((why = removed_reason(dev, "keyed mutex AcquireSync, ReleaseSync", hr)) != S_OK)
+                goto out;
+        }
+    }
+    ctx->Flush();
+    why = removed_reason(dev, "Flush, end", S_OK);
+
+out:
+    if (opened) opened->Release();
+    if (shared) shared->Release();
+    if (d1) d1->Release();
+    if (visual2) visual2->Release();
+    if (surface) surface->Release();
+    if (visual) visual->Release();
+    if (target) target->Release();
+    if (dc) dc->Release();
+    if (sc) sc->Release();
+    if (wnd) DestroyWindow(wnd);
+    if (f2) f2->Release();
+    if (ad) ad->Release();
+    if (xd) xd->Release();
+    printf("    edge path: device %s\n", why != S_OK ? "REMOVED" : "alive");
+    return why != S_OK;
+}
+
 /* D3D11CreateDevice on an adapter, the default hardware device (adapter
  * null, sw null), or a software driver DLL (sw). */
 static HRESULT create(IDXGIAdapter1 *adapter, HMODULE sw, const D3D_FEATURE_LEVEL *levels, UINT n,
@@ -348,6 +600,7 @@ static HRESULT probe(IDXGIAdapter1 *adapter, const char *label, HMODULE sw = nul
     formats(dev);
     format_table(dev);
     flip_model(dev);
+    edge_path(dev, ctx);
     ctx->Release();
     dev->Release();
     return hr;

@@ -78,6 +78,12 @@ typedef struct _MW_MEM_SLOT {
 
 typedef struct _MW_ADAPTER MW_ADAPTER;
 
+/* A DDI's CPU time (MW_ESCAPE_PERF): updated with interlocked operations,
+ * since several DDIs, and the same one on several contexts, run at once. */
+typedef struct _MW_PROF {
+    volatile LONG64 Calls, Ticks, MaxTicks;
+} MW_PROF;
+
 /* HDMI hot-plug (hdmi.c, the hardware; hpd.c, what Windows sees). All of it
  * is behind the HdmiHpd setting, a DWORD in Device Parameters:
  *   0  (default) nothing here runs and nothing here is allocated
@@ -412,6 +418,18 @@ struct _MW_ADAPTER {
     MW_UMD_PROC UmdProc[MW_UMD_PROCS];
     ULONG UmdProcNext;
     ULONG GpuClk;               /* (parent << 8) | divider last written here; 0 the firmware's */
+    /* Clocks above 600 MHz (adapter.c, GpuClkWrite): the GpuClkHigh
+     * setting, the supply as the firmware (GpuRail) and the GpuRailUv
+     * setting give it, the chip's OTP offset, and the CRU page kept mapped
+     * so a fault can drop the clock from the interrupt. */
+    ULONG GpuClkHigh;
+    ULONG RailUv;
+    ULONG RailSource;           /* 1 firmware, 2 setting, 3 both (the lower) */
+    ULONG RailOtpMv, RailOtpMinMhz, RailOtpMaxMhz;
+    BOOLEAN RailNotPlain;       /* the firmware read a J, M or S variant */
+    volatile BOOLEAN GpuClkIsHigh;
+    PUCHAR CruClkVa;
+    volatile ULONG GpuClkFallbacks;
     PKTHREAD CopyThread;
     KEVENT CopyEvent;
     FAST_MUTEX CopyLock;
@@ -474,9 +492,50 @@ struct _MW_ADAPTER {
     ULONG64 WaitTicks, WaitMaxTicks, WaitOtherMaxTicks;
     ULONG WaitCount, WaitOtherCount;
 
+    /* m5test prof (MW_ESCAPE_PERF_DATA has the meanings). Prof, the
+     * Render and map counts are interlocked; everything after them belongs
+     * to the queue and changes only at the device's interrupt level. */
+    MW_PROF Prof[MW_PERF_DDIS];
+    volatile LONG64 RenderAllocs, RenderCmds, MapPages;
+    volatile LONG RenderAllocsMax, RenderCmdsMax;
+    ULONG PollMs;               /* setting PollMs: the poll timer's period, 1 (default) to 50 */
+    ULONG64 SlotJobs[2], SlotTicks[2], SlotMaxTicks[2];
+    ULONG SlotHist[2][MW_PERF_BUCKETS];
+    ULONG64 FenceCount, FenceTicks, FenceMaxTicks;
+    ULONG FenceHist[MW_PERF_BUCKETS];
+    ULONG64 GapCount, GapTicks, GapMaxTicks;
+    ULONG GapHist[MW_PERF_BUCKETS];
+    ULONG64 LastJobEndTick;     /* when the last chain was collected; 0 once the next has started */
+    ULONG ReapIsr, ReapPoll, PollRuns;
+    volatile LONG64 NotifyTick; /* first DMA_COMPLETED not yet seen by a DPC */
+    ULONG64 DpcCount, DpcTicks, DpcMaxTicks;
+    ULONG64 QueueDepthSum;
+    ULONG QueueDepthMax, Submissions;
+    ULONG RingNext;
+    MW_PERF_JOB Ring[MW_PERF_RING];
+
     /* HDMI hot-plug, all of it behind HdmiHpd (hdmi.c, hpd.c). */
     MW_HDMI Hdmi;
 };
+
+/* The end of a timed DDI call started at T0. Any IRQL. */
+static __inline void MwProfEnd(MW_PROF *P, ULONG64 T0)
+{
+    LONG64 d = (LONG64)(KeQueryPerformanceCounter(NULL).QuadPart - (LONG64)T0), m;
+
+    InterlockedIncrement64(&P->Calls);
+    InterlockedAdd64(&P->Ticks, d);
+    while (d > (m = P->MaxTicks) && InterlockedCompareExchange64(&P->MaxTicks, d, m) != m)
+        ;
+}
+
+/* A running maximum shared between threads. */
+static __inline void MwMaxLong(volatile LONG *Max, LONG V)
+{
+    LONG m;
+    while (V > (m = *Max) && InterlockedCompareExchange(Max, V, m) != m)
+        ;
+}
 
 /* The performance counter, at any IRQL. */
 static __inline ULONG64 MwTick(void)
@@ -564,6 +623,7 @@ DXGKDDI_CONTROLINTERRUPT MwControlInterrupt;
 DXGKDDI_GETSCANLINE MwGetScanLine;
 BOOLEAN MwJobInterrupt(MW_ADAPTER *A);    /* from the ISR, at DIRQL */
 ULONG MwSetting(MW_ADAPTER *A, PCWSTR Name, ULONG Default);
+void MwGpuClkFallback(MW_ADAPTER *A);
 void MwSetSetting(MW_ADAPTER *A, PCWSTR Name, ULONG Value);
 void MwScanStart(MW_ADAPTER *A);
 void MwScanStop(MW_ADAPTER *A);
@@ -590,6 +650,7 @@ void MwCopyForget(MW_ADAPTER *A, struct _MW_ALLOCATION *Alloc, BOOLEAN Freed);
 void MwCommandStop(MW_ADAPTER *A);
 void MwArmPoll(MW_ADAPTER *A);
 void MwCommandSettings(MW_ADAPTER *A);
+NTSTATUS MwPerfSnapshot(MW_ADAPTER *A, MW_ESCAPE_PERF_DATA *D);   /* PASSIVE; the queue's part */
 
 /* hdmi.c: the RK3576 HDMI hardware, ported from edk2-rk3576 */
 NTSTATUS MwHdmiMap(MW_ADAPTER *A);

@@ -546,6 +546,7 @@ static NTSTATUS BuildPaging1x(MW_ADAPTER *a, DXGKARG_BUILDPAGINGBUFFER *Arg)
             MwScanMap(a, alloc, pfn, pages);
         ExReleaseFastMutex(&a->MmuLock);
         a->Maps++;
+        InterlockedAdd64(&a->MapPages, pages);
         if (!NT_SUCCESS(st))
             a->MapFails++;
         a->LastMapVa = alloc->GpuVa;

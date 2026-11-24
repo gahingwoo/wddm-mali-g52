@@ -265,6 +265,9 @@ jobs:
           if ($LASTEXITCODE) { throw 'gsso build failed' }
           .\triangle.exe $dll
           if ($LASTEXITCODE) { throw "softpipe smoke test failed ($LASTEXITCODE)" }
+          # A draw with no input layout ever set (mesa-patches/0070).
+          .\triangle.exe $dll nolayout
+          if ($LASTEXITCODE) { throw "softpipe draw without an input layout failed ($LASTEXITCODE)" }
           # No Mali on the runner: Panfrost must report no device and hand
           # over to softpipe without crashing, and the triangle still draws.
           $env:GALLIUM_DRIVER = 'panfrost'
@@ -343,7 +346,17 @@ jobs:
           if (Test-Path gsso-hang.txt) { Get-Content gsso-hang.txt | Select-String -NotMatch 'NatVis|ModLoad' | Select-Object -Last 150 }
           $gout = (Get-Content gsso.out -ErrorAction SilentlyContinue) -join "`n"
 
+          # A draw with no input layout and no vertex buffer ever set on the
+          # device: the D3D11 runtime's clear of part of a DComp surface.
+          # Panfrost read a NULL vertex elements state there (+0x344) and
+          # the process died (mesa-patches/0070). Pixels are arbitrary.
+          $nl = Run-Triangle 'nolayout' 'triangle.exe' 'nolayout'
+          Get-Content nolayout.out, nolayout.err -ErrorAction SilentlyContinue | Select-String -NotMatch 'ioctl|  ->' | Select-Object -Last 10
+          if (Test-Path nolayout-crash.txt) { Get-Content nolayout-crash.txt | Select-String -NotMatch 'NatVis|ModLoad' | Select-Object -Last 60 }
+
           $all = (Get-Content fake.out, fake.err -ErrorAction SilentlyContinue) -join "`n"
+          if ($nl -eq 'hang') { throw 'triangle.exe nolayout hung' }
+          if ($nl -ne 0 -and $nl -ne 2) { throw "triangle.exe nolayout died ($nl): a draw without an input layout" }
           if ($r -eq 'hang') { throw 'triangle.exe hung' }
           if ($all -match 'using softpipe') { throw 'fell back to softpipe' }
           if ($all -notmatch 'malikm-fake: submit') { throw 'no job was submitted' }
@@ -402,8 +415,55 @@ jobs:
           if ($codes['msedge'] -ne 0) { throw "the device with the multisample answers (msedge.exe) was refused ($($codes['msedge']))" }
           if ($edge -notmatch 'feature level 10_1') { throw 'msedge.exe did not get feature level 10_1' }
           if ($edge -notmatch 'MSAA consistency: 0 disagreement') { throw 'msedge.exe: the multisample answers disagree' }
+          # Chromium's steps after CreateDevice (d3dprobe "edge path"): the
+          # device must not be removed by any of them.
+          foreach ($exe in 'msedge', 'plainprobe') {
+            $t = (Get-Content "d3dprobe-$exe.txt" -ErrorAction SilentlyContinue) -join "`n"
+            if ($t -notmatch 'edge path: device alive') { throw "${exe}.exe: the device was removed on the edge path" }
+          }
           if ($edge -notmatch '(?m)^ +28 R8G8B8A8_UNORM .* ms-rt.* q 1 0 1 0') { throw 'msedge.exe: R8G8B8A8_UNORM is not a multisample render target at 1x and 4x' }
           if ($edge -notmatch '(?m)^ +87 B8G8R8A8_UNORM .* ms-rt.* q 1 0 1 0') { throw 'msedge.exe: B8G8R8A8_UNORM is not a multisample render target at 1x and 4x' }
+
+      - name: The UMD log from a low-integrity process (Edge's GPU process)
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          # Edge's GPU process runs at low integrity with a restricted token
+          # and wrote no UMD log on the board (2026-11-23). triangle.exe
+          # under another name, with a low label on the file, starts at low
+          # integrity; it must get a log once C:\mali\log has the ACL and
+          # label docs/EDGE-PRESENT.md sets up, and the log's first line
+          # names the token (mesa-patches/0072).
+          $env:GALLIUM_DRIVER = 'panfrost'
+          $env:MALIKM_FAKE = '2'
+          New-Item -ItemType Directory -Force C:\mali\log | Out-Null
+          Copy-Item out\triangle.exe out\lowtri.exe
+          icacls out\lowtri.exe /setintegritylevel low
+          if ($LASTEXITCODE) { throw 'icacls on lowtri.exe failed' }
+          $dll = (Resolve-Path out\libgallium_d3d10.dll).Path
+          function Run-Low($tag) {
+            $p = Start-Process -FilePath (Resolve-Path out\lowtri.exe).Path -ArgumentList "`"$dll`"" -NoNewWindow -PassThru `
+                   -RedirectStandardOutput "low-$tag.out" -RedirectStandardError "low-$tag.err"
+            if (-not $p.WaitForExit(120000)) { Stop-Process -Id $p.Id -Force; return 'hang' }
+            return $p.ExitCode
+          }
+          $c = Run-Low 'before'
+          $before = @(Get-ChildItem C:\mali\log -Filter 'lowtri.exe-*' -ErrorAction SilentlyContinue).Count
+          Write-Host "low integrity, directory as made: exit $c, $before log(s)"
+          # The setup in docs/EDGE-PRESENT.md, word for word.
+          icacls C:\mali\log /grant '*S-1-1-0:(OI)(CI)M' '*S-1-5-12:(OI)(CI)M' '*S-1-15-2-1:(OI)(CI)M' '*S-1-15-2-2:(OI)(CI)M'
+          if ($LASTEXITCODE) { throw 'icacls /grant failed' }
+          icacls C:\mali\log /setintegritylevel '(OI)(CI)low'
+          if ($LASTEXITCODE) { throw 'icacls /setintegritylevel failed' }
+          $c = Run-Low 'after'
+          $logs = @(Get-ChildItem C:\mali\log -Filter 'lowtri.exe-*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime)
+          Write-Host "low integrity, after the setup: exit $c, $($logs.Count) log(s)"
+          if ($c -eq 'hang') { throw 'lowtri.exe hung' }
+          if ($logs.Count -le $before) { throw 'no UMD log from the low-integrity process after the ACL setup' }
+          $first = Get-Content $logs[-1].FullName -TotalCount 1
+          Write-Host "first line: $first"
+          Copy-Item $logs[-1].FullName umdlog-lowtri.txt
+          if ($first -notmatch 'log on: .*integrity 0x1000 \(low\)') { throw 'the log does not name a low-integrity token' }
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -419,6 +479,10 @@ jobs:
             present-*.txt
             gsso.*
             gsso-*.txt
+            nolayout.*
+            nolayout-*.txt
+            low-*.out
+            low-*.err
             trace.*
             trace/
 

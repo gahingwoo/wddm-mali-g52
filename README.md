@@ -24,8 +24,8 @@ up with a dragged window: [what was measured](docs/results/tspi3m-2026-11-14/REA
 [how the first picture was reached](docs/results/tspi3m-2026-11-13/README.md).
 Programs built for x64 and x86 can use it as well as ARM64 ones, and it has
 an OpenGL 3.1 driver beside the Direct3D one. It is still a first driver:
-Direct3D feature level 10_0, one display mode, one board, and a heavy
-program makes the whole desktop wait.
+Direct3D feature level 10_0 by default (10_1 behind a setting), one display
+at a time, one board, and a heavy program makes the whole desktop wait.
 
 The Mali-G52 draws under Windows: on 2026-10-02 Mesa's Panfrost, inside the
 D3D10 software-driver DLL and talking to our own kernel driver, rendered a
@@ -61,6 +61,20 @@ drivers only.
 | M5.2 (b) | A job submitted through the WDDM driver | done 2026-10-02, [result](docs/results/m5.2-step-b/README.md) |
 | M5.2 (c) | The triangle through the WDDM driver, Mesa loaded by the runtime as the UMD | done 2026-10-03, [result](docs/results/m5.2-step-c2/README.md) |
 | M5.2 (d) | DWM composites on the Mali in installed Windows | **desktop on screen 2026-11-13**, [result](docs/results/tspi3m-2026-11-13/README.md); the desktop, the Start menu, File Explorer and Device Manager draw. Speed, memory and hitches measured and worked on 2026-11-14, x64 and x86 programs and OpenGL added the same day, [result](docs/results/tspi3m-2026-11-14/README.md) |
+
+### On the TaishanPi 3M under Windows, 2026-11-23
+
+What the board has shown, and nothing more. Each line links to the
+document with the runs behind it.
+
+| Area | State |
+|---|---|
+| Desktop on the Mali (DSI panel) | Works: DWM composes on the GPU and the VOP2 scans the frame out. The panel's ribbon cable broke on 2026-11-23, so the later runs were on HDMI. |
+| HDMI hot-plug | Works with `HdmiHpd` 3: the desktop on a 2560x1440 monitor at its own timing, with HDMI audio. Unplugging lights the panel again after about a second, and plugging back returns to HDMI with sound. `HdmiExclusive` is on by default at level 3, so HDMI and the panel take turns; both at once (extend or duplicate) is planned, not written. `HdmiHpd` is 0 unless set. [HDMI-HPD.md](docs/HDMI-HPD.md) |
+| Edge | Partly. With `UmdDdi` 101, Edge's GPU process gets the Mali at feature level 10_1 and ANGLE reports WebGL2 on it. The device-creation fix and the fixes for the crashes found on the board (a draw with no input layout, a shared resource given a cached buffer) are merged. Presenting to a composition swap chain is still blocked: Edge loses its device at the first present and falls back to software rendering. That waits on the redirection and DWM work. [EDGE-CREATEDEVICE.md](docs/EDGE-CREATEDEVICE.md), [EDGE-PRESENT.md](docs/EDGE-PRESENT.md) |
+| WDDM 2.0 | Probe only, on branch `wddm2x`. The adapter starts and runs at WDDM 2.0 (`WddmVersion` 0x2000, dwm.exe and LogonUI running, no fallback), but the screen stays black and every UMD falls back to softpipe, so it is not usable. The cause found so far is a WDDM 1.x handle callback that returns NULL at 2.0; the build that replaces it has not run on the board yet. The driver on main is WDDM 1.3. |
+| GPU speed | FurMark (1024x640, 60 s) scores 288 and 290 at 594 MHz with the GPU 87.9% busy: the clock is the limit. Dragging a window keeps the GPU 12 to 13% busy and is limited by the CPU's submit path. Sending a batch's two GPU chains as one render cut DWM's submit CPU per job from 0.29 to 0.33 ms to 0.20 to 0.23 ms over three runs, with no errors; that is on branch `merge-submit-default`, not main yet. [PERF.md](docs/PERF.md) |
+| GPU clock and supply | At most 600 MHz (594 MHz used). The GPU supply, `vdd_gpu_s0` (RK806 BUCK5), reads 750 mV, the PMIC's default. A firmware branch raises it to 775 mV on this board, and the board read it back at 775 mV; 702 MHz has not been run. |
 
 All results: [docs/results/](docs/results/README.md). All documents:
 [docs/](docs/README.md).
@@ -99,7 +113,7 @@ trust the certificate, `pnputil /add-driver`. It needs the firmware below.
 | GPU | Mali-G52 (Bifrost, job manager), `rockchip,rk3576-mali` |
 | Registers | `0x27800000`, 128 KiB |
 | Interrupts | job SPI 347, MMU SPI 348, GPU SPI 349 (ACPI GSIV 379, 380, 381) |
-| Power | domain `PD_GPU`; supply `vdd_gpu_s0`, RK806 DCDC5 |
+| Power | domain `PD_GPU`; supply `vdd_gpu_s0`, RK806 DCDC5 (BUCK5), 750 mV at power-on on the TaishanPi 3M |
 | Clock | `CLK_GPU`, set through TF-A's SCMI service on Linux |
 
 Developed on the ArmSoM CM5-IO and the LCKFB TaishanPi 3M, with firmware from

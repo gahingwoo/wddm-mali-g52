@@ -3,11 +3,17 @@
 // d3d11-triangle: render one triangle through a D3D10-DDI software driver DLL
 // (Mesa's d3d10umd target) and check the pixels.
 //
-//   triangle.exe [path\to\libgallium_d3d10.dll]
+//   triangle.exe [path\to\libgallium_d3d10.dll | hw] [nolayout]
 //
 // Clears a 64x64 RGBA8 target to blue, draws a red triangle covering the
 // centre, copies to a staging texture and checks the centre is red and a
 // corner is blue. Exit code 0 means pass.
+//
+// nolayout: the same triangle from SV_VertexID, with no input layout and no
+// vertex buffer ever set on the device. The D3D11 runtime draws this way
+// for a clear of part of a view (a DComp surface after BeginDraw), and
+// ANGLE does for some of its blits; Panfrost crashed on it at NULL+0x344
+// (mesa-patches/0070).
 //
 #include <windows.h>
 #include <d3d11.h>
@@ -22,7 +28,11 @@
 
 static const char kHlsl[] =
     "float4 vs(float2 p : POSITION) : SV_Position { return float4(p, 0.0, 1.0); }\n"
-    "float4 ps() : SV_Target { return float4(1.0, 0.0, 0.0, 1.0); }\n";
+    "float4 ps() : SV_Target { return float4(1.0, 0.0, 0.0, 1.0); }\n"
+    "float4 vsid(uint id : SV_VertexID) : SV_Position {\n"
+    "    float2 p = id == 0 ? float2(0.0, 0.8) : id == 1 ? float2(0.8, -0.8) : float2(-0.8, -0.8);\n"
+    "    return float4(p, 0.0, 1.0);\n"
+    "}\n";
 
 #define CHECK(hr, what)                                                       \
     do {                                                                      \
@@ -46,6 +56,7 @@ int main(int argc, char **argv)
      * (M5.2 step c). */
     const char *dll = argc > 1 ? argv[1] : "libgallium_d3d10.dll";
     bool hw = _stricmp(dll, "hw") == 0;
+    bool nolayout = argc > 2 && _stricmp(argv[2], "nolayout") == 0;
     D3D_FEATURE_LEVEL fl = D3D_FEATURE_LEVEL_10_0, got;
     ID3D11Device *dev = nullptr;
     ID3D11DeviceContext *ctx = nullptr;
@@ -96,7 +107,7 @@ int main(int argc, char **argv)
     CHECK(dev->CreateRenderTargetView(rt, nullptr, &rtv), "CreateRenderTargetView");
 
     ID3DBlob *vsb = nullptr, *psb = nullptr, *err = nullptr;
-    HRESULT hr = D3DCompile(kHlsl, sizeof(kHlsl) - 1, "tri", nullptr, nullptr, "vs", "vs_4_0", 0, 0, &vsb, &err);
+    HRESULT hr = D3DCompile(kHlsl, sizeof(kHlsl) - 1, "tri", nullptr, nullptr, nolayout ? "vsid" : "vs", "vs_4_0", 0, 0, &vsb, &err);
     if (FAILED(hr)) { printf("FAIL vs compile: %s\n", err ? (char *)err->GetBufferPointer() : "?"); return 1; }
     hr = D3DCompile(kHlsl, sizeof(kHlsl) - 1, "tri", nullptr, nullptr, "ps", "ps_4_0", 0, 0, &psb, &err);
     if (FAILED(hr)) { printf("FAIL ps compile: %s\n", err ? (char *)err->GetBufferPointer() : "?"); return 1; }
@@ -116,7 +127,8 @@ int main(int argc, char **argv)
     CHECK(dev->CreateBuffer(&bd, &init, &vb), "CreateBuffer");
     D3D11_INPUT_ELEMENT_DESC ied = { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 };
     ID3D11InputLayout *il = nullptr;
-    CHECK(dev->CreateInputLayout(&ied, 1, vsb->GetBufferPointer(), vsb->GetBufferSize(), &il), "CreateInputLayout");
+    if (!nolayout)
+        CHECK(dev->CreateInputLayout(&ied, 1, vsb->GetBufferPointer(), vsb->GetBufferSize(), &il), "CreateInputLayout");
     D3D11_RASTERIZER_DESC rd = {};
     rd.FillMode = D3D11_FILL_SOLID;
     rd.CullMode = D3D11_CULL_NONE;
@@ -131,8 +143,12 @@ int main(int argc, char **argv)
     ctx->RSSetViewports(1, &vp);
     ctx->RSSetState(rs);
     UINT stride = 8, offset = 0;
-    ctx->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
-    ctx->IASetInputLayout(il);
+    if (nolayout) {
+        printf("no input layout, no vertex buffer: the triangle from SV_VertexID\n");
+    } else {
+        ctx->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+        ctx->IASetInputLayout(il);
+    }
     ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     ctx->VSSetShader(vs, nullptr, 0);
     ctx->PSSetShader(ps, nullptr, 0);
