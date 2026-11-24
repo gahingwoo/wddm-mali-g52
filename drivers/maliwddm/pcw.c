@@ -6,7 +6,8 @@
  *   \RK3576 GPU(gpu0)\Temperature (C)   the hotter of TSADC 3 and 5, whole C
  *   \RK3576 GPU(gpu0)\Clock (MHz)       CRU_CLKSEL_CON165 now
  *   \RK3576 GPU(gpu0)\% busy            job chains on the GPU, per interval
- *   \RK3576 GPU(gpu0)\Throttled         1 while the 85 C fallback holds 594 MHz
+ *   \RK3576 GPU(gpu0)\Throttled         1 while the guard holds 594 MHz
+ *   \RK3576 GPU(gpu0)\Throttled reason  0 none, 1 thermal, 2 faults (thermal_calc.h)
  *
  * The set is described in maliwddm.man; ctrpp turns it into
  * maliwddmCounters.h (the Register/Add/Unregister helpers used here) and
@@ -33,6 +34,7 @@ typedef struct _MW_PCW_GPU_VALUES {
     ULONG ClockMhz;
     ULONGLONG Busy100ns;
     ULONG Throttled;
+    ULONG ThrottledReason;
 } MW_PCW_GPU_VALUES;
 
 #pragma warning(push)
@@ -55,7 +57,8 @@ static void Values(MW_ADAPTER *A, MW_PCW_GPU_VALUES *V)
     V->TemperatureC = (ULONG)MwPcwTempC(valid, mc);
     V->ClockMhz = (ULONG)MwPcwMhz(MwGpuClkHzNow(A));
     V->Busy100ns = MwPcwTicksTo100ns(ticks, A->PerfHz);
-    V->Throttled = A->ThermOn && A->Therm.Held ? 1u : 0u;
+    V->ThrottledReason = A->ThermOn ? MwThrottleReason(&A->Therm) : MW_THROTTLE_NONE;
+    V->Throttled = V->ThrottledReason != MW_THROTTLE_NONE ? 1u : 0u;
 }
 
 static NTSTATUS NTAPI PcwCallback(PCW_CALLBACK_TYPE Type, PPCW_CALLBACK_INFORMATION Info, PVOID Context)

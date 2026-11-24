@@ -317,9 +317,18 @@ typedef struct _MW_ESCAPE_GPUCLK_DATA {
     mw_u32 ThermalDrops;                /* times held for heat */
     mw_u32 ThermalRestores;             /* times the clock asked for came back */
     mw_u32 Wanted;                      /* the clock above 600 MHz asked for, (Parent << 8) | Div, or 0 */
+    /* The switch between job chains and the fault policy (gpuclk_calc.h,
+     * thermal_calc.h). */
+    mw_u32 ThrottleReason;              /* 0 none, 1 thermal, 2 faults (locked at 594 MHz until restart) */
+    mw_u32 HighFaults;                  /* job faults, timeouts and TDRs while above 600 MHz */
+    mw_u32 RestoreHoldSec;              /* the time below 75 C before the clock comes back */
+    mw_u32 CoolForSec;                  /* below 75 C for this long now, while held */
+    mw_u32 Switches;                    /* clock changes written, each between two job chains */
+    mw_u32 Deferred;                    /* of those, how many waited for a running chain to end */
 } MW_ESCAPE_GPUCLK_DATA;
 #define MW_ESCAPE_GPUCLK_V1_SIZE  24
 #define MW_ESCAPE_GPUCLK_V2_SIZE  48
+#define MW_ESCAPE_GPUCLK_V3_SIZE  80
 #define MW_MEM_PROCS            64
 
 typedef struct _MW_MEM_PROC {

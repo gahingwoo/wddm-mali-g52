@@ -159,6 +159,8 @@ jobs:
         run: make -C tests/wddm2-host run
       - name: maliwddm's GPU temperature fallback (hold at 85 C, back below 75 C)
         run: make -C tests/thermal-host run
+      - name: maliwddm's GPU clock switch, one field at a time (gpuclk_calc.h)
+        run: make -C tests/gpuclk-host run
       - name: maliwddm's temperature and clock for Task Manager (perfdata_calc.h)
         run: make -C tests/perfdata-host run
       - name: maliwddm's source modes and VOP2 window scaling (scale.h)

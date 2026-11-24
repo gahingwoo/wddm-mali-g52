@@ -251,7 +251,8 @@ off.
 | `\RK3576 GPU(gpu0)\Temperature (C)` | `perf_counter_rawcount` | the hotter of TSADC channels 3 and 5, whole degrees (the reading of section 3, truncated as Task Manager truncates it); 0 when the TSADC is not running |
 | `\RK3576 GPU(gpu0)\Clock (MHz)` | `perf_counter_rawcount` | the GPU clock `CRU_CLKSEL_CON165` gives now, rounded: 198, 594 or 702; 0 on the PVTPLL path |
 | `\RK3576 GPU(gpu0)\% busy` | `perf_100nsec_timer` | the time job chains ran on the GPU (`SlotTicks`, both slots, in 100 ns), which PDH turns into a percentage of each sample interval. A chain still running counts when it ends |
-| `\RK3576 GPU(gpu0)\Throttled` | `perf_counter_rawcount` | 1 while the thermal fallback holds 594 MHz (`GpuClkHigh` on, above 85 C until below 75 C), else 0 |
+| `\RK3576 GPU(gpu0)\Throttled` | `perf_counter_rawcount` | 1 while the guard holds 594 MHz (`GpuClkHigh` on: heat or faults), else 0 |
+| `\RK3576 GPU(gpu0)\Throttled reason` | `perf_counter_rawcount` | why: 0 not held, 1 thermal (85 C; back after 75 C for `GpuClkRestoreHoldSec`, default 90 s), 2 faults (two job faults or TDRs above 600 MHz within 10 minutes; until restart). docs/PERF.md, "The fallback on the board" |
 
 One instance, `gpu0`, while the adapter is started; none before or
 after. Counter set GUID `{382d7234-6ed6-420e-9aa8-ba6e5abec190}`, provider

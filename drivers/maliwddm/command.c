@@ -525,6 +525,9 @@ static void Kick(MW_ADAPTER *A)
             FinishPreempt(A);
             continue;
         }
+        /* No chain runs: a clock change asked for is written here, before
+         * the next one starts (gpuclk_calc.h). */
+        MwGpuClkBetweenChains(A);
         const MW_COMMAND *c = &s->Commands[s->Next++];
         ULONG64 jc = s->ResumeTail != 0 ? s->ResumeTail : c->Jc;
         s->ResumeTail = 0;
@@ -558,6 +561,8 @@ static void Kick(MW_ADAPTER *A)
     }
     if (!A->Running && A->PreemptPending)
         FinishPreempt(A);
+    if (!A->Running)
+        MwGpuClkBetweenChains(A);
 }
 
 /* With a preemption request waiting: soft-stop the running chain once it
@@ -1167,6 +1172,8 @@ static BOOLEAN SyncReset(PVOID Context)
     if (a->Running)
         MkJobHardStop(&a->Gpu, a->RunningSlot);
     a->Running = FALSE;
+    /* A TDR above 600 MHz: 594 MHz now, counted for the fault policy. */
+    MwGpuClkResetFault(a);
     a->QHead = a->QCount = 0;
     a->NeedDpc = FALSE;
     /* A request waiting is part of what the reset recovers from, and a

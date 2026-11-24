@@ -253,7 +253,7 @@ Profiling (m5test prof, m5test ring; docs/PERF.md)
                        thermal-safety work; Windows then shows thermal
                        zones). Read at every m5test prof, no reboot.
     (The "RK3576 GPU" performance counters, Temperature (C), Clock (MHz),
-    % busy and Throttled, are always provided; run maliwddm-counters.cmd
+    % busy, Throttled and Throttled reason, are always provided; run maliwddm-counters.cmd
     install once after each package install so that PDH has their names.
     docs/PERFDATA.md section 6.)
     PerfData 0         at WDDM 2.x, stop answering dxgkrnl's performance
@@ -261,6 +261,10 @@ Profiling (m5test prof, m5test ring; docs/PERF.md)
                        Manager, no clock in m5test temp. On (1) by default;
                        at 1.3 they are never answered. Read at the
                        adapter's start: reboot. docs/PERFDATA.md.
+    GpuClkRestoreHoldSec n  with GpuClkHigh: the seconds the GPU must stay
+                       below 75 C before the clock asked for comes back
+                       after a thermal hold (default 90, at most 3600).
+                       Read at the adapter's start: reboot.
     PollMs n           the job-status poll timer's period, 1 to 50 ms
                        (default 1). Raise it only when m5test prof shows
                        the interrupt collecting the chains. Read at the

@@ -16,6 +16,7 @@ rem   \RK3576 GPU(gpu0)\Temperature (C)
 rem   \RK3576 GPU(gpu0)\Clock (MHz)
 rem   \RK3576 GPU(gpu0)\%% busy
 rem   \RK3576 GPU(gpu0)\Throttled
+rem   \RK3576 GPU(gpu0)\Throttled reason   (0 none, 1 thermal, 2 faults)
 rem
 rem Run from an ADMINISTRATOR prompt.
 setlocal enableextensions
@@ -48,5 +49,5 @@ exit /b %errorlevel%
 echo driver store: %DIR%
 reg query "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Perflib\_V2Providers\%GUID%" /s 2>nul | findstr /i "ApplicationIdentity ProviderName"
 typeperf -qx "RK3576 GPU"
-typeperf "\RK3576 GPU(gpu0)\Temperature (C)" "\RK3576 GPU(gpu0)\Clock (MHz)" "\RK3576 GPU(gpu0)\%% busy" "\RK3576 GPU(gpu0)\Throttled" -sc 3
+typeperf "\RK3576 GPU(gpu0)\Temperature (C)" "\RK3576 GPU(gpu0)\Clock (MHz)" "\RK3576 GPU(gpu0)\%% busy" "\RK3576 GPU(gpu0)\Throttled" "\RK3576 GPU(gpu0)\Throttled reason" -sc 3
 exit /b %errorlevel%

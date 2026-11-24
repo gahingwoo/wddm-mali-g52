@@ -18,6 +18,7 @@
 #include "rotate.h"
 #include "hdmi_calc.h"
 #include "thermal_calc.h"
+#include "gpuclk_calc.h"
 #include "perfdata_calc.h"
 #include "scale.h"
 
@@ -451,8 +452,9 @@ struct _MW_ADAPTER {
     volatile ULONG GpuClkFallbacks;
     /* The temperature fallback (adapter.c, ThermDpc; thermal_calc.h): with
      * GpuClkHigh on, the TSADC read once a second; above 85 C the clock is
-     * held at 594 MHz until below 75 C. GpuClkWanted is the clock above
-     * 600 MHz that was asked for (0 none, or dropped by a job fault). The
+     * held at 594 MHz until below 75 C for GpuClkRestoreHoldSec.
+     * GpuClkWanted is the clock above 600 MHz that was asked for (0 none);
+     * a job fault no longer clears it (the fault policy does). The
      * clock writes of GpuClkWrite and the DPC are under ClkLock; the DPC's
      * write itself runs synchronised with the interrupt, where a job fault
      * drops the clock. */
@@ -464,6 +466,22 @@ struct _MW_ADAPTER {
     KDPC ThermDpc;
     MW_THERMAL Therm;
     volatile ULONG GpuClkThermalDrops, GpuClkThermalRestores;
+    /* The clock switch (gpuclk_calc.h): a change asked for is written
+     * between two job chains (MwGpuClkBetweenChains, from Kick) or at once
+     * when none runs, never under a running chain. ClkPending is the
+     * register's low byte | MW_CLK_PENDING, or 0. All at the interrupt's
+     * level (synchronised). */
+    volatile ULONG ClkPending;
+    volatile ULONG ClkSwitches, ClkDeferred;
+    /* The fault policy (thermal_calc.h): faults above 600 MHz, counted at
+     * the interrupt, folded into Therm by ThermDpc. RestoreHoldMs is the
+     * setting GpuClkRestoreHoldSec. The registry trace of drops, restores
+     * and the fault lock is written by a work item (ClkLogItem). */
+    volatile LONG HighFaultEvents;
+    LONG HighFaultsSeen;
+    ULONG64 RestoreHoldMs;
+    PIO_WORKITEM ClkLogItem;
+    volatile LONG ClkLogQueued;
     /* dxgkrnl's performance queries, QAI 24 to 27 (adapter.c,
      * perfdata_calc.h): PerfData the setting (default 1, read at start),
      * PerfSeen one bit per type answered once (24 and 25 are journaled and
@@ -686,6 +704,10 @@ void MwPcwExit(void);
 void MwPcwAttach(MW_ADAPTER *A);
 void MwPcwDetach(MW_ADAPTER *A);
 void MwGpuClkFallback(MW_ADAPTER *A);
+void MwGpuClkBetweenChains(MW_ADAPTER *A);
+void MwGpuClkResetFault(MW_ADAPTER *A);
+#define MW_CLK_PENDING 0x80000000u
+extern PDRIVER_OBJECT MwDriverObject;
 void MwSetSetting(MW_ADAPTER *A, PCWSTR Name, ULONG Value);
 void MwScanStart(MW_ADAPTER *A);
 void MwScanStop(MW_ADAPTER *A);

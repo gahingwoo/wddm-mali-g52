@@ -185,7 +185,6 @@ static NTSTATUS APIENTRY MwAddDevice(IN_CONST_PDEVICE_OBJECT Pdo, OUT_PPVOID Con
 #define MW_CRU_CLKSEL165   0x27200594u
 #define MW_GPU_MAX_HZ      600000000u
 #define MW_GPU_CEIL_HZ     950000000u   /* mainline's highest operating point */
-#define MW_GPU_SAFE_VAL    ((0xFFu << 16) | (0u << 5) | (2u - 1u))   /* GPLL / 2 */
 #define MW_RAIL_UV_MIN     550000u      /* vdd_gpu_s0 regulator-min/max-microvolt */
 #define MW_RAIL_UV_MAX     900000u
 
@@ -269,14 +268,41 @@ static PUCHAR TsadcMapIfRunning(MW_ADAPTER *A)
 static BOOLEAN SyncThermDrop(PVOID Context);
 static BOOLEAN SyncThermRestore(PVOID Context);
 
-/* Once a second while GpuClkHigh is on (thermal_calc.h). */
+/* The registry trace of the guard (MwLog needs PASSIVE_LEVEL), from a
+ * work item ThermDpc queues when something changed. */
+static VOID ClkLogWork(PVOID IoObject, PVOID Context, PIO_WORKITEM Item)
+{
+    MW_ADAPTER *a = (MW_ADAPTER *)Context;
+    UNREFERENCED_PARAMETER(IoObject);
+    UNREFERENCED_PARAMETER(Item);
+
+    MwLog(a, L"GpuClkThermalDrops", a->GpuClkThermalDrops);
+    MwLog(a, L"GpuClkThermalRestores", a->GpuClkThermalRestores);
+    MwLog(a, L"GpuClkHighFaults", a->Therm.HighFaults);
+    MwLog(a, L"GpuClkThrottleReason", MwThrottleReason(&a->Therm));
+    MwLog(a, L"GpuClkFaultLocked", a->Therm.FaultLocked ? 1 : 0);
+    MwLog(a, L"GpuClkSwitches", a->ClkSwitches);
+    MwLog(a, L"GpuClkDeferred", a->ClkDeferred);
+    InterlockedExchange(&a->ClkLogQueued, 0);
+}
+
+static void ClkLogQueue(MW_ADAPTER *A)
+{
+    if (A->ClkLogItem != NULL && InterlockedCompareExchange(&A->ClkLogQueued, 1, 0) == 0)
+        IoQueueWorkItemEx(A->ClkLogItem, ClkLogWork, DelayedWorkQueue, A);
+}
+
+/* Once a second while GpuClkHigh is on (thermal_calc.h): faults above
+ * 600 MHz since the last reading first, then the temperature. */
 static VOID ThermDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
 {
     MW_ADAPTER *a = (MW_ADAPTER *)Context;
     KIRQL old;
     long mc = 0;
     int valid, act;
-    BOOLEAN ret = FALSE;
+    BOOLEAN ret = FALSE, changed = FALSE;
+    ULONG64 now = KeQueryInterruptTime() / 10000;
+    LONG faults;
     UNREFERENCED_PARAMETER(Dpc);
     UNREFERENCED_PARAMETER(Arg1);
     UNREFERENCED_PARAMETER(Arg2);
@@ -286,15 +312,25 @@ static VOID ThermDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
     valid = MwThermalHotter(READ_REGISTER_ULONG((PULONG)(a->TsadcVa + MW_TSADC_DATA(MW_THERMAL_CH_A))),
                             READ_REGISTER_ULONG((PULONG)(a->TsadcVa + MW_TSADC_DATA(MW_THERMAL_CH_B))), &mc);
     KeAcquireSpinLock(&a->ClkLock, &old);
-    act = MwThermalStep(&a->Therm, valid, mc);
+    faults = a->HighFaultEvents;
+    while (a->HighFaultsSeen != faults) {
+        a->HighFaultsSeen++;
+        (void)MwThermalFault(&a->Therm, now, 1);
+        changed = TRUE;
+    }
+    act = MwThermalStep(&a->Therm, valid, mc, now, a->RestoreHoldMs);
     if (act == MW_THERMAL_DROP) {
         InterlockedIncrement((volatile LONG *)&a->GpuClkThermalDrops);
         (void)a->Dxgk.DxgkCbSynchronizeExecution(a->Dxgk.DeviceHandle, SyncThermDrop, a, 0, &ret);
+        changed = TRUE;
     } else if (act == MW_THERMAL_RESTORE) {
         if (NT_SUCCESS(a->Dxgk.DxgkCbSynchronizeExecution(a->Dxgk.DeviceHandle, SyncThermRestore, a, 0, &ret)) && ret)
             InterlockedIncrement((volatile LONG *)&a->GpuClkThermalRestores);
+        changed = TRUE;
     }
     KeReleaseSpinLock(&a->ClkLock, old);
+    if (changed)
+        ClkLogQueue(a);
 }
 
 /* Once per start, at passive level, before any stored clock is applied. */
@@ -350,9 +386,9 @@ static void GpuRailInit(MW_ADAPTER *A)
     MwLog(A, L"GpuRailUv", A->RailUv);
     MwLog(A, L"GpuClkHighSetting", A->GpuClkHigh);
 
-    /* Mapped for the whole start, so a fault can drop the clock from the
-     * interrupt (GpuClkFallback). Only when a high clock can be allowed. */
-    if (A->GpuClkHigh != 0 && A->CruClkVa == NULL) {
+    /* Mapped for the whole start: every clock change is written from the
+     * interrupt's level, between two job chains (gpuclk_calc.h). */
+    if (A->CruClkVa == NULL) {
         PHYSICAL_ADDRESS pa;
         pa.QuadPart = MW_CRU_CLKSEL165 & ~0xFFFu;
         A->CruClkVa = (PUCHAR)MmMapIoSpaceEx(pa, PAGE_SIZE, PAGE_READWRITE | PAGE_NOCACHE);
@@ -366,6 +402,16 @@ static void GpuRailInit(MW_ADAPTER *A)
     RtlZeroMemory(&A->Therm, sizeof(A->Therm));
     A->GpuClkWanted = 0;
     A->ThermOn = FALSE;
+    A->ClkPending = 0;
+    A->HighFaultEvents = 0;
+    A->HighFaultsSeen = 0;
+    A->RestoreHoldMs = MwThermalHoldMs(MwSetting(A, L"GpuClkRestoreHoldSec", 0));
+    MwLog(A, L"GpuClkRestoreHoldMs", (ULONG)A->RestoreHoldMs);
+    if (A->ClkLogItem == NULL && MwDriverObject != NULL) {
+        A->ClkLogItem = (PIO_WORKITEM)ExAllocatePool2(POOL_FLAG_NON_PAGED, IoSizeofWorkItem(), MW_TAG);
+        if (A->ClkLogItem != NULL)
+            IoInitializeWorkItem(MwDriverObject, A->ClkLogItem);
+    }
     if (A->TsadcVa == NULL)
         A->TsadcVa = TsadcMapIfRunning(A);
     if (A->GpuClkHigh != 0 && A->TsadcVa != NULL) {
@@ -413,9 +459,77 @@ static ULONG GpuAllowedHz(MW_ADAPTER *A)
     return best;
 }
 
+/* ---- the clock switch (gpuclk_calc.h) ----
+ * Every change goes through ClkRequest at the interrupt's level: it is
+ * written at once when no job chain runs, else by Kick between the
+ * running chain and the next (MwGpuClkBetweenChains). The writes are
+ * mainline's order, one field at a time (MwClkSteps). */
+
+typedef struct {
+    MW_ADAPTER *A;
+    ULONG Val;
+} MW_CLK_REQ;
+
+PDRIVER_OBJECT MwDriverObject;
+
+static void ClkApply(MW_ADAPTER *A)
+{
+    ULONG want = A->ClkPending, cur, w[2], n;
+    PUCHAR reg = A->CruClkVa;
+    unsigned long hz;
+
+    if (want == 0)
+        return;
+    A->ClkPending = 0;
+    if (reg == NULL)
+        return;
+    want &= 0xFFu;
+    cur = READ_REGISTER_ULONG((PULONG)(reg + (MW_CRU_CLKSEL165 & 0xFFFu))) & 0xFFu;
+    n = MwClkSteps(cur, want, MwGpuPll, w);
+    for (ULONG i = 0; i < n; i++)
+        WRITE_REGISTER_ULONG((PULONG)(reg + (MW_CRU_CLKSEL165 & 0xFFFu)), w[i]);
+    hz = MwClkRate(want, MwGpuPll);
+    A->GpuClk = (((want >> MW_CK_MUX_SHIFT) & 7u) << 8) | ((want & MW_CK_DIV_MASK) + 1u);
+    A->GpuClkIsHigh = hz > MW_GPU_MAX_HZ;
+    A->ClkSwitches++;
+}
+
+/* Interrupt level, synchronised: ask for Val (MwClkVal). */
+static BOOLEAN ClkRequest(MW_ADAPTER *A, ULONG Val)
+{
+    A->ClkPending = MW_CLK_PENDING | (Val & 0xFFu);
+    if (A->Running) {
+        A->ClkDeferred++;
+        return FALSE;
+    }
+    ClkApply(A);
+    return TRUE;
+}
+
+static BOOLEAN SyncClkRequest(PVOID Context)
+{
+    MW_CLK_REQ *r = (MW_CLK_REQ *)Context;
+    return ClkRequest(r->A, r->Val);
+}
+
+/* From Kick (command.c), with no chain running, before the next starts. */
+void MwGpuClkBetweenChains(MW_ADAPTER *A)
+{
+    if (A->ClkPending != 0)
+        ClkApply(A);
+}
+
+/* The 594 MHz after a fault is above 600 only if pending says so. */
+static BOOLEAN ClkHighNowOrSoon(MW_ADAPTER *A)
+{
+    ULONG p = A->ClkPending;
+    if (p != 0)
+        return MwClkRate(p & 0xFFu, MwGpuPll) > MW_GPU_MAX_HZ;
+    return A->GpuClkIsHigh;
+}
+
 static NTSTATUS GpuClkWrite(MW_ADAPTER *A, ULONG Parent, ULONG Div)
 {
-    PHYSICAL_ADDRESS pa;
     PUCHAR reg;
     ULONG hz, cur;
     BOOLEAN high;
@@ -442,43 +556,41 @@ static NTSTATUS GpuClkWrite(MW_ADAPTER *A, ULONG Parent, ULONG Div)
             return STATUS_INVALID_PARAMETER;
         }
     }
-    if (A->CruClkVa != NULL) {
-        reg = A->CruClkVa;
-    } else {
-        pa.QuadPart = MW_CRU_CLKSEL165 & ~0xFFFu;
-        reg = (PUCHAR)MmMapIoSpaceEx(pa, PAGE_SIZE, PAGE_READWRITE | PAGE_NOCACHE);
-        if (reg == NULL)
-            return STATUS_INSUFFICIENT_RESOURCES;
-    }
+    reg = A->CruClkVa;
+    if (reg == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
     cur = READ_REGISTER_ULONG((PULONG)(reg + (MW_CRU_CLKSEL165 & 0xFFFu)));
     if (high && (cur & 0x100u) != 0) {
         /* On the PVTPLL path the mux written here is not the GPU's clock,
          * and what the GPU runs at is not known. */
-        if (reg != A->CruClkVa)
-            MmUnmapIoSpace(reg, PAGE_SIZE);
         MwLog(A, L"GpuClkRefusedPvtpll", cur);
         return STATUS_INVALID_DEVICE_STATE;
     }
     {
         KIRQL old;
-        BOOLEAN held;
+        BOOLEAN held, ret = FALSE;
+        MW_CLK_REQ req;
 
         KeAcquireSpinLock(&A->ClkLock, &old);
-        /* Hot: the clock asked for is kept and comes back below 75 C. */
-        held = high && A->Therm.Held;
+        /* Hot, or locked after faults: the clock asked for is kept, and
+         * comes back when the guard allows (thermal_calc.h). */
+        held = high && MwThrottleReason(&A->Therm) != MW_THROTTLE_NONE;
         A->GpuClkWanted = high ? ((Parent << 8) | Div) : 0;
         if (!held) {
-            A->GpuClkIsHigh = FALSE;
-            WRITE_REGISTER_ULONG((PULONG)(reg + (MW_CRU_CLKSEL165 & 0xFFFu)),
-                                 (0xFFu << 16) | (Parent << 5) | (Div - 1));
-            A->GpuClk = (Parent << 8) | Div;
-            A->GpuClkIsHigh = high;
+            req.A = A;
+            req.Val = MwClkVal(Parent, Div);
+            if (!NT_SUCCESS(A->Dxgk.DxgkCbSynchronizeExecution(A->Dxgk.DeviceHandle, SyncClkRequest, &req, 0, &ret)) &&
+                !A->Running) {
+                /* No interrupt to synchronise with yet (StartDevice
+                 * applying the stored GpuClk): nothing runs either. */
+                A->ClkPending = MW_CLK_PENDING | req.Val;
+                ClkApply(A);
+            }
         }
         KeReleaseSpinLock(&A->ClkLock, old);
-        if (reg != A->CruClkVa)
-            MmUnmapIoSpace(reg, PAGE_SIZE);
         if (held) {
-            MwLog(A, L"GpuClkHeldHot", hz);
+            MwLog(A, L"GpuClkHeld", hz);
+            MwLog(A, L"GpuClkThrottleReason", MwThrottleReason(&A->Therm));
             return STATUS_SUCCESS;
         }
     }
@@ -486,26 +598,32 @@ static NTSTATUS GpuClkWrite(MW_ADAPTER *A, ULONG Parent, ULONG Div)
     return STATUS_SUCCESS;
 }
 
-/* From Reap, at any IRQL: a job faulted or timed out while the clock was
- * above 600 MHz. One register write through the mapping GpuRailInit made;
- * nothing logged here (MwLog needs passive level), the count is in the
- * stats and GpuClkInfo. */
+/* At the interrupt's level: 594 MHz (GPLL / 2), between chains. TRUE when
+ * the clock was or was going to be above 600 MHz. */
 static BOOLEAN GpuClkSafe(MW_ADAPTER *A)
 {
-    if (!A->GpuClkIsHigh || A->CruClkVa == NULL)
+    if (!ClkHighNowOrSoon(A) || A->CruClkVa == NULL)
         return FALSE;
-    WRITE_REGISTER_ULONG((PULONG)(A->CruClkVa + (MW_CRU_CLKSEL165 & 0xFFFu)), MW_GPU_SAFE_VAL);
-    A->GpuClk = (0u << 8) | 2u;
-    A->GpuClkIsHigh = FALSE;
+    (void)ClkRequest(A, MwClkVal(0, 2));
     return TRUE;
 }
 
+/* From Reap, at the interrupt: a job faulted or timed out, and the chain is
+ * no longer running, so the drop is written at once. Above 600 MHz it
+ * counts for the fault policy (ThermDpc folds it in); the clock asked for
+ * is kept. Nothing logged here (MwLog needs passive level). */
 void MwGpuClkFallback(MW_ADAPTER *A)
 {
-    /* After a fault nothing brings the clock back by itself, heat or not. */
-    A->GpuClkWanted = 0;
-    if (GpuClkSafe(A))
+    if (GpuClkSafe(A)) {
         A->GpuClkFallbacks++;
+        InterlockedIncrement(&A->HighFaultEvents);
+    }
+}
+
+/* From SyncReset (a TDR), the same. */
+void MwGpuClkResetFault(MW_ADAPTER *A)
+{
+    MwGpuClkFallback(A);
 }
 
 /* At the interrupt's level (DxgkCbSynchronizeExecution), from ThermDpc. */
@@ -519,14 +637,11 @@ static BOOLEAN SyncThermRestore(PVOID Context)
     MW_ADAPTER *a = (MW_ADAPTER *)Context;
     ULONG w = a->GpuClkWanted;
 
-    /* Only the clock that was asked for, only if no fault took it away,
-     * and only over the 594 MHz this fallback wrote. */
-    if (w == 0 || a->GpuClkIsHigh || a->CruClkVa == NULL || a->GpuClk != ((0u << 8) | 2u))
+    /* Only the clock that was asked for, and only over a clock at or
+     * below 600 MHz (594 from a drop). */
+    if (w == 0 || ClkHighNowOrSoon(a) || a->CruClkVa == NULL)
         return FALSE;
-    WRITE_REGISTER_ULONG((PULONG)(a->CruClkVa + (MW_CRU_CLKSEL165 & 0xFFFu)),
-                         (0xFFu << 16) | ((w >> 8) << 5) | ((w & 0xFF) - 1));
-    a->GpuClk = w;
-    a->GpuClkIsHigh = TRUE;
+    (void)ClkRequest(a, MwClkVal(w >> 8, w & 0xFF));
     return TRUE;
 }
 
@@ -558,6 +673,15 @@ static NTSTATUS GpuClk(MW_ADAPTER *A, MW_ESCAPE_GPUCLK_DATA *D, ULONG Size)
         D->ThermalDrops = A->GpuClkThermalDrops;
         D->ThermalRestores = A->GpuClkThermalRestores;
         D->Wanted = A->GpuClkWanted;
+    }
+    if (Size >= MW_ESCAPE_GPUCLK_V3_SIZE) {
+        ULONG64 now = KeQueryInterruptTime() / 10000;
+        D->ThrottleReason = MwThrottleReason(&A->Therm);
+        D->HighFaults = A->Therm.HighFaults;
+        D->RestoreHoldSec = (mw_u32)(A->RestoreHoldMs / 1000);
+        D->CoolForSec = A->Therm.Held && A->Therm.CoolSinceMs != 0 ? (mw_u32)((now - A->Therm.CoolSinceMs) / 1000) : 0;
+        D->Switches = A->ClkSwitches;
+        D->Deferred = A->ClkDeferred;
     }
     return st;
 }
@@ -699,14 +823,30 @@ static void StopGpu(MW_ADAPTER *A)
         KeCancelTimer(&A->ThermTimer);
         KeFlushQueuedDpcs();
     }
+    /* The trace's work item, if one is queued, ends before the adapter's
+     * state goes (bounded: it only writes the registry). */
+    for (ULONG i = 0; i < 200 && A->ClkLogQueued != 0; i++) {
+        LARGE_INTEGER d;
+        d.QuadPart = -10LL * 10000;
+        KeDelayExecutionThread(KernelMode, FALSE, &d);
+    }
+    if (A->ClkLogQueued == 0 && A->ClkLogItem != NULL) {
+        IoUninitializeWorkItem(A->ClkLogItem);
+        ExFreePoolWithTag(A->ClkLogItem, MW_TAG);
+        A->ClkLogItem = NULL;
+    }
     if (A->TsadcVa != NULL) {
         MmUnmapIoSpace(A->TsadcVa, PAGE_SIZE);
         A->TsadcVa = NULL;
     }
     A->GpuClkWanted = 0;
     /* A clock above 600 MHz is allowed by this start's checks only: the
-     * next start (another package, the setting removed) may not allow it. */
-    (void)GpuClkSafe(A);
+     * next start (another package, the setting removed) may not allow it.
+     * The GPU is stopped: nothing runs, the write is made now. */
+    if (ClkHighNowOrSoon(A) && A->CruClkVa != NULL) {
+        A->ClkPending = MW_CLK_PENDING | MwClkVal(0, 2);
+        ClkApply(A);
+    }
     if (A->CruClkVa != NULL) {
         MmUnmapIoSpace(A->CruClkVa, PAGE_SIZE);
         A->CruClkVa = NULL;
@@ -1871,6 +2011,8 @@ static VOID APIENTRY T_SetStablePowerState(IN_CONST_HANDLE hAdapter, const DXGKA
 NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 {
     DRIVER_INITIALIZATION_DATA init = {0};
+
+    MwDriverObject = DriverObject;     /* the guard's work item (ClkLogWork) */
 
     /* WDDM 1.3 unless the WddmProbe setting asks for another (version.c). */
     MwVersionInit(RegistryPath);

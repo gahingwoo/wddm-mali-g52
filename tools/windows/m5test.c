@@ -975,6 +975,16 @@ int main(int argc, char **argv)
                    d.ThermalMilliC / 1000.0,
                    d.ThermalHeld ? "HELD at 594 MHz now" : "not held",
                    d.ThermalDrops, d.ThermalRestores);
+        if (d.High)
+            printf("  throttled reason %u (%s); %u faults above 600 MHz (two within 10 min lock 594 MHz until "
+                   "restart); back after %u s below 75 C; %u clock switches, %u of them waited for a running "
+                   "job chain\n",
+                   d.ThrottleReason,
+                   d.ThrottleReason == 2 ? "FAULTS: 594 MHz until restart" :
+                   d.ThrottleReason == 1 ? "thermal" : "none",
+                   d.HighFaults, d.RestoreHoldSec, d.Switches, d.Deferred);
+        if (d.High && d.ThermalHeld && d.CoolForSec)
+            printf("  below 75 C for %u s now\n", d.CoolForSec);
         return st < 0 ? 1 : 0;
     }
     if (argc >= 2 && strcmp(argv[1], "mem") == 0)

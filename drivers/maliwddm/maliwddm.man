@@ -59,9 +59,17 @@
           <counter id="4"
                    uri="wddm-mali-g52.maliwddm.Rk3576Gpu.Throttled"
                    name="Throttled"
-                   description="1 while the thermal fallback holds the clock at 594 MHz (above 85 C, until below 75 C), else 0"
+                   description="1 while the guard holds the clock at 594 MHz (heat or faults; see Throttled reason), else 0"
                    struct="GpuValues"
                    field="Throttled"
+                   type="perf_counter_rawcount"
+                   detailLevel="standard"/>
+          <counter id="5"
+                   uri="wddm-mali-g52.maliwddm.Rk3576Gpu.ThrottledReason"
+                   name="Throttled reason"
+                   description="Why the clock is held at 594 MHz: 0 not held, 1 thermal (85 C, back after 75 C for GpuClkRestoreHoldSec), 2 faults (two job faults or TDRs above 600 MHz within 10 minutes; until restart)"
+                   struct="GpuValues"
+                   field="ThrottledReason"
                    type="perf_counter_rawcount"
                    detailLevel="standard"/>
         </counterSet>
