@@ -452,7 +452,7 @@ vp_run_tests(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11VideoDevice *vde
    Vp v = { dev, ctx, vdev, vctx, 0 };
    ID3D11VideoProcessorEnumerator *e = NULL;
    ID3D11VideoProcessor *vp = NULL;
-   ID3D11Texture2D *nv12 = NULL, *out = NULL, *big = NULL, *small = NULL, *bgra_in = NULL;
+   ID3D11Texture2D *nv12 = NULL, *out = NULL, *big = NULL, *shrunk = NULL, *bgra_in = NULL;
    UINT f = 0, fs = 0;
 
    make_pattern();
@@ -484,8 +484,8 @@ vp_run_tests(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11VideoDevice *vde
    out = make_texture(&v, DXGI_FORMAT_B8G8R8A8_UNORM, W, H, D3D11_BIND_RENDER_TARGET, D3D11_USAGE_DEFAULT, 0);
    big = make_texture(&v, DXGI_FORMAT_B8G8R8A8_UNORM, W * 2, H * 2, D3D11_BIND_RENDER_TARGET,
                       D3D11_USAGE_DEFAULT, 0);
-   small = make_texture(&v, DXGI_FORMAT_B8G8R8A8_UNORM, 77, 58, D3D11_BIND_RENDER_TARGET, D3D11_USAGE_DEFAULT, 0);
-   if (!nv12 || !out || !big || !small)
+   shrunk = make_texture(&v, DXGI_FORMAT_B8G8R8A8_UNORM, 77, 58, D3D11_BIND_RENDER_TARGET, D3D11_USAGE_DEFAULT, 0);
+   if (!nv12 || !out || !big || !shrunk)
       return 1;
    {
       /* NV12 in one go, as D3D lays it out: luma rows, then chroma rows. */
@@ -520,8 +520,8 @@ vp_run_tests(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11VideoDevice *vde
    }
    {
       RECT src = { 10, 6, 116, 86 }, dst = { 0, 0, 77, 58 };
-      if (SUCCEEDED(blit(&v, e, vp, nv12, small, &src, NULL, NULL, NULL, true))) {
-         uint8_t *px = read_back(&v, small, 77, 58, DXGI_FORMAT_B8G8R8A8_UNORM);
+      if (SUCCEEDED(blit(&v, e, vp, nv12, shrunk, &src, NULL, NULL, NULL, true))) {
+         uint8_t *px = read_back(&v, shrunk, 77, 58, DXGI_FORMAT_B8G8R8A8_UNORM);
          if (px)
             check_blit(&v, "NV12 -> BGRA, source rect, 0.73x", px, 77, 58, src, dst, dst, black, black, 3,
                        false, NULL, 0, 0);
@@ -551,8 +551,8 @@ vp_run_tests(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11VideoDevice *vde
       RECT dst = { 0, 0, 77, 58 };
       if (src_px && bgra_in) {
          ctx->UpdateSubresource(bgra_in, 0, NULL, src_px, W * 4, 0);
-         if (SUCCEEDED(blit(&v, e, vp, bgra_in, small, NULL, NULL, NULL, NULL, false))) {
-            uint8_t *px = read_back(&v, small, 77, 58, DXGI_FORMAT_B8G8R8A8_UNORM);
+         if (SUCCEEDED(blit(&v, e, vp, bgra_in, shrunk, NULL, NULL, NULL, NULL, false))) {
+            uint8_t *px = read_back(&v, shrunk, 77, 58, DXGI_FORMAT_B8G8R8A8_UNORM);
             if (px)
                check_blit(&v, "BGRA -> BGRA, 0.6x", px, 77, 58, full, dst, dst, black, black, 3, true, src_px,
                           W, H);
@@ -569,7 +569,7 @@ vp_run_tests(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11VideoDevice *vde
    test_plane_views(&v, nv12);
 
    if (bgra_in) bgra_in->Release();
-   small->Release();
+   shrunk->Release();
    big->Release();
    out->Release();
    nv12->Release();
