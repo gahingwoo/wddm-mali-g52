@@ -776,6 +776,9 @@ it, so the frame stays one submission and the copy costs one draw. A copy
 between two levels of one texture keeps both flushes. Off unless 1;
 running processes take a change within a second or two. For one process,
 `D3D10UMD_COPYBATCH=0` or `1` in its environment overrides the KMD.
+It applies to every process with the Panfrost UMD, the OpenGL ICD
+(maligl.dll, `glCopyImageSubData`) included, since both take the switches
+from the same escape.
 
 Expected, from the numbers above (estimates, to be confirmed):
 
@@ -831,7 +834,7 @@ CPU), and in an elevated PowerShell (dwm.exe's CPU time needs it).
 
        foreach ($cb in '0','1','0','1','0','1') { $env:D3D10UMD_COPYBATCH = $cb; C:\mali\copytest.exe hw bench 600 | Select-String bench }
 
-   Compare `CPU .. ms a frame`.
+   Compare `CPU .. ms a frame` and `Mcycles a frame`.
 3. Baseline drag, `UmdCopyBatch` unset. Three times: run the line below,
    then drag a window in circles for the whole 15 s.
 

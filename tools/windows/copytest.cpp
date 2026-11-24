@@ -387,6 +387,15 @@ static double cpu_ms(void)
     return (double)t / 10000.0;
 }
 
+// GetProcessTimes counts in clock ticks and read 0 on the CI runner for
+// half a second of WARP; the cycle count is exact, for comparing two runs.
+static double mcycles(void)
+{
+    ULONG64 c = 0;
+    QueryProcessCycleTime(GetCurrentProcess(), &c);
+    return (double)c / 1e6;
+}
+
 static void bench(int frames)
 {
     const UINT W = 2560, H = 1440;
@@ -404,10 +413,11 @@ static void bench(int frames)
     ctx->Flush();
     LARGE_INTEGER f, t0, t1;
     QueryPerformanceFrequency(&f);
-    double c0 = 0;
+    double c0 = 0, m0 = 0;
     for (int n = -30; n < frames; n++) {
         if (n == 0) {
             c0 = cpu_ms();
+            m0 = mcycles();
             QueryPerformanceCounter(&t0);
         }
         int b = n & 1;
@@ -434,11 +444,11 @@ static void bench(int frames)
             Sleep(0);
     QueryPerformanceCounter(&t1);
     double wall = (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)f.QuadPart;
-    double cpu = cpu_ms() - c0;
+    double cpu = cpu_ms() - c0, mc = mcycles() - m0;
     const char *env = getenv("D3D10UMD_COPYBATCH");
     printf("bench: %d frames (4 draws, 2 copies of 600x400 each) in %.0f ms: %.2f ms a frame,"
-           " CPU %.2f ms a frame (%.0f%% of one core); D3D10UMD_COPYBATCH=%s\n",
-           frames, wall, wall / frames, cpu / frames, wall > 0 ? cpu * 100.0 / wall : 0.0,
+           " CPU %.2f ms a frame (%.0f%% of one core), %.2f Mcycles a frame; D3D10UMD_COPYBATCH=%s\n",
+           frames, wall, wall / frames, cpu / frames, wall > 0 ? cpu * 100.0 / wall : 0.0, mc / frames,
            env ? env : "(unset, the KMD's UmdCopyBatch)");
     for (int i = 0; i < 2; i++) {
         q[i]->Release();
