@@ -764,6 +764,13 @@ switch on would have.
 
 ### The switch: `UmdCopyBatch`
 
+Board result, 2026-11-24 (TaishanPi 3M, WDDM 2.0, HDMI 2560x1440): `copytest hw`
+passed with the switch off and on; three automated 15 s drags each way cut
+DWM's GPU copy time from about 1075 ms to 60 to 123 ms and its submits from
+about 3050 to 1480, present time rose from about 100 to 340 ms, and no stale
+or ghost rectangles were seen. Since then the switch is on unless set to 0.
+
+
 mesa-patches/0075. With `UmdCopyBatch` 1 in Device Parameters (handed to
 the UMD as `MW_UMD_FLAG_COPY_BATCH`, 0x8 in `m5test perf`'s switches),
 neither flush is made. The blitter's draw is recorded like any other draw

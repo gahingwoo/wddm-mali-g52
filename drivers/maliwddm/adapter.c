@@ -1265,8 +1265,11 @@ static ULONG UmdFlags(MW_ADAPTER *A)
      * cut DWM's submit CPU per job by about a third, no errors. */
     if (MwSetting(A, L"UmdMergeSubmit", 1) != 0)
         f |= MW_UMD_FLAG_MERGE_SUBMIT;
-    /* Off unless 1 until board runs have shown it renders the same. */
-    if (MwSetting(A, L"UmdCopyBatch", 0) == 1)
+    /* On unless 0: on the TaishanPi 3M on 2026-11-24 copytest passed both
+     * ways, three automated drags each way cut DWM's GPU copy time from
+     * about 1075 ms to 60 to 123 ms per 15 s and its submits by half, and
+     * no stale or ghost rectangles were seen. */
+    if (MwSetting(A, L"UmdCopyBatch", 1) != 0)
         f |= MW_UMD_FLAG_COPY_BATCH;
     return f;
 }
