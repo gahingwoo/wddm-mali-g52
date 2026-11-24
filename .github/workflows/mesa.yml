@@ -410,7 +410,8 @@ jobs:
           $dll = (Resolve-Path out\libgallium_d3d10.dll).Path
           New-Item -ItemType Directory -Force vt | Out-Null
           cl /nologo /W3 /O2 /EHsc /MD /Itools\windows\vdectest tools\windows\vdectest\vdectest.cpp `
-             tools\windows\vdectest\h264parse.c tools\windows\vdectest\md5.c /Fe:vt\vdectest.exe
+             tools\windows\vdectest\vptest.cpp tools\windows\vdectest\h264parse.c `
+             tools\windows\vdectest\md5.c /Fe:vt\vdectest.exe
           if ($LASTEXITCODE) { throw 'vdectest build failed' }
           Copy-Item vt\vdectest.exe vt\notaplayer.exe
           Copy-Item out\triangle.exe vt\mpv.exe
@@ -431,19 +432,21 @@ jobs:
           $off = Run-Exe 'off' 'vdectest.exe' "`"$dll`" --probe"
           $env:D3D10UMD_UMDVIDEO = '1'
           $noprof = Run-Exe 'noprofiles' 'vdectest.exe' "`"$dll`" --probe"
+          # 0077: the video processor and NV12 plane views, no decoder needed.
+          $vpt = Run-Exe 'vp' 'vdectest.exe' "`"$dll`" --vp"
           $other = Run-Exe 'otherprocess' 'notaplayer.exe' "`"$dll`" --probe"
           $tri = Run-Exe 'triangle11' 'mpv.exe' "`"$dll`""
           $pres = Run-Exe 'present11' 'ffplay.exe' "`"$dll`""
           $env:D3D10UMD_UMDVIDEO = '2'
           $env:D3D10UMD_VDEC_FAKE = '1'
-          $dec = Run-Exe 'decode' 'vdectest.exe' "`"$dll`" `"$stream`" --fake"
+          $dec = Run-Exe 'decode' 'vdectest.exe' "`"$dll`" `"$stream`" --fake --vp"
           Remove-Item Env:D3D10UMD_VDEC_FAKE
           $env:D3D10UMD_UMDVIDEO = '2'
           $nodev = Run-Exe 'nodevice' 'vdectest.exe' "`"$dll`" --probe"
           Remove-Item Env:D3D10UMD_UMDVIDEO, Env:D3D10UMD_UMDDDI, Env:GALLIUM_DRIVER
 
           $t = @{}
-          foreach ($k in 'off', 'noprofiles', 'otherprocess', 'decode', 'nodevice') { $t[$k] = (Get-Content "vdec-$k.txt" -ErrorAction SilentlyContinue) -join "`n" }
+          foreach ($k in 'off', 'noprofiles', 'vp', 'otherprocess', 'decode', 'nodevice') { $t[$k] = (Get-Content "vdec-$k.txt" -ErrorAction SilentlyContinue) -join "`n" }
           if ($off -eq 'hang' -or $off -eq 0) { throw "UmdVideo 0: a video device was created ($off)" }
           if ($t['off'] -match 'ID3D11VideoDevice: yes') { throw 'UmdVideo 0 offered a video device' }
           if ($noprof -ne 3 -or $t['noprofiles'] -notmatch 'ID3D11VideoDevice: yes' -or $t['noprofiles'] -notmatch 'decoder profiles: 0') { throw "UmdVideo 1: expected a video device with no profiles ($noprof)" }
@@ -451,6 +454,8 @@ jobs:
           if ($tri -ne 0 -and $tri -ne 2) { throw "triangle.exe on the D3D11.1 interface failed ($tri)" }
           if ($pres -ne 0) { throw "present.exe on the D3D11.1 interface failed ($pres)" }
           if ($dec -ne 0 -or $t['decode'] -notmatch 'fake pattern: MATCH' -or $t['decode'] -notmatch 'frames out 12') { throw "decode through ID3D11VideoContext failed ($dec)" }
+          if ($vpt -ne 0 -or $t['vp'] -notmatch 'video processor tests: PASS') { throw "video processor or NV12 plane views failed ($vpt)" }
+          if ($t['decode'] -notmatch 'through the video processor: MATCH') { throw 'the decoded picture through the video processor did not match' }
           if ($nodev -ne 3 -or $t['nodevice'] -notmatch 'decoder profiles: 0') { throw "without \\.\VDPU383 the profile must not be offered ($nodev)" }
 
       - uses: actions/upload-artifact@v4

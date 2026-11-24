@@ -5,7 +5,7 @@ m = re.search(r'typedef struct D3D11_1DDI_VIDEODEVICEFUNCS\s*\{(.*?)\}\s*D3D11_1
 members = re.findall(r'(PFND3D11_1DDI_\w+)\s+(pfn\w+);', m.group(1))
 impl = set(sys.argv[2].split(','))
 out = []
-out.append('/* Generated from the WDK\'s d3d10umddi.h (D3D11_1DDI_VIDEODEVICEFUNCS) by\n * tools/gen-video-stubs.py; the entry points this driver does not carry out. */\n')
+out.append('/* Generated from the WDK\'s d3d10umddi.h (D3D11_1DDI_VIDEODEVICEFUNCS) by\n * tools/gen-video-stubs.py in wddm-mali-g52; the entry points this driver does not carry out. */\n')
 fill = []
 for t, mem in members:
     name = mem[3:]

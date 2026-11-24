@@ -10,6 +10,9 @@
  *   --ref <file.yuv>   I420 reference (the ITU conformance .yuv, or
  *                      ffmpeg -i x.264 -f rawvideo -pix_fmt yuv420p); MATCH or MISMATCH
  *   --fake             the UMD runs with D3D10UMD_VDEC_FAKE=1: check its pattern instead
+ *   --vp               the video processor and NV12 plane view tests (vptest.cpp); with
+ *                      a stream, the decoder texture is also a shader resource and the
+ *                      first frame goes through the video processor (with --fake)
  *   -n <pictures>      stop after that many
  *   -o <file.yuv>      write the frames (I420)
  *
@@ -41,6 +44,7 @@ extern "C" {
 #include "h264parse.h"
 #include "md5.h"
 }
+#include "vptest.h"
 
 #include "../../../video/vdpu383/vdpu383_ioctl.h"
 
@@ -68,7 +72,7 @@ struct Test {
    ID3D11VideoDecoderOutputView *views[H264_MAX_SLOTS];
    unsigned tex_w, tex_h;
 
-   int fake;
+   int fake, vp, vp_done, vp_rc;
    unsigned slot_status[H264_MAX_SLOTS];   /* StatusReportFeedbackNumber last decoded there */
 
    unsigned width, height, crop_l, crop_r, crop_t, crop_b;
@@ -248,7 +252,7 @@ setup_decoder(Test *t, unsigned width, unsigned height)
    td.Format = DXGI_FORMAT_NV12;
    td.SampleDesc.Count = 1;
    td.Usage = D3D11_USAGE_DEFAULT;
-   td.BindFlags = D3D11_BIND_DECODER;
+   td.BindFlags = D3D11_BIND_DECODER | (t->vp ? D3D11_BIND_SHADER_RESOURCE : 0);
    hr = t->dev->CreateTexture2D(&td, NULL, &t->tex);
    printf("NV12 decoder texture array %ux%u x %u: 0x%08lx\n", td.Width, td.Height, td.ArraySize,
           (unsigned long)hr);
@@ -446,6 +450,11 @@ output_cb(void *ctx, int slot, unsigned decode_index, int poc)
          printf("frame %4u (pic %u, slot %d): %zu bytes not the fake decoder's pattern\n",
                 t->frames_out, decode_index, slot, bad);
       }
+      if (t->vp && !t->vp_done) {
+         t->vp_done = 1;
+         t->vp_rc = vp_check_decoded(t->dev, t->ctx, t->vdev, t->vctx, t->tex, (UINT)slot, t->tex_w,
+                                     t->tex_h, ly, lc);
+      }
    } else if (t->ref) {
       size_t off = (size_t)t->frames_out * fsize;
       if (off + fsize > t->ref_len || memcmp(t->ref + off, t->frame, fsize)) {
@@ -473,6 +482,7 @@ main(int argc, char **argv)
    for (int i = 2; i < argc; i++) {
       if (!strcmp(argv[i], "--probe")) probe_only = 1;
       else if (!strcmp(argv[i], "--fake")) t.fake = 1;
+      else if (!strcmp(argv[i], "--vp")) t.vp = 1;
       else if (!strcmp(argv[i], "--ref") && i + 1 < argc) ref = argv[++i];
       else if (!strcmp(argv[i], "-o") && i + 1 < argc) outp = argv[++i];
       else if (!strcmp(argv[i], "-n") && i + 1 < argc) max_pictures = (unsigned)atoi(argv[++i]);
@@ -486,6 +496,8 @@ main(int argc, char **argv)
    if (FAILED(create_device(argv[1], &t)))
       return 1;
    rc = probe(&t);
+   if (t.vp && t.vdev && !stream && !probe_only)
+      return vp_run_tests(t.dev, t.ctx, t.vdev, t.vctx);
    if (probe_only || rc)
       return rc;
    if (!stream) {
@@ -544,5 +556,7 @@ main(int argc, char **argv)
    }
    if (t.out)
       fclose(t.out);
-   return (prc || t.decode_errors || t.mismatches || !t.frames_out) ? 2 : 0;
+   if (t.vp && !t.vp_done)
+      printf("decoded picture through the video processor: not run (needs --fake)\n");
+   return (prc || t.decode_errors || t.mismatches || !t.frames_out || t.vp_rc) ? 2 : 0;
 }
