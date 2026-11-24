@@ -268,7 +268,7 @@ jobs:
           if ($LASTEXITCODE) { throw 'copytest build failed' }
           .\triangle.exe $dll
           if ($LASTEXITCODE) { throw "softpipe smoke test failed ($LASTEXITCODE)" }
-          # The copy orders of mesa-patches/0073 on a driver that runs them:
+          # The copy orders of mesa-patches/0075 on a driver that runs them:
           # the expected pixels are right (the same program checks the Mali).
           .\copytest.exe $dll
           if ($LASTEXITCODE) { throw "copytest on softpipe failed ($LASTEXITCODE)" }
@@ -361,7 +361,7 @@ jobs:
           Get-Content nolayout.out, nolayout.err -ErrorAction SilentlyContinue | Select-String -NotMatch 'ioctl|  ->' | Select-Object -Last 10
           if (Test-Path nolayout-crash.txt) { Get-Content nolayout-crash.txt | Select-String -NotMatch 'NatVis|ModLoad' | Select-Object -Last 60 }
 
-          # GPU copies with and without the open batches (mesa-patches/0073):
+          # GPU copies with and without the open batches (mesa-patches/0075):
           # Panfrost records and submits them; nothing runs the jobs, so the
           # pixels are only reported (nocheck).
           $cr = @{}

@@ -764,7 +764,7 @@ switch on would have.
 
 ### The switch: `UmdCopyBatch`
 
-mesa-patches/0073. With `UmdCopyBatch` 1 in Device Parameters (handed to
+mesa-patches/0075. With `UmdCopyBatch` 1 in Device Parameters (handed to
 the UMD as `MW_UMD_FLAG_COPY_BATCH`, 0x8 in `m5test perf`'s switches),
 neither flush is made. The blitter's draw is recorded like any other draw
 and Panfrost's own resource tracking orders it: reading the source
