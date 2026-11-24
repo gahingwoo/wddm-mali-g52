@@ -354,81 +354,141 @@ One code change, plus logging for the cause.
 - The board test records dxgkrnl's own events (etwrec) around the run:
   if a device is removed again, they say why.
 
+## Board result, 2026-11-24 (DriverVer 2.40.7.189 = 352b667, patch 0073)
+
+TaishanPi 3M, HDMI only, 2560x1440. Files in
+`board-session-prep/edge5-2.40.7.189/`.
+
+- Without redirection, Notepad was opened, typed in, moved and resized 20
+  times, then closed. The desktop and dwm.exe were unchanged: the
+  residency change (runtime resources listed only when named) did not
+  break the desktop.
+- With `C:\mali\redirect` on, the probe on the Mali passed the whole edge
+  path. dwm.exe did not crash, but its log ends at
+  `RelocateDeviceFuncs1: ... the device is being removed`, with no
+  `removed:` line after it and nothing more from dwm.exe. Every process
+  started afterwards hung (SearchHost.exe seven times,
+  ShellExperienceHost.exe, the screenshot script), each with its log ending
+  at a `Flush`. About 1.5 minutes after the switch was deleted the whole
+  UI froze, mouse included, until dwm.exe was killed.
+
+### Decoding the dxgkrnl trace
+
+`tools/etw/dxgk-decode.py` with the board's dxgkrnl.sys gives field names
+but no event names. The event, task and opcode names are in the
+WEVT_TEMPLATE's EVNT, TASK and OPCO tables, which pyfwevt does not
+expose. `tools/etw/dxgk-event-names.py dxgkrnl.sys [ids]` reads them
+now. Read directly, the rare events are Device and Context start and
+stop, PresentHistory, Fence and MonitoredFence. There are no
+device-error or TDR events. Event 70 with Status 0xc0000001, the one the
+decoder's filter shows, is VidMm's InnerIteration stop, 590 times through
+the whole trace: normal paging, not a failure.
+
+- The probe's device lives from 24180046330 to 24190620573 (100 ns
+  units), about 1.06 s. DWM's removal was 0.36 s into it.
+- DWM's context (0xffffa5861c9a95a0, 22887 events) runs to 24188310622
+  and then stops. Its last packets complete normally (QueuePacket stop,
+  not preempted, not timed out; DmaPacket with no fault address). After
+  that dwm.exe never makes another device.
+
+So dxgkrnl did not remove DWM's device. The removal came from the user-mode
+runtime, and after it DWM stopped working instead of rebuilding its device
+as it did in round 4.
+
+### Why DWM stopped: the removal logging deadlocked it
+
+`malikm_note_removed` (352b667) took the shim's lock with
+AcquireSRWLockExclusive. The runtime moves a device's function table
+wherever it notices the removal, and that can be inside a runtime callback
+the shim makes while it holds that lock. An SRW lock taken twice on one
+thread never returns. The log's last line is the one written just before
+that acquire, and nothing follows from any DWM thread. So the logging that
+was meant to explain the removal stopped DWM's render thread for good, and
+everything waiting on DWM hung with it. Round 4 had no such call, and DWM
+rebuilt its device eight to fifteen times before giving up with
+0x8898008D.
+
+### The change (632b8e1, patch 0074)
+
+- wlock/wunlock keep a thread-local "held" flag. `malikm_note_removed`
+  does not take the lock when its thread already holds it; otherwise it
+  tries for 20 ms and gives up. The first `removed:` line says which case
+  it was: `inside a call that holds the shim lock` means the runtime
+  called RelocateDeviceFuncs from inside one of the shim's callbacks.
+- d3d10umd keeps the last 32 entry points of the process after the
+  entry-point trace has stopped (DWM's had, long before the removal), and
+  RelocateDeviceFuncs writes them as `recent:` lines. The last one before
+  `RelocateDeviceFuncs1` is the call the removal came in.
+
+Still not known: why the runtime removes DWM's device about 30 ms after
+DWM opens a composition buffer an application has just presented. The
+`recent:` and `removed:` lines of the next run are where to read it.
+
 ## Board test, one install
 
-The package changes one behaviour: shared surfaces stay out of the
-residency list unless a job names them. It also adds the removal
-logging. `C:\mali\redirect` stays the only switch. Without it the
-desktop behaves as in 0.3.59.412, except for that one change.
+Same as round 5. This package (logging only, plus the lock fix) should
+leave DWM alive after a removal, rebuilding its device as in round 4, and
+give the removal's call in the log.
 
-Package: CI run 45089269914 (352b667), artifact
-`wddm-mali-g52-driver-arm64`, DriverVer 11/23/2026,0.31.38.111, UMD from
-Mesa run 45089269899 (patches 0001-0073). Test certificate SHA1
-DDE0EFE9956EE80FD1053C043B64707E13752530 (new). d3dprobe.exe, etwrec.exe
+Package: CI run 45322983394 (632b8e1), artifact
+`wddm-mali-g52-driver-arm64`, DriverVer 11/24/2026,3.57.23.142, UMD from
+Mesa run 45322983455 (patches 0001-0074). Test certificate SHA1
+473F2837FD96CFD9A205BD7B7D6C482586249112 (new). d3dprobe.exe, etwrec.exe
 and m5test.exe are in the `m3test-arm64` artifact of the same CI run.
 
-1. Copy the package to `C:\mali\pkg-edge5\`. From the same run's
-   `m3test-arm64` artifact take d3dprobe.exe (copy it over
-   `C:\mali\fake\msedge.exe` and `C:\mali\fake\plainprobe.exe`),
-   etwrec.exe and m5test.exe, to `C:\mali\`. Copy
-   `C:\Windows\System32\drivers\dxgkrnl.sys` to `C:\mali\` as well, to
-   decode the trace with.
-2. Import the new test certificate into Root and TrustedPublisher, as
-   administrator (`certutil -addstore -f Root ...cer`, then
-   `TrustedPublisher`).
-3. `pnputil /add-driver C:\mali\pkg-edge5\driver\maliwddm.inf` (stage only).
+1. Copy the package to `C:\mali\pkg-edge6\`; d3dprobe.exe (to
+   `C:\mali\fake\msedge.exe` and `plainprobe.exe`), etwrec.exe and
+   m5test.exe from the same run's `m3test-arm64` artifact to `C:\mali\`.
+2. Import the new test certificate into Root and TrustedPublisher.
+3. `pnputil /add-driver C:\mali\pkg-edge6\driver\maliwddm.inf` (stage only).
 4. As SYSTEM (task `malireinst`), `ConfigFlags |= 0x20` on
    `HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0`; poll until set.
 5. `C:\mali\log`: delete `off` and the old `*.txt`; the ACL stays.
    `C:\mali\redirect` must NOT exist. Clean restart.
-6. After logon, without redirection: wait 30 s, then open Notepad, type a
-   line, move the window, close it. Photo if anything looks wrong. This
-   checks the residency change with the desktop as it always was.
-7. As administrator: `C:\mali\etwrec.exe start C:\mali\dxgkrnl.etl`. Then
+6. Without redirection: the Notepad round from round 5 (automated is
+   fine).
+7. As administrator: `C:\mali\etwrec.exe start C:\mali\dxgkrnl.etl`, then
    `echo > C:\mali\redirect`.
-8. In the user's session (`schtasks /it /ru woo`, `.cmd` wrapper), with
-   redirection, one at a time, about 20 s each, watching the screen:
-   - `C:\mali\fake\plainprobe.exe > C:\mali\present-plain-C.txt`
-   - Notepad: open, type, move, resize, close.
-   - A windowed D3D application: `C:\mali\fake\plainprobe.exe` is not
-     one (it closes at once), so use the DirectX one already on the board
-     if there is one, or Settings (WinUI, D3D) and the Edge window itself.
-   - Edge as before (separate profile, `--enable-logging --v=1`, the
-     WebGL page, then edge://gpu with a screenshot). Leave it open 60 s.
-9. As administrator: `C:\mali\etwrec.exe stop`, then
-   `C:\mali\m5test.exe mem > C:\mali\m5-mem.txt`. Then
-   `del C:\mali\redirect`, `echo > C:\mali\log\off`.
-10. Collect `C:\mali\present-*.txt`, `C:\mali\m5-mem.txt`,
-    `C:\mali\dxgkrnl.etl`, `C:\mali\dxgkrnl.sys`, every
-    `C:\mali\log\*.txt`, the Application and System event logs from the
-    last hour (all providers this time, not only Kernel-General), the Edge
-    log, the edge://gpu screenshot, and the times the screen went black, if
-    it did.
+8. In the user's session, with redirection, one at a time, about 20 s
+   each, watching the screen and noting the time of anything that goes
+   black or stops:
+   - `C:\mali\fake\plainprobe.exe > C:\mali\present-plain-D.txt`
+   - Notepad: open, type, move, resize, close (a new process after the
+     switch).
+   - Settings (a WinUI window, D3D).
+   - Edge (separate profile, `--enable-logging --v=1`, the WebGL page,
+     edge://gpu with a screenshot), open 60 s.
+9. As administrator: `C:\mali\etwrec.exe stop`,
+   `C:\mali\m5test.exe mem > C:\mali\m5-mem.txt`, `del C:\mali\redirect`,
+   `echo > C:\mali\log\off`. Then 3 more minutes of normal use (move a
+   window, open Start), to see whether DWM stays responsive.
+10. Collect as in round 5: `present-*.txt`, `m5-mem.txt`, `dxgkrnl.etl`,
+    `dxgkrnl.sys`, all `C:\mali\log\*.txt`, app.evtx and sys.evtx, the
+    Edge log, the screenshot, and the times noted.
 
-If the desktop goes black and stays black, `del C:\mali\redirect` over
-SSH. A new dwm.exe then starts without redirection.
+If the UI freezes anyway: `del C:\mali\redirect` and
+`Stop-Process -Name dwm -Force` over SSH, as in round 5. Note the time.
 
 What to read:
 
-- The Application log: no dwm.exe APPCRASH with 0x8898008D. That, and no
-  black screen in step 8, means the residency change was the fix.
-- `findstr /c:"device is being removed" C:\mali\log\*.txt`: no lines.
-  If there are any, the `removed:` lines after each say what that device
-  last submitted. Then decode the trace:
-  `tools/etw/make-events-json.py dxgkrnl.sys > events.json`, then
-  `tools/etw/dxgk-decode.py events.json dxgkrnl.etl` around the removal
-  times.
-- present-plain-C.txt: the edge path on the Mali passes, as in run B.
+- `findstr /c:"being removed" /c:"removed:" /c:"recent:" C:\mali\log\dwm.exe-*.txt`.
+  After each `being removed` there must now be `removed:` lines (if not,
+  the deadlock is still there) and up to 32 `recent:` lines. The first
+  `removed:` line says whether the removal came inside a shim callback;
+  the last `recent:` lines before `RelocateDeviceFuncs1` name the DDI it
+  came in.
+- No AppHang for processes started after the switch, and no UI freeze
+  after it is gone. With the deadlock gone DWM may still lose its device
+  and rebuild it. If that happens too often it fails fast with 0x8898008D
+  as in round 4. That would mean the removal is still there, with the
+  hang fixed.
 - Edge: no `Present1 failed`, no testDeviceLost; edge://gpu "Software
   Rendering: No".
-- Step 6 (no redirection): Notepad and the desktop as before. If not, the
-  residency change broke something without redirection: look for a GPU
-  fault in `m5-mem.txt` and in the KMD trace (JobsFailed, LastFaultStatus).
 
 ## Not known yet
 
-- Why dxgkrnl removed DWM's devices. The residency change is the best
-  guess, not a finding; the trace and the `removed:` lines are what settle
-  it if the removals happen again.
-- Redirected presents of blt-model windowed applications (Notepad) have
-  not run on the board yet.
+- Why the runtime removes DWM's device soon after DWM opens a freshly
+  presented composition buffer (rounds 4 and 5). Not dxgkrnl: its trace
+  shows no device error. The next run's `recent:` lines name the call.
+- Redirected presents of blt-model windowed applications: Notepad in
+  round 5 ran only as a process started after DWM had already stopped.
