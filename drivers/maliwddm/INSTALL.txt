@@ -290,7 +290,8 @@ Profiling (m5test prof, m5test ring; docs/PERF.md)
                        firmware reports vdd_gpu_s0 at 775 mV or more
                        (edk2-rk3576 raises it on the TaishanPi 3M), and
                        then the GPU starts at 702 MHz unless a GpuClk is
-                       stored; dropped to 594 MHz at 85 C, back after 90 s
+                       stored (else 594 MHz, never the firmware's
+                       198); dropped to 594 MHz at 85 C, back after 90 s
                        below 75 C, locked at 594 MHz after two faults in
                        10 minutes. 1 or 2 as in docs/PERF.md. Read at the
                        adapter's start: reboot.

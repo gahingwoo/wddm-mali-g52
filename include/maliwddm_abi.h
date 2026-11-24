@@ -297,7 +297,7 @@ typedef struct _MW_ESCAPE_STATS_DATA {
  * supply meets the operating point (adapter.c, GpuClkWrite).
  * Mode: 0 report only; 1 set now; 2 set now and at every start; 3 forget
  * the stored setting (from the next start: 702 MHz when GpuClkHigh is on
- * and allows it, else the firmware's rate).
+ * and allows it, else 594 MHz).
  * A caller may send only the first six fields (MW_ESCAPE_GPUCLK_V1_SIZE). */
 typedef struct _MW_ESCAPE_GPUCLK_DATA {
     mw_u32 Code;                        /* MW_ESCAPE_GPUCLK */

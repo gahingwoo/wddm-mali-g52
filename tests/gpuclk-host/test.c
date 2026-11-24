@@ -109,8 +109,13 @@ static void defaults(void)
     /* The clock at start. */
     CHECK(MwClkStartWant(0, 1, 1) == ((3ul << 8) | 1ul), "on, allowed, nothing stored: SPLL / 1");
     CHECK(MwClkStartWant(0, 2, 1) == MW_CK_SPLL_702, "vendor table, allowed: 702");
-    CHECK(MwClkStartWant(0, 1, 0) == 0, "on but not allowed (rail, no guard): the firmware's");
-    CHECK(MwClkStartWant(0, 0, 1) == 0, "off: the firmware's");
+    CHECK(MwClkStartWant(0, 1, 0) == MW_CK_GPLL_594, "on but not allowed (rail, no guard): 594");
+    CHECK(MwClkStartWant(0, 0, 1) == MW_CK_GPLL_594, "off (CM5-IO, ROCK 4D at 750 mV): 594, not 198");
+    CHECK(MwClkStartWant(0, 0, 0) == MW_CK_GPLL_594, "off, nothing known: 594");
+    for (unsigned long h = 0; h < 3; h++)
+        for (int ok = 0; ok < 2; ok++)
+            CHECK(MwClkStartWant(0, h, ok) != 0, "never the firmware's 198 (High %lu, ok %d)", h, ok);
+    CHECK(MwClkRate(MwClkVal(MW_CK_GPLL_594 >> 8, MW_CK_GPLL_594 & 0xFF), pll) == 594000000ul, "GPLL / 2 is 594 MHz");
     CHECK(MwClkStartWant(0x0002, 1, 1) == 0x0002, "stored 594 wins over the default");
     CHECK(MwClkStartWant(0x0301, 0, 0) == 0x0301, "stored 702 is still asked for (GpuClkWrite refuses it)");
     CHECK(MwClkRate(MwClkVal(MW_CK_SPLL_702 >> 8, MW_CK_SPLL_702 & 0xFF), pll) == 702000000ul, "SPLL / 1 is 702 MHz");

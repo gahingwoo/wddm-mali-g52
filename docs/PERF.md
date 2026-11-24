@@ -1180,14 +1180,18 @@ firmware has put `vdd_gpu_s0` at 775 mV.
   still only lower the rail the checks use, never turn the default on.
   edk2-rk3576 537ea09 (on `main` since 2026-11-24) does the raise on the
   TaishanPi 3M only. The CM5-IO and the ROCK 4D leave BUCK5 at the PMIC's
-  750 mV (or report nothing), so nothing changes there: no clock above
-  600 MHz, and the start clock is what it was before (the stored
-  `GpuClk`, else the firmware's).
+  750 mV (or report nothing): no clock above 600 MHz there. With no
+  `GpuClk` stored they now start at GPLL / 2 = 594 MHz instead of the
+  firmware's GPLL / 6 = 198 MHz (the user's decision of 2026-11-25; until
+  then a fresh install ran the GPU at 198 MHz unless `m5test clk 0 2 keep`
+  had been run). 594 MHz is within mainline's 600 MHz operating point
+  (700 mV), below the PMIC's 750 mV default.
 - **`GpuClkHigh` 0** turns it off as before; 1 and 2 as before.
 - **The start clock.** A stored `GpuClk` (`m5test clk <p> <d> keep`) wins
   whatever it is, so a board kept at 594 MHz (`m5test clk 0 2 keep`) stays
   at 594. With none stored and `GpuClkHigh` on (by default or set), the
-  driver asks for SPLL / 1 = 702 MHz, but only when the checks allow it:
+  driver asks for SPLL / 1 = 702 MHz, else GPLL / 2 = 594 MHz; 702 only
+  when the checks allow it:
   the supply meets what 702 needs and the temperature guard runs (TSADC
   started by the firmware). `GpuClkWrite` checks everything again and
   logs a refusal as before. `m5test clk forget` now means "back to the
@@ -1216,8 +1220,8 @@ Not run on a board yet. Board steps (TaishanPi 3M, firmware with 537ea09):
 2. Install the package as usual (full restart). `m5test clk`: GpuClkHigh 1
    "not set: the default", supply 775000 uV from firmware, 702 MHz
    written by this driver, guard on.
-3. `GpuClkHigh` 0, restart: GpuClkHigh 0 "set", the firmware's clock
-   (198 MHz with no `GpuClk` stored), nothing above 600 MHz.
+3. `GpuClkHigh` 0, restart: GpuClkHigh 0 "set", 594 MHz written by this
+   driver (no `GpuClk` stored), nothing above 600 MHz.
 4. On a CM5-IO or a ROCK 4D, if one is at hand: GpuClkHigh 0 "not set",
-   nothing above 600 MHz.
+   594 MHz written by this driver, nothing above 600 MHz.
 

@@ -971,7 +971,7 @@ int main(int argc, char **argv)
          * 1 CPLL 1000 MHz, 3 SPLL 702 MHz (only with GpuClkHigh and a
          * supply that meets the operating point); keep stores it for every
          * start. clk forget: back to the default at the next start (702 MHz
-         * with GpuClkHigh on, else the firmware's). */
+         * with GpuClkHigh on, else 594 MHz). */
         static const unsigned pll[8] = { 1188, 1000, 0, 702, 0, 0, 0, 0 };
         static const char *const name[8] = { "GPLL", "CPLL", "?", "SPLL", "?", "?", "?", "?" };
         static const char *const src[4] = { "unknown", "firmware (GpuRail)", "the GpuRailUv setting",

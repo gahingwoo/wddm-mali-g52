@@ -840,8 +840,9 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
     {
         /* A stored GpuClk wins; with none and GpuClkHigh on (by default
          * where the firmware set the rail to 775 mV), 702 MHz, under the
-         * temperature guard and the fault policy (gpuclk_calc.h,
-         * MwClkStartWant). GpuClkWrite checks everything again. */
+         * temperature guard and the fault policy; otherwise 594 MHz, not
+         * the firmware's 198 (gpuclk_calc.h, MwClkStartWant). GpuClkWrite
+         * checks everything again. */
         ULONG need = GpuRequiredUv(a, 702000000u);
         BOOLEAN ok702 = a->ThermOn && need != 0 && a->RailUv != 0 && need <= a->RailUv && !a->RailNotPlain;
         ULONG clk = MwClkStartWant(MwSetting(a, L"GpuClk", 0), a->GpuClkHigh, ok702);
