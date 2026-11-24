@@ -35,6 +35,20 @@
  *   d3dprobe <dll>      only <dll>, as a D3D_DRIVER_TYPE_SOFTWARE driver
  *                       (Mesa's d3d10umd on a CI runner); exit status 3
  *                       when the runtime does not create that device.
+ *   d3dprobe sandbox    the swap chain steps of Edge's GPU process on
+ *                       adapter 0, run three times as a child process with
+ *                       the token of each: medium integrity (as a normal
+ *                       application), low integrity, and low integrity
+ *                       with Chromium's GPU-process restrictions (a
+ *                       restricted token whose restricting SIDs are
+ *                       Everyone, Users, RESTRICTED and the logon SID, no
+ *                       privileges). The steps: DCompositionCreateDevice3
+ *                       as Chromium calls it, flip-model and blt swap
+ *                       chains on a window (create, three presents,
+ *                       ResizeBuffers, released and made again on the
+ *                       same window as ANGLE's SwapChain11::reset does, a
+ *                       second one at the same time), then the edge path.
+ *                       docs/EDGE-PRESENT.md, "Edge at WDDM 2.0".
  *
  * Exit status 0 when it ran; it changes nothing on the system.
  *
@@ -45,7 +59,9 @@
 #include <d3d11_1.h>
 #include <dxgi1_2.h>
 #include <dcomp.h>
+#include <sddl.h>
 #include <stdio.h>
+#include <string.h>
 
 /* dwm.exe's fail-fast with redirection on (2026-11-23), exception code
  * 0x8898008D, is this winerror.h code: DWM gives up after its D3D device
@@ -54,6 +70,7 @@
 static_assert(MILERR_NO_HARDWARE_DEVICE == (HRESULT)0x8898008DL, "0x8898008D is not MILERR_NO_HARDWARE_DEVICE");
 
 #pragma comment(lib, "dcomp.lib")
+#pragma comment(lib, "advapi32.lib")
 
 static const char *fl_name(D3D_FEATURE_LEVEL f)
 {
@@ -612,6 +629,295 @@ static HRESULT probe(IDXGIAdapter1 *adapter, const char *label, HMODULE sw = nul
     return hr;
 }
 
+/* ---- d3dprobe sandbox ---- */
+
+/* This process's integrity level and whether its token is restricted. */
+static void token_info(void)
+{
+    HANDLE t = nullptr;
+    alignas(8) BYTE buf[256];
+    DWORD len = 0;
+    DWORD il = 0;
+    BOOL restricted;
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &t)) {
+        printf("    token: cannot open (%lu)\n", GetLastError());
+        return;
+    }
+    if (GetTokenInformation(t, TokenIntegrityLevel, buf, sizeof buf, &len)) {
+        PSID sid = ((TOKEN_MANDATORY_LABEL *)buf)->Label.Sid;
+        il = *GetSidSubAuthority(sid, *GetSidSubAuthorityCount(sid) - 1);
+    }
+    restricted = IsTokenRestricted(t);
+    printf("    token: integrity 0x%04lx (%s), restricted %d\n", il,
+           il >= 0x3000 ? "high" : il >= 0x2000 ? "medium" : il >= 0x1000 ? "low" : "untrusted", restricted);
+    CloseHandle(t);
+}
+
+/* Paint a swap chain's back buffer and present it, N times. */
+static HRESULT paint_present(ID3D11Device *dev, ID3D11DeviceContext *ctx, IDXGISwapChain1 *sc, int n)
+{
+    HRESULT hr = S_OK;
+    for (int i = 0; i < n && SUCCEEDED(hr); i++) {
+        ID3D11Texture2D *buf = nullptr;
+        ID3D11RenderTargetView *rtv = nullptr;
+        const float colour[4] = { 0.2f * (float)i, 0.5f, 0.2f, 1.0f };
+        hr = sc->GetBuffer(0, __uuidof(ID3D11Texture2D), (void **)&buf);
+        if (SUCCEEDED(hr))
+            hr = dev->CreateRenderTargetView(buf, nullptr, &rtv);
+        if (SUCCEEDED(hr)) {
+            ctx->OMSetRenderTargets(1, &rtv, nullptr);
+            ctx->ClearRenderTargetView(rtv, colour);
+            ctx->OMSetRenderTargets(0, nullptr, nullptr);
+        }
+        if (rtv) rtv->Release();
+        if (buf) buf->Release();
+        if (SUCCEEDED(hr))
+            hr = sc->Present(0, 0);
+    }
+    return hr;
+}
+
+static HWND probe_window(const wchar_t *title, int x)
+{
+    WNDCLASSW wc = {};
+    wc.lpfnWndProc = wndproc;
+    wc.hInstance = GetModuleHandleW(nullptr);
+    wc.lpszClassName = L"d3dprobe-sc";
+    RegisterClassW(&wc);
+    return CreateWindowExW(0, L"d3dprobe-sc", title, WS_OVERLAPPEDWINDOW | WS_VISIBLE, x, 0, 240, 180, nullptr,
+                           nullptr, wc.hInstance, nullptr);
+}
+
+/* What ANGLE's SwapChain11 does on a window when DirectComposition is not
+ * used: a swap chain, presents, a resize, the swap chain released and made
+ * again on the same window (SwapChain11::reset, where Edge logged "Could
+ * not create additional swap chains or offscreen surfaces, 0x887A0022"),
+ * and a second one on another window at the same time. Returns the
+ * failures. */
+static int window_swap_chains(ID3D11Device *dev, ID3D11DeviceContext *ctx)
+{
+    static const struct { DXGI_SWAP_EFFECT e; const char *n; } effects[] = {
+        { DXGI_SWAP_EFFECT_FLIP_DISCARD, "FLIP_DISCARD" },
+        { DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, "FLIP_SEQUENTIAL" },
+        { DXGI_SWAP_EFFECT_DISCARD, "DISCARD (blt)" },
+    };
+    IDXGIDevice *xd = nullptr;
+    IDXGIAdapter *ad = nullptr;
+    IDXGIFactory2 *f2 = nullptr;
+    int bad = 0;
+
+    if (FAILED(dev->QueryInterface(__uuidof(IDXGIDevice), (void **)&xd)) || FAILED(xd->GetAdapter(&ad)) ||
+        FAILED(ad->GetParent(__uuidof(IDXGIFactory2), (void **)&f2))) {
+        printf("    window swap chains: no IDXGIFactory2\n");
+        bad++;
+        goto out;
+    }
+    for (const auto &ef : effects) {
+        HWND w1 = probe_window(L"d3dprobe swap chain 1", 0), w2 = probe_window(L"d3dprobe swap chain 2", 260);
+        IDXGISwapChain1 *a = nullptr, *b = nullptr;
+        DXGI_SWAP_CHAIN_DESC1 d = {};
+        HRESULT hr, pr = E_FAIL, rz = E_FAIL, again = E_FAIL, pr2 = E_FAIL, second = E_FAIL;
+
+        d.Width = 200;
+        d.Height = 140;
+        d.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        d.SampleDesc.Count = 1;
+        d.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_SHADER_INPUT;
+        d.BufferCount = 2;
+        d.SwapEffect = ef.e;
+        d.Scaling = DXGI_SCALING_STRETCH;
+        hr = f2->CreateSwapChainForHwnd(dev, w1, &d, nullptr, nullptr, &a);
+        if (SUCCEEDED(hr))
+            pr = paint_present(dev, ctx, a, 3);
+        if (SUCCEEDED(pr))
+            rz = a->ResizeBuffers(2, 216, 156, DXGI_FORMAT_B8G8R8A8_UNORM, 0);
+        if (a) {
+            a->Release();
+            a = nullptr;
+        }
+        if (SUCCEEDED(hr)) {
+            again = f2->CreateSwapChainForHwnd(dev, w1, &d, nullptr, nullptr, &a);
+            if (SUCCEEDED(again))
+                pr2 = paint_present(dev, ctx, a, 2);
+            second = f2->CreateSwapChainForHwnd(dev, w2, &d, nullptr, nullptr, &b);
+            if (SUCCEEDED(second))
+                second = paint_present(dev, ctx, b, 2);
+        }
+        printf("    window %-15s create 0x%08lx, 3 presents 0x%08lx, ResizeBuffers 0x%08lx, again on the same "
+               "window 0x%08lx, presents 0x%08lx, a second one 0x%08lx; removed reason 0x%08lx\n",
+               ef.n, (unsigned long)hr, (unsigned long)pr, (unsigned long)rz, (unsigned long)again,
+               (unsigned long)pr2, (unsigned long)second, (unsigned long)dev->GetDeviceRemovedReason());
+        bad += FAILED(hr) || FAILED(pr) || FAILED(rz) || FAILED(again) || FAILED(pr2) || FAILED(second);
+        if (hr == (HRESULT)0x887A0022 || again == (HRESULT)0x887A0022)
+            printf("      0x887A0022 is DXGI_ERROR_NOT_CURRENTLY_AVAILABLE, what Edge's GPU process logged\n");
+        if (b) b->Release();
+        if (a) a->Release();
+        if (w2) DestroyWindow(w2);
+        if (w1) DestroyWindow(w1);
+    }
+out:
+    if (f2) f2->Release();
+    if (ad) ad->Release();
+    if (xd) xd->Release();
+    return bad;
+}
+
+/* The child: adapter 0, the steps above, as this token allows. */
+static int sandbox_child(const char *mode)
+{
+    IDXGIFactory1 *f = nullptr;
+    IDXGIAdapter1 *a = nullptr;
+    ID3D11Device *dev = nullptr;
+    ID3D11DeviceContext *ctx = nullptr;
+    D3D_FEATURE_LEVEL got;
+    static const D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0 };
+    DXGI_ADAPTER_DESC1 ad = {};
+    HRESULT hr;
+    int bad = 0;
+
+    printf("  sandbox child \"%s\":\n", mode);
+    token_info();
+    if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void **)&f)) || f->EnumAdapters1(0, &a) != S_OK) {
+        printf("    no DXGI adapter 0\n");
+        return 100;
+    }
+    a->GetDesc1(&ad);
+    hr = D3D11CreateDevice(a, D3D_DRIVER_TYPE_UNKNOWN, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, levels,
+                           ARRAYSIZE(levels), D3D11_SDK_VERSION, &dev, &got, &ctx);
+    printf("    adapter 0 %ls (vendor 0x%04x device 0x%04x): D3D11CreateDevice 0x%08lx, %s\n", ad.Description,
+           ad.VendorId, ad.DeviceId, (unsigned long)hr, SUCCEEDED(hr) ? fl_name(got) : "-");
+    if (FAILED(hr)) {
+        a->Release();
+        f->Release();
+        return 101;
+    }
+    {
+        IDXGIDevice *xd = nullptr;
+        IUnknown *dd = nullptr;
+        HRESULT h = dev->QueryInterface(__uuidof(IDXGIDevice), (void **)&xd);
+        if (SUCCEEDED(h))
+            h = DCompositionCreateDevice3(xd, __uuidof(IDCompositionDesktopDevice), (void **)&dd);
+        printf("    DCompositionCreateDevice3 (as Chromium's direct_composition_support.cc) 0x%08lx%s\n",
+               (unsigned long)h, h == E_ACCESSDENIED ? ": Access is denied, what Edge logged" : "");
+        bad += FAILED(h);
+        if (dd) dd->Release();
+        if (xd) xd->Release();
+    }
+    bad += window_swap_chains(dev, ctx);
+    bad += edge_path(dev, ctx);
+    printf("    sandbox child \"%s\": %d failed steps\n", mode, bad);
+    ctx->Release();
+    dev->Release();
+    a->Release();
+    f->Release();
+    return bad;
+}
+
+/* A primary token for a child: a copy of ours at low integrity, and for
+ * "gpu" restricted as Chromium's GPU process token. nullptr: medium (no
+ * token, plain CreateProcess). */
+static HANDLE child_token(const char *mode)
+{
+    HANDLE me = nullptr, t = nullptr;
+    PSID low = nullptr;
+    BOOL ok;
+
+    if (strcmp(mode, "medium") == 0)
+        return nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(),
+                          TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT, &me))
+        return INVALID_HANDLE_VALUE;
+    if (strcmp(mode, "gpu") == 0) {
+        BYTE everyone[SECURITY_MAX_SID_SIZE], users[SECURITY_MAX_SID_SIZE], restr[SECURITY_MAX_SID_SIZE];
+        DWORD n1 = sizeof everyone, n2 = sizeof users, n3 = sizeof restr;
+        SID_AND_ATTRIBUTES sids[4] = {};
+        DWORD count = 0;
+        alignas(8) BYTE groups[4096];
+        DWORD len = 0;
+
+        CreateWellKnownSid(WinWorldSid, nullptr, everyone, &n1);
+        CreateWellKnownSid(WinBuiltinUsersSid, nullptr, users, &n2);
+        CreateWellKnownSid(WinRestrictedCodeSid, nullptr, restr, &n3);
+        sids[count++].Sid = everyone;
+        sids[count++].Sid = users;
+        sids[count++].Sid = restr;
+        if (GetTokenInformation(me, TokenGroups, groups, sizeof groups, &len)) {
+            TOKEN_GROUPS *g = (TOKEN_GROUPS *)groups;
+            for (DWORD i = 0; i < g->GroupCount; i++)
+                if (g->Groups[i].Attributes & SE_GROUP_LOGON_ID) {
+                    sids[count++].Sid = g->Groups[i].Sid;
+                    break;
+                }
+        }
+        ok = CreateRestrictedToken(me, DISABLE_MAX_PRIVILEGE, 0, nullptr, 0, nullptr, count, sids, &t);
+    } else {
+        ok = DuplicateTokenEx(me, MAXIMUM_ALLOWED, nullptr, SecurityImpersonation, TokenPrimary, &t);
+    }
+    CloseHandle(me);
+    if (!ok)
+        return INVALID_HANDLE_VALUE;
+    if (ConvertStringSidToSidW(L"S-1-16-4096", &low)) {
+        TOKEN_MANDATORY_LABEL tml = {};
+        tml.Label.Attributes = SE_GROUP_INTEGRITY;
+        tml.Label.Sid = low;
+        SetTokenInformation(t, TokenIntegrityLevel, &tml, (DWORD)(sizeof tml + GetLengthSid(low)));
+        LocalFree(low);
+    }
+    return t;
+}
+
+static int sandbox(void)
+{
+    static const char *const modes[] = { "medium", "low", "gpu" };
+    wchar_t exe[MAX_PATH];
+    int bad = 0;
+
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    printf("sandbox: Edge's GPU-process steps on adapter 0 as three kinds of process\n");
+    for (const char *mode : modes) {
+        wchar_t cmd[MAX_PATH + 64];
+        STARTUPINFOW si = {};
+        PROCESS_INFORMATION pi = {};
+        HANDLE tok = child_token(mode);
+        BOOL ok;
+        DWORD code = 999;
+
+        swprintf_s(cmd, L"\"%s\" sandbox-child %hs", exe, mode);
+        si.cb = sizeof si;
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+        si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+        si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+        if (tok == INVALID_HANDLE_VALUE) {
+            printf("  %s: no token (%lu)\n", mode, GetLastError());
+            bad++;
+            continue;
+        }
+        ok = tok ? CreateProcessAsUserW(tok, nullptr, cmd, nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi)
+                 : CreateProcessW(nullptr, cmd, nullptr, nullptr, TRUE, 0, nullptr, nullptr, &si, &pi);
+        if (!ok) {
+            printf("  %s: CreateProcess failed (%lu)\n", mode, GetLastError());
+            bad++;
+        } else {
+            if (WaitForSingleObject(pi.hProcess, 120000) != WAIT_OBJECT_0) {
+                printf("  %s: still running after 120 s, stopped\n", mode);
+                TerminateProcess(pi.hProcess, 998);
+                WaitForSingleObject(pi.hProcess, 5000);
+            }
+            GetExitCodeProcess(pi.hProcess, &code);
+            printf("  %s: exit %lu%s\n", mode, code,
+                   code == 0 ? " (every step passed)" : code >= 0xC0000000 ? " (the child crashed or did not start)" : "");
+            bad += code != 0;
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+        }
+        if (tok)
+            CloseHandle(tok);
+    }
+    return bad != 0 ? 4 : 0;
+}
+
 int main(int argc, char **argv)
 {
     IDXGIFactory1 *f = nullptr;
@@ -621,6 +927,10 @@ int main(int argc, char **argv)
         DWORD n = GetModuleFileNameA(nullptr, exe, sizeof exe);
         printf("running as %s\n", n && n < sizeof exe ? exe : "?");
     }
+    if (argc > 1 && strcmp(argv[1], "sandbox") == 0)
+        return sandbox();
+    if (argc > 2 && strcmp(argv[1], "sandbox-child") == 0)
+        return sandbox_child(argv[2]);
     if (argc > 1) {
         HMODULE sw = LoadLibraryA(argv[1]);
         if (!sw) {

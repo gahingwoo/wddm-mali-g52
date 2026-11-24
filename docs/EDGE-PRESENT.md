@@ -530,3 +530,133 @@ Not run yet: Edge at 2.0.
   shows no device error. The next run's `recent:` lines name the call.
 - Redirected presents of blt-model windowed applications: Notepad in
   round 5 ran only as a process started after DWM had already stopped.
+
+## Edge at WDDM 2.0 (2026-11-24, branch `edge-wddm2`)
+
+TaishanPi 3M, WDDM 2.0 by default, maliwddm 9.6.46.569, Edge
+158.0.4370.33. Edge renders everything in software. edge://gpu (read over
+CDP) after the GPU process gave up:
+
+- `GPU process crash count: 3`, compositing, WebGL, rasterization and
+  video decode disabled, "GPU process was unable to boot".
+- The current GPU0 line is `VENDOR=0x0000, DEVICE=0x0000, LUID={0,0}`:
+  that is SwiftShader, which Chromium falls back to. The earlier entries
+  in the same page show the GPU process on the Mali: `VENDOR=0x50434b52,
+  DEVICE=0x32303437 [Rockchip RK3576 Mali-G52 (WDDM)]`, ANGLE on D3D11,
+  `vs_4_1 ps_4_1`. So the adapter's IDs are there and stable: DXGI makes
+  them from the ACPI hardware ID `RKCP7402` ("RKCP" and "7402" as
+  four-character codes, as d3dprobe has printed since 2026-11-22). They
+  are not a PCI vendor, so Chromium's lists for NVIDIA, Intel and AMD do
+  not apply (GPU rasterization is off for an unknown vendor by
+  Chromium's rule, not a failure). `DRIVER_VERSION=0.0.0.0` is the UMD's
+  file version: the Mesa DLLs carry no version resource. Neither is why
+  the GPU process crashed.
+- The log, in each of the three GPU processes:
+
+      direct_composition_support.cc:762 DCompositionCreateDevice3 failed: Access is denied. (0x80070005)
+      SwapChain11.cpp:632 rx::SwapChain11::reset: Could not create additional swap chains or offscreen surfaces, HRESULT: 0x887A0022
+      SwapChain11.cpp:639 Device lost in SwapChain11::reset HRESULT: 0x887A0022
+      eglCreateWindowSurface failed with error EGL_CONTEXT_LOST
+      Restarting GPU process due to unrecoverable error. Context was lost.
+
+  DirectComposition is refused first, so ANGLE makes a swap chain on a
+  window instead, and that fails with 0x887A0022
+  (DXGI_ERROR_NOT_CURRENTLY_AVAILABLE). ANGLE counts that code as a lost
+  device (`d3d11::isDeviceLostError`), so the context is lost and the GPU
+  process restarts; after three, Chromium gives up.
+
+What is known from earlier runs:
+
+- At 1.3 (rounds 3 to 6) Edge's GPU process got as far as Present1 on a
+  composition swap chain, so DCompositionCreateDevice worked in its
+  sandbox then. Its log said `integrity 0x1000 (low), app container 0,
+  restricted 1`.
+- d3dprobe at medium integrity made flip-model and blt swap chains on a
+  window and passed the whole edge path at 1.3, with and without
+  `C:\mali\redirect`.
+
+So both failures are refusals ("access denied", "not currently
+available"), both in the sandboxed GPU process, and both new at 2.0.
+Nothing in maliwddm checks a caller's token, and no KMD or UMD trace from
+a 2.0 Edge run exists yet. Which of these it is cannot be told from the
+edge://gpu page:
+
+1. **The sandbox at 2.0**: something DXGI or DirectComposition does only
+   for a WDDM 2.x adapter (for example sharing a monitored fence or a
+   composition surface with DWM by NT handle) is refused to a low
+   integrity, restricted token. Then a medium-integrity process passes
+   and a sandboxed one fails, at 2.0 only.
+2. **2.0 itself**: the same steps fail at medium integrity too. Then
+   the UMD log (`ddi-error`) or the KMD trace (`Fail_*`) of that process
+   names the call.
+3. **Redirection**: the UMD answers DXGI_STATUS_NO_REDIRECTION unless
+   `C:\mali\redirect` exists (patch 0023). At 1.3 a window swap chain
+   worked either way; at 2.0 that is not known.
+
+### `d3dprobe sandbox`
+
+To tell them apart without Edge, d3dprobe (this branch) runs Edge's GPU
+process steps on adapter 0 in three child processes, one per token:
+`medium` (a normal application), `low` (low integrity) and `gpu` (low
+integrity, a restricted token whose restricting SIDs are Everyone,
+Users, RESTRICTED and the logon SID, no privileges, as Chromium's GPU
+process after its sandbox locks down). Each child prints its token and:
+
+- `DCompositionCreateDevice3` on the device, as Chromium calls it;
+- for FLIP_DISCARD, FLIP_SEQUENTIAL and DISCARD (blt), on a window of its
+  own: create, three presents, ResizeBuffers, the swap chain released and
+  made again on the same window (ANGLE's `SwapChain11::reset`), and a
+  second swap chain on another window at the same time;
+- the edge path as before (composition swap chain, DComp target, three
+  Present1, a DComp surface, a shared NT-handle texture with a keyed
+  mutex).
+
+Every step prints its HRESULT and the device's removed reason. Each
+child's exit code is its count of failed steps.
+
+### Board test
+
+Package: this branch's CI run. Copy `d3dprobe.exe` from the same run's
+`m3test-arm64` artifact to `C:\mali\fake\msedge.exe` (the UMD gives
+browsers their answers by process name) and `C:\mali\fake\plainprobe.exe`.
+
+1. WDDM 2.0 (the default; `m5test wddm` says confirmed 0x2000). In the
+   user's session (not over SSH, where every swap chain fails with
+   0x887A0022 for want of an interactive desktop):
+   - `C:\mali\fake\msedge.exe sandbox > C:\mali\sandbox-20.txt`
+   - with the UMD log on (`del C:\mali\log\off`, the ACL from round 3
+     lets a low-integrity process write there), the same again to
+     `sandbox-20-log.txt`, then `echo > C:\mali\log\off`.
+2. The same with `echo > C:\mali\redirect` (`sandbox-20-redirect.txt`),
+   then `del C:\mali\redirect`.
+3. `wddm-probe off`, reboot, step 1 again (`sandbox-13.txt`), then
+   `wddm-probe default` and reboot.
+4. Edge at 2.0, a fresh profile each time, `--enable-logging --v=1`,
+   edge://gpu saved each time:
+   - as is;
+   - `--disable-gpu-sandbox` (if this one is hardware accelerated, the
+     sandbox is the variable, as in case 1);
+   - `--disable-direct-composition`.
+5. Collect: the `sandbox-*.txt`, `C:\mali\log\*.txt` of the run with
+   the log, the three edge://gpu pages and Edge logs, and `reg query`
+   of `Device Parameters\maliwddm` (any `Fail_*`).
+
+How to read `sandbox-20.txt`:
+
+- `medium` passes and `gpu` fails at `DCompositionCreateDevice3
+  0x80070005` and the window swap chains `0x887A0022`: case 1, the
+  sandbox at 2.0. Compare with `sandbox-13.txt`, which should pass in all
+  three; the next step is the call that needs the access (an ETW capture
+  of the `gpu` child: `wpr -start tools\windows\dxgkrnl.wprp`).
+- `medium` fails the same way: case 2. The log of that run has the
+  `ddi-error` or the KMD trace has the `Fail_` that names the call.
+- Only `sandbox-20-redirect.txt` passes: case 3.
+
+What should come out once fixed: `d3dprobe sandbox` exit 0 for all three,
+and edge://gpu with Canvas, Compositing, WebGL and Rasterization
+"Hardware accelerated" (Rasterization may stay "Software only" for an
+unknown vendor, which is Chromium's rule), GPU process crash count 0, and
+a long page (for example https://en.wikipedia.org/wiki/Windows) scrolling
+with the mouse wheel without the frame-by-frame stutter of software
+compositing (edge://gpu-internals or `--show-fps-counter` for a number).
+
