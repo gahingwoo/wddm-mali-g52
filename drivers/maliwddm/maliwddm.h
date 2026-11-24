@@ -98,7 +98,7 @@ typedef struct _MW_PROF {
  *      HDPTX PHY itself, so HDMI works when plugged after a DSI boot, and a
  *      different monitor gets its own timing; HDMI audio follows the link */
 #define MW_EDID_MAX 512
-#define MW_HDMI_MODES       6
+#define MW_HDMI_MODES       48
 #define MW_WIRE_DSI         1
 #define MW_WIRE_HDMI        2
 
@@ -213,7 +213,7 @@ typedef struct _MW_HDMI {
     ULONG ResMaxPixels;
     BOOLEAN OnRes;
 
-    ULONG ModeSets, ModeSetFails, Restores;
+    ULONG ModeSets, ModeSetFails, Restores, RestoreOks;
 } MW_HDMI;
 
 typedef struct _MW_DEVICE {

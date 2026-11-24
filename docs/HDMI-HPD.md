@@ -117,10 +117,14 @@ HDMI0 detached, MIPI0_IF_CTRL 0x80000033, the panel's timing, Esmart0 back
 on the firmware's framebuffer, standby released, backlight on. The DSI host
 and the panel are never touched.
 
-Modes offered on HDMI: the EDID's detailed timings that are progressive, at
-most 340 MHz, 4-pixel aligned, within `HdmiMaxPixels` and lockable by the
+Modes offered on HDMI: everything the EDID lists (detailed timings,
+DisplayID timings, CTA-861 VICs with their 59.94 Hz variants, standard and
+established timings through DMT, CVT reduced blanking inside the range
+limits), at every refresh rate, progressive, at most 340 MHz and the sink's
+Max_TMDS_Clock, 4-pixel aligned, within `HdmiMaxPixels` and lockable by the
 PHY; then 1920x1080@60 and 1280x720@60. On an HDMI boot the firmware's own
-timing comes first for the monitor it lit.
+timing comes first for the monitor it lit. A failed mode set puts the
+previous timing back. [DISPLAY-MODES.md](DISPLAY-MODES.md), phase 2.
 
 ## Board test plan
 
