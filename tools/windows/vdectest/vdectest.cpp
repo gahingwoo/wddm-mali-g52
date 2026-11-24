@@ -10,6 +10,8 @@
  *   --ref <file.yuv>   I420 reference (the ITU conformance .yuv, or
  *                      ffmpeg -i x.264 -f rawvideo -pix_fmt yuv420p); MATCH or MISMATCH
  *   --fake             the UMD runs with D3D10UMD_VDEC_FAKE=1: check its pattern instead
+ *   --chromium         what Chromium's D3D11VideoDecoder asks of the device, step by step
+ *                      (chromeprobe.cpp); exit 0 when all of it is there, 4 otherwise
  *   --vp               the video processor and NV12 plane view tests (vptest.cpp); with
  *                      a stream, the decoder texture is also a shader resource and the
  *                      first frame goes through the video processor (with --fake)
@@ -45,6 +47,7 @@ extern "C" {
 #include "md5.h"
 }
 #include "vptest.h"
+#include "chromeprobe.h"
 
 #include "../../../video/vdpu383/vdpu383_ioctl.h"
 
@@ -472,7 +475,7 @@ main(int argc, char **argv)
    Test t;
    const char *stream = NULL, *ref = NULL, *outp = NULL;
    unsigned max_pictures = 0, runs0 = 0, runs1 = 0;
-   int probe_only = 0, have_runs, rc;
+   int probe_only = 0, have_runs, rc, chromium = 0;
 
    memset(&t, 0, sizeof t);
    if (argc < 3) {
@@ -483,6 +486,7 @@ main(int argc, char **argv)
       if (!strcmp(argv[i], "--probe")) probe_only = 1;
       else if (!strcmp(argv[i], "--fake")) t.fake = 1;
       else if (!strcmp(argv[i], "--vp")) t.vp = 1;
+      else if (!strcmp(argv[i], "--chromium")) chromium = 1;
       else if (!strcmp(argv[i], "--ref") && i + 1 < argc) ref = argv[++i];
       else if (!strcmp(argv[i], "-o") && i + 1 < argc) outp = argv[++i];
       else if (!strcmp(argv[i], "-n") && i + 1 < argc) max_pictures = (unsigned)atoi(argv[++i]);
@@ -496,6 +500,8 @@ main(int argc, char **argv)
    if (FAILED(create_device(argv[1], &t)))
       return 1;
    rc = probe(&t);
+   if (chromium)
+      return chrome_probe(t.dev, t.ctx);
    if (t.vp && t.vdev && !stream && !probe_only)
       return vp_run_tests(t.dev, t.ctx, t.vdev, t.vctx);
    if (probe_only || rc)

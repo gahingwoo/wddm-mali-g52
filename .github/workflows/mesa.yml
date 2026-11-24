@@ -410,7 +410,8 @@ jobs:
           $dll = (Resolve-Path out\libgallium_d3d10.dll).Path
           New-Item -ItemType Directory -Force vt | Out-Null
           cl /nologo /W3 /O2 /EHsc /MD /Itools\windows\vdectest tools\windows\vdectest\vdectest.cpp `
-             tools\windows\vdectest\vptest.cpp tools\windows\vdectest\h264parse.c `
+             tools\windows\vdectest\vptest.cpp tools\windows\vdectest\chromeprobe.cpp `
+             tools\windows\vdectest\h264parse.c `
              tools\windows\vdectest\md5.c /Fe:vt\vdectest.exe
           if ($LASTEXITCODE) { throw 'vdectest build failed' }
           Copy-Item vt\vdectest.exe vt\notaplayer.exe
@@ -443,6 +444,9 @@ jobs:
           $env:D3D10UMD_UMDVIDEO = '2'
           $env:D3D10UMD_VDEC_FAKE = '1'
           $dec = Run-Exe 'decode' 'vdectest.exe' "`"$dll`" `"$stream`" --fake --vp"
+          # What Chromium's D3D11VideoDecoder would get from this device:
+          # printed, not a pass or fail yet (it needs feature level 11_0).
+          $chr = Run-Exe 'chromium' 'vdectest.exe' "`"$dll`" --chromium"
           Remove-Item Env:D3D10UMD_VDEC_FAKE
           $env:D3D10UMD_UMDVIDEO = '2'
           $nodev = Run-Exe 'nodevice' 'vdectest.exe' "`"$dll`" --probe"

@@ -121,9 +121,9 @@ interrupts and its own IOMMU. Three stages:
 | | Goal | State |
 |---|---|---|
 | V3a H.264 | `ID3D11VideoDevice` with H.264 VLD (no FGT), short slice format, NV12 decoder output, `DecoderEndFrame` decodes on the VDPU383; FFmpeg d3d11va(-copy) and mpv `--hwdec=d3d11va-copy` | **this branch**: Mesa 0076, `video/`, vdectest, CI; vdpu383.sys `UserAccess` on woa-rk3576 `vdpu383-d3d11va`. Not run on the board |
-| V3a HEVC Main | the same for `D3D11_DECODER_PROFILE_HEVC_VLD_MAIN` | needs an HEVC register builder first (mainline `rkvdec-vdpu383-hevc.c`), proven with vdpu383test and the HEVC conformance streams before the UMD gets the profile |
-| V3a VP9 profile 0 | `D3D11_DECODER_PROFILE_VP9_VLD_PROFILE0` | VDPU383 VP9 is in MPP only (no mainline driver): a register builder and probability handling from MPP, then vdpu383test, then the UMD |
-| V4 | NV12 as two shader views (R8 and R8G8 planes), the D3D11 video processor (NV12 to BGRA on the GPU): Media Player, Edge, mpv zero-copy rendering | not started |
+| V3a HEVC Main | the same for `D3D11_DECODER_PROFILE_HEVC_VLD_MAIN` | register builder and parser written (woa-rk3576 branch `vdpu383-hevc`, `lib/vdpu383_hevc.c`); 75 conformance streams pass the parser and the reference set checks on Linux, with the SPS's sets and with DXVA alone. Next: vdpu383test on the board (`hevc-conformance.ps1`), then the profile in the UMD |
+| V3a VP9 profile 0 | `D3D11_DECODER_PROFILE_VP9_VLD_PROFILE0` | not started. VDPU383 VP9 is in MPP only (`hal_vp9d_vdpu383.c`, no mainline driver). DXVA hands the decoder the frame header and the compressed header in the bitstream; the driver keeps the four frame contexts, decodes the probability deltas of the compressed header (a bool decoder) and adapts the probabilities from the counts the hardware writes after each frame (MPP `vp9d` does all three). Then vdpu383test with the libvpx test vectors, then the UMD |
+| V4 | NV12 as two shader views (R8 and R8G8 planes), the D3D11 video processor (NV12 and RGB in, RGB out, on the GPU): Media Player, Edge, mpv zero-copy rendering | **this branch**: Mesa 0077, `vdectest --vp`, CI on softpipe. Not run on the board |
 | V3b | zero copy through maliwddm and the decoder's IOMMU; sandboxed processes | not started |
 
 H.264 limits in V3a: 8-bit 4:2:0, progressive and field/MBAFF as the
@@ -139,6 +139,16 @@ register builder handles them, up to 4096x2304; no encryption.
   `tools/gen-video-stubs.py`), `Resource.cpp` (NV12 as one R8 texture of
   1.5 times the height, plane-aware copies), `Shader.cpp` (constant
   buffer windows).
+- `mesa-patches/0077-...`: `VideoProcessor.cpp` (the video processor
+  DDI, drawn in a pipe context of its own, and the NV12 plane textures),
+  `VideoShaders.c` (the NV12 and RGB fragment shaders, TGSI built with
+  ureg: luma filtered by the sampler, chroma interpolated from texel
+  fetches, BT.601 or BT.709, studio or full range), `Resource.cpp` (an
+  NV12 texture with `BIND_SHADER_RESOURCE` gets R8 and R8G8 plane
+  textures; copies and updates keep them in step), `Shader.cpp` (an
+  R8_UNORM or R8G8_UNORM view of NV12 is a view of a plane), `Video.cpp`
+  (a decode writes the planes too), `Device.cpp` (video processor input
+  and output in `CheckFormatSupport`).
 - `video/vdec.c`: the backend (README in `video/`). With
   `D3D10UMD_VDEC_FAKE=1` it builds and checks the register file and
   writes a known pattern instead of decoding.
@@ -147,6 +157,13 @@ register builder handles them, up to 4096x2304; no encryption.
   per slice, picture parameters, scaling matrix, short slice control,
   bitstream padded to 128 bytes, copy to a staging NV12 texture, map) and
   compares every frame with a reference.
+- `tools/windows/vdectest/vptest.cpp` (`vdectest --vp`): an NV12 picture
+  with luma changing at every texel and steep chroma ramps, through
+  `VideoProcessorBlt` to BGRA at 1:1, 2x and 0.73x with a source
+  rectangle, with destination and target rectangles and a background,
+  and BGRA in, each read back and compared with a model of the sampling;
+  then the NV12 texture as R8 and R8G8 shader resource views, read by a
+  pixel shader.
 - CI: `tests/vdec-host` (ci.yml) runs a 12-frame High profile stream
   through the backend on Linux under ASan; mesa.yml runs vdectest on
   softpipe through the D3D11.1 interface with the fake decoder, the
@@ -251,6 +268,31 @@ Full restart. Then, as the normal user (not elevated):
    prints `runs`, before and after). If mpv's own renderer fails on the
    D3D11.1 interface, repeat with `--vo=null`: that still measures the
    decoder, and says the renderer is the problem.
+
+6. V4, the video processor and plane views (`UmdVideo` 2 as above):
+
+   ```
+   vdectest hw --vp
+   vdectest hw testsrc-176x144-high.264 --vp
+   mpv --hwdec=d3d11va --gpu-api=d3d11 --d3d11-flip=no --length=60 bbb.mp4
+   ```
+
+   `video processor tests: PASS` (filter precision on the Mali allows 3
+   per channel when scaled), `decoded picture ... through the video
+   processor: MATCH`, and mpv showing `hw d3d11va` (not `-copy`): that is
+   mpv sampling the decoder's NV12 through R8 and R8G8 views. Then set
+   `UmdVideo` 3 (every process but dwm, LogonUI and consent), full
+   restart, and play `bbb.mp4` in Media Player: a picture, and in its UMD
+   log (`C:\mali\log\Microsoft.Media.Player*` or the Media Foundation
+   host's) `video: frame` lines and `video: blit` lines. Edge needs
+   vdpu383.sys `UserAccess` 2 as well (its GPU process runs at low
+   integrity; a test board only): `edge://media-internals` for a
+   `<video>` with `bbb.mp4` says `D3D11VideoDecoder` and no fallback.
+   Not checked in Chromium's source tonight: whether D3D11VideoDecoder
+   accepts a device below feature level 11_0 (this driver's is 10_1). If
+   media-internals names the feature level as the reason, that is it, and
+   Edge waits for an 11_0 device (D3D11-UMD.md); Media Player and mpv do
+   not depend on it.
 
 **Send back**
 
