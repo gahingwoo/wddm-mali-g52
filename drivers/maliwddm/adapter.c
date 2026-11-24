@@ -883,6 +883,15 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
             return STATUS_INVALID_PARAMETER;
         GpuInfo(a, (MW_ESCAPE_GPU_INFO_DATA *)Esc->pPrivateDriverData);
         return STATUS_SUCCESS;
+    case MW_ESCAPE_WDDM: {
+        MW_ESCAPE_WDDM_DATA *w = (MW_ESCAPE_WDDM_DATA *)Esc->pPrivateDriverData;
+        if (Esc->PrivateDriverDataSize < sizeof(*w))
+            return STATUS_INVALID_PARAMETER;
+        w->WddmVersion = MwWddmVersion;
+        w->Needs = MwWddmVersion >= DXGKDDI_WDDMv2 ? MW_WDDM_NEEDS_RESIDENCY : 0;
+        w->Reserved = 0;
+        return STATUS_SUCCESS;
+    }
     case MW_ESCAPE_GPUCLK:
         if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_GPUCLK_DATA))
             return STATUS_INVALID_PARAMETER;

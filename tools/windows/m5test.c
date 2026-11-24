@@ -17,7 +17,7 @@
  * m5test perf [seconds], m5test scan [mode] and m5test mem (GPU memory by
  * process) only ask the driver; nothing is submitted.
  *
- * m5test renderprobe submits renders with no GPU work in six variants and
+ * m5test renderprobe submits renders with no GPU work in eight variants and
  * prints where D3DKMTRender fails (docs/WDDM2.md 16.9).
  *
  * Build: cl /W4 /I include tools\windows\m5test.c
@@ -34,6 +34,8 @@
 typedef NTSTATUS (APIENTRY *KMT_FN)(void *);
 static KMT_FN pCreateDevice, pDestroyDevice, pCreateContext, pDestroyContext, pCreateAllocation,
               pDestroyAllocation, pLock, pUnlock, pRender, pEscape, pEnumAdapters2;
+/* WDDM 2.0 residency (optional: absent or refused on a 1.3 adapter). */
+static KMT_FN pCreatePagingQueue, pDestroyPagingQueue, pMakeResident;
 
 static KMT_FN resolve(const char *name)
 {
@@ -67,6 +69,9 @@ static int resolve_all(void)
     pRender = resolve("Render");
     pEscape = resolve("Escape");
     pEnumAdapters2 = resolve("EnumAdapters2");
+    pCreatePagingQueue = resolve("CreatePagingQueue");
+    pDestroyPagingQueue = resolve("DestroyPagingQueue");
+    pMakeResident = resolve("MakeResident");
     return pCreateDevice && pDestroyDevice && pCreateContext && pDestroyContext && pCreateAllocation &&
            pDestroyAllocation && pLock && pUnlock && pRender && pEscape && pEnumAdapters2;
 }
@@ -108,6 +113,46 @@ static NTSTATUS escape(D3DKMT_HANDLE adapter, D3DKMT_HANDLE device, void *data, 
     e.pPrivateDriverData = data;
     e.PrivateDriverDataSize = size;
     return pEscape(&e);
+}
+
+/* WDDM 2.0: an allocation must be made resident before a DMA buffer may
+ * name it. dxgmms2 10.0.22621.2428 (VIDMM_GLOBAL::ReferenceDmaBuffer)
+ * otherwise fails the render with 0xc0000001, "Failed to reference DMA
+ * buffer: Allocation is not requested to be resident". WDDM 1.x paged
+ * allocations in from the allocation list by itself. The paging queue is
+ * the device's; the call is waited for on the CPU through the queue's
+ * fence. Returns the MakeResident status (0 when resident). */
+static NTSTATUS make_resident(D3DKMT_HANDLE device, D3DKMT_HANDLE allocation)
+{
+    D3DKMT_CREATEPAGINGQUEUE q = {0};
+    D3DDDI_DESTROYPAGINGQUEUE dq = {0};
+    D3DDDI_MAKERESIDENT mr = {0};
+    UINT priority = D3DDDI_ALLOCATIONPRIORITY_NORMAL;
+    NTSTATUS st;
+
+    if (pCreatePagingQueue == NULL || pMakeResident == NULL)
+        return (NTSTATUS)0xC00000BB;    /* STATUS_NOT_SUPPORTED */
+    q.hDevice = device;
+    q.Priority = D3DDDI_PAGINGQUEUE_PRIORITY_NORMAL;
+    if ((st = pCreatePagingQueue(&q)) < 0)
+        return st;
+    mr.hPagingQueue = q.hPagingQueue;
+    mr.NumAllocations = 1;
+    mr.AllocationList = &allocation;
+    mr.PriorityList = &priority;
+    st = pMakeResident(&mr);
+    if (st == (NTSTATUS)0x00000103 && q.FenceValueCPUVirtualAddress != NULL) {   /* STATUS_PENDING */
+        ULONGLONG t0 = GetTickCount64();
+        while (*(volatile UINT64 *)q.FenceValueCPUVirtualAddress < mr.PagingFenceValue &&
+               GetTickCount64() - t0 < 2000)
+            Sleep(1);
+        st = *(volatile UINT64 *)q.FenceValueCPUVirtualAddress >= mr.PagingFenceValue ? 0 : (NTSTATUS)0x00000102;
+    }
+    /* The residency belongs to the device, not the queue. */
+    dq.hPagingQueue = q.hPagingQueue;
+    if (pDestroyPagingQueue != NULL)
+        (void)pDestroyPagingQueue(&dq);
+    return st;
 }
 
 /* The adapter that answers our GPU-info escape with a G52's GPU_ID. */
@@ -469,13 +514,19 @@ static int render_probe(D3DKMT_HANDLE adapter)
      * succeeds. Len 1: one command of type 0, which the driver's
      * DxgkDdiRender refuses with STATUS_INVALID_PARAMETER (0xc000000d):
      * that status says DxgkDdiRender was reached. */
-    static const struct { const char *What; unsigned Node, Allocs, Null, Lock, Len; } v[] = {
-        { "A node 0, 1 allocation locked before (as M1)",     0, 1, 0, 1, 0 },
-        { "B node 0, no allocation list",                     0, 0, 0, 0, 0 },
-        { "C node 0, 1 allocation, not locked before",        0, 1, 0, 0, 0 },
-        { "D node 0, 1 allocation, NullRendering",            0, 1, 1, 1, 0 },
-        { "E node 0, no allocations, one bad command",        0, 0, 0, 0, 1 },
-        { "F node 1 (the paging/copy node), no allocations",  1, 0, 0, 0, 0 },
+    /* G and H are the residency pair (WDDM2.md 16.10): both name one
+     * allocation with a command the driver refuses; only H makes the
+     * allocation resident first. 0xc0000001 on G and 0xc000000d on H say
+     * that residency is what stops renders at 2.0. */
+    static const struct { const char *What; unsigned Node, Allocs, Null, Lock, Len, Resident; } v[] = {
+        { "A node 0, 1 allocation locked before (as M1)",     0, 1, 0, 1, 0, 0 },
+        { "B node 0, no allocation list",                     0, 0, 0, 0, 0, 0 },
+        { "C node 0, 1 allocation, not locked before",        0, 1, 0, 0, 0, 0 },
+        { "D node 0, 1 allocation, NullRendering",            0, 1, 1, 1, 0, 0 },
+        { "E node 0, no allocations, one bad command",        0, 0, 0, 0, 1, 0 },
+        { "F node 1 (the paging/copy node), no allocations",  1, 0, 0, 0, 0, 0 },
+        { "G node 0, 1 allocation, one bad command",          0, 1, 0, 0, 1, 0 },
+        { "H as G, the allocation made resident first",       0, 1, 0, 0, 1, 1 },
     };
     int bad = 0;
 
@@ -514,6 +565,8 @@ static int render_probe(D3DKMT_HANDLE adapter)
                 ca.NumAllocations = 1;
                 ca.pAllocationInfo = &ai;
                 st = pCreateAllocation(&ca);
+                if (st >= 0 && v[i].Resident)
+                    printf("  MakeResident 0x%08lx\n", (unsigned long)make_resident(dev.hDevice, ai.hAllocation));
                 if (st >= 0 && v[i].Lock) {
                     D3DKMT_LOCK lock = {0};
                     D3DKMT_UNLOCK unlock = {0};
@@ -669,6 +722,8 @@ int main(int argc, char **argv)
     ca.pAllocationInfo = &ai;
     if ((st = pCreateAllocation(&ca)) < 0)
         return fail("CreateAllocation", st);
+    st = make_resident(dev.hDevice, ai.hAllocation);
+    printf("MakeResident: 0x%08lx (WDDM 2.x needs it; a 1.3 adapter may refuse it)\n", (unsigned long)st);
 
     where.Code = MW_ESCAPE_ALLOC_INFO;
     where.hAllocation = ai.hAllocation;

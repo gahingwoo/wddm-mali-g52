@@ -54,6 +54,19 @@ typedef struct _MW_COMMAND {
 #define MW_ESCAPE_GPU_INFO      2
 #define MW_ESCAPE_STATS         3
 #define MW_ESCAPE_SCANOUT       4
+#define MW_ESCAPE_WDDM          8
+
+/* The WDDM version the KMD reported at this start (DXGK_DRIVERCAPS), and
+ * what that asks of the UMD. A KMD that does not know the code refuses it:
+ * WDDM 1.3, nothing asked. */
+#define MW_WDDM_NEEDS_RESIDENCY 0x1u    /* allocations must be made resident (MakeResident) before a
+                                         * render names them: WDDM 2.x, docs/WDDM2.md 16.10 */
+typedef struct _MW_ESCAPE_WDDM_DATA {
+    mw_u32 Code;                        /* MW_ESCAPE_WDDM */
+    mw_u32 WddmVersion;                 /* out: 0x1300, 0x2000, ... */
+    mw_u32 Needs;                       /* out: MW_WDDM_NEEDS_* */
+    mw_u32 Reserved;
+} MW_ESCAPE_WDDM_DATA;
 
 /* Scan-out of primaries by the display controller, on and off.
  * Mode: 1 on, 0 off (flips are copied), 2 off and the IOMMU off too,
