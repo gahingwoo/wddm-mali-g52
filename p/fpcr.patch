@@ -1,0 +1,45 @@
+From ee5b5b8c22238c29bc06fe7ba24a7911a7c425a2 Mon Sep 17 00:00:00 2001
+From: Jiaxing Hu <gahing@gahingwoo.com>
+Date: Tue, 24 Nov 2026 19:26:56 +1300
+Subject: [PATCH] util: use inline asm for FPCR with clang-cl on aarch64
+
+clang-cl defines _MSC_VER, so DETECT_CC_MSVC is set and
+util_fpstate_get/set take the _ReadStatusReg(ARM64_FPCR) path added for
+MSVC. clang's own intrin.h does not define ARM64_FPCR (it comes from the
+MSVC headers, which clang does not include in that mode), so u_math.c
+fails to build for Windows on Arm with clang-cl.
+
+clang-cl understands GNU inline asm, so keep it on the existing
+"mrs/msr fpcr" path and leave the intrinsic for cl only.
+
+Fixes: 7906510e0e6 ("util: Fix u_math on MSVC arm64")
+Signed-off-by: Jiaxing Hu <gahing@gahingwoo.com>
+---
+ src/util/u_math.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/util/u_math.c b/src/util/u_math.c
+index aca1c59..38a4317 100644
+--- a/src/util/u_math.c
++++ b/src/util/u_math.c
+@@ -100,7 +100,7 @@ util_fpstate_get(void)
+    {
+ #ifdef HAVE___BUILTIN_AARCH64_GET_FPCR
+       fpstate = (unsigned)__builtin_aarch64_get_fpcr();
+-#elif DETECT_CC_MSVC
++#elif DETECT_CC_MSVC && !defined(__clang__)
+       fpstate = (unsigned)_ReadStatusReg(ARM64_FPCR);
+ #elif defined(__ARM_FP)
+       uint64_t fpcr;
+@@ -169,7 +169,7 @@ util_fpstate_set(unsigned fpstate)
+    {
+ #ifdef HAVE___BUILTIN_AARCH64_SET_FPCR
+       __builtin_aarch64_set_fpcr(fpstate);
+-#elif DETECT_CC_MSVC
++#elif DETECT_CC_MSVC && !defined(__clang__)
+       _WriteStatusReg(ARM64_FPCR, fpstate);
+ #elif defined(__ARM_FP)
+       uint64_t fpcr = fpstate;
+-- 
+2.43.0
+

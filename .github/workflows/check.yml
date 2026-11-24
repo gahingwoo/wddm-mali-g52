@@ -1,0 +1,66 @@
+name: upstream mesa clang-cl arm64 check
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  u_math:
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: arm64
+      - name: Tools
+        shell: pwsh
+        run: |
+          python -m pip install meson ninja mako pyyaml packaging
+          $u = 'https://github.com/lexxmark/winflexbison/releases/download/v2.5.25/win_flex_bison-2.5.25.zip'
+          Invoke-WebRequest $u -OutFile wfb.zip
+          Expand-Archive wfb.zip -DestinationPath C:\winflexbison
+          "C:\winflexbison" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: arm64
+      - name: Mesa main at 99abc485322f
+        shell: pwsh
+        run: |
+          git init mesa
+          git -C mesa fetch --depth 1 https://github.com/chaotic-cx/mesa-mirror.git 99abc485322f68b1d94ce46b6fb950154f083d66
+          git -C mesa checkout FETCH_HEAD
+      - name: Configure (clang-cl)
+        shell: pwsh
+        run: |
+          $llvm = Join-Path $env:VCINSTALLDIR 'Tools\Llvm\ARM64\bin'
+          $env:CC = Join-Path $llvm 'clang-cl.exe'
+          $env:CXX = $env:CC
+          & $env:CC --version
+          meson setup build mesa --backend=ninja -Dbuildtype=debugoptimized -Dplatforms=windows `
+            -Dgallium-drivers=softpipe '-Dvulkan-drivers=' -Dllvm=disabled `
+            -Dopengl=false -Dgles1=disabled -Dgles2=disabled -Degl=disabled -Dglx=disabled -Dgbm=disabled `
+            '-Dvideo-codecs=' -Dmicrosoft-clc=disabled -Dspirv-to-dxil=false `
+            -Dzstd=disabled -Dshader-cache=disabled -Dbuild-tests=false
+          if ($LASTEXITCODE) { Get-Content build\meson-logs\meson-log.txt -Tail 80; throw 'meson setup failed' }
+          ninja -C build -t targets all | Select-String 'u_math.c.obj'
+      - name: Build u_math.c unpatched (expected to fail)
+        shell: pwsh
+        run: |
+          $t = (ninja -C build -t targets all | Select-String -Pattern '^([^:]*u_math\.c\.obj):' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $t | Out-File -Encoding ascii target.txt
+          ninja -C build $t
+          "unpatched exit: $LASTEXITCODE"
+          exit 0
+      - name: Build u_math.c and libmesa_util patched
+        shell: pwsh
+        run: |
+          git -C mesa apply ..\p\fpcr.patch
+          if ($LASTEXITCODE) { throw 'patch failed' }
+          $t = (Get-Content target.txt).Trim()
+          ninja -C build $t
+          if ($LASTEXITCODE) { throw 'patched build failed' }
+          $lib = (ninja -C build -t targets all | Select-String -Pattern '^(src[/\\]util[/\\][^:]*mesa_util\.[a-z]+):' | Select-Object -First 1).Matches[0].Groups[1].Value
+          "library target: $lib"
+          ninja -C build $lib
+          if ($LASTEXITCODE) { throw 'libmesa_util failed' }
