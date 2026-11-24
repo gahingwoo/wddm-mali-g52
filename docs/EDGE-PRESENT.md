@@ -660,3 +660,89 @@ a long page (for example https://en.wikipedia.org/wiki/Windows) scrolling
 with the mouse wheel without the frame-by-frame stutter of software
 compositing (edge://gpu-internals or `--show-fps-counter` for a number).
 
+### Board result: `d3dprobe sandbox` at 2.0 (2026-11-24)
+
+maliwddm 9.6.46.569, UMD log on. Files:
+`board-session-prep/edge-wddm20/` (`sandbox-20.txt`, `sandbox-20log.txt`,
+`edge-umdlog.zip`, the three children's UMD logs as msedge.exe).
+
+**Not the sandbox.** All three children (medium; low; low and
+restricted) behave the same:
+
+- `DCompositionCreateDevice3` succeeds in all three, the restricted one
+  included.
+- Every window swap chain step passes: FLIP_DISCARD and FLIP_SEQUENTIAL
+  create, present (`0x087A0001`, DXGI_STATUS_OCCLUDED, a success code),
+  ResizeBuffers, the swap chain made again on the same window, and a
+  second one alongside.
+- The one failure, in each child: `edge path: frame 0: Present1
+  0x887a0005, device removed reason 0x887a0020`.
+
+The UMD log of each child: `CreateDevice: done,
+DXGI_STATUS_NO_REDIRECTION`, the window swap chains' presents
+`pfnPresentCb 0x00000000 (S_OK)`, then the composition swap chain's first
+present `present: shared allocation 0x40000e80 -> 0x0, pfnPresentCb
+0x88760873 (D3DDDIERR_INVALIDHANDLE)`, `RelocateDeviceFuncs1`, removed.
+
+That is, line for line, run A of 2026-11-23 at 1.3: a composition swap
+chain under `DXGI_STATUS_NO_REDIRECTION`. "-> 0x0" (no destination
+allocation) is normal for a composition present: it was the same in run
+B, where the present succeeded. What run B changed was redirection
+(`C:\mali\redirect`), and round 6 then ran Edge with it with DWM alive.
+WDDM 2.0 did not bring this; it was there at 1.3 without the redirect
+file, which the board no longer has.
+
+### The change (patch 0076)
+
+The UMD's CreateDevice answers S_OK (redirection allowed) to the
+browsers: msedge.exe, chrome.exe, msedgewebview2.exe, and d3dprobe.exe
+(the names whose multisample answers it already special-cases). Every
+other process keeps DXGI_STATUS_NO_REDIRECTION, the path the desktop has
+been tested with since 2026-11-13. `C:\mali\redirect` still allows it for
+every process, and the new `C:\mali\noredirect` refuses it for every
+process (to compare, or as a way back without reinstalling). The log
+line says which: `S_OK (redirection allowed: a browser)`.
+
+Risk, from rounds 4 and 5: with redirection on, DWM lost its device
+soon after opening a freshly presented composition buffer. Round 6
+(patch 0074, the deadlock fix) ran Edge with redirection and DWM stayed
+alive and responsive; why DWM's device was removed in rounds 4 and 5 is
+still not known. If DWM restarts or the screen flickers black while Edge
+runs, that is it; `echo > C:\mali\noredirect` stops it at once for new
+processes.
+
+Not explained by this: Edge's own GPU process logged
+`DCompositionCreateDevice3 failed: Access is denied` and a window swap
+chain failing with 0x887A0022, which the d3dprobe children, even the
+restricted one, do not show. Chromium's GPU sandbox locks down further
+than d3dprobe's `gpu` token (job object, desktop and handle policy). If
+Edge still falls back after this package, `--disable-gpu-sandbox`
+separates that from the present failure.
+
+### Regression test and board test
+
+`d3dprobe sandbox` is the regression test for this path (no Edge
+needed): run as `C:\mali\fake\msedge.exe sandbox` and as
+`C:\mali\fake\plainprobe.exe sandbox` in the user's session.
+
+1. Install this branch's package (DriverVer in the report). The UMD log
+   off (`C:\mali\log\off`), no `C:\mali\redirect`, no
+   `C:\mali\noredirect`.
+2. `C:\mali\fake\msedge.exe sandbox > C:\mali\sandbox-20-fix.txt`.
+   Expect `exit 0` for medium, low and gpu, and the last line `exit 0`.
+3. `C:\mali\fake\plainprobe.exe sandbox > C:\mali\sandbox-20-plain.txt`:
+   as before the fix (Present1 removed in the edge path, exit 4), since
+   plainprobe.exe is not a browser name. This shows the switch is by name.
+4. Edge, a fresh profile, `--enable-logging --v=1`: edge://gpu. Expect
+   Canvas, Compositing and WebGL "Hardware accelerated", GPU process crash
+   count 0, no `Present1 failed` and no `0x887A0022` in the log.
+   Rasterization may say "Software only" (Chromium's rule for a vendor it
+   does not know).
+5. Smoothness: https://en.wikipedia.org/wiki/Windows, scroll with the
+   wheel for 10 s with `--show-fps-counter`; note the frame rate, and the
+   same with `--disable-gpu` for comparison. DWM must stay up throughout
+   (the same dwm.exe PID before and after, no black flash).
+6. If edge://gpu still shows software: the same with
+   `--disable-gpu-sandbox` (then the sandbox is the second problem) and
+   collect the Edge log and `C:\mali\log\msedge.exe-*.txt` (log on).
+

@@ -1,0 +1,73 @@
+diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
+index 53942fd..f717d5c 100644
+--- a/src/gallium/frontends/d3d10umd/Device.cpp
++++ b/src/gallium/frontends/d3d10umd/Device.cpp
+@@ -106,6 +106,32 @@ CalcPrivateDeviceSize(D3D10DDI_HADAPTER hAdapter,                          // IN
+  * ----------------------------------------------------------------------
+  */
+ 
++/*
++ * The processes that get DXGI redirection without C:\mali\redirect: the
++ * browsers, which present through DirectComposition, and d3dprobe (its
++ * "edge path" and "sandbox" steps), run under any of these names.
++ */
++static bool
++IsRedirectProcess(void)
++{
++   static const char *const names[] = {
++      "msedge.exe", "chrome.exe", "msedgewebview2.exe", "d3dprobe.exe",
++   };
++   char path[MAX_PATH];
++   DWORD n = GetModuleFileNameA(NULL, path, sizeof path);
++   const char *base = path;
++
++   if (n == 0 || n >= sizeof path)
++      return false;
++   for (const char *c = path; *c; c++)
++      if (*c == '\\' || *c == '/')
++         base = c + 1;
++   for (unsigned i = 0; i < ARRAYSIZE(names); i++)
++      if (_stricmp(base, names[i]) == 0)
++         return true;
++   return false;
++}
++
+ HRESULT APIENTRY
+ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+              __in D3D10DDIARG_CREATEDEVICE *pCreateData) // IN
+@@ -347,13 +373,30 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+     * DXGI_STATUS_NO_REDIRECTION tells DXGI not to use the shared resource
+     * presentation path with DWM:
+     * http://msdn.microsoft.com/en-us/library/windows/hardware/ff569887(v=vs.85).aspx
+-    * That is the honest answer while OpenResource is not implemented, and it
+-    * is also why nothing composed through DWM (the logon screen, the shell)
+-    * ever shows on maliwddm. For experiments, the file C:\mali\redirect
+-    * switches to S_OK, so the log shows what DXGI and DWM ask for next.
++    *
++    * A swap chain for composition has nothing to present to but DWM. With
++    * NO_REDIRECTION its first Present1 comes back from pfnPresentCb with
++    * D3DDDIERR_INVALIDHANDLE and the runtime removes the device: at WDDM
++    * 1.3 (2026-11-23, run A) and again at 2.0 (2026-11-24, d3dprobe
++    * sandbox, all three tokens; Edge's GPU process the same), while
++    * window swap chains present fine either way. With redirection allowed
++    * the composition path passed at 1.3 (run B, round 6: Edge rendered,
++    * DWM alive). So the browsers, which present through DirectComposition,
++    * get S_OK by default (docs/EDGE-PRESENT.md, "Edge at WDDM 2.0"); every
++    * other process keeps NO_REDIRECTION, whose present paths are the ones
++    * the desktop has been tested with. The file C:\mali\redirect allows it
++    * for every process, C:\mali\noredirect refuses it for every process.
+     */
++   if (GetFileAttributesA("C:\\mali\\noredirect") != INVALID_FILE_ATTRIBUTES) {
++      DebugPrintf("CreateDevice: done, DXGI_STATUS_NO_REDIRECTION (C:\\mali\\noredirect)\n");
++      return DXGI_STATUS_NO_REDIRECTION;
++   }
+    if (GetFileAttributesA("C:\\mali\\redirect") != INVALID_FILE_ATTRIBUTES) {
+-      DebugPrintf("CreateDevice: done, S_OK (redirection allowed)\n");
++      DebugPrintf("CreateDevice: done, S_OK (redirection allowed, C:\\mali\\redirect)\n");
++      return S_OK;
++   }
++   if (IsRedirectProcess()) {
++      DebugPrintf("CreateDevice: done, S_OK (redirection allowed: a browser)\n");
+       return S_OK;
+    }
+    DebugPrintf("CreateDevice: done, DXGI_STATUS_NO_REDIRECTION\n");
