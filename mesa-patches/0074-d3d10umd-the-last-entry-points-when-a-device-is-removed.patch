@@ -1,0 +1,92 @@
+diff --git a/src/gallium/frontends/d3d10umd/Debug.cpp b/src/gallium/frontends/d3d10umd/Debug.cpp
+index 30e39b6..e5b307b 100644
+--- a/src/gallium/frontends/d3d10umd/Debug.cpp
++++ b/src/gallium/frontends/d3d10umd/Debug.cpp
+@@ -420,15 +420,51 @@ mali_slow_log(uint64_t ticks, const char *op, const char *fmt, ...)
+  */
+ #define DEBUG_TRACE_MAX 40000
+ 
++/*
++ * The last entry points of the process, kept after the trace has stopped:
++ * DWM's removed device (2026-11-24) came long after its trace had, and
++ * nothing said which call it was in. Written without a lock; a line read
++ * while another thread overwrites it is only a wrong name.
++ */
++#define DEBUG_RECENT 32
++static struct {
++   const char *function;
++   DWORD tick, thread;
++} recent[DEBUG_RECENT];
++static volatile LONG recent_next;
++
++void
++DebugRecentEntries(void)
++{
++   LONG end = recent_next;
++   DWORD now = GetTickCount();
++
++   for (LONG i = end - DEBUG_RECENT; i < end; i++) {
++      if (i < 0)
++         continue;
++      unsigned k = (unsigned)i % DEBUG_RECENT;
++      const char *f = recent[k].function;
++      if (f)
++         DebugPrintf("recent: %lu ms ago, thread %lu, %s\n",
++                     (unsigned long)(now - recent[k].tick), (unsigned long)recent[k].thread, f);
++   }
++}
++
+ void
+ DebugTraceEntry(const char *function)
+ {
+    static volatile LONG lines = 0;
+-   HANDLE file = DebugLogFile();
++   HANDLE file;
+    char buf[160];
+    int len;
+    DWORD done;
++   unsigned k = (unsigned)(InterlockedIncrement(&recent_next) - 1) % DEBUG_RECENT;
++
++   recent[k].function = function;
++   recent[k].tick = GetTickCount();
++   recent[k].thread = GetCurrentThreadId();
+ 
++   file = DebugLogFile();
+    if (file == INVALID_HANDLE_VALUE)
+       return;
+    if (InterlockedIncrement(&lines) > DEBUG_TRACE_MAX)
+diff --git a/src/gallium/frontends/d3d10umd/Debug.h b/src/gallium/frontends/d3d10umd/Debug.h
+index b0d72e8..245db8a 100644
+--- a/src/gallium/frontends/d3d10umd/Debug.h
++++ b/src/gallium/frontends/d3d10umd/Debug.h
+@@ -67,6 +67,10 @@ DebugTraceEntry(const char *function);
+ 
+ #define LOG_ENTRYPOINT() DebugTraceEntry(__func__)
+ 
++/* The last entry points of the process, to the log (RelocateDeviceFuncs). */
++void
++DebugRecentEntries(void);
++
+ #define LOG_UNSUPPORTED_ENTRYPOINT() DebugPrintf("%s XXX\n", __func__)
+ 
+ #define LOG_UNSUPPORTED(expr) \
+diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
+index 976e4a5..53942fd 100644
+--- a/src/gallium/frontends/d3d10umd/Device.cpp
++++ b/src/gallium/frontends/d3d10umd/Device.cpp
+@@ -450,6 +450,7 @@ RelocateDeviceFuncs(D3D10DDI_HDEVICE hDevice,                           // IN
+     */
+    DebugPrintf("%s: the runtime moved the function table; the device is being removed\n",
+                __func__);
++   DebugRecentEntries();
+    d3d10_note_removed(CastDevice(hDevice)->hDevice);
+ 
+    /*
+@@ -483,6 +484,7 @@ RelocateDeviceFuncs1(D3D10DDI_HDEVICE hDevice,                           // IN
+     */
+    DebugPrintf("%s: the runtime moved the function table; the device is being removed\n",
+                __func__);
++   DebugRecentEntries();
+    d3d10_note_removed(CastDevice(hDevice)->hDevice);
+ 
+    /*

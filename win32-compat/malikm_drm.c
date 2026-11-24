@@ -774,12 +774,26 @@ static SRWLOCK wddm_lock = SRWLOCK_INIT;
 
 /* wddm_lock, timed: a long wait here is another thread's wait for the GPU
  * or the runtime, made inside the lock. */
+/* This thread holds wddm_lock. The runtime can call back into the UMD from
+ * inside a runtime callback this shim makes under the lock (it moved DWM's
+ * function table, RelocateDeviceFuncs, 2026-11-24), and an SRW lock taken
+ * again on the same thread never returns: malikm_note_removed looks here. */
+static __declspec(thread) int wddm_held;
+
 static void
 wlock(const char *who)
 {
    uint64_t slow_t0 = mali_slow_now();
    AcquireSRWLockExclusive(&wddm_lock);
+   wddm_held = 1;
    MALI_SLOW(slow_t0, "shim-lock", "waited for it in %s", who);
+}
+
+static void
+wunlock(void)
+{
+   wddm_held = 0;
+   ReleaseSRWLockExclusive(&wddm_lock);
 }
 
 /* Inside a hardware UMD (maliumd.dll, d3d10umd), the runtime's device and
@@ -1541,7 +1555,7 @@ malikm_primary_create(void *hRTDevice, void *hRTResource, unsigned w, unsigned h
       DebugPrintf("primary: %ux%u source %u, pfnAllocateCb 0x%08lx, allocation 0x%x\n",
                   w, h, vidpn_source, (unsigned long)hr, (unsigned)handle);
    }
-   ReleaseSRWLockExclusive(&wddm_lock);
+   wunlock();
    return handle;
 }
 
@@ -1556,7 +1570,7 @@ malikm_primary_destroy(void *hRTDevice, unsigned handle)
       w_destroy(handle);
       MALI_SLOW(slow_t0, "primary-destroy", "pfnDeallocateCb 0x%x", handle);
    }
-   ReleaseSRWLockExclusive(&wddm_lock);
+   wunlock();
 }
 
 /*
@@ -1589,7 +1603,7 @@ malikm_set_display_mode(void *hRTDevice, unsigned primary_allocation)
       DebugPrintf("SetDisplayMode: not possible (bound %d, primary 0x%x)\n", ddi.on,
                   primary_allocation);
    }
-   ReleaseSRWLockExclusive(&wddm_lock);
+   wunlock();
    return hr;
 }
 
@@ -1684,7 +1698,7 @@ malikm_present_allocation(void *hRTDevice, unsigned src_allocation, unsigned dst
       DebugPrintf("present: shared allocation 0x%x -> 0x%x, pfnPresentCb 0x%08lx (%s),"
                   " DXGI context %p\n", src_allocation, dst_allocation, (unsigned long)hr,
                   cb_result_name(hr), dxgi_context);
-   ReleaseSRWLockExclusive(&wddm_lock);
+   wunlock();
    return hr;
 }
 
@@ -1779,7 +1793,7 @@ malikm_present_d3dddi_rows(const void *map, unsigned stride, unsigned w, unsigne
    }
    present_result = hr;
 out:
-   ReleaseSRWLockExclusive(&wddm_lock);
+   wunlock();
    return ret;
 }
 
@@ -1871,7 +1885,7 @@ malikm_present_d3dddi(const void *bgrx, unsigned w, unsigned h, void *dxgi_conte
    if (trace_on() && ret)
       fprintf(stderr, "malikm: pfnPresentCb failed\n");
 out:
-   ReleaseSRWLockExclusive(&wddm_lock);
+   wunlock();
    return ret;
 }
 
@@ -1901,7 +1915,7 @@ malikm_bind_d3dddi(HANDLE hRTAdapter, HANDLE hRTDevice, const void *pKTCallbacks
          dev = &wdevs[i];
    wbinding = NULL;
    if (!dev) {
-      ReleaseSRWLockExclusive(&wddm_lock);
+      wunlock();
       DebugPrintf("bind: runtime device %p: no free device slot\n", hRTDevice);
       return -1;
    }
@@ -1956,7 +1970,7 @@ malikm_bind_d3dddi(HANDLE hRTAdapter, HANDLE hRTDevice, const void *pKTCallbacks
       wselect(&wdevs[0]);
       memset(dev, 0, sizeof(*dev));
    }
-   ReleaseSRWLockExclusive(&wddm_lock);
+   wunlock();
    /* Why a process does or does not get the Mali: without this the only
     * sign is "screen softpipe" a few lines later. */
    DebugPrintf("bind: runtime device %p: %s (GPU info escape 0x%08lx, %u params, valid 0x%llx;"
@@ -2003,7 +2017,7 @@ malikm_unbind_d3dddi(void *hRTDevice)
    }
    if (wbinding && !wbinding->used)
       wbinding = NULL;
-   ReleaseSRWLockExclusive(&wddm_lock);
+   wunlock();
 }
 
 static struct wbo *
@@ -2021,7 +2035,7 @@ wddm_bo_is_resource(int fd, uint32_t handle)
    wselect_fd(fd);
    struct wbo *bo = wddm_bo(handle);
    ret = bo && bo->rt_resource && !bo->released;
-   ReleaseSRWLockExclusive(&wddm_lock);
+   wunlock();
    return ret;
 }
 
@@ -2130,7 +2144,7 @@ malikm_primary_rebind(void *hRTDevice, unsigned allocation, void *hRTResource)
             wbo[i].rt_resource = hRTResource;
       }
    }
-   ReleaseSRWLockExclusive(&wddm_lock);
+   wunlock();
 }
 
 /* The runtime removed this device (it moved the device's function table,
@@ -2142,9 +2156,26 @@ malikm_note_removed(void *hRTDevice)
 {
    DWORD now = GetTickCount();
    unsigned live = 0, shared = 0, opened_released = 0;
+   int locked = 0, nested = wddm_held;
 
-   wlock(__func__);
-   if (wselect_rt(hRTDevice)) {
+   /* Never wait for the lock here. Called on a thread that already holds
+    * it (the runtime moving the table from inside a callback this shim
+    * made), AcquireSRWLockExclusive never returned: dwm.exe stopped
+    * composing for good and every new window hung (2026-11-24). Another
+    * thread may hold it for long, too, so only a short try. */
+   if (!nested) {
+      for (int i = 0; i < 20 && !locked; i++) {
+         locked = TryAcquireSRWLockExclusive(&wddm_lock);
+         if (!locked)
+            Sleep(1);
+      }
+      if (locked)
+         wddm_held = 1;
+   }
+   DebugPrintf("removed: device %p, %s\n", hRTDevice,
+               nested ? "inside a call that holds the shim lock (a callback made under it)" :
+               locked ? "shim lock taken" : "shim lock busy on another thread; BOs not counted");
+   if (locked && wselect_rt(hRTDevice)) {
       for (uint32_t i = 0; i < wbo_cap; i++) {
          if (!wbo[i].h)
             continue;
@@ -2154,9 +2185,11 @@ malikm_note_removed(void *hRTDevice)
          if (wbo[i].rt_resource && wbo[i].released)
             opened_released++;
       }
+      DebugPrintf("removed:   %u BOs live (%u of runtime resources, %u of them given back"
+                  " but still held)\n", live, shared, opened_released);
    }
-   DebugPrintf("removed: device %p, %u BOs live (%u of runtime resources, %u of them given back"
-               " but still held)\n", hRTDevice, live, shared, opened_released);
+   /* The notes are this shim's own small array: read without the lock, a
+    * note being written shows half old, half new, nothing worse. */
    for (unsigned k = 0; k < SUBMIT_NOTES; k++) {
       const struct submit_note *n =
          &submit_notes[(submit_note_next + k) % SUBMIT_NOTES];
@@ -2168,7 +2201,8 @@ malikm_note_removed(void *hRTDevice)
                   n->named, n->listed, n->shared_named, n->shared[0], n->shared[1],
                   n->shared[2], n->shared[3], (unsigned long)n->status);
    }
-   ReleaseSRWLockExclusive(&wddm_lock);
+   if (locked)
+      wunlock();
 }
 
 /* Everything this device has submitted is done. For a present that may not
@@ -2181,7 +2215,7 @@ malikm_wait_idle(void *hRTDevice)
    wlock(__func__);
    if (wselect_rt(hRTDevice) && ddi.on)
       ret = wddm_idle("present-wait");
-   ReleaseSRWLockExclusive(&wddm_lock);
+   wunlock();
    return ret;
 }
 
@@ -2238,7 +2272,7 @@ malikm_shared_destroy(void *hRTDevice, void *hRTResource)
                   " pfnDeallocateCb 0x%08lx\n", hRTResource, hRTDevice, idle, held,
                   (unsigned long)hr);
    }
-   ReleaseSRWLockExclusive(&wddm_lock);
+   wunlock();
 }
 
 /* BOs this device holds, for the slow-operation log. Under wddm_lock. */
@@ -2642,6 +2676,7 @@ wddm_ioctl(int fd, DWORD code, void *buf, DWORD len)
     * it holds up every other thread's allocations, maps and submissions. */
    uint64_t slow_t0 = mali_slow_now();
    AcquireSRWLockExclusive(&wddm_lock);
+   wddm_held = 1;
    MALI_SLOW(slow_t0, "shim-lock", "waited for it, ioctl 0x%lx nr 0x%x", (unsigned long)code,
              code == IOCTL_MALIKM_DRM ? h->Nr : 0);
    wselect_fd(fd);
@@ -2686,7 +2721,7 @@ wddm_ioctl(int fd, DWORD code, void *buf, DWORD len)
    }
    if (trace_on() && code == IOCTL_MALIKM_DRM)
       fprintf(stderr, "malikm-wddm: nr 0x%x -> %d\n", h->Nr, h->Result);
-   ReleaseSRWLockExclusive(&wddm_lock);
+   wunlock();
 }
 
 /* ---- MALIKM_FAKE ----
