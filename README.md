@@ -41,12 +41,26 @@ came up a few hours later
 2026-11-14 the copies were removed one at a time and measured
 ([result](docs/results/tspi3m-2026-11-14/README.md)).
 
-Windows on RK3576 boards
+Without this driver, Windows on RK3576 boards
 ([woa-rk3576](https://github.com/gahingwoo/woa-rk3576)) draws its desktop on the
-CPU today: there is no GPU driver, so DWM renders through WARP into the
-framebuffer the firmware leaves behind. No Windows driver for any Mali GPU
+CPU: DWM renders through WARP into the framebuffer the firmware leaves
+behind. No Windows driver for any Mali GPU
 exists as far as we can find; Arm and the SoC vendors ship Linux and Android
 drivers only.
+
+## Screenshots, 2026-11-24
+
+![FurMark through the OpenGL driver on Mali-G52 r1 MC3 (Panfrost), the WDDM adapter's properties, and dxdiag](docs/imgs/tspi3m-2026-11-24-furmark-adapter.webp)
+
+*TaishanPi 3M, Windows 11 23H2, 2026-11-24. FurMark on "Mali-G52 r1 MC3
+(Panfrost), OpenGL 3.1", Device Manager's "Rockchip RK3576 Mali-G52 (WDDM)"
+working properly, dxdiag, and a monitor widget with the GPU at 702 MHz.*
+
+![Task Manager's GPU page for the Rockchip RK3576 Mali-G52 (WDDM), with the GPU temperature](docs/imgs/tspi3m-2026-11-24-taskmanager-gpu.webp)
+
+*TaishanPi 3M, Windows 11 23H2, 2026-11-24. Task Manager's GPU page:
+utilisation, shared GPU memory, the GPU temperature, driver date and
+DirectX 11 at feature level 10_1.*
 
 ## Where it stands
 
@@ -74,8 +88,8 @@ document with the runs behind it.
 | Display resolution and refresh rate | Works on HDMI (2026-11-24, AOC Q27B3S2): Settings offers every mode and refresh rate the monitor's EDID lists up to 340 MHz, 2560x1440 at 60 and 75 Hz there; 75 Hz took, the monitor showed it, it was kept across a reboot, and hot-plug and the 15 s revert worked. That is `HdmiHpd` 3, the default on HDMI boots (branch `hdmi-retime-default`). 100 Hz at 2560x1440 needs HDMI 2.0 scrambling, not written. Below level 3 and on the panel, `ScaledModes` offers smaller resolutions scaled by the VOP2. Scale (DPI) changes work. [DISPLAY-MODES.md](docs/DISPLAY-MODES.md) |
 | Edge | Partly. With `UmdDdi` 101, Edge's GPU process gets the Mali at feature level 10_1 and ANGLE reports WebGL2 on it. The device-creation fix and the fixes for the crashes found on the board (a draw with no input layout, a shared resource given a cached buffer) are merged. Presenting to a composition swap chain is still blocked: Edge loses its device at the first present and falls back to software rendering. That waits on the redirection and DWM work. [EDGE-CREATEDEVICE.md](docs/EDGE-CREATEDEVICE.md), [EDGE-PRESENT.md](docs/EDGE-PRESENT.md) |
 | WDDM 2.0 | The default since 2026-11-24. First 2.0 desktop on 2026-11-24 (run G): LogonUI and the desktop on HDMI, GPU jobs through WDDM, dxdiag Driver Model WDDM 2.0, feature level 10_1. A 2.0 boot that does not reach a confirmed desktop falls back to 1.3 on the next boot and stays there until another package is installed. `WddmProbe` 0x1300 forces 1.3. [WDDM2.md](docs/WDDM2.md) 16.12 and 16.13 |
-| GPU speed | FurMark (1024x640, 60 s) scores 288 and 290 at 594 MHz with the GPU 87.9% busy: the clock is the limit. Dragging a window keeps the GPU 12 to 13% busy and is limited by the CPU's submit path. Sending a batch's two GPU chains as one render cut DWM's submit CPU per job from 0.29 to 0.33 ms to 0.20 to 0.23 ms over three runs, with no errors; that is on branch `merge-submit-default`, not main yet. [PERF.md](docs/PERF.md) |
-| GPU clock and supply | At most 600 MHz (594 MHz used). The GPU supply, `vdd_gpu_s0` (RK806 BUCK5), reads 750 mV, the PMIC's default. A firmware branch raises it to 775 mV on this board, and the board read it back at 775 mV; 702 MHz has not been run. |
+| GPU speed | FurMark (1024x640, 60 s) scores 288 and 290 at 594 MHz with the GPU 87.9% busy: the clock is the limit. Dragging a window keeps the GPU 12 to 13% busy and is limited by the CPU's submit path. Sending a batch's two GPU chains as one render cut DWM's submit CPU per job from 0.29 to 0.33 ms to 0.20 to 0.23 ms over three runs, with no errors; that is on by default since 2026-11-23 (`UmdMergeSubmit`). [PERF.md](docs/PERF.md) |
+| GPU clock and supply | At most 600 MHz (594 MHz used). The GPU supply, `vdd_gpu_s0` (RK806 BUCK5), reads 750 mV, the PMIC's default. A firmware branch raises it to 775 mV on this board, and the board read it back at 775 mV (edk2-rk3576 `main` since 2026-11-24). With `GpuClkHigh` 1 the GPU ran FurMark at 702 MHz on 2026-11-24: 334, 335 and 336 points against 288 and 290 at 594 MHz, no job faults, 49.9 C peak with the fan on. `GpuClkHigh` is 0 unless set, so 594 MHz stays the default. |
 
 All results: [docs/results/](docs/results/README.md). All documents:
 [docs/](docs/README.md).
