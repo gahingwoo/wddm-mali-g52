@@ -163,6 +163,8 @@ jobs:
         run: make -C tests/perfdata-host run
       - name: maliwddm's source modes and VOP2 window scaling (scale.h)
         run: make -C tests/modes-host run
+      - name: the UMD's video backend and the VDPU383 register builder, fake decoder (video/vdec.c)
+        run: make -C tests/vdec-host run
 
   umd:
     # The UMD for the package: mesa.yml's Panfrost build of the same inputs.
@@ -192,10 +194,10 @@ jobs:
           # The OpenGL forwarder is built after everything else in the run.
           ART: maligl-arm64x
         run: |
-          # What the DLL is built from (mesa.yml copies include/ and
-          # win32-compat/ into Mesa, applies mesa-patches/, puts ci/ on PATH).
+          # What the DLL is built from (mesa.yml copies include/,
+          # win32-compat/ and video/ into Mesa, applies mesa-patches/, puts ci/ on PATH).
           # mesa.yml also runs on tests/**, which do not go into the DLL.
-          inputs=(.github/workflows/mesa.yml mesa-patches win32-compat include ci)
+          inputs=(.github/workflows/mesa.yml mesa-patches win32-compat include ci video)
           deadline=$(( $(date +%s) + 50 * 60 ))
           while :; do
             : > runs.tsv

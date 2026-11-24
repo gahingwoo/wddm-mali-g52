@@ -16,6 +16,8 @@ on:
       - 'tools/windows/emucheck.cpp'
       - 'tools/windows/gltri.cpp'
       - 'tools/windows/copytest.cpp'
+      - 'tools/windows/vdectest/**'
+      - 'video/**'
   workflow_dispatch:
 
 permissions:
@@ -58,6 +60,8 @@ jobs:
         shell: pwsh
         run: |
           git clone --depth 1 --branch $env:MESA_TAG $env:MESA_URL mesa
+          # The video decoder backend and the VDPU383 register builder (0076).
+          Copy-Item -Recurse video mesa\src\gallium\frontends\d3d10umd\video
           Get-ChildItem mesa-patches -Filter *.patch -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object {
             Write-Host "applying $($_.Name)"
             git -C mesa apply --whitespace=nowarn $_.FullName
@@ -208,6 +212,8 @@ jobs:
         shell: pwsh
         run: |
           git clone --depth 1 --branch $env:MESA_TAG $env:MESA_URL mesa
+          # The video decoder backend and the VDPU383 register builder (0076).
+          Copy-Item -Recurse video mesa\src\gallium\frontends\d3d10umd\video
           Copy-Item -Recurse win32-compat mesa\include\win32-compat
           Copy-Item include\malikm_ioctl.h mesa\include\win32-compat\
           Copy-Item include\maliwddm_abi.h mesa\include\win32-compat\
@@ -392,6 +398,71 @@ jobs:
             if ($gout -notmatch "(?m)^UNSUPPORTED +$n ") { throw "gsso.exe step $n was not UNSUPPORTED on Panfrost" }
           }
 
+      - name: D3D11 video decode through the D3D11.1 interface (vdectest, fake decoder)
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          # 0076: UmdVideo gives the processes it names the D3D11.1
+          # interface and ID3D11VideoDevice; D3D10UMD_UMDVIDEO stands in for
+          # the Device Parameters value without a KMD, D3D10UMD_VDEC_FAKE for
+          # the decoder (vdec.c builds the register file, then writes a
+          # pattern vdectest checks after the copy to a staging texture).
+          $dll = (Resolve-Path out\libgallium_d3d10.dll).Path
+          New-Item -ItemType Directory -Force vt | Out-Null
+          cl /nologo /W3 /O2 /EHsc /MD /Itools\windows\vdectest tools\windows\vdectest\vdectest.cpp `
+             tools\windows\vdectest\h264parse.c tools\windows\vdectest\md5.c /Fe:vt\vdectest.exe
+          if ($LASTEXITCODE) { throw 'vdectest build failed' }
+          Copy-Item vt\vdectest.exe vt\notaplayer.exe
+          Copy-Item out\triangle.exe vt\mpv.exe
+          Copy-Item out\present.exe vt\ffplay.exe
+          $env:GALLIUM_DRIVER = 'softpipe'
+          $env:D3D10UMD_UMDDDI = '101'
+          function Run-Exe($tag, $exe, $argl) {
+            $p = Start-Process -FilePath (Resolve-Path vt\$exe).Path -ArgumentList $argl -NoNewWindow -PassThru `
+                   -RedirectStandardOutput "vdec-$tag.txt" -RedirectStandardError "vdec-$tag.err"
+            if (-not $p.WaitForExit(180000)) { Stop-Process -Id $p.Id -Force; $c = 'hang' } else { $c = $p.ExitCode }
+            Write-Host "===== ${tag}: $exe exit $c"
+            Get-Content "vdec-$tag.txt", "vdec-$tag.err" -ErrorAction SilentlyContinue | Select-Object -Last 40 | Out-Host
+            return $c
+          }
+          $stream = (Resolve-Path tests\data\testsrc-176x144-high.264).Path
+
+          $env:D3D10UMD_UMDVIDEO = '0'
+          $off = Run-Exe 'off' 'vdectest.exe' "`"$dll`" --probe"
+          $env:D3D10UMD_UMDVIDEO = '1'
+          $noprof = Run-Exe 'noprofiles' 'vdectest.exe' "`"$dll`" --probe"
+          $other = Run-Exe 'otherprocess' 'notaplayer.exe' "`"$dll`" --probe"
+          $tri = Run-Exe 'triangle11' 'mpv.exe' "`"$dll`""
+          $pres = Run-Exe 'present11' 'ffplay.exe' "`"$dll`""
+          $env:D3D10UMD_UMDVIDEO = '2'
+          $env:D3D10UMD_VDEC_FAKE = '1'
+          $dec = Run-Exe 'decode' 'vdectest.exe' "`"$dll`" `"$stream`" --fake"
+          Remove-Item Env:D3D10UMD_VDEC_FAKE
+          $env:D3D10UMD_UMDVIDEO = '2'
+          $nodev = Run-Exe 'nodevice' 'vdectest.exe' "`"$dll`" --probe"
+          Remove-Item Env:D3D10UMD_UMDVIDEO, Env:D3D10UMD_UMDDDI, Env:GALLIUM_DRIVER
+
+          $t = @{}
+          foreach ($k in 'off', 'noprofiles', 'otherprocess', 'decode', 'nodevice') { $t[$k] = (Get-Content "vdec-$k.txt" -ErrorAction SilentlyContinue) -join "`n" }
+          if ($off -eq 'hang' -or $off -eq 0) { throw "UmdVideo 0: a video device was created ($off)" }
+          if ($t['off'] -match 'ID3D11VideoDevice: yes') { throw 'UmdVideo 0 offered a video device' }
+          if ($noprof -ne 3 -or $t['noprofiles'] -notmatch 'ID3D11VideoDevice: yes' -or $t['noprofiles'] -notmatch 'decoder profiles: 0') { throw "UmdVideo 1: expected a video device with no profiles ($noprof)" }
+          if ($other -eq 0 -or $t['otherprocess'] -match 'ID3D11VideoDevice: yes') { throw "UmdVideo 1 reached a process not on the list ($other)" }
+          if ($tri -ne 0 -and $tri -ne 2) { throw "triangle.exe on the D3D11.1 interface failed ($tri)" }
+          if ($pres -ne 0) { throw "present.exe on the D3D11.1 interface failed ($pres)" }
+          if ($dec -ne 0 -or $t['decode'] -notmatch 'fake pattern: MATCH' -or $t['decode'] -notmatch 'frames out 12') { throw "decode through ID3D11VideoContext failed ($dec)" }
+          if ($nodev -ne 3 -or $t['nodevice'] -notmatch 'decoder profiles: 0') { throw "without \\.\VDPU383 the profile must not be offered ($nodev)" }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vdectest-arm64
+          path: |
+            vt/vdectest.exe
+            tests/data/testsrc-176x144-high.264
+            vdec-*.txt
+            vdec-*.err
+
       - name: The runtime's view of the multisample answers (d3dprobe, MALIKM_FAKE)
         timeout-minutes: 10
         shell: pwsh
@@ -564,6 +635,8 @@ jobs:
         shell: pwsh
         run: |
           git clone --depth 1 --branch $env:MESA_TAG $env:MESA_URL mesa
+          # The video decoder backend and the VDPU383 register builder (0076).
+          Copy-Item -Recurse video mesa\src\gallium\frontends\d3d10umd\video
           Copy-Item -Recurse win32-compat mesa\include\win32-compat
           Copy-Item include\malikm_ioctl.h mesa\include\win32-compat\
           Copy-Item include\maliwddm_abi.h mesa\include\win32-compat\
@@ -833,6 +906,8 @@ jobs:
         shell: pwsh
         run: |
           git clone --depth 1 --branch $env:MESA_TAG $env:MESA_URL mesa
+          # The video decoder backend and the VDPU383 register builder (0076).
+          Copy-Item -Recurse video mesa\src\gallium\frontends\d3d10umd\video
           Copy-Item -Recurse win32-compat mesa\include\win32-compat
           Copy-Item include\malikm_ioctl.h mesa\include\win32-compat\
           Copy-Item include\maliwddm_abi.h mesa\include\win32-compat\
