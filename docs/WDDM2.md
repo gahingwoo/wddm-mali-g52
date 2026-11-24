@@ -1294,7 +1294,7 @@ Why, from the evidence:
 | 15 `DxgkPhysicalAdapterHandle` | our adapter context | our adapter context | dxgkrnl's `DeviceHandle` from StartDevice |
 | 11 count pass | decided by `pSegmentDescriptor == NULL` | same | decided by `NbSegment == 0` |
 | 11 input | not checked | not checked | `DXGK_QUERYSEGMENTIN4.PhysicalAdapterIndex` 0 |
-| 11 segment flags | aperture, CPU visible | same | same, plus non-local budget group and application target (`Wddm2Budget`, default 1) |
+| 11 segment flags | aperture, CPU visible | same | same, plus the local budget group and application target, 0x88005 (`Wddm2Budget`, `Wddm2LocalBudget`, default 1; build 345 had the non-local group, 16.11) |
 | PreemptCommand, node 1 | n/a | handled as node 0 | DMA_PREEMPTED on node 1 at once |
 | BuildPagingBuffer, no room for the marker | n/a | operation done, then INSUFFICIENT_DMA_BUFFER (done twice) | INSUFFICIENT_DMA_BUFFER before anything is done |
 
@@ -2098,3 +2098,106 @@ nothing with the GPU, and the black screen follows from that.
 
 The two halves are separate variables. A passing (3) with a still-black
 (4) means the rule is right and the UMD's use of it is not.
+
+### 16.11 Run F (build 345): GPU work at 2.0, then a divide by zero in dxgmms2
+
+TaishanPi 3M, 2026-11-24, HDMI only, package DriverVer 4.15.16.474 (CI
+run 45325052451, build 345). Files: `board-session-prep/wddm2x-stepF/`
+(`dxgmms2.sys` and its public PDB, `dis.txt`, `publics.txt`,
+`journal-boot1.txt`, `serial-tail.txt`, the bugcheck photo).
+
+**Further than any 2.0 boot before it.** With MakeResident in the UMD the
+GPU ran: 47 submissions, every fence completed. CreateAllocation,
+OpenAllocation, Escape, BuildPagingBuffer (operation 5, map aperture
+segment) and Patch all returned 0. Then:
+
+- bugcheck 0x7E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED in dxgmms2.sys;
+- P1 0xC0000094, integer divide by zero;
+- P2 0xFFFFF8040B6C62C0.
+
+**Where (dxgmms2 10.0.22621.2428).** P2 is RVA 0xE62C0, a `brk #0xf004`
+(the ARM64 divide-by-zero trap) at
+`VIDMM_COMMIT_TELEMETRY::LogMemoryState(_GUID*)+0x160`:
+
+```
+1c00e6274:  ldr   w8, [x7, #0x1b68]     ; physical adapter count
+1c00e6290:  mov   w2, #0x0              ; D3DKMT_MEMORY_SEGMENT_GROUP_LOCAL
+1c00e6294:  mov   w1, w20               ; adapter index
+1c00e629c:  bl    GetSegmentGroupState
+1c00e62ac:  ldr   x12, [x15, #0x78]     ; usage
+1c00e62b0:  ldr   x6,  [x15, #0x10]     ; budget
+1c00e62b8:  mul   x8, x12, x25          ; usage * 100
+1c00e62bc:  cbnz  x6, 1c00e62c4
+1c00e62c0:  brk   #0xf004               ; budget 0
+1c00e62c4:  udiv  x9, x8, x6
+```
+
+- Nothing before it tests the budget.
+- A second division follows, of another group state, behind a test of a
+  per-adapter flag that picks the string "Discrete" over "Integrated".
+  On an integrated adapter, as ours, the local group is the only one
+  divided.
+- dxgmms2's budget configuration has an `L_` set (local only, e.g.
+  `L_LocalMemoryBudgetDWMTarget`) next to the `LNL_` one (local and
+  non-local). An integrated adapter is expected to have its memory in the
+  local group.
+- LogMemoryState is called from four events: LogLongPagingPacket,
+  LogFullDefragPass, LogUnderBudgetButCantCommitEvent and
+  LogNoCandidatesToSuspendFound. Which one fired is not on the photo. Any
+  of them divides by the local budget.
+
+**Why it was 0.** At 2.x our one segment is an aperture with
+`NonLocalBudgetGroup` (flags 0x108005, journal `segment ... nonlocal 1`).
+No segment was in the local group, so the local budget was 0. Earlier 2.0
+boots never did enough paging to reach the telemetry.
+
+**Build 349 (`902297c`):**
+
+- At 2.x the segment has `LocalBudgetGroup` instead (flags 0x88005:
+  aperture, CPU visible, application target, local budget group). On a
+  UMA GPU all of its memory is the system's.
+- 1.3 is unchanged. QUERYSEGMENT3 (`MwQuerySegment`) is not touched and
+  the 1.3 plan has no budget flag (0x5). The host test checks both, and
+  the lint checks that the 1.3 function has no budget flag.
+- `Wddm2LocalBudget 0` (`wddm-probe ... nonlocalbudget`) gives run F's
+  segment back. `nobudget` still drops both groups.
+- The plan journal line now prints `local %u (flags 0x...)`. The
+  QUERYSEGMENT4 fill line prints the flags dxgkrnl was given.
+- Package: `wddm-mali-g52-driver-arm64` of CI run 45331666347 (build 349,
+  Mesa run 45331666052), DriverVer 5.12.54.228.
+
+Not chosen: a second, memory segment with `PopulatedFromSystemMemory` in
+the local group, which is what Intel and AMD integrated drivers do with
+their firmware carve-out. It changes segment ids, needs backing memory
+and the paging operations of a memory segment. It is the next step if
+VidMm refuses an aperture in the local group.
+
+**Next one shot (G).** Against F the only change is the budget group.
+
+1. Install the package at 1.3 (16.1) and check `WddmVersion 0x1300` and
+   the desktop as before.
+2. `mkdir C:\mali\log`, `wddm-probe set 2000 phys uart`, clean restart,
+   HDMI only.
+3. Run `m5test renderprobe` and `m5test` (as F), then `wddm-probe check`,
+   `echo > C:\mali\log\off`, and send `C:\mali\probe\` with the dwm and
+   LogonUI logs.
+
+What the result says:
+
+- **The journal has `local 1 (flags 0x88005)` and the QUERYSEGMENT4 fill
+  pass `flags 0x00088005`:** the build is the one meant.
+- **No 0x7E, LogonUI or the desktop on HDMI, `renders` climbing:** the
+  local budget was it. Then Task Manager should show the GPU's memory as
+  dedicated, about 1 GB, not shared. Run the 16.2 checks.
+- **0x7E again at the same RVA:** the local group is still empty, so
+  VidMm did not take the flag on an aperture. The next build is the
+  memory segment above.
+- **The adapter does not start (event 549, or a fallback with the journal
+  ending at QAI 11):** VidMm refuses an aperture in the local group. Same
+  next step.
+- **Another bugcheck after more paging:** read the new journal. The event
+  that called LogMemoryState (long paging packet, defrag, commit) is
+  worth knowing then, since the paging may be slow or failing; a kernel
+  debugger stack would name it.
+- **To A/B on one install:** `wddm-probe set 2000 phys uart
+  nonlocalbudget` must give run F's 0x7E.
