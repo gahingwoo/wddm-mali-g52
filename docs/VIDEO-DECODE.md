@@ -164,11 +164,13 @@ One test, one install. Stage only, `ConfigFlags` 0x20, full reboot. Never
 - Firmware: edk2-rk3576 `main` (67f0a98 or later) with *Video Decoder
   (VDPU383)* enabled in setup.
 - vdpu383.sys: woa-rk3576 `vdpu383-d3d11va`, WinPE workflow artifact
-  `woa-drivers-signed-arm64` (the `vdpu383` folder).
-- maliwddm package: wddm-mali-g52 `video-decode`, CI artifact of the
-  maliwddm package (its UMD is the one with 0076).
+  `woa-drivers-signed-arm64` (the `vdpu383` folder), run 45360193024.
+- maliwddm package: wddm-mali-g52 `video-decode`, CI artifact
+  `wddm-mali-g52-driver-arm64` (run 45359773995 or later; its UMD is the
+  one with 0076). Its DriverVer is newer than the board's, so it is the
+  package Windows binds.
 - vdectest.exe and `testsrc-176x144-high.264`: Mesa workflow artifact
-  `vdectest-arm64` of the same branch. The conformance streams and
+  `vdectest-arm64` (run 45359774143). The conformance streams and
   FFmpeg references of 2026-11-24 (BA1_Sony_D, CABA3_SVA_B,
   MR2_TANDBERG_E, FRExt1_Panasonic).
 - Player: FFmpeg for Windows on Arm (BtbN FFmpeg-Builds, a dated
