@@ -2018,3 +2018,83 @@ What the six lines say:
   node. Compare their CreateContext answers.
 - **E returns 0xc000000d:** DxgkDdiRender is reachable, and the failure
   is in our Render's input at 2.0.
+
+### 16.10 Run E (renderprobe): residency, the 2.x rule the UMD never kept
+
+TaishanPi 3M, 2026-11-24, HDMI only, WDDM 2.0 up (logon sound, black
+screen with signal). `m5test renderprobe` gave:
+
+| | variant | Render | the driver accepted |
+|---|---|---|---|
+| A | one allocation, locked before | 0 | 0 |
+| B | no allocation list | 0 | 0 |
+| C | one allocation, not locked | 0 | 0 |
+| D | one allocation, NullRendering | 0 | 0 |
+| E | no allocations, one command the driver refuses | 0xc000000d | 0 |
+| F | node 1 | 0 | 0 |
+
+How to read it:
+
+- A to D and F have no command (length 0). dxgkrnl completes those without
+  calling DxgkDdiRender, so "accepted 0" says nothing about them.
+- E's 0xc000000d is the driver's own refusal of the bad command:
+  DxgkDdiRender is reachable.
+- What differed in run D's failing render: a command and an allocation in
+  the list together.
+
+**dxgmms2 22621.2428, `VIDMM_GLOBAL::ReferenceDmaBuffer`.** It runs only
+for a DMA buffer with a command. For each allocation in the list:
+
+- it returns 0xc0000001 with the triage text "Failed to reference DMA
+  buffer: Allocation is not requested to be resident" (it tests the
+  allocation's residency-request count, `+0x98`);
+- unless the allocation is pinned, or the adapter is in IoMmu mode.
+
+WDDM 1.x paged in whatever the allocation list named. WDDM 2.x requires
+user mode to call MakeResident (with a paging queue) on the rendering
+device first. Neither our UMD nor m5test ever did, so at 2.0 every render
+with a buffer in it was refused before the driver. DWM and LogonUI drew
+nothing with the GPU, and the black screen follows from that.
+
+**Build (`5c2164d` + `b84e2d9`):**
+
+- KMD: escape `MW_ESCAPE_WDDM` returns the WDDM version and
+  `MW_WDDM_NEEDS_RESIDENCY` at 2.x. A 1.3 KMD refuses the code, so the UMD
+  stays as it was.
+- m5test:
+  - the M1 job is made resident first;
+  - renderprobe gains G (one allocation, a command the driver refuses)
+    and H (the same, made resident first). G should give 0xc0000001 and
+    H 0xc000000d.
+- UMD (`malikm_drm.c`, so a new `maliumd.dll`):
+  - when the KMD asks for it, every buffer the shim creates or opens is
+    made resident on the current device as it is made, through the
+    runtime's `pfnCreatePagingQueueCb`/`pfnMakeResidentCb`, or the D3DKMT
+    calls when not bound to a runtime device;
+  - one paging queue per device, and the paging fence is waited for on
+    the CPU;
+  - nothing is evicted;
+  - the log lines are `residency: ...`.
+- Package: `wddm-mali-g52-driver-arm64` of CI run 45325052451 (`b925555`,
+  Mesa run 45325052531), DriverVer 4.15.16.474; m5test in that run's
+  `m3test-arm64` artifact.
+
+**Next one shot (F), in two halves on one 2.0 boot.**
+
+1. Install the new package at 1.3 (16.1), and check `WddmVersion 0x1300`.
+   The desktop must be as before: at 1.3 the UMD makes nothing resident.
+2. `mkdir C:\mali\log` (the UMD log; remove `C:\mali\log\off` if it is
+   there), `wddm-probe set 2000 phys uart`, then a clean restart, HDMI
+   only.
+3. **First half, the rule:** `m5test renderprobe` gives G 0xc0000001 and
+   H 0xc000000d. Then plain `m5test` should say `MakeResident: 0x00000000`
+   and `PASS: the Mali ran a job submitted through WDDM`.
+4. **Second half, the fix:** the screen. LogonUI and the desktop drawn on
+   HDMI, `renders` above 0, `jobs done` climbing. Run `wddm-probe check`,
+   then `echo > C:\mali\log\off`, and send `C:\mali\probe\` with
+   `C:\mali\log\dwm.exe-*.txt` and `LogonUI.exe-*.txt`. Their
+   `residency:` lines say whether the escape saw 2.x, whether a paging
+   queue was made, and any MakeResident that failed.
+
+The two halves are separate variables. A passing (3) with a still-black
+(4) means the rule is right and the UMD's use of it is not.
