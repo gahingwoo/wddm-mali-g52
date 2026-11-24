@@ -30,6 +30,7 @@ Other DWORDs, all optional:
 | `HdmiExclusive` | 1 | Level 3, DSI boot: the panel is reported gone while a monitor is on HDMI (one display at a time). 0: both reported. |
 | `HdmiHpdDebounceMs` | 1000 | A level counts only after it has held this long with no edge, 300 to 10000. |
 | `HdmiAudio` | 1 | 0: no audio setup after a mode set. |
+| `HdmiDefault60` | 1 | Level 3, HDMI: the mode marked preferred (what Windows takes for a monitor it has no saved arrangement for) is the largest size at the rate closest to 60 Hz; every other mode is still offered. 0: the monitor's (or the firmware's) preferred timing, as before. docs/DISPLAY-MODES.md, "Default: the largest size at 60 Hz". |
 | `HdmiMaxPixels` | 4096000 (2560x1600) | Size of the driver's own framebuffer, allocated at start at level 3. Modes larger than this are not offered. |
 
 ## Linux on the same board (2026-11-22 reference)

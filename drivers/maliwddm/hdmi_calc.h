@@ -289,6 +289,57 @@ MW_HC_INLINE int MwTimingSameMode(const MW_TIMING *A, const MW_TIMING *B)
     return A->HDisplay == B->HDisplay && A->VDisplay == B->VDisplay && (unsigned long long)d * 2000ull <= a;
 }
 
+/* ---- the default mode (2026-11-25, the user's decision) ----
+ *
+ * Windows takes the target mode marked preferred, the list's first, for a
+ * monitor it has no saved arrangement for. That used to be the monitor's
+ * own preferred timing, or the firmware's, which on a high-refresh
+ * monitor can be its fastest rate (2560x1440 at 75 Hz). The default is now
+ * the largest size the list has, at the rate closest to 60 Hz that size is
+ * offered at: 60 Hz where the monitor has it (60.000 before 59.94), else
+ * the nearest. Every other mode stays in the list, so 1440p75 is still a
+ * refresh rate to pick in Settings > Display > Advanced display.
+ *
+ * The largest size, not the largest size that has a 60 Hz mode: a monitor
+ * whose 2560x1440 is listed only at 75 Hz keeps 2560x1440 (at 75) rather
+ * than dropping to 1920x1080 at 60. Of two sizes with the same area the
+ * one listed first wins (the EDID's own order). */
+MW_HC_INLINE mwh_u32 MwTimingFrom60(const MW_TIMING *T)
+{
+    mwh_u32 m = MwTimingMilliHz(T);
+    return m > 60000u ? m - 60000u : 60000u - m;
+}
+
+MW_HC_INLINE mwh_u32 MwHdmiDefaultIndex(const MW_TIMING *M, mwh_u32 N)
+{
+    mwh_u32 best = 0;
+
+    for (mwh_u32 i = 1; i < N; i++) {
+        unsigned long long a = (unsigned long long)M[i].HDisplay * M[i].VDisplay;
+        unsigned long long b = (unsigned long long)M[best].HDisplay * M[best].VDisplay;
+        if (a > b)
+            best = i;
+        else if (M[i].HDisplay == M[best].HDisplay && M[i].VDisplay == M[best].VDisplay &&
+                 MwTimingFrom60(&M[i]) < MwTimingFrom60(&M[best]))
+            best = i;
+    }
+    return best;
+}
+
+/* The default first, the others in their order. */
+MW_HC_INLINE void MwHdmiDefaultFirst(MW_TIMING *M, mwh_u32 N)
+{
+    mwh_u32 i = N > 1 ? MwHdmiDefaultIndex(M, N) : 0;
+    MW_TIMING t;
+
+    if (i == 0)
+        return;
+    t = M[i];
+    for (; i > 0; i--)
+        M[i] = M[i - 1];
+    M[0] = t;
+}
+
 /* What the EDID limits: the TMDS clock (the HDMI VSDB's Max_TMDS_Clock when
  * it gives one, never above 340 MHz) and the display range limits
  * descriptor, if there is one. A sink with no VSDB gets no lower cap, as

@@ -112,6 +112,7 @@ typedef struct _MW_HDMI {
     BOOLEAN Dsi;                /* the firmware's screen is the DSI panel */
     BOOLEAN Expose;             /* the HDMI child is reported hot-plug aware */
     BOOLEAN Switch;             /* level 3: the driver sets modes */
+    BOOLEAN Default60;          /* HdmiDefault60: the preferred mode is the largest size at 60 Hz */
     ULONG HdmiChild;            /* the HDMI child's id: 0 on an HDMI boot, 1 next to the panel */
     ULONG Children;
 
