@@ -155,6 +155,8 @@ jobs:
         run: make -C tests/hdmi-host run
       - name: maliwddm's WDDM 2.x answers and one-shot fallback (wddm2plan.h)
         run: make -C tests/wddm2-host run
+      - name: maliwddm's GPU temperature fallback (hold at 85 C, back below 75 C)
+        run: make -C tests/thermal-host run
 
   umd:
     # The UMD for the package: mesa.yml's Panfrost build of the same inputs.

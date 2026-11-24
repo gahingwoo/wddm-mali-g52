@@ -306,8 +306,16 @@ typedef struct _MW_ESCAPE_GPUCLK_DATA {
     mw_u32 AllowedHz;                   /* the highest operating point allowed now */
     mw_u32 NeedUv702;                   /* what 702 MHz (SPLL / 1) needs, 0 with High 0 */
     mw_u32 Fallbacks;                   /* clocks dropped to 594 MHz by a job fault */
+    /* The temperature fallback (thermal_calc.h), with GpuClkHigh on. */
+    mw_u32 ThermalGuard;                /* 1: the TSADC is read once a second */
+    mw_u32 ThermalHeld;                 /* 1: held at 594 MHz, hotter GPU channel was >= 85 C, not yet < 75 C */
+    mw_s32 ThermalMilliC;               /* the hotter of channels 3 and 5 at the last reading, no OTP trim */
+    mw_u32 ThermalDrops;                /* times held for heat */
+    mw_u32 ThermalRestores;             /* times the clock asked for came back */
+    mw_u32 Wanted;                      /* the clock above 600 MHz asked for, (Parent << 8) | Div, or 0 */
 } MW_ESCAPE_GPUCLK_DATA;
 #define MW_ESCAPE_GPUCLK_V1_SIZE  24
+#define MW_ESCAPE_GPUCLK_V2_SIZE  48
 #define MW_MEM_PROCS            64
 
 typedef struct _MW_MEM_PROC {
@@ -415,11 +423,12 @@ typedef struct _MW_ESCAPE_PERF_DATA {
      * the TRM, 4 NPU, 5 DDR): the raw 9-bit codes and the temperature in
      * millidegrees C by mainline's table, WITHOUT the per-chip OTP trim
      * (a few degrees). Read only with the setting PerfTemp 1; TempValid 0
-     * otherwise, or when a code is not a temperature. */
+     * otherwise, or when a code is not a temperature. Also read without
+     * PerfTemp once the CRU says the TSADC runs (adapter.c, TsadcMapIfRunning). */
     mw_u32 TempValid;                   /* bit n: channel n read and in the table */
     mw_u32 TsadcCode[6];
     mw_s32 TempMilliC[6];
-    mw_u32 Reserved0;
+    mw_u32 GpuClkThermalDrops;          /* was Reserved0: times the GPU clock was held at 594 MHz for heat */
     /* The last MW_PERF_RING chains: RingNext chains have been recorded
      * since the start; the newest is Ring[(RingNext - 1) % MW_PERF_RING]. */
     mw_u32 RingNext, Reserved1;
