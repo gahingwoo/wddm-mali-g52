@@ -1935,3 +1935,86 @@ What the result says:
   private-data id, which is a UMD change.
 - **The UMD now on the Mali but GPU work failing (jobs failed, MMU
   faults):** a new problem, in physical mode at 2.0, for the next round.
+
+### 16.9 Run D (build 333): the handles resolve, the GPU never runs, and a probe without a reboot
+
+TaishanPi 3M, 2026-11-24. The DSI ribbon is broken, so this run used HDMI
+only (2560x1440, `HdmiHpd 1`). Package build 333, restamped as DriverVer
+2.29.41.819. Files: `board-session-prep/wddm2x-333-stepD/`.
+
+- **What AcquireHandleData fixed:**
+  - no softpipe and no CREATE_BO errors;
+  - no `Fail_Escape`;
+  - 140 present blts and none skipped;
+  - 97 flips, 50 of them scanned out by the VOP2;
+  - UMD reports from LogonUI and dwm.
+- **Still black.** HDMI has a signal and HDMI audio plays. `renders 0`,
+  `jobs done 0`, and no `Cnt_Render` in the whole boot: the driver's
+  DxgkDdiRender was never called. m5test's own render failed in
+  D3DKMTRender with 0xc0000001. The UMDs used CPU paths only: upload,
+  mapW, cpubuf and direct present. Every pfnRenderCb, DWM's included,
+  most likely failed the same way, so nothing was ever drawn by the GPU.
+- **"A primary shown" (scan-out state bit 4):** clear (0x1b) in the stats
+  taken at m5test's start, set (0x1f) in those taken at its failure, with
+  flips scanned out in between. It reflects the moment the stats were
+  read, not a 2.0 fault. Scan-out works, so it is not the cause of the
+  black screen; the frames scanned out were never drawn.
+
+**Where 0xc0000001 comes from (dxgkrnl 22621.2428, `tools/re`):**
+
+- `DxgkRender` validates the context and the allocation list, then calls
+  `DXGCONTEXT::Render`.
+- Inside it, the only place that returns 0xc0000001 directly is "Hardware
+  context render is not provided with hardware queue array". That needs
+  the context flag HwQueueSupported, which neither m5test nor the UMD
+  sets.
+- Everything else between there and `DxgkDdiRender` is dxgmms2 called
+  through its interface tables:
+  - `VidMmAcquireDmaBuffer` (VidMm +0x1e8);
+  - `VidMmReferenceDmaBuffer` with the allocation list (+0x238);
+  - Begin CPU access, and the length and patch-list getters.
+
+  Those statuses cannot be traced statically with confidence. Two more
+  guesses would cost two boots, so measure instead.
+
+**Instrument (`d1b6ff6`, CI run 45314806057, all green): `m5test
+renderprobe`.** No reboot, no driver change: the driver stays build 333.
+The new `m5test.exe` is in that run's `m3test-arm64` artifact. It runs six
+D3DKMTRender calls with no GPU work, each changing one thing:
+
+| | variant | says |
+|---|---|---|
+| A | node 0, one allocation, locked before (as M1) | the baseline |
+| B | node 0, no allocation list | the allocation list (VidMmReferenceDmaBuffer) |
+| C | one allocation, not locked before | the lock |
+| D | one allocation, NullRendering | the DMA-buffer path |
+| E | no allocations, one command the driver refuses | 0xc000000d means DxgkDdiRender was reached |
+| F | node 1, the copy node | the node |
+
+Each line prints the status and how many renders the driver accepted.
+
+**Next step on the board (E), no reboot.** Boot with the probe again:
+`wddm-probe set 2000 phys uart`, clean restart, HDMI as in D. Then, from
+an administrator prompt:
+
+```
+m5test renderprobe > C:\mali\probe\renderprobe.txt
+wddm-probe check
+```
+
+Send `C:\mali\probe\`. The boot's DxgKrnl ETW file (`boot.etl.*` of this
+boot) is useful too.
+
+What the six lines say:
+
+- **B succeeds, A fails:** VidMm refuses our allocations at 2.0, most
+  likely because they are in an aperture segment. The next change goes
+  into CreateAllocation's segment answer.
+- **All fail with 0xc0000001, E included:** the DMA-buffer side (acquire
+  or CPU access) fails before any list is looked at. The next change goes
+  into CreateContext's DMA-buffer description (DmaBufferSegmentSet 0,
+  i.e. system memory).
+- **F succeeds, A to E fail:** node 0 is set up differently from the copy
+  node. Compare their CreateContext answers.
+- **E returns 0xc000000d:** DxgkDdiRender is reachable, and the failure
+  is in our Render's input at 2.0.
