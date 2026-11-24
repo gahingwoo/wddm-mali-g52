@@ -916,8 +916,11 @@ static void VpProgram(MW_HDMI *H, const MW_TIMING *T, BOOLEAN Dsi, ULONG FbAddr,
         VopW(H, VOP_MIPI0_IF_CTRL, R->IfCtrl);
     } else {
         /* MIPI0 off the port as the firmware's DSI handoff leaves it:
-         * CFG_DONE_IMD and PIN_POL 3 (memory: project_tspi3m_uefi_linux_display_touch). */
-        VopW(H, VOP_MIPI0_IF_CTRL, MW_IF_CFG_DONE_IMD | MW_IF_PIN_POL(3));
+         * CFG_DONE_IMD and PIN_POL 3 (memory: project_tspi3m_uefi_linux_display_touch).
+         * Not while HdmiExtend has the panel on VP2: MIPI0 is VP2's then,
+         * and this port is VP0. */
+        if (H->PanelVp != MW_PANEL_VP2)
+            VopW(H, VOP_MIPI0_IF_CTRL, MW_IF_CFG_DONE_IMD | MW_IF_PIN_POL(3));
         VopW(H, VOP_HDMI0_IF_CTRL, R->IfCtrl);
     }
     VopW(H, VP0_CLK_CTRL, R->ClkCtrl);
@@ -1327,4 +1330,155 @@ NTSTATUS MwHdmiDsiRestore(MW_ADAPTER *A, ULONG FbAddr, ULONG Pitch)
     MwLog(A, L"Dsi_Step", 3);
     MwLog(A, L"Dsi_Status", 0);
     return STATUS_SUCCESS;
+}
+
+/* ---- HdmiExtend: the panel on VP2 (dual_calc.h, docs/DUAL-DISPLAY.md) ----
+ *
+ * What Linux runs on this board while HDMI is on VP0: the panel's MIPI0 on
+ * VP2, dclk_vp2 = CPLL / 15, one Esmart window on VP2 (Esmart1 here: the
+ * vendor kernel used Esmart2, mainline allows Esmart0..3 on VP2, and
+ * Esmart1 is on AXI bus 0 like Esmart0, so the IOMMU setup scanout.c
+ * already has serves it). Every value is from dual_calc.h, which
+ * tests/dual-host checks against the vendor kernel's register dump. As
+ * everywhere in this file the VOP2 is written, never read back, except
+ * the interrupt raw status the firmware itself polls for DSP_HOLD_VALID. */
+
+#define VOP_VP2_INT_CLR         0x0C4
+#define VOP_VP2_INT_RAW         0x0CC
+#define VOP_LINE_FLAG2          0x078
+#define VP2_BASE                0xE00
+#define VOP_CFG_DONE_VP2        0x00048004u
+#define DUAL_ESMART             1u      /* Esmart1 */
+
+static __inline void VopList(MW_HDMI *H, const MW_REGW *L, ULONG N)
+{
+    for (ULONG i = 0; i < N; i++)
+        VopW(H, L[i].Off, L[i].Val);
+}
+
+/* VP2 into standby at the end of its frame, as VpStandby does VP0. TRUE if
+ * DSP_HOLD_VALID said so within 50 ms; a port that never ran says nothing,
+ * and is in standby once the write lands anyway. */
+static BOOLEAN Vp2Standby(MW_HDMI *H)
+{
+    VopW(H, VOP_VP2_INT_CLR, (VP_INT_DSP_HOLD_VALID << 16) | VP_INT_DSP_HOLD_VALID);
+    VopW(H, VP2_BASE + 0x00, MW_VP_DSP_STANDBY);
+    VopW(H, VOP_CFG_DONE, VOP_CFG_DONE_VP2);
+    for (ULONG w = 0; w < 500; w++) {
+        if (Rd(H->Vop, VOP_VP2_INT_RAW) & VP_INT_DSP_HOLD_VALID) {
+            VopW(H, VOP_VP2_INT_CLR, (VP_INT_DSP_HOLD_VALID << 16) | VP_INT_DSP_HOLD_VALID);
+            return TRUE;
+        }
+        Us(100);
+    }
+    VopW(H, VOP_VP2_INT_CLR, (VP_INT_DSP_HOLD_VALID << 16) | VP_INT_DSP_HOLD_VALID);
+    return FALSE;
+}
+
+/* The panel's pixels from VP2 instead of VP0 (FromVp0) or instead of no
+ * port at all (HDMI alone had it). PASSIVE_LEVEL, HwLock held, flips held
+ * off. VP0 is put in standby only when it was the panel's; when it is
+ * HDMI's it is not touched. The DSI host and the panel keep running, as
+ * on every panel restore: only the source of their pixels changes. Trace:
+ * Dual_P2Step (1 VP2 standby, 2 clock, 3 overlay and window, 4 timing, 5
+ * VP0 standby, 6 MIPI0 on VP2, 7 released), Dual_P2Hold, Dual_P2Vp0Hold,
+ * Dual_P2Div, Dual_P2Status. */
+NTSTATUS MwHdmiPanelToVp2(MW_ADAPTER *A, ULONG FbAddr, ULONG Pitch, BOOLEAN FromVp0)
+{
+    MW_HDMI *H = &A->Hdmi;
+    MW_VP_REGS r;
+    MW_REGW w[MW_ESMART_WRITES > MW_OVL_WRITES ? MW_ESMART_WRITES : MW_OVL_WRITES];
+    MW_REGW en;
+    ULONG n, cpll, div;
+    const MW_TIMING *T = &H->Panel;
+
+    if (!H->HavePanel || !MwHdmiPowered(A)) {
+        MwLog(A, L"Dual_P2Status", (ULONG)STATUS_DEVICE_NOT_READY);
+        return STATUS_DEVICE_NOT_READY;
+    }
+    MwVpRegsPort(T, TRUE, 2, &r);
+    /* CPLL as the CRU has it (the firmware takes 1 GHz for granted). */
+    cpll = PllRate(H, CRU_CPLL_CON0, 8) / 1000;
+    if (cpll == 0)
+        cpll = 1000000;
+    div = MwDclkDiv(cpll, T->Clock);
+    MwLog(A, L"Dual_P2Div", div);
+    MwLog(A, L"Dual_P2Step", 1);
+    MwLog(A, L"Dual_P2Hold", Vp2Standby(H));
+
+    /* dclk_vp2 with VP2 in standby: running before standby is released
+     * (memory: project_rk3576_standby_serror). */
+    MwLog(A, L"Dual_P2Step", 2);
+    {
+        MW_REGW c[MW_DCLK_WRITES];
+        n = MwDclkWrites(2, MW_DCLK_CPLL, div, c);
+        for (ULONG i = 0; i < n; i++)
+            Wr(H->Cru, c[i].Off, c[i].Val);
+        Us(2000);
+    }
+
+    /* The overlay (Esmart1 as VP2's one layer, the mixers, BG_DLY) and the
+     * window on the panel's framebuffer, enabled last. */
+    MwLog(A, L"Dual_P2Step", 3);
+    n = MwOvlWrites(2, MwEsmartLayerId(DUAL_ESMART, 2), w);
+    VopList(H, w, n);
+    n = MwEsmartWrites(DUAL_ESMART, 2, T->HDisplay, T->VDisplay, Pitch, FbAddr, w);
+    VopList(H, w, n);
+    en = MwEsmartEnable(DUAL_ESMART, TRUE);
+    VopW(H, en.Off, en.Val);
+
+    /* VP2's timing, STANDBY still set (VP_DSP_CTRL written whole, memory:
+     * project_rk3576_vop2_single_write). */
+    MwLog(A, L"Dual_P2Step", 4);
+    VopW(H, VP2_BASE + 0x0C, r.ClkCtrl);
+    VopW(H, VP2_BASE + 0x00, r.DspCtrl | MW_VP_DSP_STANDBY);
+    VopW(H, VP2_BASE + 0x48, r.HTotalHsEnd);
+    VopW(H, VP2_BASE + 0x4C, r.HActStEnd);
+    VopW(H, VP2_BASE + 0x54, r.VActStEnd);
+    VopW(H, VP2_BASE + 0x50, r.VTotalVsEnd);
+    VopW(H, VP2_BASE + 0x34, r.PostHAct);
+    VopW(H, VP2_BASE + 0x38, r.PostVAct);
+    VopW(H, VP2_BASE + 0x3C, r.PostSclFactor);
+    VopW(H, VP2_BASE + 0x40, r.PostSclCtrl);
+    VopW(H, VP2_BASE + 0x30, r.PreScan);
+    VopW(H, VOP_LINE_FLAG2, r.LineFlag);
+    VopW(H, VOP_CFG_DONE, VOP_CFG_DONE_VP2);
+
+    /* The panel's port changes over: VP0 let go of first (when it was the
+     * panel's), MIPI0 onto VP2, VP2 out of standby. */
+    if (FromVp0) {
+        MwLog(A, L"Dual_P2Step", 5);
+        MwLog(A, L"Dual_P2Vp0Hold", VpStandby(H));
+    }
+    MwLog(A, L"Dual_P2Step", 6);
+    VopW(H, VOP_MIPI0_IF_CTRL, r.IfCtrl);
+    MwLog(A, L"Dual_P2IfCtrl", r.IfCtrl);
+    VopW(H, VOP_VP2_INT_CLR, (VP_INT_POST_BUF_EMPTY << 16) | VP_INT_POST_BUF_EMPTY);
+    VopW(H, VP2_BASE + 0x00, r.DspCtrl);
+    VopW(H, VOP_CFG_DONE, VOP_CFG_DONE_VP2);
+    Ms(20);
+    MwLog(A, L"Dual_P2Step", 7);
+    MwLog(A, L"Dual_P2Status", 0);
+    return STATUS_SUCCESS;
+}
+
+/* VP2 let go of: MIPI0 off it (CFG_DONE_IMD and PIN_POL 3, as the HDMI
+ * mode set leaves MIPI0), VP2 to standby, Esmart1 off and VP2's layer
+ * off. The clocks stay as they are. PASSIVE_LEVEL, HwLock held, flips held
+ * off. Trace: Dual_ParkHold. */
+void MwHdmiVp2Park(MW_ADAPTER *A)
+{
+    MW_HDMI *H = &A->Hdmi;
+    MW_REGW w[MW_OVL_WRITES], en;
+    ULONG n;
+
+    if (!MwHdmiPowered(A))
+        return;
+    VopW(H, VOP_MIPI0_IF_CTRL, MW_IF_CFG_DONE_IMD | MW_IF_PIN_POL(3));
+    MwLog(A, L"Dual_ParkHold", Vp2Standby(H));
+    en = MwEsmartEnable(DUAL_ESMART, FALSE);
+    VopW(H, en.Off, en.Val);
+    n = MwOvlWrites(2, 0xF, w);
+    VopList(H, w, n);
+    VopW(H, VOP_CFG_DONE, VOP_CFG_DONE_VP2);
 }

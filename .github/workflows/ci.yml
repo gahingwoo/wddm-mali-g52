@@ -163,6 +163,8 @@ jobs:
         run: make -C tests/perfdata-host run
       - name: maliwddm's source modes and VOP2 window scaling (scale.h)
         run: make -C tests/modes-host run
+      - name: maliwddm's two displays at once, HdmiExtend (dual_calc.h)
+        run: make -C tests/dual-host run
 
   umd:
     # The UMD for the package: mesa.yml's Panfrost build of the same inputs.

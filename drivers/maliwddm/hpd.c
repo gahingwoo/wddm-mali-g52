@@ -13,6 +13,8 @@
  * before, child 1 the HDMI output. There is one VidPN source, so Windows
  * shows one of them at a time ("PC screen only" / "Second screen only",
  * Win+P); a clone or extend topology is refused in IsSupportedVidPn.
+ * With HdmiExtend 1 there are two sources and both outputs can be used at
+ * once (extend); see the end of this file and docs/DUAL-DISPLAY.md.
  *
  * Mode sets. VP0 is the only video port used, by the panel and by HDMI
  * alike, as in the firmware. Committing the HDMI target with a timing that
@@ -106,6 +108,12 @@ void MwHpdSettings(MW_ADAPTER *A)
      * reported one at a time it works (docs/HDMI-HPD.md). 0 to try the
      * two-display arrangement anyway. */
     H->Exclusive = MwSetting(A, L"HdmiExclusive", 1) != 0;
+    /* HdmiExtend (docs/DUAL-DISPLAY.md), off by default: on a DSI boot two
+     * VidPN sources, the panel and HDMI at once. It replaces HdmiExclusive,
+     * which exists only because there was one source. */
+    H->ExtendSetting = MwSetting(A, L"HdmiExtend", 0) != 0;
+    if (H->ExtendSetting)
+        H->Exclusive = FALSE;
     H->LastSup = H->LastEnum = 0xFFFFFFFFu;
     H->ResMaxPixels = MwSetting(A, L"HdmiMaxPixels", 2560 * 1600);
     if (H->ResMaxPixels > MW_VP0_MAX_W * MW_VP0_MAX_H)
@@ -119,6 +127,7 @@ void MwHpdSettings(MW_ADAPTER *A)
     MwLog(A, L"Hpd_Source", H->Source);
     MwLog(A, L"Hpd_Diag", H->Diag);
     MwLog(A, L"Hpd_Exclusive", H->Exclusive);
+    MwLog(A, L"Hpd_ExtendSetting", H->ExtendSetting);
 }
 
 /* Level 3: the framebuffer of the driver's own mode sets, allocated now,
@@ -413,6 +422,8 @@ static void Snapshot(MW_ADAPTER *A, PCWSTR Prefix)
     }
 }
 
+static void DualSnapshot(MW_ADAPTER *A);
+
 /* From the poll thread: Chk1_* and the one VOP2 read 3 s after a mode set;
  * Per_* every 5 s for 2 minutes, then every 30 s (Per_N counts them); Blk_*
  * once, at the first poll after a blanking event, with Blk_Why and
@@ -443,6 +454,8 @@ static void Periodic(MW_ADAPTER *A)
     if (now >= H->NextPer) {
         Snapshot(A, L"Per");
         MwLog(A, L"Per_Sup2Path", (ULONG)H->Sup2Path);
+        if (H->Extend)
+            DualSnapshot(A);
         MwLog(A, L"Per_N", ++H->PerN);
         H->NextPer = now + (now - H->MsetTick < 120000ull * 10000 ? 5000ull : 30000ull) * 10000;
     }
@@ -537,6 +550,15 @@ void MwHpdStart(MW_ADAPTER *A)
     H->WireKind = H->Dsi ? MW_WIRE_DSI : MW_WIRE_HDMI;
     H->Wire = H->FwTiming;
     H->ActiveTarget = 0;
+    /* HdmiExtend: two sources only where there are two outputs to give
+     * them, the panel's timing to put on VP2, and the driver's own mode
+     * sets. The panel starts where the firmware left it, on VP0. */
+    H->Extend = H->ExtendSetting && H->Dsi && H->Switch && H->HavePanel && H->Children == 2;
+    H->PanelVp = H->Dsi ? MW_PANEL_VP0 : MW_PANEL_OFF;
+    RtlZeroMemory(&H->S2, sizeof(H->S2));
+    H->S2.Visible = TRUE;
+    H->S2.Target = MW_DUAL_NONE;
+    H->LastDualSup = 0xFFFFFFFFu;
 
     /* The state at start: two readings 10 ms apart. An HDMI boot's output
      * is connected whatever they say (the firmware lit it). */
@@ -562,6 +584,7 @@ void MwHpdStart(MW_ADAPTER *A)
     MwLog(A, L"Hpd_Expose", H->Expose);
     MwLog(A, L"Hpd_Switch", H->Switch);
     MwLog(A, L"Hpd_Children", H->Children);
+    MwLog(A, L"Dual_On", H->Extend);
 
     InitializeObjectAttributes(&oa, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
     if (NT_SUCCESS(PsCreateSystemThread(&h, THREAD_ALL_ACCESS, &oa, NULL, NULL, HpdThread, A))) {
@@ -610,7 +633,7 @@ void MwHpdDisplayStop(MW_ADAPTER *A)
         MmUnmapIoSpace(H->FwFbVa, H->FwFbSize);
         H->FwFbVa = NULL;
     }
-    if (H->ResVa != NULL && !H->OnRes && !A->ScanPaging) {
+    if (H->ResVa != NULL && !H->OnRes && !H->S2.OnRes && !A->ScanPaging) {
         MmFreeContiguousMemorySpecifyCache(H->ResVa, H->ResBytes, MmWriteCombined);
         H->ResVa = NULL;
     }
@@ -899,6 +922,10 @@ static void LogOnChange(MW_ADAPTER *A, PCWSTR Name, ULONG *Last, ULONG V)
     MwLog(A, Name, V);
 }
 
+/* HdmiExtend's VidPN (the end of this file). */
+static NTSTATUS DualIsSupported(MW_ADAPTER *A, const DXGK_VIDPN_INTERFACE *V, DXGKARG_ISSUPPORTEDVIDPN *Arg);
+static NTSTATUS DualCommit(MW_ADAPTER *A, const DXGK_VIDPN_INTERFACE *V, const DXGKARG_COMMITVIDPN *Arg);
+
 /* Hpd_IsSup: target | reason << 8 | supported << 16 | paths << 24. Reason:
  * 0 fine, 1 not source 0 or more than one path (clone/extend), 2 the target
  * has no modes, 3 the pinned source size is none of the target's (then
@@ -925,6 +952,8 @@ NTSTATUS MwHpdIsSupportedVidPn(MW_ADAPTER *A, DXGKARG_ISSUPPORTEDVIDPN *Arg)
     st = A->Dxgk.DxgkCbQueryVidPnInterface(Arg->hDesiredVidPn, DXGK_VIDPN_INTERFACE_VERSION_V1, &v);
     if (!NT_SUCCESS(st))
         return st;
+    if (H->Extend)
+        return DualIsSupported(A, v, Arg);
     st = v->pfnGetTopology(Arg->hDesiredVidPn, &topo, &ti);
     if (!NT_SUCCESS(st))
         return st;
@@ -1030,9 +1059,13 @@ NTSTATUS MwHpdEnumVidPnCofuncModality(MW_ADAPTER *A, const DXGKARG_ENUMVIDPNCOFU
             if (upd.ContentTransformation.Rotation == D3DKMDT_VPPR_UNPINNED) {
                 RtlZeroMemory(&upd.ContentTransformation.RotationSupport, sizeof(upd.ContentTransformation.RotationSupport));
                 upd.ContentTransformation.RotationSupport.Identity = 1;
-                upd.ContentTransformation.RotationSupport.Rotate90 = 1;
-                upd.ContentTransformation.RotationSupport.Rotate180 = 1;
-                upd.ContentTransformation.RotationSupport.Rotate270 = 1;
+                /* HdmiExtend: rotation is the adapter's (A->RotDeg), so
+                 * source 0's alone; source 1 is offered identity. */
+                if (!(A->Hdmi.Extend && path->VidPnSourceId != 0)) {
+                    upd.ContentTransformation.RotationSupport.Rotate90 = 1;
+                    upd.ContentTransformation.RotationSupport.Rotate180 = 1;
+                    upd.ContentTransformation.RotationSupport.Rotate270 = 1;
+                }
                 Mw2xRotationSupport(&upd.ContentTransformation.RotationSupport);
             }
             r = ti->pfnUpdatePathSupportInfo(topo, &upd);
@@ -1104,6 +1137,47 @@ static void UseFb(MW_ADAPTER *A, BOOLEAN Res, UINT W, UINT H2)
     InterlockedExchange(&H->FbSwitch, 0);
 }
 
+/* HdmiExtend: UseFb for source 1, the same way. */
+static void Bind2(MW_ADAPTER *A, BOOLEAN Res, UINT W, UINT H2)
+{
+    MW_HDMI *H = &A->Hdmi;
+    MW_SRC2 *s = &H->S2;
+
+    InterlockedExchange(&H->FbSwitch, 1);
+    for (ULONG i = 0; i < 5000 && H->FbUsers != 0; i++)
+        KeStallExecutionProcessor(10);
+    ExAcquireFastMutex(&A->CopyLock);
+    if (Res) {
+        s->FbPa = H->ResPa;
+        s->FbVa = H->ResVa;
+        s->FbW = W;
+        s->FbH = H2;
+        s->FbPitch = W * 4;
+        s->FbSize = (SIZE_T)W * 4 * H2;
+    } else {
+        s->FbPa = H->FwFb.PhysicAddress;
+        s->FbVa = H->FwFbVa;
+        s->FbW = H->FwFb.Width;
+        s->FbH = H->FwFb.Height;
+        s->FbPitch = H->FwFb.Pitch;
+        s->FbSize = H->FwFbSize;
+    }
+    s->OnRes = Res;
+    s->Showing = FALSE;
+    KeMemoryBarrier();
+    ExReleaseFastMutex(&A->CopyLock);
+    InterlockedExchange(&H->FbSwitch, 0);
+}
+
+/* The framebuffer of source Src (0 or 1). Source 0 is UseFb, as always. */
+static void BindFb(MW_ADAPTER *A, ULONG Src, BOOLEAN Res, UINT W, UINT H2)
+{
+    if (Src == 1)
+        Bind2(A, Res, W, H2);
+    else
+        UseFb(A, Res, W, H2);
+}
+
 /* HdmiDiag 2: eight vertical bars (white, yellow, cyan, green, magenta,
  * red, blue, black) and a white 8-pixel frame, in our framebuffer before
  * the window is pointed at it. On the monitor: the window, its address,
@@ -1154,7 +1228,7 @@ static void Baseline(MW_ADAPTER *A)
  * timing it is (MwKnownTiming). Under HwLock, Busy set. Trace: Mset_Restore
  * (its status, 0xFFFFFFFF when there was nothing to restore),
  * Mset_RestoreMode, Hpd_RestoreOk. */
-static void Restore(MW_ADAPTER *A, const MW_TIMING *Prev, BOOLEAN PrevRes)
+static void Restore(MW_ADAPTER *A, const MW_TIMING *Prev, BOOLEAN PrevRes, ULONG Src)
 {
     MW_HDMI *H = &A->Hdmi;
     MW_TIMING back = *Prev;
@@ -1181,10 +1255,10 @@ static void Restore(MW_ADAPTER *A, const MW_TIMING *Prev, BOOLEAN PrevRes)
     MwLog(A, L"Mset_RestoreMode", (ULONG)back.HDisplay << 16 | back.VDisplay);
     if (PrevRes) {
         st = MwHdmiModeSet(A, &back, H->ResPa.LowPart, (ULONG)back.HDisplay * 4);
-        UseFb(A, TRUE, back.HDisplay, back.VDisplay);
+        BindFb(A, Src, TRUE, back.HDisplay, back.VDisplay);
     } else {
         st = MwHdmiModeSet(A, &back, H->FwFb.PhysicAddress.LowPart, H->FwFb.Pitch);
-        UseFb(A, FALSE, 0, 0);
+        BindFb(A, Src, FALSE, 0, 0);
     }
     MwLog(A, L"Mset_Restore", (ULONG)st);
     if (NT_SUCCESS(st)) {
@@ -1198,15 +1272,12 @@ static void Restore(MW_ADAPTER *A, const MW_TIMING *Prev, BOOLEAN PrevRes)
 }
 
 /* Make VP0 drive Target at T. PASSIVE_LEVEL, from CommitVidPn. */
+static NTSTATUS ApplyHdmi(MW_ADAPTER *A, const MW_TIMING *T, ULONG Src, BOOLEAN KeepPanel);
+
 static NTSTATUS Apply(MW_ADAPTER *A, ULONG Target, const MW_TIMING *T)
 {
     MW_HDMI *H = &A->Hdmi;
     NTSTATUS st = STATUS_SUCCESS;
-    MW_TIMING prev;
-    ULONG prevKind = 0;
-    BOOLEAN prevRes = FALSE;
-
-    RtlZeroMemory(&prev, sizeof(prev));
 
     if (H->Dsi && Target == 0) {
         if (H->WireKind == MW_WIRE_DSI)
@@ -1228,6 +1299,21 @@ static NTSTATUS Apply(MW_ADAPTER *A, ULONG Target, const MW_TIMING *T)
         MwLog(A, L"Scan_Switch", NT_SUCCESS(st) ? 1 : (ULONG)st);
         return st;
     }
+    return ApplyHdmi(A, T, 0, FALSE);
+}
+
+/* HDMI on VP0 at T, its framebuffer bound to source Src. KeepPanel
+ * (HdmiExtend): the panel's backlight is the caller's business, the panel
+ * may be on VP2 and is to stay lit. Apply's is Src 0 without KeepPanel. */
+static NTSTATUS ApplyHdmi(MW_ADAPTER *A, const MW_TIMING *T, ULONG Src, BOOLEAN KeepPanel)
+{
+    MW_HDMI *H = &A->Hdmi;
+    NTSTATUS st = STATUS_SUCCESS;
+    MW_TIMING prev;
+    ULONG prevKind = 0;
+    BOOLEAN prevRes = FALSE;
+
+    RtlZeroMemory(&prev, sizeof(prev));
     if (H->WireKind == MW_WIRE_HDMI && MwTimingEqual(&H->Wire, T))
         return STATUS_SUCCESS;
     if (T->Fw)                  /* the firmware's timing cannot be set again: its syncs are unknown */
@@ -1235,10 +1321,10 @@ static NTSTATUS Apply(MW_ADAPTER *A, ULONG Target, const MW_TIMING *T)
     /* What is on the wire now, for a restore if this mode set fails. */
     prevKind = H->WireKind;
     prev = H->Wire;
-    prevRes = H->OnRes;
+    prevRes = Src == 1 ? H->S2.OnRes : H->OnRes;
     if (H->ResVa == NULL || (SIZE_T)T->HDisplay * 4 * T->VDisplay > H->ResBytes)
         return STATUS_GRAPHICS_INVALID_VIDPN;
-    if (H->Dsi)
+    if (H->Dsi && !KeepPanel)
         MwBacklightPower(A, FALSE);
     RtlZeroMemory(H->ResVa, (SIZE_T)T->HDisplay * 4 * T->VDisplay);
     if (H->Diag == 2) {
@@ -1252,7 +1338,7 @@ static NTSTATUS Apply(MW_ADAPTER *A, ULONG Target, const MW_TIMING *T)
     /* Once VP0 was touched the window is on our framebuffer, whatever the
      * outcome; STATUS_DEVICE_NOT_READY is a refusal before any write. */
     if (st != STATUS_DEVICE_NOT_READY)
-        UseFb(A, TRUE, T->HDisplay, T->VDisplay);
+        BindFb(A, Src, TRUE, T->HDisplay, T->VDisplay);
     if (NT_SUCCESS(st)) {
         H->WireKind = MW_WIRE_HDMI;
         H->Wire = *T;
@@ -1268,12 +1354,12 @@ static NTSTATUS Apply(MW_ADAPTER *A, ULONG Target, const MW_TIMING *T)
              * on the framebuffer it had. HDMI to HDMI only: a DSI boot's
              * panel path is left as it was. */
             if (prevKind == MW_WIRE_HDMI)
-                Restore(A, &prev, prevRes);
+                Restore(A, &prev, prevRes, Src);
         }
     }
     InterlockedExchange(&H->Busy, 0);
     Unlock(&H->HwLock);
-    if (st == STATUS_DEVICE_NOT_READY && H->Dsi)
+    if (st == STATUS_DEVICE_NOT_READY && H->Dsi && !KeepPanel)
         MwBacklightPower(A, TRUE);
     Baseline(A);
     MwLog(A, L"Scan_Switch", NT_SUCCESS(st) ? 2 : (ULONG)st);
@@ -1322,6 +1408,8 @@ NTSTATUS MwHpdCommitVidPn(MW_ADAPTER *A, const DXGKARG_COMMITVIDPN *Arg)
     st = A->Dxgk.DxgkCbQueryVidPnInterface(Arg->hFunctionalVidPn, DXGK_VIDPN_INTERFACE_VERSION_V1, &v);
     if (!NT_SUCCESS(st))
         return st;
+    if (H->Extend)
+        return DualCommit(A, v, Arg);
     if (!PathOf(v, Arg->hFunctionalVidPn, &target, &deg) || !PinnedSource(v, Arg->hFunctionalVidPn, 0, &w, &h)) {
         /* No path for our source, or nothing pinned: it is being turned off. */
         MwHpdBlackEvent(A, 3);
@@ -1397,4 +1485,533 @@ NTSTATUS MwHpdRecommendMonitorModes(MW_ADAPTER *A, const DXGKARG_RECOMMENDMONITO
     }
     MwLog(A, L"Hpd_MonitorModes", Arg->VideoPresentTargetId << 16 | n);
     return STATUS_SUCCESS;
+}
+
+/* ---- HdmiExtend: two sources (dual_calc.h, docs/DUAL-DISPLAY.md) ----
+ *
+ * A DSI boot at level 3 with HdmiExtend 1 reports two VidPN sources. Any
+ * source may drive any target, one path per source and per target
+ * (MwDualCheck): extend in either order, either output alone from either
+ * source. Clone is refused, as it is with one source. Rotation is source
+ * 0's only (A->RotDeg is the adapter's); source 1 is offered identity.
+ *
+ * The hardware follows the outputs in use, not the sources: the panel
+ * alone is on VP0 exactly as without HdmiExtend; HDMI is always on VP0;
+ * the panel moves to VP2 only while both are in use (MwDualPanelVpFor,
+ * MwDualSteps). A source is then given its target's framebuffer (the
+ * firmware's for the panel, the reserved one for HDMI) and its window
+ * (MwDualWin): source 0 through A->Fb and A->Win0Mst, source 1 through
+ * Hdmi.S2. */
+
+/* A path's rotation is identity, or nothing is pinned yet. */
+static BOOLEAN RotIdentity(D3DKMDT_VIDPN_PRESENT_PATH_ROTATION R)
+{
+    return R == D3DKMDT_VPPR_IDENTITY || R == D3DKMDT_VPPR_UNPINNED || R == D3DKMDT_VPPR_UNINITIALIZED ||
+           R == D3DKMDT_VPPR_NOTSPECIFIED;
+}
+
+/* The checks MwHpdIsSupportedVidPn makes of its one path, for any source:
+ * 0 fine, 2 the target has no modes, 3 the pinned source size is none of
+ * the target's, 4 the pinned target mode is not ours, 5 the pinned source
+ * and target sizes differ. */
+static ULONG DualPathReason(MW_ADAPTER *A, const DXGK_VIDPN_INTERFACE *V, D3DKMDT_HVIDPN Vp,
+                            const D3DKMDT_VIDPN_PRESENT_PATH *Path)
+{
+    MW_TIMING m[MW_HDMI_MODES];
+    ULONG n = TargetModes(A, Path->VidPnTargetId, m);
+    UINT w = 0, h = 0;
+    BOOLEAN any;
+    LONG t;
+
+    if (n == 0)
+        return 2;
+    if (PinnedSource(V, Vp, Path->VidPnSourceId, &w, &h)) {
+        BOOLEAN size = FALSE;
+        for (ULONG i = 0; i < n; i++)
+            if (m[i].HDisplay == w && m[i].VDisplay == h)
+                size = TRUE;
+        if (!size) {
+            MwLog(A, L"Hpd_IsSupSize", w << 16 | (h & 0xFFFF));
+            return 3;
+        }
+    }
+    t = PinnedTarget(A, V, Vp, Path->VidPnTargetId, m, n, &any);
+    if (any && t < 0)
+        return 4;
+    if (any && w != 0 && (m[t].HDisplay != w || m[t].VDisplay != h))
+        return 5;
+    return 0;
+}
+
+/* Dual_IsSup (logged when it changes): paths | MwDualCheck's reason << 4 |
+ * the first path reason that failed << 8 | supported << 12 | source 0's
+ * target << 16 | source 1's << 24 (0xFF: none). */
+static NTSTATUS DualIsSupported(MW_ADAPTER *A, const DXGK_VIDPN_INTERFACE *V, DXGKARG_ISSUPPORTEDVIDPN *Arg)
+{
+    MW_HDMI *H = &A->Hdmi;
+    D3DKMDT_HVIDPNTOPOLOGY topo;
+    const DXGK_VIDPNTOPOLOGY_INTERFACE *ti;
+    const D3DKMDT_VIDPN_PRESENT_PATH *path = NULL, *next;
+    MW_DUAL_PATH p[3];
+    mwh_u8 map[MW_DUAL_SOURCES];
+    ULONG paths = 0, reason = 0, dual;
+    NTSTATUS st;
+
+    st = V->pfnGetTopology(Arg->hDesiredVidPn, &topo, &ti);
+    if (!NT_SUCCESS(st))
+        return st;
+    st = ti->pfnAcquireFirstPathInfo(topo, &path);
+    while (st == STATUS_SUCCESS && path != NULL) {
+        if (paths < ARRAYSIZE(p)) {
+            p[paths].Src = (mwh_u8)min(path->VidPnSourceId, 0xFFu);
+            p[paths].Tgt = (mwh_u8)min(path->VidPnTargetId, 0xFFu);
+            p[paths].RotIdentity = RotIdentity(path->ContentTransformation.Rotation) ? 1 : 0;
+        }
+        paths++;
+        if (reason == 0 && path->VidPnSourceId < MW_DUAL_SOURCES && path->VidPnTargetId < H->Children)
+            reason = DualPathReason(A, V, Arg->hDesiredVidPn, path);
+        st = ti->pfnAcquireNextPathInfo(topo, path, &next);
+        ti->pfnReleasePathInfo(topo, path);
+        path = next;
+    }
+    dual = MwDualCheck(p, min(paths, (ULONG)ARRAYSIZE(p)), H->Children);
+    if (paths > ARRAYSIZE(p))
+        dual = MW_DUAL_TOO_MANY;
+    MwDualMap(p, dual == MW_DUAL_OK ? paths : 0, map);
+    Arg->IsVidPnSupported = dual == MW_DUAL_OK && reason == 0;
+    /* By the single source's reasons: a topology refused counts as 1. */
+    InterlockedIncrement(&H->SupBy[dual != MW_DUAL_OK ? 1 : reason]);
+    if (paths >= 2)
+        InterlockedExchange(&H->Sup2Path, (LONG)((ULONG)p[0].Src << 24 | (ULONG)p[0].Tgt << 16 |
+                                                 (ULONG)p[1].Src << 8 | p[1].Tgt));
+    LogOnChange(A, L"Dual_IsSup", &H->LastDualSup,
+                (paths & 0xF) | (dual & 0xF) << 4 | (reason & 0xF) << 8 | (Arg->IsVidPnSupported ? 1u : 0) << 12 |
+                    (ULONG)map[0] << 16 | (ULONG)map[1] << 24);
+    return STATUS_SUCCESS;
+}
+
+/* One of MwDualSteps' steps. PASSIVE_LEVEL. Trace: Dual_Step (step << 28 |
+ * status low bits), and what each step's hdmi.c function logs. */
+static NTSTATUS DualStep(MW_ADAPTER *A, ULONG Step, const MW_TIMING *Hdmi, ULONG HdmiSrc)
+{
+    MW_HDMI *H = &A->Hdmi;
+    NTSTATUS st = STATUS_SUCCESS;
+
+    switch (Step) {
+    case MW_DSTEP_BL_OFF:
+        MwBacklightPower(A, FALSE);
+        break;
+    case MW_DSTEP_BL_ON:
+        MwBacklightPower(A, TRUE);
+        break;
+    case MW_DSTEP_PARK:
+        Lock(&H->HwLock);
+        InterlockedExchange(&H->Busy, 1);
+        MwHdmiVp2Park(A);
+        H->PanelVp = MW_PANEL_OFF;
+        InterlockedExchange(&H->Busy, 0);
+        Unlock(&H->HwLock);
+        break;
+    case MW_DSTEP_PANEL_VP0:
+        /* Apply's panel restore, without UseFb: the sources are bound
+         * after the last step. */
+        Lock(&H->HwLock);
+        InterlockedExchange(&H->Busy, 1);
+        st = MwHdmiDsiRestore(A, H->FwFb.PhysicAddress.LowPart, H->FwFb.Pitch);
+        if (NT_SUCCESS(st)) {
+            H->WireKind = MW_WIRE_DSI;
+            H->PanelVp = MW_PANEL_VP0;
+            H->Restores++;
+        }
+        InterlockedExchange(&H->Busy, 0);
+        Unlock(&H->HwLock);
+        break;
+    case MW_DSTEP_PANEL_VP2: {
+        BOOLEAN fromVp0 = H->PanelVp == MW_PANEL_VP0;
+        Lock(&H->HwLock);
+        InterlockedExchange(&H->Busy, 1);
+        st = MwHdmiPanelToVp2(A, H->FwFb.PhysicAddress.LowPart, H->FwFb.Pitch, fromVp0);
+        if (NT_SUCCESS(st)) {
+            H->PanelVp = MW_PANEL_VP2;
+            /* VP0 was the panel's and is in standby now: nobody's. */
+            if (fromVp0) {
+                H->WireKind = 0;
+                RtlZeroMemory(&H->Wire, sizeof(H->Wire));
+            }
+        }
+        InterlockedExchange(&H->Busy, 0);
+        Unlock(&H->HwLock);
+        break;
+    }
+    case MW_DSTEP_HDMI:
+        st = ApplyHdmi(A, Hdmi, HdmiSrc, TRUE);
+        break;
+    default:
+        st = STATUS_INVALID_PARAMETER;
+        break;
+    }
+    MwLog(A, L"Dual_Step", Step << 28 | ((ULONG)st & 0x0FFFFFFF));
+    return st;
+}
+
+/* Every step from the panel's port now to Next; the first failure stops
+ * them. */
+static NTSTATUS DualSteps(MW_ADAPTER *A, ULONG Next, BOOLEAN HdmiOn, const MW_TIMING *Hdmi, ULONG HdmiSrc)
+{
+    mwh_u8 steps[8];
+    ULONG n = MwDualSteps(A->Hdmi.PanelVp, Next, HdmiOn, steps);
+    NTSTATUS st = STATUS_SUCCESS;
+
+    MwLog(A, L"Dual_Steps", MwDualStepsPacked(steps, n));
+    for (ULONG i = 0; i < n && NT_SUCCESS(st); i++)
+        st = DualStep(A, steps[i], Hdmi, HdmiSrc);
+    return st;
+}
+
+/* Source Src on Target with source mode W x H2 at timing T (refresh rate),
+ * rotated Deg (source 0 only), or off (Target MW_DUAL_NONE). Flips are held
+ * off while its window and framebuffer change. */
+static void DualBind(MW_ADAPTER *A, ULONG Src, ULONG Target, UINT W, UINT H2, const MW_TIMING *T, UINT Deg)
+{
+    MW_HDMI *H = &A->Hdmi;
+    MW_DUAL_WIN win;
+    D3DKMDT_VIDEO_SIGNAL_INFO sig;
+    BOOLEAN res = Target == MW_DUAL_HDMI, have;
+
+    if (Target == MW_DUAL_NONE) {
+        if (Src == 0) {
+            A->PathActive = FALSE;
+            A->CommitsNoPath++;
+        } else {
+            H->S2.Active = FALSE;
+            H->S2.Target = MW_DUAL_NONE;
+        }
+        return;
+    }
+    have = MwDualWin(Target, H->PanelVp, &win) != 0;
+    RtlZeroMemory(&sig, sizeof(sig));
+    Signal(A, T, &sig);
+    /* Already so (the first commit after boot, with the panel where the
+     * firmware put it; a mode change on the same output): nothing is
+     * written, as a commit without HdmiExtend writes nothing then. */
+    {
+        ULONG mst = have ? win.Mst : 0;
+        BOOLEAN same;
+        if (Src == 0)
+            same = A->PathActive && H->ActiveTarget == Target && A->Win0Mst == (have ? mst : A->Win0Mst) &&
+                   (res ? (H->OnRes && A->Fb.Width == W && A->Fb.Height == H2) : !H->OnRes);
+        else
+            same = H->S2.Active && H->S2.Target == Target && H->S2.WinMst == mst &&
+                   (res ? (H->S2.OnRes && H->S2.FbW == W && H->S2.FbH == H2) : !H->S2.OnRes);
+        if (same) {
+            if (Src == 0) {
+                H->RefNum = sig.VSyncFreq.Numerator;
+                H->RefDen = sig.VSyncFreq.Denominator;
+                A->CommitsPinned++;
+                MwSetRotation(A, Deg, L"CommitRotation");
+            } else {
+                H->S2.Width = W;
+                H->S2.Height = H2;
+                H->S2.RefNum = sig.VSyncFreq.Numerator;
+                H->S2.RefDen = sig.VSyncFreq.Denominator;
+            }
+            MwLog(A, Src == 0 ? L"Dual_Same0" : L"Dual_Same1", Target);
+            return;
+        }
+    }
+    BindFb(A, Src, res, W, H2);
+    Lock(&H->HwLock);
+    InterlockedExchange(&H->Busy, 1);
+    if (Src == 0) {
+        A->Win0Mst = have ? win.Mst : MW_ESMART_BASE(0) + MW_ESMART_YRGB_MST;
+        A->Win0Cfg = have ? win.CfgDone : MwCfgDone(0);
+        if (have)
+            MwScanWinToFb(A, win.Mst, win.CfgDone, A->Fb.PhysicAddress.LowPart);
+        A->ScanShowing = FALSE;
+        H->ActiveTarget = Target;
+        H->RefNum = sig.VSyncFreq.Numerator;
+        H->RefDen = sig.VSyncFreq.Denominator;
+    } else {
+        MW_SRC2 *s = &H->S2;
+        s->WinMst = have ? win.Mst : 0;
+        s->WinCfg = have ? win.CfgDone : 0;
+        if (have)
+            MwScanWinToFb(A, win.Mst, win.CfgDone, s->FbPa.LowPart);
+        s->Showing = FALSE;
+        s->Target = Target;
+        s->Width = W;
+        s->Height = H2;
+        s->RefNum = sig.VSyncFreq.Numerator;
+        s->RefDen = sig.VSyncFreq.Denominator;
+        s->Active = TRUE;
+        /* Copy the current primary again at the next vsync, onto the
+         * framebuffer just given. */
+        InterlockedExchange(&s->ShownSeq, s->FlipSeq - 1);
+    }
+    InterlockedExchange(&H->Busy, 0);
+    Unlock(&H->HwLock);
+    if (Src == 0) {
+        A->PathActive = TRUE;
+        A->CommitsPinned++;
+        if (W != A->SrcWidth || H2 != A->SrcHeight) {
+            A->SrcWidth = W;
+            A->SrcHeight = H2;
+            MwLog(A, L"CommitSourceWidth", W);
+            MwLog(A, L"CommitSourceHeight", H2);
+        }
+        MwSetRotation(A, Deg, L"CommitRotation");
+        InterlockedExchange(&A->ShownSeq, A->FlipSeq - 1);
+    }
+    MwLog(A, Src == 0 ? L"Dual_Bind0" : L"Dual_Bind1",
+          Target << 28 | (have ? win.Esmart << 24 | win.Vp << 20 : 0xFu << 20) | (W & 0x3FF) << 10 | (H2 & 0x3FF));
+}
+
+/* CommitVidPn with HdmiExtend. Trace: Dual_Commits, Dual_Commit (source 0's
+ * target << 24 | source 1's << 16 | panel's port before << 8 | after),
+ * Dual_Steps (dual_calc.h's steps, a nibble each), Dual_Step, Dual_Bind0/1,
+ * Dual_PanelVp, Dual_Fails, Dual_CommitStatus. */
+static NTSTATUS DualCommit(MW_ADAPTER *A, const DXGK_VIDPN_INTERFACE *V, const DXGKARG_COMMITVIDPN *Arg)
+{
+    MW_HDMI *H = &A->Hdmi;
+    D3DKMDT_HVIDPNTOPOLOGY topo;
+    const DXGK_VIDPNTOPOLOGY_INTERFACE *ti;
+    const D3DKMDT_VIDPN_PRESENT_PATH *path = NULL, *next;
+    struct {
+        ULONG Src, Tgt;
+        UINT W, H, Deg;
+        MW_TIMING T;
+    } use[2];
+    MW_DUAL_PATH p[2];
+    MW_TIMING m[MW_HDMI_MODES];
+    ULONG n = 0, before = H->PanelVp, after, hdmiSrc = 0;
+    BOOLEAN panelOn = FALSE, hdmiOn = FALSE, bad = FALSE;
+    const MW_TIMING *hdmiT = NULL;
+    NTSTATUS st;
+
+    MwLog(A, L"Dual_Commits", ++H->DualCommits);
+    st = V->pfnGetTopology(Arg->hFunctionalVidPn, &topo, &ti);
+    if (!NT_SUCCESS(st))
+        return st;
+    st = ti->pfnAcquireFirstPathInfo(topo, &path);
+    while (st == STATUS_SUCCESS && path != NULL) {
+        UINT w = 0, h = 0;
+        /* A path with no source mode pinned is being switched off. */
+        if (PinnedSource(V, Arg->hFunctionalVidPn, path->VidPnSourceId, &w, &h)) {
+            if (n >= 2) {
+                bad = TRUE;
+            } else {
+                ULONG k = TargetModes(A, path->VidPnTargetId, m);
+                BOOLEAN any;
+                LONG t = PinnedTarget(A, V, Arg->hFunctionalVidPn, path->VidPnTargetId, m, k, &any);
+                if (!any)
+                    for (ULONG i = 0; i < k && t < 0; i++)
+                        if (m[i].HDisplay == w && m[i].VDisplay == h)
+                            t = (LONG)i;
+                if (t < 0 || m[t].HDisplay != w || m[t].VDisplay != h) {
+                    bad = TRUE;
+                } else {
+                    use[n].Src = path->VidPnSourceId;
+                    use[n].Tgt = path->VidPnTargetId;
+                    use[n].W = w;
+                    use[n].H = h;
+                    use[n].Deg = MwPathDegrees(path->ContentTransformation.Rotation);
+                    use[n].T = m[t];
+                    p[n].Src = (mwh_u8)min(use[n].Src, 0xFFu);
+                    p[n].Tgt = (mwh_u8)min(use[n].Tgt, 0xFFu);
+                    p[n].RotIdentity = RotIdentity(path->ContentTransformation.Rotation) ? 1 : 0;
+                    n++;
+                }
+            }
+        }
+        st = ti->pfnAcquireNextPathInfo(topo, path, &next);
+        ti->pfnReleasePathInfo(topo, path);
+        path = next;
+    }
+    if (bad || MwDualCheck(p, n, H->Children) != MW_DUAL_OK) {
+        A->CommitsNotOurs++;
+        H->DualFails++;
+        MwLog(A, L"Dual_Fails", H->DualFails);
+        MwLog(A, L"Dual_CommitStatus", (ULONG)STATUS_GRAPHICS_INVALID_VIDPN);
+        return STATUS_GRAPHICS_INVALID_VIDPN;
+    }
+    for (ULONG i = 0; i < n; i++) {
+        if (use[i].Tgt == MW_DUAL_PANEL)
+            panelOn = TRUE;
+        if (use[i].Tgt == MW_DUAL_HDMI) {
+            hdmiOn = TRUE;
+            hdmiT = &use[i].T;
+            hdmiSrc = use[i].Src;
+        }
+    }
+    after = MwDualPanelVpFor(panelOn, hdmiOn, before);
+    {
+        mwh_u8 map[MW_DUAL_SOURCES];
+        MwDualMap(p, n, map);
+        MwLog(A, L"Dual_Commit", (ULONG)map[0] << 24 | (ULONG)map[1] << 16 | (before & 0xFF) << 8 | (after & 0xFF));
+    }
+    if (n == 0) {
+        /* Everything being switched off: the hardware stays as it is. */
+        MwHpdBlackEvent(A, 3);
+        DualBind(A, 0, MW_DUAL_NONE, 0, 0, NULL, 0);
+        DualBind(A, 1, MW_DUAL_NONE, 0, 0, NULL, 0);
+        MwLog(A, L"CommitNoPath", 0);
+        return STATUS_SUCCESS;
+    }
+    st = DualSteps(A, after, hdmiOn, hdmiT, hdmiSrc);
+    if (!NT_SUCCESS(st)) {
+        /* Windows keeps the VidPN it had. If the panel was on VP0 and is not
+         * now, put it back there: that is the arrangement the old VidPN's
+         * sources were bound to whenever the panel was in it. */
+        H->DualFails++;
+        MwLog(A, L"Dual_Fails", H->DualFails);
+        if (before == MW_PANEL_VP0 && H->PanelVp != MW_PANEL_VP0)
+            (void)DualSteps(A, MW_PANEL_VP0, FALSE, NULL, 0);
+        MwLog(A, L"Dual_PanelVp", H->PanelVp);
+        MwLog(A, L"Dual_CommitStatus", (ULONG)st);
+        return st;
+    }
+    MwLog(A, L"Dual_PanelVp", H->PanelVp);
+    /* The sources onto their targets: a source without a path is off. */
+    for (ULONG s = 0; s < MW_DUAL_SOURCES; s++) {
+        ULONG i;
+        for (i = 0; i < n && use[i].Src != s; i++)
+            ;
+        if (i == n)
+            DualBind(A, s, MW_DUAL_NONE, 0, 0, NULL, 0);
+        else
+            DualBind(A, s, use[i].Tgt, use[i].W, use[i].H, &use[i].T, use[i].Deg);
+    }
+    Baseline(A);
+    MwLog(A, L"Dual_CommitStatus", 0);
+    MwLog(A, L"CommitStatus", 0);
+    return STATUS_SUCCESS;
+}
+
+/* ---- source 1's flips, visibility and copies ---- */
+
+/* SetVidPnSourceAddress for source 1: scanned out at once if it can be,
+ * else left to the copy thread at the next vsync. Any IRQL. */
+NTSTATUS MwDualSetAddress(MW_ADAPTER *A, const DXGKARG_SETVIDPNSOURCEADDRESS *Arg)
+{
+    MW_SRC2 *s = &A->Hdmi.S2;
+    MW_ALLOCATION *p = (MW_ALLOCATION *)Arg->hAllocation;
+    LONG seq;
+
+    s->ScanAddr = Arg->PrimaryAddress;
+    s->ScanAlloc = p;
+    s->Flips++;
+    seq = InterlockedIncrement(&s->FlipSeq);
+    if (!s->Visible) {
+        s->Invisible++;
+    } else if (MwScan2Flip(A, p)) {
+        s->ShownAddr = Arg->PrimaryAddress;
+        InterlockedExchange(&s->ShownSeq, seq);
+    } else {
+        s->NotMapped++;
+    }
+    return STATUS_SUCCESS;
+}
+
+/* SetVidPnSourceVisibility for source 1, as display.c does it for source
+ * 0: invisible clears its framebuffer once and shows it; visible puts the
+ * current primary back. PASSIVE_LEVEL. */
+NTSTATUS MwDualVisibility(MW_ADAPTER *A, BOOLEAN Visible)
+{
+    MW_SRC2 *s = &A->Hdmi.S2;
+
+    s->Visible = Visible;
+    if (!Visible) {
+        if (MwHpdFbEnter(A)) {
+            if (s->FbVa != NULL && !A->Hdmi.Hold)
+                RtlZeroMemory(s->FbVa, s->FbSize);
+            MwScan2ToFb(A);
+            MwHpdFbLeave(A);
+        }
+        return STATUS_SUCCESS;
+    }
+    ExAcquireFastMutex(&A->CopyLock);
+    if (MwScan2Why(A, s->ScanAlloc) == 0)
+        (void)MwScan2Flip(A, s->ScanAlloc);
+    else if (s->ScanAlloc != NULL)
+        InterlockedExchange(&s->ShownSeq, s->FlipSeq - 1);
+    ExReleaseFastMutex(&A->CopyLock);
+    return STATUS_SUCCESS;
+}
+
+/* Which source a primary is for, by its size (dual_calc.h MwDualSourceOf).
+ * 0 without HdmiExtend. Any IRQL. */
+ULONG MwDualSourceOfAlloc(MW_ADAPTER *A, const MW_ALLOCATION *P)
+{
+    MW_DUAL_SRCSIZE s[MW_DUAL_SOURCES];
+
+    if (!A->Hdmi.Extend || P == NULL)
+        return 0;
+    s[0].Active = A->PathActive;
+    s[0].W = A->SrcWidth;
+    s[0].H = A->SrcHeight;
+    s[1].Active = A->Hdmi.S2.Active;
+    s[1].W = A->Hdmi.S2.Width;
+    s[1].H = A->Hdmi.S2.Height;
+    return MwDualSourceOf(P->Width, P->Height, s);
+}
+
+/* The copy thread's work for source 1 (command.c), CopyLock held: the
+ * current primary scanned out if it can be now, else copied into source
+ * 1's framebuffer and the window put on that; then the flip is shown. */
+void MwDualCopy(MW_ADAPTER *A)
+{
+    MW_SRC2 *s = &A->Hdmi.S2;
+    LONG seq = s->FlipSeq;
+    MW_ALLOCATION *p = s->ScanAlloc;
+    PHYSICAL_ADDRESS addr = s->ScanAddr;
+
+    if (MwScan2Why(A, p) == 0) {
+        if (!s->Showing)
+            (void)MwScan2Flip(A, p);
+    } else if (p != NULL && p->Mdl != NULL && s->Visible && s->FbVa != NULL && !A->Hdmi.Hold && !A->Stopping) {
+        PUCHAR src = (PUCHAR)MmGetSystemAddressForMdlSafe(p->Mdl, NormalPagePriority | MdlMappingNoExecute);
+        if (src != NULL) {
+            ULONG w = min(p->Width ? p->Width : s->FbW, s->FbW);
+            ULONG h = min(p->Height ? p->Height : s->FbH, s->FbH);
+            ULONG pitch = p->Pitch ? p->Pitch : w * 4;
+            src += (SIZE_T)p->MdlPage << PAGE_SHIFT;
+            if ((SIZE_T)pitch * h <= p->Size) {
+                for (ULONG y = 0; y < h; y++)
+                    RtlCopyMemory(s->FbVa + (SIZE_T)y * s->FbPitch, src + (SIZE_T)y * pitch, (SIZE_T)w * 4);
+                s->Copies++;
+            } else {
+                s->CopySkips++;
+            }
+            MwScan2ToFb(A);
+        } else {
+            s->CopySkips++;
+        }
+    } else if (p != NULL) {
+        s->CopySkips++;
+    }
+    s->ShownAddr = addr;
+    InterlockedExchange(&s->ShownSeq, seq);
+}
+
+/* Per2_*, with Per_*: source 1's counters since start. Active | Visible
+ * << 1 | Showing << 2 in Per2_State; Per2_Fb W << 16 | H; Per2_Target. */
+static void DualSnapshot(MW_ADAPTER *A)
+{
+    MW_HDMI *H = &A->Hdmi;
+    const MW_SRC2 *s = &H->S2;
+
+    MwLog(A, L"Per2_Flips", s->Flips);
+    MwLog(A, L"Per2_Scanned", s->ScanFlips);
+    MwLog(A, L"Per2_Copied", s->Copies);
+    MwLog(A, L"Per2_CopySkips", s->CopySkips);
+    MwLog(A, L"Per2_NotMapped", s->NotMapped);
+    MwLog(A, L"Per2_Invisible", s->Invisible);
+    MwLog(A, L"Per2_Vsyncs", s->Vsyncs);
+    MwLog(A, L"Per2_ToFbs", s->ToFbs);
+    MwLog(A, L"Per2_Blts", s->Blts);
+    MwLog(A, L"Per2_Target", s->Target);
+    MwLog(A, L"Per2_State", (s->Active ? 1u : 0) | (s->Visible ? 2u : 0) | (s->Showing ? 4u : 0));
+    MwLog(A, L"Per2_Fb", s->FbW << 16 | (s->FbH & 0xFFFF));
+    MwLog(A, L"Per2_PanelVp", H->PanelVp);
+    MwLog(A, L"Per2_Src0Target", A->PathActive ? H->ActiveTarget : 0xFFu);
 }

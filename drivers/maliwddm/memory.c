@@ -371,7 +371,12 @@ NTSTATUS APIENTRY MwDescribeAllocation(IN_CONST_HANDLE hAdapter, DXGKARG_DESCRIB
      * 241.70 MHz is 59.998 Hz. The firmware's own mode on the panel is
      * exactly 60 (display.c TimingMadeUp), which is why 60/1 never
      * mattered there. */
-    if (a != NULL && a->Hdmi.Switch && (alloc->Flags & MW_ALLOC_PRIMARY) && a->Hdmi.RefDen != 0) {
+    if (a != NULL && MwDualOn(a) && (alloc->Flags & MW_ALLOC_PRIMARY) && MwDualSourceOfAlloc(a, alloc) == 1 &&
+        a->Hdmi.S2.RefDen != 0) {
+        /* HdmiExtend: a primary of source 1's size has source 1's rate. */
+        Arg->RefreshRate.Numerator = a->Hdmi.S2.RefNum;
+        Arg->RefreshRate.Denominator = a->Hdmi.S2.RefDen;
+    } else if (a != NULL && a->Hdmi.Switch && (alloc->Flags & MW_ALLOC_PRIMARY) && a->Hdmi.RefDen != 0) {
         Arg->RefreshRate.Numerator = a->Hdmi.RefNum;
         Arg->RefreshRate.Denominator = a->Hdmi.RefDen;
     } else if (a != NULL && !a->Hdmi.Switch && (alloc->Flags & MW_ALLOC_PRIMARY) &&

@@ -20,6 +20,7 @@
 #include "thermal_calc.h"
 #include "perfdata_calc.h"
 #include "scale.h"
+#include "dual_calc.h"
 
 /* The adapter's own power and ACPI target (video.h; dispmprt.h has it in newer WDKs). */
 #ifndef DISPLAY_ADAPTER_HW_ID
@@ -104,6 +105,34 @@ typedef struct _MW_PROF {
 #define MW_WIRE_DSI         1
 #define MW_WIRE_HDMI        2
 
+/* HdmiExtend (docs/DUAL-DISPLAY.md): the second VidPN source. Source 0 is
+ * the adapter's own state as it always was (A->Fb, ScanAlloc, the copy
+ * thread...); source 1, which exists only with HdmiExtend on a DSI boot,
+ * keeps here what a source needs: its target, its framebuffer (the
+ * firmware's for the panel, the reserved one for HDMI), the window it is
+ * shown through, and its flips. Its flips are scanned out like source 0's
+ * (scanout.c MwScan2Flip), copied by the copy thread when they cannot be,
+ * and completed by the same emulated vsync (command.c). */
+typedef struct _MW_SRC2 {
+    BOOLEAN Active;             /* a committed path */
+    BOOLEAN Visible;
+    BOOLEAN OnRes;              /* its framebuffer is the reserved one */
+    ULONG Target;               /* MW_DUAL_PANEL or MW_DUAL_HDMI */
+    UINT Width, Height;         /* the committed source mode */
+    PHYSICAL_ADDRESS FbPa;
+    PUCHAR FbVa;
+    UINT FbW, FbH, FbPitch;
+    SIZE_T FbSize;
+    ULONG WinMst, WinCfg;       /* the window's YRGB_MST register and its port's CFG_DONE; 0 none */
+    PHYSICAL_ADDRESS ScanAddr, ShownAddr;
+    struct _MW_ALLOCATION *volatile ScanAlloc;
+    volatile LONG FlipSeq, ShownSeq;
+    volatile BOOLEAN Showing;   /* the window is on a primary, not on FbPa */
+    volatile LONG CopyBusy;     /* the vsync DPC asked the copy thread for a copy */
+    ULONG RefNum, RefDen;       /* the committed target mode's refresh rate */
+    ULONG Flips, ScanFlips, Copies, CopySkips, NotMapped, Invisible, Vsyncs, ToFbs, Blts;
+} MW_SRC2;
+
 typedef struct _MW_HDMI {
     ULONG Level;                /* the HdmiHpd setting */
     ULONG Source;               /* HdmiHpdSource: 0 IOC LEVEL_INT, 1 IOC PORT_LEVEL, 2 GPIO4_PC1 pad */
@@ -176,7 +205,7 @@ typedef struct _MW_HDMI {
      * the first four visibility-off times after a mode set (ms since
      * boot), the vsync interrupt switches, and the bases of the counters
      * the snapshots report as deltas. */
-    volatile LONG SupBy[6];
+    volatile LONG SupBy[8];
     volatile LONG Sup2Path;
     ULONG VisOffMs[4];
     volatile LONG VisOffN;
@@ -216,6 +245,16 @@ typedef struct _MW_HDMI {
     BOOLEAN OnRes;
 
     ULONG ModeSets, ModeSetFails, Restores, RestoreOks;
+
+    /* HdmiExtend (hpd.c, dual_calc.h). ExtendSetting is the setting as read
+     * (0 by default); Extend says two sources were reported, which takes a
+     * DSI boot at level 3 with the panel's timing known. PanelVp is the
+     * port the panel is on (MW_PANEL_*): VP0 except while both outputs are
+     * in use. With Extend off none of this is used. */
+    BOOLEAN ExtendSetting, Extend;
+    ULONG PanelVp;
+    ULONG DualCommits, DualFails, LastDualSup;
+    MW_SRC2 S2;
 } MW_HDMI;
 
 typedef struct _MW_DEVICE {
@@ -399,11 +438,17 @@ struct _MW_ADAPTER {
      * thread the DPC copies as before. */
     /* Scan-out by the VOP2 through its IOMMU (scanout.c). */
 #define MW_SCAN_SLOTS 6
+#define MW_SCAN_SLOTS_MAX 10    /* HdmiExtend: two sources' primaries */
     PUCHAR VopVa;
     PVOID ScanTables;
     PHYSICAL_ADDRESS ScanTablesPa;
     ULONG ScanTablesUsed, ScanTablesTotal, ScanSlotBytes;
-    struct _MW_ALLOCATION *ScanSlot[MW_SCAN_SLOTS];
+    struct _MW_ALLOCATION *ScanSlot[MW_SCAN_SLOTS_MAX];
+    ULONG ScanSlotCount;        /* MW_SCAN_SLOTS, or MW_SCAN_SLOTS_MAX with HdmiExtend */
+    /* Source 0's window: its YRGB_MST register and its port's CFG_DONE.
+     * Esmart0 on VP0 always, unless HdmiExtend has the panel on VP2 and
+     * source 0 is the panel's (Esmart1). */
+    ULONG Win0Mst, Win0Cfg;
     BOOLEAN ScanReady, ScanPaging;
     volatile BOOLEAN ScanShowing;
     volatile LONG ScanOn;
@@ -708,6 +753,11 @@ void MwScanCheck(MW_ADAPTER *A);
 void MwScanPower(MW_ADAPTER *A, BOOLEAN On);
 ULONG MwScanMmuStatus(MW_ADAPTER *A, ULONG Which, ULONG *FaultAddr);
 BOOLEAN MwScanFlip(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
+/* scanout.c, HdmiExtend's source 1 */
+ULONG MwScan2Why(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
+BOOLEAN MwScan2Flip(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
+void MwScan2ToFb(MW_ADAPTER *A);
+void MwScanWinToFb(MW_ADAPTER *A, ULONG Mst, ULONG Cfg, ULONG Pa);
 UINT MwFlipDegrees(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
 void MwScanMap(MW_ADAPTER *A, struct _MW_ALLOCATION *P, PPFN_NUMBER Pfn, ULONG Pages);
 void MwScanUnmap(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
@@ -727,6 +777,8 @@ BOOLEAN MwHdmiReadHpd(MW_ADAPTER *A, ULONG *Raw);
 NTSTATUS MwHdmiReadEdid(MW_ADAPTER *A, UCHAR *Buf, ULONG Max, ULONG *Len);
 NTSTATUS MwHdmiModeSet(MW_ADAPTER *A, const MW_TIMING *T, ULONG FbAddr, ULONG Pitch);
 NTSTATUS MwHdmiDsiRestore(MW_ADAPTER *A, ULONG FbAddr, ULONG Pitch);
+NTSTATUS MwHdmiPanelToVp2(MW_ADAPTER *A, ULONG FbAddr, ULONG Pitch, BOOLEAN FromVp0);
+void MwHdmiVp2Park(MW_ADAPTER *A);
 ULONG MwHdmiVpRawStatus(MW_ADAPTER *A);
 
 /* hpd.c: hot-plug as Windows sees it */
@@ -742,6 +794,15 @@ NTSTATUS MwHpdIsSupportedVidPn(MW_ADAPTER *A, DXGKARG_ISSUPPORTEDVIDPN *Arg);
 NTSTATUS MwHpdEnumVidPnCofuncModality(MW_ADAPTER *A, const DXGKARG_ENUMVIDPNCOFUNCMODALITY *Arg);
 NTSTATUS MwHpdCommitVidPn(MW_ADAPTER *A, const DXGKARG_COMMITVIDPN *Arg);
 NTSTATUS MwHpdRecommendMonitorModes(MW_ADAPTER *A, const DXGKARG_RECOMMENDMONITORMODES *Arg);
+/* hpd.c, HdmiExtend's source 1 (display.c, command.c, memory.c) */
+NTSTATUS MwDualSetAddress(MW_ADAPTER *A, const DXGKARG_SETVIDPNSOURCEADDRESS *Arg);
+NTSTATUS MwDualVisibility(MW_ADAPTER *A, BOOLEAN Visible);
+ULONG MwDualSourceOfAlloc(MW_ADAPTER *A, const struct _MW_ALLOCATION *P);
+void MwDualCopy(MW_ADAPTER *A);
+static __inline BOOLEAN MwDualOn(const MW_ADAPTER *A)
+{
+    return A->Hdmi.Extend;
+}
 /* display.c's, for hpd.c */
 UINT MwPathDegrees(D3DKMDT_VIDPN_PRESENT_PATH_ROTATION R);
 void MwSetRotation(MW_ADAPTER *A, UINT Deg, PCWSTR Why);
