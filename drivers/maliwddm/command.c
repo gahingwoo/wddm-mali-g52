@@ -330,6 +330,9 @@ static void DoPresent(MW_ADAPTER *A, const MW_PRESENT_OP *Op)
     ULONG n = Op->NumRects ? Op->NumRects : 1;
     ULONG64 t0 = MwTick(), longest = 0;
     UINT rot = 0;
+    /* The picture's size in the framebuffer: the firmware's, or a smaller
+     * source mode's that the window scales (MwScrW, scanout.c). */
+    UINT sw = MwScrW(A), sh = MwScrH(A);
 
     if (Op->Dst != NULL && (Op->Dst->Flags & MW_ALLOC_PRIMARY) && A->FbVa != NULL) {
         UINT lw, lh;
@@ -339,7 +342,7 @@ static void DoPresent(MW_ADAPTER *A, const MW_PRESENT_OP *Op)
         /* Rotated, the rectangles are the desktop's and are clipped to its
          * size; MwRotCopy puts them in the framebuffer. */
         rot = Op->Rotate;
-        MwRotLogicalSize(rot, A->Fb.Width, A->Fb.Height, &lw, &lh);
+        MwRotLogicalSize(rot, sw, sh, &lw, &lh);
         dstW = (LONG)lw;
         dstH = (LONG)lh;
         dstPitch = (LONG)A->Fb.Pitch;
@@ -385,10 +388,10 @@ static void DoPresent(MW_ADAPTER *A, const MW_PRESENT_OP *Op)
             l.Right = r.right;
             l.Bottom = r.bottom;
             if (Op->Kind == MW_PRESENT_BLT) {
-                MwRotCopy(rot, dst, dstPitch, A->Fb.Width, A->Fb.Height, src, srcPitch, dx, dy, &l);
+                MwRotCopy(rot, dst, dstPitch, sw, sh, src, srcPitch, dx, dy, &l);
                 A->PresentBltBytes += (ULONG64)(l.Right - l.Left) * (ULONG64)(l.Bottom - l.Top) * 4;
             } else {
-                MW_ROT_RECT f = MwRotRect(rot, A->Fb.Width, A->Fb.Height, &l);
+                MW_ROT_RECT f = MwRotRect(rot, sw, sh, &l);
                 for (LONG y = f.Top; y < f.Bottom; y++) {
                     ULONG *d = (ULONG *)(dst + (SIZE_T)y * dstPitch) + f.Left;
                     for (LONG x = 0; x < f.Right - f.Left; x++)
@@ -809,13 +812,13 @@ static BOOLEAN SyncVsync(PVOID Context)
  * Any IRQL; reads only. */
 UINT MwFlipDegrees(MW_ADAPTER *A, MW_ALLOCATION *P)
 {
-    UINT deg = A->RotDeg;
+    UINT deg = A->RotDeg, sw = MwScrW(A), sh = MwScrH(A);
 
     if (deg == 0 || P == NULL)
         return 0;
     if (deg == 90 || deg == 270)
-        return (P->Width == A->Fb.Height && P->Height == A->Fb.Width && P->Width != P->Height) ? deg : 0;
-    return (A->RotateFlips && P->Width == A->Fb.Width && P->Height == A->Fb.Height) ? deg : 0;
+        return (P->Width == sh && P->Height == sw && P->Width != P->Height) ? deg : 0;
+    return (A->RotateFlips && P->Width == sw && P->Height == sh) ? deg : 0;
 }
 
 /* The primary just made current, to the framebuffer: there is no scanout
@@ -826,6 +829,7 @@ static void ShowPrimary(MW_ADAPTER *A, MW_ALLOCATION *P)
     PUCHAR src;
     ULONG w, h, pitch;
     ULONG64 t0 = MwTick();
+    UINT sw = MwScrW(A), sh = MwScrH(A);
 
     if (A->FbVa == NULL || P->Mdl == NULL || A->Hdmi.Hold) {
         A->FlipCopySkips++;     /* Hold: HdmiDiag 2 keeps its test pattern on the screen */
@@ -850,7 +854,7 @@ static void ShowPrimary(MW_ADAPTER *A, MW_ALLOCATION *P)
                 A->FlipCopySkips++;
                 return;
             }
-            MwRotCopy(deg, A->FbVa, (long)A->Fb.Pitch, A->Fb.Width, A->Fb.Height, src, (long)rp, 0, 0, &l);
+            MwRotCopy(deg, A->FbVa, (long)A->Fb.Pitch, sw, sh, src, (long)rp, 0, 0, &l);
             A->RotFlipCopies++;
             A->FlipCopies++;
             A->LastPath = 3;
@@ -858,8 +862,10 @@ static void ShowPrimary(MW_ADAPTER *A, MW_ALLOCATION *P)
             return;
         }
     }
-    w = min(P->Width ? P->Width : A->Fb.Width, A->Fb.Width);
-    h = min(P->Height ? P->Height : A->Fb.Height, A->Fb.Height);
+    /* A smaller source mode's primary lands in the top left corner, which
+     * is what the window scales up (scanout.c). */
+    w = min(P->Width ? P->Width : sw, sw);
+    h = min(P->Height ? P->Height : sh, sh);
     pitch = P->Pitch ? P->Pitch : w * 4;
     for (ULONG y = 0; y < h; y++)
         RtlCopyMemory(A->FbVa + (SIZE_T)y * A->Fb.Pitch, src + (SIZE_T)y * pitch, (SIZE_T)w * 4);
