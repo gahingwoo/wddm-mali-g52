@@ -1674,7 +1674,7 @@ static NTSTATUS DualSteps(MW_ADAPTER *A, ULONG Next, BOOLEAN HdmiOn, const MW_TI
 static void DualBind(MW_ADAPTER *A, ULONG Src, ULONG Target, UINT W, UINT H2, const MW_TIMING *T, UINT Deg)
 {
     MW_HDMI *H = &A->Hdmi;
-    MW_DUAL_WIN win;
+    MW_DUAL_WIN win = { 0 };
     D3DKMDT_VIDEO_SIGNAL_INFO sig;
     BOOLEAN res = Target == MW_DUAL_HDMI, have;
 
@@ -1873,9 +1873,9 @@ static NTSTATUS DualCommit(MW_ADAPTER *A, const DXGK_VIDPN_INTERFACE *V, const D
     MwLog(A, L"Dual_PanelVp", H->PanelVp);
     /* The sources onto their targets: a source without a path is off. */
     for (ULONG s = 0; s < MW_DUAL_SOURCES; s++) {
-        ULONG i;
-        for (i = 0; i < n && use[i].Src != s; i++)
-            ;
+        ULONG i = 0;
+        while (i < n && use[i].Src != s)
+            i++;
         if (i == n)
             DualBind(A, s, MW_DUAL_NONE, 0, 0, NULL, 0);
         else
