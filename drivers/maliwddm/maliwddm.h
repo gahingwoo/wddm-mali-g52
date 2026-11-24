@@ -17,6 +17,8 @@
 #include "maliwddm_abi.h"
 #include "rotate.h"
 #include "hdmi_calc.h"
+#include "thermal_calc.h"
+#include "perfdata_calc.h"
 
 /* The adapter's own power and ACPI target (video.h; dispmprt.h has it in newer WDKs). */
 #ifndef DISPLAY_ADAPTER_HW_ID
@@ -430,6 +432,29 @@ struct _MW_ADAPTER {
     volatile BOOLEAN GpuClkIsHigh;
     PUCHAR CruClkVa;
     volatile ULONG GpuClkFallbacks;
+    /* The temperature fallback (adapter.c, ThermDpc; thermal_calc.h): with
+     * GpuClkHigh on, the TSADC read once a second; above 85 C the clock is
+     * held at 594 MHz until below 75 C. GpuClkWanted is the clock above
+     * 600 MHz that was asked for (0 none, or dropped by a job fault). The
+     * clock writes of GpuClkWrite and the DPC are under ClkLock; the DPC's
+     * write itself runs synchronised with the interrupt, where a job fault
+     * drops the clock. */
+    KSPIN_LOCK ClkLock;
+    ULONG GpuClkWanted;
+    PUCHAR TsadcVa;             /* mapped only once the CRU says the TSADC runs */
+    volatile BOOLEAN ThermOn;   /* the timer runs */
+    KTIMER ThermTimer;
+    KDPC ThermDpc;
+    MW_THERMAL Therm;
+    volatile ULONG GpuClkThermalDrops, GpuClkThermalRestores;
+    /* dxgkrnl's performance queries, QAI 24 to 27 (adapter.c,
+     * perfdata_calc.h): PerfData the setting (default 1, read at start),
+     * PerfSeen one bit per type answered once (24 and 25 are journaled and
+     * traced only the first time: they come twice a second while Task
+     * Manager is open), PerfAnswers how many of each in all. */
+    ULONG PerfData;
+    volatile LONG PerfSeen;
+    volatile ULONG PerfAnswers[4];
     PKTHREAD CopyThread;
     KEVENT CopyEvent;
     FAST_MUTEX CopyLock;
@@ -623,6 +648,14 @@ DXGKDDI_CONTROLINTERRUPT MwControlInterrupt;
 DXGKDDI_GETSCANLINE MwGetScanLine;
 BOOLEAN MwJobInterrupt(MW_ADAPTER *A);    /* from the ISR, at DIRQL */
 ULONG MwSetting(MW_ADAPTER *A, PCWSTR Name, ULONG Default);
+/* adapter.c: the GPU's temperature (hotter TSADC channel, 0 = no reading)
+ * and clock (Hz, 0 = not known) now; pcw.c: the "RK3576 GPU" counters. */
+int MwGpuTempMilliC(MW_ADAPTER *A, long *MilliC);
+ULONG MwGpuClkHzNow(MW_ADAPTER *A);
+void MwPcwInit(void);
+void MwPcwExit(void);
+void MwPcwAttach(MW_ADAPTER *A);
+void MwPcwDetach(MW_ADAPTER *A);
 void MwGpuClkFallback(MW_ADAPTER *A);
 void MwSetSetting(MW_ADAPTER *A, PCWSTR Name, ULONG Value);
 void MwScanStart(MW_ADAPTER *A);

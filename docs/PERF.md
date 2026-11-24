@@ -410,7 +410,7 @@ measurements; each item says what number will confirm it.
 | 1 | Measure (this branch, defaults) | none: the baseline | none | the plan above | done in code |
 | 2 | `UmdMergeSubmit` 1: a batch's vertex/tiler and fragment chains as one render | half the renders, events, signal calls, allocation lists, patches and SubmitCommands; a few percent of a core for DWM, more for apps with many batches | low: Panfrost submits the two back to back with out_sync 0 on the first exactly when the second follows; any other call sends a kept chain first | `submit` calls/s halves, `renders: 2.00 chains each`, `Render`/`Patch`/`SubmitCommand` ms per s fall, no change in jobs failed | done; board 2026-11-23: DWM submit CPU per job down about a third, 0 errors; on by default (0 turns it off) |
 | 3 | `PollMs` 4 or 10, only if the interrupt collects nearly every chain | up to 1000 timer DPCs a second fewer while the GPU works | low: the timer is the fallback and the 2 s timeout; with TimeSlice set it also paces soft-stops | `PollRuns` per second falls, `bubbles` unchanged | done, at 1 |
-| 4 | GPU clock 702 MHz from SPLL (mux 3, divider 1) | up to +18% on GPU-bound loads over 594 MHz | medium: above the 700 MHz operating point; mainline asks 775 mV from 701 to 800 MHz. Do only after the RK806 BUCK5 voltage has been read (firmware) and is at least 775 mV | FurMark score, `GPU busy`, temperature under FurMark below 85 C, JobsFailed 0 over 3 runs | done, off: `GpuClkHigh` (branch `gpu-clk`, see the last section); the rail read 750 mV, firmware `tspi3m-gpu-volt-read` 537ea09 raises it to 775 mV (read back on the board); 702 MHz not run yet |
+| 4 | GPU clock 702 MHz from SPLL (mux 3, divider 1) | up to +18% on GPU-bound loads over 594 MHz | medium: above the 700 MHz operating point; mainline asks 775 mV from 701 to 800 MHz. Do only after the RK806 BUCK5 voltage has been read (firmware) and is at least 775 mV | FurMark score, `GPU busy`, temperature under FurMark below 85 C, JobsFailed 0 over 3 runs | done, off by default: `GpuClkHigh` 1 on the board 2026-11-24, FurMark 334/335/336 against 288/290 (+16%), 0 failed jobs; firmware 537ea09 raises the rail to 775 mV; temperature fallback on branch `gpu-thermal-fallback` |
 | 5 | Windowed presents without the CPU: DXGI 1.2 flip model (`UmdDxgi12`, d3d11 branch) or a GPU copy into the presented surface with the KMD's blt behind the GPU queue | the largest for browsers and video: four passes over the frame, two of them reads of write-combined memory, and a GPU wait in the app's present | medium; another branch's work | `present, read back` falls to 0, `KMD blt presents` MB falls, YouTube dropped frames | not here |
 | 6 | Fewer BOs per render: list the named ones plus the others only when the set changed or every Nth render | `Render`, `Patch` and the runtime's render time scale with the entries (up to 256 a render) | medium: an allocation not in a list may be evicted under memory pressure, and a job touching it faults (the 0x4002c3 faults of 2026-10-17) | `renders: entries each` falls; JobsFailed stays 0 under memory pressure (many Edge tabs) | idea, needs item 1's numbers |
 | 7 | Mali performance counters (PRFCNT: GPU active cycles, L2 and external read/write beats) | instrumentation: says whether a GPU-bound load is shader, texture or bandwidth bound | low: GPU-side registers and a dump buffer, no clock or power change | counters against FurMark at two clocks | design only |
@@ -866,3 +866,82 @@ on the board. Send `copytest-*.txt`, the bench lines, and the six
 second, dwm.exe's `submit` calls a second, `present, no copy` us each,
 and the `dwm CPU` line. Three runs each way, as always: the desktop moves
 by tens of percent between runs of the same setting.
+
+## 702 MHz on the board, 2026-11-24
+
+TaishanPi 3M, firmware `tspi3m-gpu-volt-read` 537ea09 (serial: BUCK5
+0x28 -> 0x2C, read back 775000 uV, TSHUT armed), driver package
+7.31.29.680 (`gpu-clk`), `GpuClkHigh` 1, `m5test clk 3 1`, so SPLL / 1.
+
+GpuTest 0.7.0 FurMark through the OpenGL ICD, 1024x640 windowed, 60 s:
+
+| Clock | Runs | Scores | GPU busy |
+|---|---|---|---|
+| 594 MHz (GPLL / 2), 2026-11-23 | 2 | 288, 290 | 87.9% |
+| 702 MHz (SPLL / 1) | 3 | 334, 335, 336 | about 87% |
+
++16% for a clock 18% higher; the GPU stays about as busy, so the load is
+still bound by the clock. 46408 jobs over the three runs: none failed,
+timed out, faulted or reset the GPU, and no `GpuClkFallbacks`. The
+hottest die reading was 49.9 C, with the fan on. The clock is kept on
+this board with `m5test clk 3 1 keep`.
+
+With the fan off the board idles at 67 to 68 C already at 594 MHz. In
+an extreme test (fan off, FurMark at 702 MHz and Prime95 with every
+option at its maximum) the board froze about 90 s after Prime95 started:
+the picture stopped, no bugcheck. The highest readings were 82 to 84 C,
+on the little cores; the GPU read 78.5 C. One run; taken as an extreme
+case of the CPU load, not of 702 MHz, and not repeated. The fallback
+below would not have fired in it (78.5 C is under 85 C).
+
+The firmware raises the rail on every TaishanPi 3M boot (default on,
+the user's decision); `GpuClkHigh` stays 0 by default in the driver.
+
+### The temperature fallback (branch `gpu-thermal-fallback`)
+
+With `GpuClkHigh` on, the driver reads TSADC channels 3 and 5 (the two
+candidates for the GPU, see "Temperature" above) once a second from its
+own 1 s timer, and takes the hotter one:
+
+- at or above 85 C (mainline's `gpu-alert`) the clock goes to GPLL / 2 =
+  594 MHz at once and is held there;
+- it goes back to the clock that was asked for only below 75 C;
+- three readings in a row with neither channel valid count as hot;
+- a job fault still drops the clock and nothing brings it back by itself;
+- the adapter stopping drops it as before.
+
+The decisions are `drivers/maliwddm/thermal_calc.h`, checked on the host
+by `tests/thermal-host` (329 checks: the code table, the hotter channel,
+the 85/75 band, unreadable sensors). The clock write of a drop or a
+restore runs synchronised with the interrupt, where a job fault drops
+the clock, so the two cannot cross.
+
+The TSADC is now read without `PerfTemp` once the CRU says it runs
+(gates `CLKGATE_CON(13)` bits 8 and 9 open, resets `SOFTRST_CON(13)` bits
+8 and 9 released, `TSADC_AUTO_CON` bit 0 set, the way edk2-rk3576's
+`Rk3576TsadcIsRunning` checks it). Without a running TSADC there is no
+guard and `GpuClkWrite` refuses anything above 600 MHz
+(`GpuClkRefusedNoTemp`). No OTP trim is applied, a few degrees, which the
+10 C band covers.
+
+`m5test clk` adds a line: whether the guard is on, the hotter reading,
+whether the clock is held, and how often it was held and released.
+`m5test prof` shows the temperatures without `PerfTemp` and the hold
+count (`GpuClkThermalDrops`, the old `Reserved0` of the perf escape).
+
+Not run on a board yet. To see a drop:
+
+1. Stage and install the `gpu-thermal-fallback` package as in "Board
+   tests" (`pnputil /add-driver`, `ConfigFlags |= 0x20`, full restart).
+   `GpuClkHigh` 1 and the kept `GpuClk` (3 1) stay as they are.
+2. `m5test clk`: "temperature guard: on", "not held", 702 MHz.
+3. Fan unplugged: FurMark 1024x640, and `m5test clk` every 30 s (or
+   `m5test prof 10` in a loop). Expect "HELD at 594 MHz now" and held
+   1 time once the hotter channel reaches 85 C, `m5test prof` showing
+   594 MHz and the FurMark frame rate falling to the 594 MHz rate. Stop
+   at once if any channel passes 95 C or the board stops answering:
+   TSHUT is at 120 C, but the freeze on 2026-11-24 came at 84 C.
+4. Fan back on, FurMark stopped: within a minute or two of the hotter
+   channel falling below 75 C, "not held", back 1 time, 702 MHz again.
+5. Fan on, FurMark 60 s three times: the scores of 2026-11-24 (334 to
+   336), held 0 times, JobsFailed 0.

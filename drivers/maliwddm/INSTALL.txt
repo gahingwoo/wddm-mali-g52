@@ -236,7 +236,7 @@ Profiling (m5test prof, m5test ring; docs/PERF.md)
   and the CPU time in the runtime's render call, by process.
 
   Settings, DWORDs in Device Parameters, each off (today's behaviour)
-  unless set, except UmdMergeSubmit, which is on unless 0:
+  unless set, except UmdMergeSubmit and PerfData, which are on unless 0:
 
     UmdCopyBatch 1     a GPU copy (CopySubresourceRegion, CopyResource)
                        becomes a draw in the batches the UMD already has
@@ -252,6 +252,15 @@ Profiling (m5test prof, m5test ring; docs/PERF.md)
                        that starts the TSADC (edk2-rk3576 with the
                        thermal-safety work; Windows then shows thermal
                        zones). Read at every m5test prof, no reboot.
+    (The "RK3576 GPU" performance counters, Temperature (C), Clock (MHz),
+    % busy and Throttled, are always provided; run maliwddm-counters.cmd
+    install once after each package install so that PDH has their names.
+    docs/PERFDATA.md section 6.)
+    PerfData 0         at WDDM 2.x, stop answering dxgkrnl's performance
+                       queries (QAI 24 to 27): no GPU temperature in Task
+                       Manager, no clock in m5test temp. On (1) by default;
+                       at 1.3 they are never answered. Read at the
+                       adapter's start: reboot. docs/PERFDATA.md.
     PollMs n           the job-status poll timer's period, 1 to 50 ms
                        (default 1). Raise it only when m5test prof shows
                        the interrupt collecting the chains. Read at the

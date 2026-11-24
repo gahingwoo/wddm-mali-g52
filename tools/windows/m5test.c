@@ -19,6 +19,12 @@
  * chains), m5test scan [mode] and m5test mem (GPU memory by process) only
  * ask the driver; nothing is submitted.
  *
+ * m5test temp [seconds] asks dxgkrnl, as Task Manager does, for the
+ * adapter's and each node's performance data (D3DKMTQueryAdapterInfo
+ * KMTQAITYPE_ADAPTERPERFDATA and NODEPERFDATA): temperature, clock and
+ * supply, once a second (docs/PERFDATA.md). Exit 0 when the temperature is
+ * one Task Manager shows.
+ *
  * m5test renderprobe submits renders with no GPU work in eight variants and
  * prints where D3DKMTRender fails (docs/WDDM2.md 16.9).
  *
@@ -466,7 +472,7 @@ static void print_temps(const MW_ESCAPE_PERF_DATA *d)
 {
     static const char *const ch[6] = { "centre", "big", "little", "GPU", "NPU", "DDR" };
     if (d->TempValid == 0) {
-        printf("  temperatures: not read (set PerfTemp 1 in Device Parameters; needs firmware with TSHUT/_CRT)\n");
+        printf("  temperatures: not read (the TSADC is not running, or set PerfTemp 1; needs firmware with TSHUT/_CRT)\n");
         return;
     }
     printf("  temperatures (TSADC, no OTP trim, +-3 C):");
@@ -474,6 +480,8 @@ static void print_temps(const MW_ESCAPE_PERF_DATA *d)
         if (d->TempValid & (1u << n))
             printf(" %s %.1f C", ch[n], d->TempMilliC[n] / 1000.0);
     printf("\n");
+    if (d->GpuClkThermalDrops)
+        printf("  GPU clock held at 594 MHz for heat %u times (GpuClkThermalDrops)\n", d->GpuClkThermalDrops);
 }
 
 static void print_clock(const MW_ESCAPE_PERF_DATA *d)
@@ -617,6 +625,65 @@ static double mib(unsigned long long bytes)
  * they count in a process's working set only where its UMD has them mapped
  * (Panfrost keeps a CPU view of every BO it has touched). Run elevated to
  * see the working sets of dwm.exe and the others. */
+/* m5test temp [seconds]: the queries Task Manager's GPU page makes. */
+static int temp(D3DKMT_HANDLE adapter, unsigned seconds)
+{
+    KMT_FN pQai = resolve("QueryAdapterInfo");
+    D3DKMT_QUERYADAPTERINFO q = {0};
+    D3DKMT_ADAPTER_PERFDATACAPS caps = {0};
+    D3DKMT_GPUVERSION ver = {0};
+    NTSTATUS st;
+    int shown = 0;
+
+    if (pQai == NULL)
+        return 3;
+    q.hAdapter = adapter;
+    /* From dxgkrnl's copy, filled at adapter start at WDDM 2.4 and up only. */
+    q.Type = KMTQAITYPE_ADAPTERPERFDATA_CAPS;
+    q.pPrivateDriverData = &caps;
+    q.PrivateDriverDataSize = sizeof(caps);
+    st = pQai(&q);
+    printf("ADAPTERPERFDATA_CAPS 0x%08lx: TemperatureMax %.1f C, TemperatureWarning %.1f C, MaxFanRPM %lu "
+           "(zeros below WDDM 2.4: dxgkrnl asks the driver only from 2.4)\n",
+           (unsigned long)st, caps.TemperatureMax / 10.0, caps.TemperatureWarning / 10.0,
+           (unsigned long)caps.MaxFanRPM);
+    q.Type = KMTQUITYPE_GPUVERSION;
+    q.pPrivateDriverData = &ver;
+    q.PrivateDriverDataSize = sizeof(ver);
+    st = pQai(&q);
+    printf("GPUVERSION 0x%08lx: BIOS \"%ls\", architecture \"%ls\"\n", (unsigned long)st,
+           ver.BiosVersion, ver.GpuArchitecture);
+    for (unsigned s = 0; s < seconds; s++) {
+        D3DKMT_ADAPTER_PERFDATA a = {0};
+        q.Type = KMTQAITYPE_ADAPTERPERFDATA;
+        q.pPrivateDriverData = &a;
+        q.PrivateDriverDataSize = sizeof(a);
+        st = pQai(&q);
+        printf("t=%us ADAPTERPERFDATA 0x%08lx: Temperature %lu (%.1f C), Task Manager shows %s",
+               s, (unsigned long)st, (unsigned long)a.Temperature, a.Temperature / 10.0,
+               st >= 0 && a.Temperature / 10 != 0 ? "it" : "NOTHING");
+        if (st >= 0 && a.Temperature / 10 != 0)
+            printf(" (%lu C)", (unsigned long)(a.Temperature / 10));
+        printf(", PowerStateOverride %u\n", (unsigned)a.PowerStateOverride);
+        if (st >= 0 && a.Temperature / 10 != 0)
+            shown = 1;
+        for (unsigned n = 0; n < 2; n++) {
+            D3DKMT_NODE_PERFDATA d = {0};
+            d.NodeOrdinal = n;
+            q.Type = KMTQAITYPE_NODEPERFDATA;
+            q.pPrivateDriverData = &d;
+            q.PrivateDriverDataSize = sizeof(d);
+            st = pQai(&q);
+            printf("      node %u NODEPERFDATA 0x%08lx: %.0f MHz, max %.0f MHz, max OC %.0f MHz, %lu mV\n", n,
+                   (unsigned long)st, d.Frequency / 1e6, d.MaxFrequency / 1e6, d.MaxFrequencyOC / 1e6,
+                   (unsigned long)d.Voltage);
+        }
+        if (s + 1 < seconds)
+            Sleep(1000);
+    }
+    return shown ? 0 : 2;
+}
+
 static int mem(D3DKMT_HANDLE adapter)
 {
     static MW_ESCAPE_MEMORY_DATA d;
@@ -901,10 +968,21 @@ int main(int argc, char **argv)
                    d.AllowedHz / 1000000, d.NeedUv702);
         if (d.Fallbacks)
             printf("  %u times back to 594 MHz after a job fault\n", d.Fallbacks);
+        if (d.High)
+            printf("  temperature guard: %s; hotter of TSADC 3/5 %.1f C (no OTP trim); %s; "
+                   "held for heat %u times, back %u times (drop at 85 C, back below 75 C)\n",
+                   d.ThermalGuard ? "on, every 1 s" : "OFF, so nothing above 600 MHz",
+                   d.ThermalMilliC / 1000.0,
+                   d.ThermalHeld ? "HELD at 594 MHz now" : "not held",
+                   d.ThermalDrops, d.ThermalRestores);
         return st < 0 ? 1 : 0;
     }
     if (argc >= 2 && strcmp(argv[1], "mem") == 0)
         return mem(adapter);
+    if (argc >= 2 && strcmp(argv[1], "temp") == 0) {
+        int seconds = argc >= 3 ? atoi(argv[2]) : 3;
+        return temp(adapter, seconds > 0 && seconds <= 600 ? (unsigned)seconds : 3);
+    }
     if (argc >= 2 && strcmp(argv[1], "renderprobe") == 0)
         return render_probe(adapter);
     if (argc >= 2 && strcmp(argv[1], "prof") == 0) {

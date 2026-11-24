@@ -52,6 +52,8 @@ jobs:
             Where-Object { $_.FullName -match '\\ARM64\\Release\\' } |
             Copy-Item -Destination $out -Force
           if (-not (Test-Path "$out\$env:DRV.sys")) { throw "no $env:DRV.sys came out of the build" }
+          # maliwddm's performance counter manifest goes with the .sys (the INF copies it).
+          if ($env:DRV -eq 'maliwddm') { Copy-Item drivers\maliwddm\maliwddm.man $out }
           $kits = 'C:\Program Files (x86)\Windows Kits\10'
           $st   = Join-Path $kits "bin\$env:WDK_VERSION\x86\signtool.exe"
           $i2c  = Join-Path $kits "bin\$env:WDK_VERSION\x86\inf2cat.exe"
@@ -155,6 +157,10 @@ jobs:
         run: make -C tests/hdmi-host run
       - name: maliwddm's WDDM 2.x answers and one-shot fallback (wddm2plan.h)
         run: make -C tests/wddm2-host run
+      - name: maliwddm's GPU temperature fallback (hold at 85 C, back below 75 C)
+        run: make -C tests/thermal-host run
+      - name: maliwddm's temperature and clock for Task Manager (perfdata_calc.h)
+        run: make -C tests/perfdata-host run
 
   umd:
     # The UMD for the package: mesa.yml's Panfrost build of the same inputs.
@@ -286,7 +292,7 @@ jobs:
           # Same layout as the kernel driver artifact: a maliwddm folder.
           $drv = 'pkg\maliwddm'
           New-Item -ItemType Directory -Force -Path $drv | Out-Null
-          Copy-Item kmd\maliwddm\maliwddm.inf, kmd\maliwddm\maliwddm.sys $drv
+          Copy-Item kmd\maliwddm\maliwddm.inf, kmd\maliwddm\maliwddm.sys, kmd\maliwddm\maliwddm.man $drv
           # The null driver for the display controller; a catalog of its own.
           Copy-Item drivers\maliwddm\malivop.inf $drv
           # The INF copies this to System32\maliumd.dll (see the INF for why
@@ -340,7 +346,7 @@ jobs:
           certutil -f -addstore TrustedPublisher wddm-mali-g52-test.cer | Out-Null
           # 1. Each file's hash is in the catalog, and the catalog's
           #    signature verifies.
-          foreach ($f in 'maliwddm.inf', 'maliwddm.sys', 'maliumd_arm64.dll', 'maliumd_fwd.dll', 'maliumd_x64.dll', 'maliumd_x86.dll', 'maligl_fwd.dll', 'maligl_arm64.dll', 'maligl_x64.dll', 'maligl_x86.dll') {
+          foreach ($f in 'maliwddm.inf', 'maliwddm.sys', 'maliwddm.man', 'maliumd_arm64.dll', 'maliumd_fwd.dll', 'maliumd_x64.dll', 'maliumd_x86.dll', 'maligl_fwd.dll', 'maligl_arm64.dll', 'maligl_x64.dll', 'maligl_x86.dll') {
             & $st verify /pa /q /c $cat "$drv\$f"
             if ($LASTEXITCODE) { throw "$f is not in $cat, or the catalog does not verify" }
             Write-Host "in the catalog: $f"
@@ -382,6 +388,8 @@ jobs:
           Copy-Item wddm-mali-g52-test.cer pkg\maliwddm\
           # The WDDM version probe (docs/WDDM2.md, P1).
           Copy-Item tools\windows\wddm-probe.cmd $rel
+          # The "RK3576 GPU" performance counters: lodctr on the installed manifest.
+          Copy-Item tools\windows\maliwddm-counters.cmd $rel
           Copy-Item umd\libgallium_d3d10.pdb "$rel\symbols\" -ErrorAction SilentlyContinue
           $info = @(
             (Get-Content drivers\maliwddm\INSTALL.txt -Raw).TrimEnd(),
