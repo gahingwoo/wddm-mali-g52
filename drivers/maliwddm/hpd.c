@@ -74,11 +74,20 @@ void MwHpdSettings(MW_ADAPTER *A)
 {
     MW_HDMI *H = &A->Hdmi;
 
-    H->Level = MwSetting(A, L"HdmiHpd", 0);
+    /* An explicit HdmiHpd wins (0 or 1 to go back); without one, 3 on an
+     * HDMI boot and 0 when the firmware handed over a DSI panel (hdmi_calc.h
+     * MwHpdLevelFor). The panel is known by GPU0's second memory resource,
+     * which the firmware adds only for a lit DSI panel (backlight.c);
+     * MwBacklightStart, which maps it, runs later. Trace: Hpd_LevelFrom 0
+     * from the setting, 1 the HDMI boot's default, 2 the panel's. */
+    {
+        ULONG set = MwSetting(A, L"HdmiHpd", MW_HPD_UNSET);
+        BOOLEAN panel = set == MW_HPD_UNSET && MwBacklightPresent(A);
+        H->Level = MwHpdLevelFor(set, panel);
+        MwLog(A, L"Hpd_LevelFrom", set != MW_HPD_UNSET ? 0u : (panel ? 2u : 1u));
+    }
     if (H->Level == 0)
         return;
-    if (H->Level > 3)
-        H->Level = 3;
     H->Source = MwSetting(A, L"HdmiHpdSource", 0);
     H->PollMs = MwSetting(A, L"HdmiHpdPollMs", 200);
     if (H->PollMs < 50)

@@ -88,8 +88,10 @@ typedef struct _MW_PROF {
 } MW_PROF;
 
 /* HDMI hot-plug (hdmi.c, the hardware; hpd.c, what Windows sees). All of it
- * is behind the HdmiHpd setting, a DWORD in Device Parameters:
- *   0  (default) nothing here runs and nothing here is allocated
+ * is behind the HdmiHpd setting, a DWORD in Device Parameters. Without the
+ * value: 3 on an HDMI boot, 0 when the firmware handed over a DSI panel
+ * (MwHpdLevelFor, hdmi_calc.h).
+ *   0  nothing here runs and nothing here is allocated
  *   1  sense only: HPD is polled and the EDID read over DDC, the results
  *      go to the registry; Windows is told nothing new
  *   2  report: on an HDMI boot the one child becomes hot-plug aware and its
@@ -637,6 +639,7 @@ DXGKDDI_SYSTEM_DISPLAY_WRITE MwSystemDisplayWrite;
 
 /* backlight.c: a MIPI DSI panel's backlight and the brightness interface */
 void MwBacklightStart(MW_ADAPTER *A);
+BOOLEAN MwBacklightPresent(MW_ADAPTER *A);
 void MwBacklightStop(MW_ADAPTER *A);
 void MwBacklightPower(MW_ADAPTER *A, BOOLEAN On);
 NTSTATUS MwBacklightQueryInterface(MW_ADAPTER *A, PQUERY_INTERFACE Qi);

@@ -309,6 +309,17 @@ static BOOLEAN BlFindResource(MW_ADAPTER *A, PHYSICAL_ADDRESS *Pa, ULONG *Len)
     return FALSE;
 }
 
+/* Whether the firmware handed over a DSI panel (the resource is there),
+ * before MwBacklightStart: for the HdmiHpd default (hpd.c). Nothing is
+ * mapped or read. PASSIVE_LEVEL. */
+BOOLEAN MwBacklightPresent(MW_ADAPTER *A)
+{
+    PHYSICAL_ADDRESS pa;
+    ULONG len = 0;
+
+    return BlFindResource(A, &pa, &len);
+}
+
 /* PASSIVE_LEVEL, from StartDevice. Registry trace: Backlight (1 found and
  * running, 0 none: an HDMI output), BacklightVersion, BacklightPeriod,
  * BacklightFirmwareLevel; Fail_Backlight with the reason when a resource was

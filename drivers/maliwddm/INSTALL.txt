@@ -127,6 +127,29 @@ Display orientation
   m5test perf writes T_Rotation (degrees), T_RotFlipCopies and
   T_RotPresents (frames the driver turned) to Device Parameters\maliwddm.
 
+Resolution and refresh rate on HDMI
+
+  On an HDMI boot the driver sets the monitor's modes itself (HdmiHpd 3,
+  the default there when no HdmiHpd value is set): Settings > System >
+  Display > Display resolution lists the monitor's own modes, and Advanced
+  display > Choose a refresh rate its refresh rates, up to 340 MHz of pixel
+  clock (2560x1440 at 60 and 75 Hz on an AOC Q27B3S2; 100 Hz there needs
+  HDMI 2.0 scrambling, which the driver does not do yet). Windows keeps a
+  choice it cannot confirm for 15 seconds and then goes back. A mode set
+  that fails puts the previous mode back. When the firmware shows the DSI
+  panel the default stays 0, as before.
+
+  To go back to the firmware's mode only (smaller resolutions are then
+  scaled by the display controller, ScaledModes), from an administrator
+  prompt, then reboot:
+
+       reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters" /v HdmiHpd /t REG_DWORD /d 0 /f
+
+  Delete the value to return to the default. With no usable picture, the
+  same over SSH, or from the rescue Windows with the main Windows' SYSTEM
+  hive loaded. Device Parameters\maliwddm records Hpd_Level and
+  Hpd_LevelFrom (0 the value, 1 the HDMI default, 2 the panel's).
+
 Screen brightness (TaishanPi 3M with its MIPI DSI screen)
 
   With edk2-rk3576 firmware that describes the screen's backlight (GPU0

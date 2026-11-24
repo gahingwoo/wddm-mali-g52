@@ -64,6 +64,23 @@ typedef struct _MW_TIMING {
 #define MW_VP0_MAX_W            4096u
 #define MW_VP0_MAX_H            2304u
 
+/* ---- the HdmiHpd level ----
+ *
+ * The setting when there is one (above 3 is 3). Without one: 3 on an HDMI
+ * boot, so that Windows can choose the monitor's modes and refresh rates
+ * (board, 2026-11-24: 2560x1440 at 75 Hz on the AOC, kept across a
+ * reboot, hot-plug and the 15 s revert fine); 0 when the firmware handed
+ * over a DSI panel, whose path stays as it was. MW_HPD_UNSET is what
+ * MwSetting returns for a value that is not there. tests/hdmi-host. */
+#define MW_HPD_UNSET 0xFFFFFFFFu
+
+MW_HC_INLINE mwh_u32 MwHpdLevelFor(mwh_u32 Setting, int DsiPanel)
+{
+    if (Setting == MW_HPD_UNSET)
+        return DsiPanel ? 0u : 3u;
+    return Setting > 3 ? 3u : Setting;
+}
+
 MW_HC_INLINE int MwTimingEqual(const MW_TIMING *A, const MW_TIMING *B)
 {
     return A->Clock == B->Clock && A->HDisplay == B->HDisplay && A->VDisplay == B->VDisplay &&

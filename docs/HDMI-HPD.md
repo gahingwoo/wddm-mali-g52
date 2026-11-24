@@ -8,7 +8,11 @@ Branch `hdmi-hpd`. Code: `drivers/maliwddm/hpd.c` (what Windows sees),
 
 A DWORD in the adapter's Device Parameters,
 `HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters`.
-Read once, when the adapter starts. Missing or 0 is today's driver.
+Read once, when the adapter starts. Missing: 3 on an HDMI boot, 0 when the
+firmware handed over the DSI panel (since branch `hdmi-retime-default`,
+after the 2026-11-24 board run in [DISPLAY-MODES.md](DISPLAY-MODES.md)).
+A value always wins; 0 is the driver without any of this. `Hpd_LevelFrom`
+in the trace: 0 from the value, 1 the HDMI default, 2 the panel's.
 
 | `HdmiHpd` | What runs |
 |---|---|
