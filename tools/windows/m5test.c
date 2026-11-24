@@ -417,7 +417,7 @@ static void print_temps(const MW_ESCAPE_PERF_DATA *d)
 {
     static const char *const ch[6] = { "centre", "big", "little", "GPU", "NPU", "DDR" };
     if (d->TempValid == 0) {
-        printf("  temperatures: not read (set PerfTemp 1 in Device Parameters; needs firmware with TSHUT/_CRT)\n");
+        printf("  temperatures: not read (the TSADC is not running, or set PerfTemp 1; needs firmware with TSHUT/_CRT)\n");
         return;
     }
     printf("  temperatures (TSADC, no OTP trim, +-3 C):");
@@ -425,6 +425,8 @@ static void print_temps(const MW_ESCAPE_PERF_DATA *d)
         if (d->TempValid & (1u << n))
             printf(" %s %.1f C", ch[n], d->TempMilliC[n] / 1000.0);
     printf("\n");
+    if (d->GpuClkThermalDrops)
+        printf("  GPU clock held at 594 MHz for heat %u times (GpuClkThermalDrops)\n", d->GpuClkThermalDrops);
 }
 
 static void print_clock(const MW_ESCAPE_PERF_DATA *d)
@@ -725,6 +727,13 @@ int main(int argc, char **argv)
                    d.AllowedHz / 1000000, d.NeedUv702);
         if (d.Fallbacks)
             printf("  %u times back to 594 MHz after a job fault\n", d.Fallbacks);
+        if (d.High)
+            printf("  temperature guard: %s; hotter of TSADC 3/5 %.1f C (no OTP trim); %s; "
+                   "held for heat %u times, back %u times (drop at 85 C, back below 75 C)\n",
+                   d.ThermalGuard ? "on, every 1 s" : "OFF, so nothing above 600 MHz",
+                   d.ThermalMilliC / 1000.0,
+                   d.ThermalHeld ? "HELD at 594 MHz now" : "not held",
+                   d.ThermalDrops, d.ThermalRestores);
         return st < 0 ? 1 : 0;
     }
     if (argc >= 2 && strcmp(argv[1], "mem") == 0)

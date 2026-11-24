@@ -215,6 +215,82 @@ C_ASSERT(sizeof(MW_GPU_RAIL_REPORT) == 32);
 /* 7701c75f-f454-4aab-9445-117f09fb87cf, edk2-rk3576 GpuRail.c */
 static GUID MwGpuRailGuid = { 0x7701c75f, 0xf454, 0x4aab, { 0x94, 0x45, 0x11, 0x7f, 0x09, 0xfb, 0x87, 0xcf } };
 
+/* The TSADC (TRM chapter 19): its CRU gates are CLKGATE_CON(13) bits 8
+ * (pclk) and 9 (clk), its resets SOFTRST_CON(13) bits 8 and 9, all in the
+ * CRU page this driver already maps for CLKSEL_CON165; sampling runs when
+ * TSADC_AUTO_CON bit 0 is set (edk2-rk3576 Rk3576TsadcLib.c, which starts
+ * it and arms TSHUT). A read of the TSADC while it is gated or in reset can
+ * be an SError on this SoC, so the TSADC is read only after the CRU says it
+ * runs (TsadcMapIfRunning) or with the setting PerfTemp 1. */
+#define MW_TSADC_PA          0x2AE70000u
+#define MW_TSADC_AUTO_CON    0x004u
+#define MW_TSADC_DATA(n)     (0x02Cu + (n) * 4u)
+#define MW_CRU_PA            0x27200000u
+#define MW_CRU_GATE13        0x834u
+#define MW_CRU_SOFTRST13     0xA34u
+#define MW_TSADC_CRU_BITS    0x300u
+
+static PUCHAR TsadcMapIfRunning(MW_ADAPTER *A)
+{
+    PHYSICAL_ADDRESS pa;
+    PUCHAR cru, ts;
+    ULONG gate, rst, autocon;
+
+    pa.QuadPart = MW_CRU_PA;
+    cru = (PUCHAR)MmMapIoSpaceEx(pa, PAGE_SIZE, PAGE_READWRITE | PAGE_NOCACHE);
+    if (cru == NULL)
+        return NULL;
+    gate = READ_REGISTER_ULONG((PULONG)(cru + MW_CRU_GATE13));
+    rst = READ_REGISTER_ULONG((PULONG)(cru + MW_CRU_SOFTRST13));
+    MmUnmapIoSpace(cru, PAGE_SIZE);
+    if ((gate & MW_TSADC_CRU_BITS) != 0 || (rst & MW_TSADC_CRU_BITS) != 0) {
+        MwLog(A, L"TsadcNotRunningGate", gate);
+        return NULL;
+    }
+    pa.QuadPart = MW_TSADC_PA;
+    ts = (PUCHAR)MmMapIoSpaceEx(pa, PAGE_SIZE, PAGE_READWRITE | PAGE_NOCACHE);
+    if (ts == NULL)
+        return NULL;
+    autocon = READ_REGISTER_ULONG((PULONG)(ts + MW_TSADC_AUTO_CON));
+    if ((autocon & 1u) == 0) {
+        MmUnmapIoSpace(ts, PAGE_SIZE);
+        MwLog(A, L"TsadcNotRunningAuto", autocon);
+        return NULL;
+    }
+    return ts;
+}
+
+static BOOLEAN SyncThermDrop(PVOID Context);
+static BOOLEAN SyncThermRestore(PVOID Context);
+
+/* Once a second while GpuClkHigh is on (thermal_calc.h). */
+static VOID ThermDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
+{
+    MW_ADAPTER *a = (MW_ADAPTER *)Context;
+    KIRQL old;
+    long mc = 0;
+    int valid, act;
+    BOOLEAN ret = FALSE;
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(Arg1);
+    UNREFERENCED_PARAMETER(Arg2);
+
+    if (!a->ThermOn || a->TsadcVa == NULL)
+        return;
+    valid = MwThermalHotter(READ_REGISTER_ULONG((PULONG)(a->TsadcVa + MW_TSADC_DATA(MW_THERMAL_CH_A))),
+                            READ_REGISTER_ULONG((PULONG)(a->TsadcVa + MW_TSADC_DATA(MW_THERMAL_CH_B))), &mc);
+    KeAcquireSpinLock(&a->ClkLock, &old);
+    act = MwThermalStep(&a->Therm, valid, mc);
+    if (act == MW_THERMAL_DROP) {
+        InterlockedIncrement((volatile LONG *)&a->GpuClkThermalDrops);
+        (void)a->Dxgk.DxgkCbSynchronizeExecution(a->Dxgk.DeviceHandle, SyncThermDrop, a, 0, &ret);
+    } else if (act == MW_THERMAL_RESTORE) {
+        if (NT_SUCCESS(a->Dxgk.DxgkCbSynchronizeExecution(a->Dxgk.DeviceHandle, SyncThermRestore, a, 0, &ret)) && ret)
+            InterlockedIncrement((volatile LONG *)&a->GpuClkThermalRestores);
+    }
+    KeReleaseSpinLock(&a->ClkLock, old);
+}
+
 /* Once per start, at passive level, before any stored clock is applied. */
 static void GpuRailInit(MW_ADAPTER *A)
 {
@@ -272,6 +348,26 @@ static void GpuRailInit(MW_ADAPTER *A)
         pa.QuadPart = MW_CRU_CLKSEL165 & ~0xFFFu;
         A->CruClkVa = (PUCHAR)MmMapIoSpaceEx(pa, PAGE_SIZE, PAGE_READWRITE | PAGE_NOCACHE);
     }
+
+    /* The temperature guard: without a TSADC that runs, no clock above
+     * 600 MHz (GpuClkWrite checks ThermOn). The TSADC stays mapped for the
+     * start either way once it runs, which also lets the perf escape show
+     * temperatures without PerfTemp. */
+    KeInitializeSpinLock(&A->ClkLock);
+    RtlZeroMemory(&A->Therm, sizeof(A->Therm));
+    A->GpuClkWanted = 0;
+    A->ThermOn = FALSE;
+    if (A->TsadcVa == NULL)
+        A->TsadcVa = TsadcMapIfRunning(A);
+    if (A->GpuClkHigh != 0 && A->TsadcVa != NULL) {
+        LARGE_INTEGER due;
+        KeInitializeTimer(&A->ThermTimer);
+        KeInitializeDpc(&A->ThermDpc, ThermDpc, A);
+        due.QuadPart = -10000LL * MW_THERMAL_PERIOD_MS;
+        KeSetTimerEx(&A->ThermTimer, due, MW_THERMAL_PERIOD_MS, &A->ThermDpc);
+        A->ThermOn = TRUE;
+    }
+    MwLog(A, L"GpuClkThermalGuard", A->ThermOn ? 1 : 0);
 }
 
 /* The supply the rate needs, by the table GpuClkHigh picks; 0 when no
@@ -327,6 +423,10 @@ static NTSTATUS GpuClkWrite(MW_ADAPTER *A, ULONG Parent, ULONG Div)
             MwLog(A, L"GpuClkRefusedHz", hz);
             return STATUS_INVALID_PARAMETER;
         }
+        if (!A->ThermOn) {
+            MwLog(A, L"GpuClkRefusedNoTemp", hz);
+            return STATUS_INVALID_DEVICE_STATE;
+        }
         if (GpuRequiredUv(A, hz) == 0 || GpuRequiredUv(A, hz) > A->RailUv) {
             MwLog(A, L"GpuClkRefusedHz", hz);
             MwLog(A, L"GpuClkNeedsUv", GpuRequiredUv(A, hz));
@@ -350,13 +450,29 @@ static NTSTATUS GpuClkWrite(MW_ADAPTER *A, ULONG Parent, ULONG Div)
         MwLog(A, L"GpuClkRefusedPvtpll", cur);
         return STATUS_INVALID_DEVICE_STATE;
     }
-    A->GpuClkIsHigh = FALSE;
-    WRITE_REGISTER_ULONG((PULONG)(reg + (MW_CRU_CLKSEL165 & 0xFFFu)),
-                         (0xFFu << 16) | (Parent << 5) | (Div - 1));
-    if (reg != A->CruClkVa)
-        MmUnmapIoSpace(reg, PAGE_SIZE);
-    A->GpuClk = (Parent << 8) | Div;
-    A->GpuClkIsHigh = high;
+    {
+        KIRQL old;
+        BOOLEAN held;
+
+        KeAcquireSpinLock(&A->ClkLock, &old);
+        /* Hot: the clock asked for is kept and comes back below 75 C. */
+        held = high && A->Therm.Held;
+        A->GpuClkWanted = high ? ((Parent << 8) | Div) : 0;
+        if (!held) {
+            A->GpuClkIsHigh = FALSE;
+            WRITE_REGISTER_ULONG((PULONG)(reg + (MW_CRU_CLKSEL165 & 0xFFFu)),
+                                 (0xFFu << 16) | (Parent << 5) | (Div - 1));
+            A->GpuClk = (Parent << 8) | Div;
+            A->GpuClkIsHigh = high;
+        }
+        KeReleaseSpinLock(&A->ClkLock, old);
+        if (reg != A->CruClkVa)
+            MmUnmapIoSpace(reg, PAGE_SIZE);
+        if (held) {
+            MwLog(A, L"GpuClkHeldHot", hz);
+            return STATUS_SUCCESS;
+        }
+    }
     MwLog(A, L"GpuClkHz", hz);
     return STATUS_SUCCESS;
 }
@@ -377,8 +493,32 @@ static BOOLEAN GpuClkSafe(MW_ADAPTER *A)
 
 void MwGpuClkFallback(MW_ADAPTER *A)
 {
+    /* After a fault nothing brings the clock back by itself, heat or not. */
+    A->GpuClkWanted = 0;
     if (GpuClkSafe(A))
         A->GpuClkFallbacks++;
+}
+
+/* At the interrupt's level (DxgkCbSynchronizeExecution), from ThermDpc. */
+static BOOLEAN SyncThermDrop(PVOID Context)
+{
+    return GpuClkSafe((MW_ADAPTER *)Context);
+}
+
+static BOOLEAN SyncThermRestore(PVOID Context)
+{
+    MW_ADAPTER *a = (MW_ADAPTER *)Context;
+    ULONG w = a->GpuClkWanted;
+
+    /* Only the clock that was asked for, only if no fault took it away,
+     * and only over the 594 MHz this fallback wrote. */
+    if (w == 0 || a->GpuClkIsHigh || a->CruClkVa == NULL || a->GpuClk != ((0u << 8) | 2u))
+        return FALSE;
+    WRITE_REGISTER_ULONG((PULONG)(a->CruClkVa + (MW_CRU_CLKSEL165 & 0xFFFu)),
+                         (0xFFu << 16) | ((w >> 8) << 5) | ((w & 0xFF) - 1));
+    a->GpuClk = w;
+    a->GpuClkIsHigh = TRUE;
+    return TRUE;
 }
 
 static NTSTATUS GpuClk(MW_ADAPTER *A, MW_ESCAPE_GPUCLK_DATA *D, ULONG Size)
@@ -394,13 +534,21 @@ static NTSTATUS GpuClk(MW_ADAPTER *A, MW_ESCAPE_GPUCLK_DATA *D, ULONG Size)
     }
     D->Applied = A->GpuClk;
     D->Stored = MwSetting(A, L"GpuClk", 0);
-    if (Size >= sizeof(MW_ESCAPE_GPUCLK_DATA)) {
+    if (Size >= MW_ESCAPE_GPUCLK_V2_SIZE) {
         D->High = A->GpuClkHigh;
         D->RailUv = A->RailUv;
         D->RailSource = A->RailSource | (A->RailNotPlain ? 0x100u : 0);
         D->AllowedHz = GpuAllowedHz(A);
         D->NeedUv702 = A->GpuClkHigh != 0 ? GpuRequiredUv(A, 702000000u) : 0;
         D->Fallbacks = A->GpuClkFallbacks;
+    }
+    if (Size >= sizeof(MW_ESCAPE_GPUCLK_DATA)) {
+        D->ThermalGuard = A->ThermOn ? 1 : 0;
+        D->ThermalHeld = A->Therm.Held ? 1 : 0;
+        D->ThermalMilliC = (mw_s32)A->Therm.LastMilliC;
+        D->ThermalDrops = A->GpuClkThermalDrops;
+        D->ThermalRestores = A->GpuClkThermalRestores;
+        D->Wanted = A->GpuClkWanted;
     }
     return st;
 }
@@ -523,6 +671,17 @@ static void StopGpu(MW_ADAPTER *A)
         A->Gpu.Regs = NULL;
     }
     A->GpuUp = FALSE;
+    if (A->ThermOn) {
+        A->ThermOn = FALSE;
+        KeMemoryBarrier();
+        KeCancelTimer(&A->ThermTimer);
+        KeFlushQueuedDpcs();
+    }
+    if (A->TsadcVa != NULL) {
+        MmUnmapIoSpace(A->TsadcVa, PAGE_SIZE);
+        A->TsadcVa = NULL;
+    }
+    A->GpuClkWanted = 0;
     /* A clock above 600 MHz is allowed by this start's checks only: the
      * next start (another package, the setting removed) may not allow it. */
     (void)GpuClkSafe(A);
@@ -1019,51 +1178,38 @@ static void GpuClkRead(mw_u32 *Raw, mw_u32 *Hz)
 }
 
 /* The TSADC's data registers, TSADC_DATA0..5 (TRM 19.4.2; the block the
- * firmware's ACPI thermal zones read, Thermal.asl in edk2-rk3576). Only
- * with the setting PerfTemp 1: a firmware from before the thermal-safety
- * work leaves the TSADC unclocked, and a read of an unclocked block on
- * this SoC can be an SError. */
-#define MW_TSADC_PA         0x2AE70000u
-#define MW_TSADC_DATA(n)    (0x02Cu + (n) * 4u)
-
-/* mainline's rk3588_code_table, which rk3576 uses, linear between rows;
- * no OTP trim. FALSE when the code is not a temperature. */
-static BOOLEAN TsadcToMilliC(ULONG Code, LONG *MilliC)
-{
-    if (Code > 0x1FF || Code < 215)
-        return FALSE;
-    if (Code <= 285)
-        *MilliC = -40000 + (LONG)(65000 * (Code - 215) / 70);
-    else if (Code <= 350)
-        *MilliC = 25000 + (LONG)(60000 * (Code - 285) / 65);
-    else if (Code <= 395)
-        *MilliC = 85000 + (LONG)(40000 * (Code - 350) / 45);
-    else
-        *MilliC = 125000;
-    return TRUE;
-}
-
+ * firmware's ACPI thermal zones read, Thermal.asl in edk2-rk3576), through
+ * the mapping GpuRailInit made once the CRU said the TSADC runs, or with
+ * the setting PerfTemp 1 as before (a firmware from before the
+ * thermal-safety work leaves the TSADC unclocked, and a read of an
+ * unclocked block on this SoC can be an SError). */
 static void TempRead(MW_ADAPTER *A, MW_ESCAPE_PERF_DATA *D)
 {
     PHYSICAL_ADDRESS pa;
     PUCHAR reg;
 
     D->TempValid = 0;
-    if (MwSetting(A, L"PerfTemp", 0) != 1)
-        return;
-    pa.QuadPart = MW_TSADC_PA;
-    reg = (PUCHAR)MmMapIoSpaceEx(pa, PAGE_SIZE, PAGE_READWRITE | PAGE_NOCACHE);
-    if (reg == NULL)
-        return;
+    D->GpuClkThermalDrops = A->GpuClkThermalDrops;
+    if (A->TsadcVa != NULL) {
+        reg = A->TsadcVa;
+    } else {
+        if (MwSetting(A, L"PerfTemp", 0) != 1)
+            return;
+        pa.QuadPart = MW_TSADC_PA;
+        reg = (PUCHAR)MmMapIoSpaceEx(pa, PAGE_SIZE, PAGE_READWRITE | PAGE_NOCACHE);
+        if (reg == NULL)
+            return;
+    }
     for (ULONG n = 0; n < 6; n++) {
-        LONG t = 0;
+        long t = 0;
         D->TsadcCode[n] = READ_REGISTER_ULONG((PULONG)(reg + MW_TSADC_DATA(n)));
-        if (TsadcToMilliC(D->TsadcCode[n], &t)) {
-            D->TempMilliC[n] = t;
+        if (MwTsadcToMilliC(D->TsadcCode[n], &t)) {
+            D->TempMilliC[n] = (mw_s32)t;
             D->TempValid |= 1u << n;
         }
     }
-    MmUnmapIoSpace(reg, PAGE_SIZE);
+    if (reg != A->TsadcVa)
+        MmUnmapIoSpace(reg, PAGE_SIZE);
 }
 
 static NTSTATUS EscapePerf(MW_ADAPTER *A, MW_ESCAPE_PERF_DATA *D)
