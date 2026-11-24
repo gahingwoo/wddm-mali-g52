@@ -550,8 +550,21 @@ vp_run_tests(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11VideoDevice *vde
                              D3D11_USAGE_DEFAULT, 0);
       RECT dst = { 0, 0, 77, 58 };
       if (src_px && bgra_in) {
+         HRESULT hr;
          ctx->UpdateSubresource(bgra_in, 0, NULL, src_px, W * 4, 0);
-         if (SUCCEEDED(blit(&v, e, vp, bgra_in, shrunk, NULL, NULL, NULL, NULL, false))) {
+         hr = blit(&v, e, vp, bgra_in, shrunk, NULL, NULL, NULL, NULL, false);
+         if (FAILED(hr)) {
+            /* Which binding the runtime wants for an RGB input: say so, and
+             * go on with a render target one. */
+            printf("  BGRA input with BIND_SHADER_RESOURCE only: 0x%08lx; again with RENDER_TARGET too\n",
+                   (unsigned long)hr);
+            bgra_in->Release();
+            bgra_in = make_texture(&v, DXGI_FORMAT_B8G8R8A8_UNORM, W, H,
+                                   D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET, D3D11_USAGE_DEFAULT, 0);
+            if (bgra_in)
+               ctx->UpdateSubresource(bgra_in, 0, NULL, src_px, W * 4, 0);
+         }
+         if (bgra_in && SUCCEEDED(blit(&v, e, vp, bgra_in, shrunk, NULL, NULL, NULL, NULL, false))) {
             uint8_t *px = read_back(&v, shrunk, 77, 58, DXGI_FORMAT_B8G8R8A8_UNORM);
             if (px)
                check_blit(&v, "BGRA -> BGRA, 0.6x", px, 77, 58, full, dst, dst, black, black, 3, true, src_px,

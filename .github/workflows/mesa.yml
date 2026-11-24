@@ -418,6 +418,9 @@ jobs:
           Copy-Item out\present.exe vt\ffplay.exe
           $env:GALLIUM_DRIVER = 'softpipe'
           $env:D3D10UMD_UMDDDI = '101'
+          # The UMD's own log, for the video lines (removed at the end, so
+          # the later steps start without one).
+          New-Item -ItemType Directory -Force C:\mali\log | Out-Null
           function Run-Exe($tag, $exe, $argl) {
             $p = Start-Process -FilePath (Resolve-Path vt\$exe).Path -ArgumentList $argl -NoNewWindow -PassThru `
                    -RedirectStandardOutput "vdec-$tag.txt" -RedirectStandardError "vdec-$tag.err"
@@ -444,6 +447,13 @@ jobs:
           $env:D3D10UMD_UMDVIDEO = '2'
           $nodev = Run-Exe 'nodevice' 'vdectest.exe' "`"$dll`" --probe"
           Remove-Item Env:D3D10UMD_UMDVIDEO, Env:D3D10UMD_UMDDDI, Env:GALLIUM_DRIVER
+
+          Get-ChildItem C:\mali\log -Filter 'vdectest*' | ForEach-Object {
+            Write-Host "===== UMD log $($_.Name): video"
+            Copy-Item $_.FullName "vdec-umdlog-$($_.Name)"
+            Get-Content $_.FullName | Select-String 'video:|refused|NV12' | Select-Object -First 80 | ForEach-Object { $_.Line }
+          }
+          Remove-Item -Recurse -Force C:\mali\log
 
           $t = @{}
           foreach ($k in 'off', 'noprofiles', 'vp', 'otherprocess', 'decode', 'nodevice') { $t[$k] = (Get-Content "vdec-$k.txt" -ErrorAction SilentlyContinue) -join "`n" }
