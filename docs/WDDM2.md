@@ -2238,7 +2238,73 @@ n=1 each, so not yet a result. In both modes dwm does thousands of GPU
 copies of about 1 ms each (`gpucopy` in the UMD log): a cost of the
 current UMD, not of 2.0.
 
-**Next.** `wddm2x` is merged with `main` (1.3 stays what `main` does; 2.x
-stays behind `WddmProbe`). Before 2.0 can be a default: repeat the drag
-with n of at least 3 per mode, run the watchdog confirm over a longer
-session, and check suspend, HDMI hot-plug and TDR at 2.0.
+**Next.** `wddm2x` is merged with `main`, and 2.0 became the default the
+same day (16.13), with the fallback to 1.3 as its safety net. Still open
+at 2.0: the drag with n of at least 3 per mode, a longer session, and
+suspend, HDMI hot-plug and TDR.
+
+### 16.13 WDDM 2.0 is the default (2026-11-24), and how to go back to 1.3
+
+From the first package built after the merge of `wddm2x` with `main`
+(2026-11-24), the driver
+reports WDDM 2.0 when `Services\maliwddm\Parameters` has no `WddmProbe`
+value. The configuration is run G's: interface 0x5023, physical mode, a
+copy node for paging, the segment in the local budget group (0x88005),
+CalibrateGpuClock and SetStablePowerState, rotation Offset0,
+AcquireHandleData, and the UMD's MakeResident. Every `Wddm2*` knob keeps
+its default and its meaning. Sections 16.1 to 16.12 describe the time
+when 1.3 was the default; where they say "no probe", read `WddmProbe`
+0x1300 now.
+
+**The safety net is the probe's, applied to the default.**
+
+- Every 2.0 boot arms itself first (`WddmProbeArmed` = 0x2000, flushed
+  and read back), and the watchdog clears it at the confirm: 300 renders,
+  120 s up, nothing stuck.
+- A boot that never confirms (hang, bugcheck, black screen and a power
+  cut) leaves the arming set. The next boot runs 1.3 and writes
+  `WddmProbeFellBack` 0x2000 and `WddmProbeFellBackBuild` = its build.
+- **The fallback sticks.** With no `WddmProbe`, a default that fell back
+  with this build stays at 1.3 (`WddmProbeResult` 6, nothing armed), so a
+  default that hangs does not alternate with 1.3 boot after boot. A new
+  package (another build number) tries 2.0 once more.
+- An explicit `WddmProbe` falls back as before: the value is deleted, and
+  the stickiness then keeps the default from retrying the same version.
+- The decisions are `Mw2BootDecide` in `wddm2plan.h`. `tests/wddm2-host`
+  runs every pattern of hung and good boots over eight boots, with the
+  default and with a probe: never two hung 2.x boots in a row, and never
+  2.0 again after a fallback with the same build.
+
+**Going back to 1.3, from an administrator prompt, then reboot:**
+
+```
+reg add HKLM\SYSTEM\CurrentControlSet\Services\maliwddm\Parameters /v WddmProbe /t REG_DWORD /d 0x1300 /f
+```
+
+`wddm-probe off` and `wddm-probe set 1300` write the same. At 0x1300 the
+driver is the 1.3 driver of `main` before this change: the 1.3 plan (one
+node, segment flags 0x5, the 1.3 DDI table), no arming, no journal, no
+watchdog unless `ProbeWatchdog` 1. The host test checks that the plan is
+byte for byte the same whatever the 2.x knobs say. `wddm-probe default`
+deletes `WddmProbe` and the fallback values and goes back to 2.0.
+
+**The journal on a daily driver.** It lives in the SYSTEM hive, so it is
+bounded:
+
+- eight boots kept (`Probe\Boot0` to `Boot7`), as before;
+- at most 400 events per default boot, and none after the confirm;
+- a probe the user asked for (`wddm-probe set 2000 ...`) keeps 1500;
+- `ProbeJournalMax` can lower either, never raise it past 1500.
+
+The watchdog's `Probe2000` key holds fixed value names and does not grow.
+`wddm-probe check` works as before.
+
+**What to check on the first board boot with no values set:**
+
+1. `wddm-probe default`, reboot. The desktop, dxdiag Driver Model WDDM
+   2.0, `Device Parameters\maliwddm\WddmVersion` 0x2000,
+   `WddmProbeResult` 1.
+2. After two minutes: `Parameters\WddmProbeConfirmed` 0x2000 and
+   `WddmProbeArmed` 0. The journal's last line says "the journal ends
+   here (the default)".
+3. `wddm-probe off`, reboot: WDDM 1.3 and the desktop as on `main`.

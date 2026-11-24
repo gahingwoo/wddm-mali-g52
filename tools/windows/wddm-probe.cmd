@@ -1,8 +1,21 @@
 @echo off
-rem wddm-probe: the WDDM version probe (docs/WDDM2.md, phase P1).
+rem wddm-probe: the WDDM version the driver reports (docs/WDDM2.md).
 rem
-rem   wddm-probe set 2000     report WDDM 2.0 from the next boot (2100 = 2.1,
-rem                           ... 2900, 3000, 3100 = 3.1). Also arms a boot-time
+rem WDDM 2.0 is the DEFAULT since 2026-11-24 (WDDM2.md 16.13): with no
+rem WddmProbe value the driver reports 2.0, arms itself, and falls back to
+rem 1.3 by itself if a 2.0 boot never reaches a confirmed desktop. That
+rem fallback sticks until another driver package is installed or
+rem "wddm-probe default" is run.
+rem
+rem   wddm-probe off          force WDDM 1.3 from the next boot (WddmProbe
+rem                           0x1300, the same as "set 1300"); removes the
+rem                           boot-time capture
+rem   wddm-probe default      back to the default (2.0): deletes WddmProbe
+rem                           and a sticky fallback (WddmProbeFellBack*)
+rem   wddm-probe set 1300     force WDDM 1.3, exactly as before 2.0 was the default
+rem   wddm-probe set 2000     report WDDM 2.0 from the next boot as a probe
+rem                           (2100 = 2.1, ... 2900, 3000, 3100 = 3.1), with
+rem                           the probe's full journal. Also arms a boot-time
 rem                           DxgKrnl ETW capture to C:\mali\probe\boot.etl.
 rem   wddm-probe set 2000 gpummu  the same in Wddm2Shape 1: GpuMmu caps and DDIs
 rem                           (default, "phys": Wddm2Shape 0, physical mode with
@@ -29,18 +42,18 @@ rem   wddm-probe set 2000 norotoffset  paths without Offset0 (Wddm2RotOffset
 rem                           0): dxgkrnl bugchecks 0x113/0x1C, as build 325
 rem   wddm-probe keep 2000    the same, without the one-shot fallback (only
 rem                           for a version already seen to start)
-rem   wddm-probe watch        on 1.3: run the driver's watchdog anyway (a
-rem                           baseline for the Probe1300 key); "off" ends it
+rem   wddm-probe watch        on a forced 1.3: run the driver's watchdog anyway
+rem                           (a baseline for the Probe1300 key); "off" ends it
+rem                           (the default 2.0 runs it anyway)
 rem   wddm-probe check        after the reboot: stops the capture and writes
 rem                           C:\mali\probe\probe-<time>.txt with everything
 rem                           the probe is judged by
-rem   wddm-probe off          back to WDDM 1.3 from the next boot; removes the
-rem                           boot-time capture
 rem
 rem The driver reads the setting in DriverEntry, so each change needs a FULL
 rem REBOOT. pnputil /restart-device keeps the loaded driver image and is not
 rem a test of anything here. A version dxgkrnl refuses falls back to 1.3 by itself on the boot
-rem after the failed one (version.c); "check" then shows WddmProbeFellBack.
+rem after the failed one (version.c); "check" then shows WddmProbeFellBack
+rem (and WddmProbeFellBackBuild, the package build it fell back with).
 rem If the screen stays black, RDP still answers, or power off, boot again,
 rem and the fallback takes it back to 1.3.
 rem
@@ -74,13 +87,14 @@ if /i "%~1"=="keep" goto set
 if /i "%~1"=="check" goto check
 if /i "%~1"=="watch" goto watch
 if /i "%~1"=="off" goto off
-echo usage: wddm-probe set ^<2000^|2100^|...^|3100^> [phys^|gpummu] [uart] [nobudget] [nonlocalbudget] [nopowerddi] [norotoffset] [gethandledata] ^| keep ^<v^> [...] ^| watch ^| check ^| off
+if /i "%~1"=="default" goto default
+echo usage: wddm-probe set ^<1300^|2000^|2100^|...^|3100^> [phys^|gpummu] [uart] [nobudget] [nonlocalbudget] [nopowerddi] [norotoffset] [gethandledata] ^| keep ^<v^> [...] ^| watch ^| check ^| off ^| default
 exit /b 1
 
 :set
 if "%~2"=="" (echo which version? e.g. wddm-probe set 2000 & exit /b 1)
 reg add %PARAMS% /v WddmProbe /t REG_DWORD /d 0x%~2 /f >nul || exit /b 1
-for %%v in (WddmProbeArmed WddmProbeConfirmed WddmProbeFellBack WddmProbeFellBackBoot WddmProbeArmFailed WddmProbeUnknown WddmProbeKeep ProbeUart ProbeWatchdog Wddm2Shape Wddm2Budget Wddm2LocalBudget Wddm2PowerDdis Wddm2RotOffset Wddm2AcquireHandle) do reg delete %PARAMS% /v %%v /f >nul 2>&1
+for %%v in (WddmProbeArmed WddmProbeConfirmed WddmProbeFellBack WddmProbeFellBackBoot WddmProbeFellBackBuild WddmProbeArmFailed WddmProbeUnknown WddmProbeKeep ProbeUart ProbeWatchdog Wddm2Shape Wddm2Budget Wddm2LocalBudget Wddm2PowerDdis Wddm2RotOffset Wddm2AcquireHandle) do reg delete %PARAMS% /v %%v /f >nul 2>&1
 if /i "%~1"=="keep" reg add %PARAMS% /v WddmProbeKeep /t REG_DWORD /d 1 /f >nul
 set SHAPE=0
 for %%a in (%3 %4 %5 %6 %7 %8) do (
@@ -135,7 +149,7 @@ for %%f in ("%DIR%\boot.etl*") do move /y "%%f" "%DIR%\old-%%~nxf" >nul 2>&1
 exit /b 0
 
 :off
-reg delete %PARAMS% /v WddmProbe /f >nul 2>&1
+reg add %PARAMS% /v WddmProbe /t REG_DWORD /d 0x1300 /f >nul || exit /b 1
 reg add %PARAMS% /v WddmProbeArmed /t REG_DWORD /d 0 /f >nul
 reg delete %PARAMS% /v WddmProbeKeep /f >nul 2>&1
 reg delete %PARAMS% /v ProbeWatchdog /f >nul 2>&1
@@ -147,7 +161,13 @@ reg delete %PARAMS% /v Wddm2PowerDdis /f >nul 2>&1
 reg delete %PARAMS% /v Wddm2RotOffset /f >nul 2>&1
 reg delete %PARAMS% /v Wddm2AcquireHandle /f >nul 2>&1
 reg delete %AUTO% /f >nul 2>&1
-echo WDDM 1.3 from the next boot. REBOOT to apply.
+echo WDDM 1.3 from the next boot (WddmProbe 0x1300). REBOOT to apply. "wddm-probe default" goes back to 2.0.
+exit /b 0
+
+:default
+for %%v in (WddmProbe WddmProbeArmed WddmProbeConfirmed WddmProbeFellBack WddmProbeFellBackBoot WddmProbeFellBackBuild WddmProbeArmFailed WddmProbeUnknown WddmProbeKeep ProbeUart ProbeWatchdog Wddm2Shape Wddm2Budget Wddm2LocalBudget Wddm2PowerDdis Wddm2RotOffset Wddm2AcquireHandle) do reg delete %PARAMS% /v %%v /f >nul 2>&1
+reg delete %AUTO% /f >nul 2>&1
+echo The default from the next boot: WDDM 2.0, with the fallback to 1.3. REBOOT to apply.
 exit /b 0
 
 :check
@@ -173,6 +193,8 @@ reg query %PARAMS% >> "%OUT%" 2>&1
 echo   WddmProbeConfirmed = this version reached 300 Render calls, 120 s up, nothing stuck >> "%OUT%"
 echo   WddmProbeArmFailed = the arming did not read back; the probe was not used >> "%OUT%"
 echo   WddmProbeFellBack  = this version was refused or hung; now on 1.3 >> "%OUT%"
+echo   WddmProbeFellBackBuild = the build it fell back with; with no WddmProbe, 1.3 stays until another build >> "%OUT%"
+echo   WddmProbe absent = the default, 2.0; 0x1300 = forced 1.3 >> "%OUT%"
 
 echo == 2. what the adapter reported at StartDevice, this boot (Device Parameters\maliwddm) >> "%OUT%"
 reg query %DEVKEY% | findstr /i "Build WddmVersion DdiInterface WddmProbe Started GpuUp LastFailedDdi Fail_ QAI_ Seen_CreateDevice Seen_Render AdapterLuid" >> "%OUT%" 2>&1

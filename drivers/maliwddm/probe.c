@@ -42,8 +42,10 @@
  * runs, so the last E value on disk names the DDI a hang is in. Only at
  * PASSIVE_LEVEL (the registry), only the first MW_BC_PER_DDI calls of each
  * DDI (Render would flood it) plus every failure, and at most
- * ProbeJournalMax (default 1500) events per boot. The 1.3 fallback boot
- * never writes there, and eight boots are kept.
+ * Mw2JournalMax events per boot (wddm2plan.h: ProbeJournalMax, default 1500
+ * for a WddmProbe and 400 for the default 2.x boot, which also stops at
+ * its confirm; never more than 1500). The 1.3 fallback boot never writes
+ * there, and eight boots are kept, so the journal is bounded.
  */
 #include "maliwddm.h"
 #include "wddm2.h"
@@ -57,7 +59,7 @@
 
 /* ---- the boot journal ---- */
 
-#define MW_BC_SLOTS         8
+#define MW_BC_SLOTS         MW2_JOURNAL_BOOTS
 #define MW_BC_PER_DDI       64
 
 static HANDLE BcKey;
@@ -158,6 +160,13 @@ void MwBcInit(PUNICODE_STRING RegistryPath, ULONG BootNumber, ULONG Max)
         BcKey = boot;
     }
     ZwClose(probe);
+}
+
+/* No more events this boot (the default 2.x boot, once confirmed). The key
+ * stays open: another thread may be writing to it right now. */
+void MwBcEnd(void)
+{
+    BcMax = 0;
 }
 
 void MwBcClose(void)

@@ -4,7 +4,8 @@ wddm-mali-g52: installing the driver package (ARM64)
 What is in this folder
 
   driver\maliwddm.inf        the INF
-  driver\maliwddm.sys        the kernel driver (WDDM 1.3)
+  driver\maliwddm.sys        the kernel driver (WDDM 2.0 by default, 1.3 on
+                             request; see "WDDM version" below)
   driver\maliumd_arm64.dll   the user-mode driver (Mesa d3d10umd with
                              Panfrost) for ARM64 processes; to System32
   driver\maliumd_x64.dll     the same for x64 processes; to System32
@@ -81,6 +82,27 @@ Check
   - Which maliumd.dll a process has loaded, from PowerShell:
 
        (Get-Process dwm).Modules | Where-Object ModuleName -eq maliumd.dll | Select-Object FileName
+
+WDDM version: 2.0 by default, 1.3 on request
+
+  Since 2026-11-24 the driver reports WDDM 2.0 (dxdiag: Driver Model
+  WDDM 2.0). Every 2.0 boot arms a fallback first: if the boot does not
+  reach a confirmed desktop (300 renders, 120 s up, no driver call stuck),
+  the next boot runs WDDM 1.3 by itself, and stays at 1.3 until a
+  different driver package is installed. A hang or a black screen at 2.0
+  therefore costs one boot: power off, boot again.
+
+  To go back to WDDM 1.3 for good, as every package before this one,
+  from an administrator prompt, then reboot:
+
+       reg add HKLM\SYSTEM\CurrentControlSet\Services\maliwddm\Parameters /v WddmProbe /t REG_DWORD /d 0x1300 /f
+
+  (tools\windows\wddm-probe.cmd off does the same.) Back to the default:
+  delete the value, or wddm-probe default, which also clears a fallback
+  (WddmProbeFellBack, WddmProbeFellBackBuild). Which version ran: Device
+  Parameters\maliwddm\WddmVersion (0x2000 or 0x1300), or dxdiag. The 2.0
+  boots keep a small journal under Services\maliwddm\Probe (eight boots
+  of at most 400 entries each; it stops once the boot is confirmed).
 
 Display orientation
 

@@ -24,40 +24,68 @@
 #define MW2_WDDM_1_3        0x1300u
 #define MW2_WDDM_2_0        0x2000u
 
-#define MW2_RESULT_NONE         0   /* no WddmProbe: WDDM 1.3 */
-#define MW2_RESULT_ACTIVE       1   /* WddmProbe in effect */
+/* The version without a WddmProbe value, from 2026-11-24 (WDDM2.md 16.13):
+ * 2.0, the run G configuration. WddmProbe 0x1300 forces 1.3. */
+#define MW2_WDDM_DEFAULT    MW2_WDDM_2_0
+
+#define MW2_RESULT_NONE         0   /* 1.3 is the version wanted (WddmProbe 0x1300, or a 1.3 default) */
+#define MW2_RESULT_ACTIVE       1   /* a 2.x version in effect, WddmProbe's or the default */
 #define MW2_RESULT_FELL_BACK    2   /* the last boot with it never confirmed: 1.3 */
 #define MW2_RESULT_UNKNOWN      3   /* a value that is no WDDM version: 1.3 */
 #define MW2_RESULT_NO_KEY       4   /* no service key path: 1.3 */
 #define MW2_RESULT_ARM_FAILED   5   /* the arming could not be written and read back: 1.3 */
+#define MW2_RESULT_STAYED_BACK  6   /* the default fell back earlier with this build: 1.3 until
+                                     * the package changes or wddm-probe resets it */
 
 typedef struct {
-    unsigned Want;          /* Parameters\WddmProbe (0 = none) */
-    unsigned Known;         /* Want names a version this driver knows */
+    unsigned Want;          /* Parameters\WddmProbe (0 = none: the default) */
+    unsigned Default;       /* MW2_WDDM_DEFAULT */
+    unsigned Known;         /* Mw2Wanted(Want, Default) names a version this driver knows */
     unsigned Armed;         /* Parameters\WddmProbeArmed */
     unsigned Keep;          /* Parameters\WddmProbeKeep */
+    unsigned FellBack;      /* Parameters\WddmProbeFellBack */
+    unsigned FellBackBuild; /* Parameters\WddmProbeFellBackBuild */
+    unsigned Build;         /* MW_BUILD of this driver */
 } MW2_BOOT_IN;
 
 typedef struct {
     unsigned Result;        /* MW2_RESULT_* before arming */
-    unsigned FallBack;      /* delete WddmProbe, WddmProbeArmed = 0, WddmProbeFellBack = Want */
-    unsigned Arm;           /* write WddmProbeArmed = Want, flush, read it back */
+    unsigned Wanted;        /* the version wanted: WddmProbe, or the default */
+    unsigned FallBack;      /* WddmProbeArmed = 0, WddmProbeFellBack = Wanted, WddmProbeFellBackBuild =
+                             * Build; and delete WddmProbe if it was set */
+    unsigned Arm;           /* write WddmProbeArmed = Wanted, flush, read it back */
 } MW2_BOOT_OUT;
 
-/* The first half: what the registry says. A probe is armed before it is
- * used, every boot, so any boot that never confirms costs one boot. */
+static __inline unsigned Mw2Wanted(unsigned Want, unsigned Default)
+{
+    return Want != 0 ? Want : Default;
+}
+
+/* The first half: what the registry says. A 2.x version is armed before it
+ * is used, every boot, so any boot that never confirms costs one boot. The
+ * fallback is sticky: with no WddmProbe, a default that fell back with this
+ * very build stays at 1.3, so a default that hangs does not alternate with
+ * 1.3 boot after boot. A new package (another MW_BUILD) tries it once
+ * more; `wddm-probe set` and `wddm-probe default` clear WddmProbeFellBack. */
 static __inline void Mw2BootDecide(const MW2_BOOT_IN *In, MW2_BOOT_OUT *Out)
 {
+    unsigned want = Mw2Wanted(In->Want, In->Default);
+
     Out->Result = MW2_RESULT_NONE;
+    Out->Wanted = want;
     Out->FallBack = 0;
     Out->Arm = 0;
-    if (In->Want == 0 || In->Want == MW2_WDDM_1_3)
+    if (want == 0 || want == MW2_WDDM_1_3)
         return;
     if (!In->Known) {
         Out->Result = MW2_RESULT_UNKNOWN;
         return;
     }
-    if (In->Armed == In->Want && !In->Keep) {
+    if (In->Want == 0 && In->FellBack == want && In->FellBackBuild == In->Build && !In->Keep) {
+        Out->Result = MW2_RESULT_STAYED_BACK;
+        return;
+    }
+    if (In->Armed == want && !In->Keep) {
         Out->Result = MW2_RESULT_FELL_BACK;
         Out->FallBack = 1;
         return;
@@ -66,7 +94,7 @@ static __inline void Mw2BootDecide(const MW2_BOOT_IN *In, MW2_BOOT_OUT *Out)
     Out->Arm = !In->Keep;
 }
 
-/* The second half: with Arm set, the probe goes ahead only if the arming
+/* The second half: with Arm set, the version goes ahead only if the arming
  * reached the registry (read back equal). An unarmed 2.x boot that hangs
  * would hang again on every boot after it. */
 static __inline unsigned Mw2BootArmed(unsigned Result, unsigned Arm, unsigned ReadBack, unsigned Want)
@@ -74,6 +102,20 @@ static __inline unsigned Mw2BootArmed(unsigned Result, unsigned Arm, unsigned Re
     if (Result == MW2_RESULT_ACTIVE && Arm && ReadBack != Want)
         return MW2_RESULT_ARM_FAILED;
     return Result;
+}
+
+/* The boot journal's size (probe.c): events per boot. A probe the user
+ * asked for keeps ProbeJournalMax (default 1500); the default 2.x boot of
+ * a daily driver keeps 400, and stops once the boot is confirmed. With
+ * eight boots kept, the registry holds at most 8 x 1500 events. */
+#define MW2_JOURNAL_PROBE       1500u
+#define MW2_JOURNAL_DEFAULT     400u
+#define MW2_JOURNAL_BOOTS       8u
+
+static __inline unsigned Mw2JournalMax(unsigned Want, unsigned Configured)
+{
+    unsigned max = Configured != 0xFFFFFFFFu ? Configured : (Want != 0 ? MW2_JOURNAL_PROBE : MW2_JOURNAL_DEFAULT);
+    return max > MW2_JOURNAL_PROBE ? MW2_JOURNAL_PROBE : max;
 }
 
 /* When a 2.x boot counts as good (the watchdog, probe.c, at PASSIVE_LEVEL):

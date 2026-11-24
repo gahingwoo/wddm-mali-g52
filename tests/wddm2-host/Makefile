@@ -29,6 +29,12 @@ lint:
 	@grep -q 'Mw2BudgetMode(MwWddm2Budget, MwWddm2LocalBudget)' $(SRC)/version.c || { echo "FAIL: the budget group is not Mw2BudgetMode's"; exit 1; }
 	@grep -q 'd->Flags.LocalBudgetGroup = p->SegLocalBudget;' $(SRC)/memory.c || { echo "FAIL: QUERYSEGMENT4 local budget group not from MwPlan"; exit 1; }
 	@! sed -n '/^NTSTATUS MwQuerySegment(/,/^}/p' $(SRC)/memory.c | grep -n 'BudgetGroup\|ApplicationTarget' || { echo "FAIL: the 1.3 segment (QUERYSEGMENT3) gained a budget flag"; exit 1; }
+	@grep -q 'in.Default = MW2_WDDM_DEFAULT;' $(SRC)/version.c || { echo "FAIL: version.c does not use the default version"; exit 1; }
+	@grep -q 'level = FindLevel(Mw2Wanted(in.Want, in.Default));' $(SRC)/version.c || { echo "FAIL: the level is not the wanted version's"; exit 1; }
+	@grep -q 'ParamWrite(L"WddmProbeFellBackBuild", (ULONG)MW_BUILD);' $(SRC)/version.c || { echo "FAIL: a fallback does not record its build (no sticky fallback)"; exit 1; }
+	@grep -q 'in.FellBackBuild = ParamRead(L"WddmProbeFellBackBuild"' $(SRC)/version.c || { echo "FAIL: the sticky fallback is not read"; exit 1; }
+	@grep -q 'Mw2JournalMax(in.Want' $(SRC)/version.c || { echo "FAIL: the journal is not capped by Mw2JournalMax"; exit 1; }
+	@grep -q 'define MW_BC_SLOTS         MW2_JOURNAL_BOOTS' $(SRC)/probe.c || { echo "FAIL: journal boots not MW2_JOURNAL_BOOTS"; exit 1; }
 	@echo "lint: ok"
 
 run: wddm2-host lint

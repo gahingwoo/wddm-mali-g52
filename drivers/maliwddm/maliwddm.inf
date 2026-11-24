@@ -1,5 +1,5 @@
 ;
-; maliwddm.inf - milestone M5.2: the full WDDM 1.3 driver for the RK3576's
+; maliwddm.inf - milestone M5.2: the full WDDM driver (2.0 by default, 1.3 on request) for the RK3576's
 ; Mali-G52 and its display (docs/M5.2-PLAN.md). Binds ACPI\RKCP7402 (GPU0 in
 ; the edk2-rk3576 CM5-IO DSDT), the device m1probe and malikm bind:
 ; only one of them can be installed at a time.

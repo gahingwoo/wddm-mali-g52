@@ -148,27 +148,38 @@ static void check_per_node(void)
 /* ---- the one-shot fallback over boots ---- */
 
 typedef struct {
-    unsigned Want, Armed, Keep, FellBack, Confirmed;
+    unsigned Want, Armed, Keep, FellBack, FellBackBuild, Confirmed;
     unsigned RegistryBroken;    /* writes do not stick */
+    unsigned Build;             /* MW_BUILD of the installed package */
+    unsigned Default;           /* MW2_WDDM_DEFAULT, or 1.3 for the old behaviour */
 } REG;
 
-/* One boot as DriverEntry and the watchdog see it. Returns the version
- * that boot ran. Hangs = the 2.x boot never confirms. */
+static unsigned known(unsigned v)
+{
+    return v == MW2_WDDM_2_0 || v == 0x2100u;
+}
+
+/* One boot as DriverEntry (version.c) and the watchdog see it. Returns the
+ * version that boot ran. Hangs = the 2.x boot never confirms. */
 static unsigned boot(REG *r, int hangs)
 {
-    MW2_BOOT_IN in = { r->Want, r->Want == MW2_WDDM_2_0 || r->Want == 0x2100u, r->Armed, r->Keep };
+    MW2_BOOT_IN in = { r->Want, r->Default, known(Mw2Wanted(r->Want, r->Default)), r->Armed, r->Keep,
+                       r->FellBack, r->FellBackBuild, r->Build };
     MW2_BOOT_OUT out;
     unsigned result;
 
     Mw2BootDecide(&in, &out);
+    CHECK(out.Wanted == Mw2Wanted(r->Want, r->Default), "Wanted is WddmProbe or the default");
     if (out.FallBack && !r->RegistryBroken) {
-        r->FellBack = r->Want;
-        r->Want = 0;
+        r->FellBack = out.Wanted;
+        r->FellBackBuild = r->Build;
+        if (r->Want != 0)
+            r->Want = 0;
         r->Armed = 0;
     }
     if (out.Arm && !r->RegistryBroken)
-        r->Armed = in.Want;
-    result = Mw2BootArmed(out.Result, out.Arm, r->Armed, in.Want);
+        r->Armed = out.Wanted;
+    result = Mw2BootArmed(out.Result, out.Arm, r->Armed, out.Wanted);
     if (result != MW2_RESULT_ACTIVE)
         return MW2_WDDM_1_3;
     if (!hangs) {
@@ -177,10 +188,29 @@ static unsigned boot(REG *r, int hangs)
         CHECK(!Mw2Confirm(5000, 600, 1), "no confirm while a DDI is stuck");
         if (Mw2Confirm(5000, 600, 0) && !r->RegistryBroken) {
             r->Armed = 0;
-            r->Confirmed = in.Want;
+            r->Confirmed = out.Wanted;
         }
     }
-    return in.Want;
+    return out.Wanted;
+}
+
+static void reg_init(REG *r, unsigned want)
+{
+    memset(r, 0, sizeof(*r));
+    r->Want = want;
+    r->Default = MW2_WDDM_DEFAULT;
+    r->Build = 350;
+    r->FellBackBuild = 0xFFFFFFFFu;     /* version.c's default when the value is absent */
+}
+
+/* `wddm-probe set` and `wddm-probe default` delete these. */
+static void reg_reset(REG *r)
+{
+    r->Armed = 0;
+    r->FellBack = 0;
+    r->FellBackBuild = 0xFFFFFFFFu;
+    r->Confirmed = 0;
+    r->Keep = 0;
 }
 
 static void check_fallback(void)
@@ -188,56 +218,132 @@ static void check_fallback(void)
     REG r;
     unsigned v;
 
-    /* Set, hang, fall back, stay at 1.3. */
-    memset(&r, 0, sizeof(r));
-    r.Want = MW2_WDDM_2_0;
+    CHECK(MW2_WDDM_DEFAULT == MW2_WDDM_2_0, "the default is WDDM 2.0");
+
+    /* An explicit probe: set, hang, fall back, stay at 1.3. */
+    reg_init(&r, MW2_WDDM_2_0);
     CHECK(boot(&r, 1) == MW2_WDDM_2_0, "first boot runs 2.0");
     CHECK(boot(&r, 0) == MW2_WDDM_1_3, "the boot after a hang is 1.3");
     CHECK(r.FellBack == MW2_WDDM_2_0 && r.Want == 0, "WddmProbeFellBack written, WddmProbe deleted");
     for (int i = 0; i < 5; i++)
-        CHECK(boot(&r, 1) == MW2_WDDM_1_3, "and every boot after it");
+        CHECK(boot(&r, 1) == MW2_WDDM_1_3, "and every boot after it (the default does not retry it)");
 
-    /* A good boot confirms; the next boot re-arms; a later hang still
-     * costs one boot. */
-    memset(&r, 0, sizeof(r));
-    r.Want = MW2_WDDM_2_0;
-    CHECK(boot(&r, 0) == MW2_WDDM_2_0 && r.Confirmed == MW2_WDDM_2_0 && r.Armed == 0, "good boot confirms");
-    CHECK(boot(&r, 1) == MW2_WDDM_2_0 && r.Armed == MW2_WDDM_2_0, "next boot is 2.0 again, armed");
-    CHECK(boot(&r, 0) == MW2_WDDM_1_3, "a later hang still falls back");
+    /* The default, no WddmProbe at all: 2.0, armed like a probe. */
+    reg_init(&r, 0);
+    CHECK(boot(&r, 0) == MW2_WDDM_2_0, "no WddmProbe: 2.0");
+    CHECK(r.Confirmed == MW2_WDDM_2_0 && r.Armed == 0, "the default boot confirms and disarms");
+    CHECK(boot(&r, 1) == MW2_WDDM_2_0 && r.Armed == MW2_WDDM_2_0, "every default boot re-arms");
+    CHECK(boot(&r, 0) == MW2_WDDM_1_3, "a default boot that hung: the next one is 1.3");
+    CHECK(r.FellBack == MW2_WDDM_2_0 && r.FellBackBuild == r.Build, "the fallback names the build");
+    /* Sticky: no alternation of 2.0 and 1.3, whatever the boots do. */
+    for (int i = 0; i < 6; i++)
+        CHECK(boot(&r, i & 1) == MW2_WDDM_1_3, "default fallback is sticky (boot %d)", i);
+    /* A new package tries 2.0 once more. */
+    r.Build = 351;
+    CHECK(boot(&r, 1) == MW2_WDDM_2_0, "a new package: 2.0 again");
+    CHECK(boot(&r, 0) == MW2_WDDM_1_3, "and it falls back once more if it hangs");
+    CHECK(boot(&r, 0) == MW2_WDDM_1_3, "and stays");
+    /* The user resets it (wddm-probe default). */
+    reg_reset(&r);
+    CHECK(boot(&r, 0) == MW2_WDDM_2_0, "after a reset: 2.0");
 
-    /* Over any pattern of hangs, two 2.x boots that both hang are never
-     * back to back. */
+    /* Over any pattern of hangs, with the default: never two hung 2.x
+     * boots in a row, and after the first hung one never 2.x again with
+     * the same build. */
     for (unsigned pat = 0; pat < 256; pat++) {
-        unsigned prevHung = 0;
-        memset(&r, 0, sizeof(r));
-        r.Want = MW2_WDDM_2_0;
+        unsigned prevHung = 0, everHung = 0;
+        reg_init(&r, 0);
         for (int i = 0; i < 8; i++) {
             int hangs = (pat >> i) & 1;
             v = boot(&r, hangs);
             int hung2x = v == MW2_WDDM_2_0 && hangs;
             CHECK(!(prevHung && hung2x), "pattern 0x%02x boot %d: two hung 2.x boots in a row", pat, i);
+            CHECK(!(everHung && v == MW2_WDDM_2_0), "pattern 0x%02x boot %d: 2.0 again after a fallback", pat, i);
+            if (v == MW2_WDDM_1_3 && r.FellBack)
+                everHung = 1;
+            prevHung = hung2x;
+        }
+    }
+    /* The same with an explicit probe. */
+    for (unsigned pat = 0; pat < 256; pat++) {
+        unsigned prevHung = 0;
+        reg_init(&r, MW2_WDDM_2_0);
+        for (int i = 0; i < 8; i++) {
+            int hangs = (pat >> i) & 1;
+            v = boot(&r, hangs);
+            int hung2x = v == MW2_WDDM_2_0 && hangs;
+            CHECK(!(prevHung && hung2x), "probe pattern 0x%02x boot %d: two hung 2.x boots in a row", pat, i);
             prevHung = hung2x;
         }
     }
 
     /* The arming did not reach the registry: 1.3, never an unarmed 2.x. */
-    memset(&r, 0, sizeof(r));
-    r.Want = MW2_WDDM_2_0;
+    reg_init(&r, 0);
+    r.RegistryBroken = 1;
+    CHECK(boot(&r, 1) == MW2_WDDM_1_3, "no arming, no 2.0, default too");
+    reg_init(&r, MW2_WDDM_2_0);
     r.RegistryBroken = 1;
     CHECK(boot(&r, 1) == MW2_WDDM_1_3, "no arming, no probe");
 
-    /* Values that are not a WDDM version, or 1.3 itself. */
-    memset(&r, 0, sizeof(r));
-    r.Want = 0x1234;
+    /* Forced 1.3 (wddm-probe set 1300, wddm-probe off): 1.3, nothing armed,
+     * nothing written, every boot. */
+    reg_init(&r, MW2_WDDM_1_3);
+    for (int i = 0; i < 3; i++)
+        CHECK(boot(&r, 1) == MW2_WDDM_1_3 && r.Armed == 0 && r.FellBack == 0, "0x1300: 1.3, untouched");
+    {
+        MW2_BOOT_IN in = { MW2_WDDM_1_3, MW2_WDDM_DEFAULT, 1, 0, 0, 0, 0, 1 };
+        MW2_BOOT_OUT out;
+        Mw2BootDecide(&in, &out);
+        CHECK(out.Result == MW2_RESULT_NONE && !out.Arm && !out.FallBack, "0x1300: result NONE, no arming");
+        in.Want = 0;
+        in.FellBack = MW2_WDDM_2_0;
+        in.FellBackBuild = 1;
+        Mw2BootDecide(&in, &out);
+        CHECK(out.Result == MW2_RESULT_STAYED_BACK && !out.Arm && !out.FallBack,
+              "default fell back with this build: STAYED_BACK, nothing written");
+    }
+
+    /* A value that is not a WDDM version. */
+    reg_init(&r, 0x1234);
     CHECK(boot(&r, 1) == MW2_WDDM_1_3, "unknown value: 1.3");
-    r.Want = MW2_WDDM_1_3;
-    CHECK(boot(&r, 1) == MW2_WDDM_1_3, "0x1300: 1.3");
 
     /* Keep = 1 turns the arming off: documented as never for a first test. */
-    memset(&r, 0, sizeof(r));
-    r.Want = MW2_WDDM_2_0;
+    reg_init(&r, MW2_WDDM_2_0);
     r.Keep = 1;
     CHECK(boot(&r, 1) == MW2_WDDM_2_0 && boot(&r, 1) == MW2_WDDM_2_0, "Keep: no fallback (by design)");
+
+    /* The journal is bounded. */
+    CHECK(Mw2JournalMax(0, 0xFFFFFFFFu) == MW2_JOURNAL_DEFAULT, "default boot: 400 events");
+    CHECK(Mw2JournalMax(MW2_WDDM_2_0, 0xFFFFFFFFu) == MW2_JOURNAL_PROBE, "a probe: 1500 events");
+    CHECK(Mw2JournalMax(0, 100000u) == MW2_JOURNAL_PROBE, "ProbeJournalMax cannot raise it past 1500");
+    CHECK(Mw2JournalMax(0, 0) == 0, "ProbeJournalMax 0: no journal");
+}
+
+/* ---- what each start-up gives the driver: the plan version.c builds ---- */
+
+static void check_default_plans(void)
+{
+    MW2_PLAN p13, forced, def, g;
+
+    /* version.c: Mw2Plan(1.3, 0, 0) first; replaced only for a 2.x result. */
+    Mw2Plan(MW2_WDDM_1_3, 0, 0, &p13);
+    /* Forced 1.3 (WddmProbe 0x1300) and every fallback keep that plan, byte
+     * for byte, whatever the 2.x knobs say. */
+    for (unsigned shape = 0; shape < 2; shape++)
+        for (unsigned b = 0; b < 3; b++) {
+            Mw2Plan(MW2_WDDM_1_3, shape, b, &forced);
+            CHECK(memcmp(&p13, &forced, sizeof(p13)) == 0, "forced 1.3: the 1.3 plan, shape %u budget %u", shape, b);
+        }
+    CHECK(p13.Nodes == 1 && Mw2SegmentFlags(&p13) == 0x5u && !p13.PowerDdis && !p13.AcquireHandleData,
+          "the 1.3 plan: one node, segment 0x5, the 1.3 DDI table and callbacks");
+    /* The default: 2.0 with the registry's defaults (Wddm2Shape 0,
+     * Wddm2Budget 1, Wddm2LocalBudget 1, the rest 1), which is run G. */
+    Mw2Plan(MW2_WDDM_DEFAULT, MW2_SHAPE_PHYSICAL, Mw2BudgetMode(1, 1), &def);
+    CHECK(def.Nodes == 2 && def.PagingNode == MW2_NODE_COPY && !def.GpuMmu, "default: 2.0 physical, copy paging node");
+    CHECK(Mw2SegmentFlags(&def) == 0x88005u, "default: run G's segment, flags 0x88005");
+    CHECK(def.PowerDdis && def.RotationOffset0 && def.AcquireHandleData, "default: run G's DDIs and callbacks");
+    Mw2Plan(MW2_WDDM_2_0, MW2_SHAPE_PHYSICAL, MW2_BUDGET_LOCAL, &g);
+    CHECK(memcmp(&def, &g, sizeof(g)) == 0, "default plan == WddmProbe 0x2000 plan (run G)");
 }
 
 /* ---- the knobs to the budget group ---- */
@@ -290,6 +396,7 @@ int main(void)
     CHECK(Mw2RotationSupportFault(0x0Fu, 0) == 3, "no Offset bit on a secondary path is refused too");
     CHECK(Mw2RotationSupportFault(0x0Fu | MW2_ROTATION_OFFSET0, 1) == 0, "what Mw2xRotationSupport makes of 0xF");
     check_budget_knobs();
+    check_default_plans();
     check_segment_pass();
     check_per_node();
     check_fallback();

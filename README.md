@@ -72,7 +72,7 @@ document with the runs behind it.
 | Desktop on the Mali (DSI panel) | Works: DWM composes on the GPU and the VOP2 scans the frame out. The panel's ribbon cable broke on 2026-11-23, so the later runs were on HDMI. |
 | HDMI hot-plug | Works with `HdmiHpd` 3: the desktop on a 2560x1440 monitor at its own timing, with HDMI audio. Unplugging lights the panel again after about a second, and plugging back returns to HDMI with sound. `HdmiExclusive` is on by default at level 3, so HDMI and the panel take turns; both at once (extend or duplicate) is planned, not written. `HdmiHpd` is 0 unless set. [HDMI-HPD.md](docs/HDMI-HPD.md) |
 | Edge | Partly. With `UmdDdi` 101, Edge's GPU process gets the Mali at feature level 10_1 and ANGLE reports WebGL2 on it. The device-creation fix and the fixes for the crashes found on the board (a draw with no input layout, a shared resource given a cached buffer) are merged. Presenting to a composition swap chain is still blocked: Edge loses its device at the first present and falls back to software rendering. That waits on the redirection and DWM work. [EDGE-CREATEDEVICE.md](docs/EDGE-CREATEDEVICE.md), [EDGE-PRESENT.md](docs/EDGE-PRESENT.md) |
-| WDDM 2.0 | Probe only, on branch `wddm2x`. The adapter starts and runs at WDDM 2.0 (`WddmVersion` 0x2000, dwm.exe and LogonUI running, no fallback), but the screen stays black and every UMD falls back to softpipe, so it is not usable. The cause found so far is a WDDM 1.x handle callback that returns NULL at 2.0; the build that replaces it has not run on the board yet. The driver on main is WDDM 1.3. |
+| WDDM 2.0 | The default since 2026-11-24. First 2.0 desktop on 2026-11-24 (run G): LogonUI and the desktop on HDMI, GPU jobs through WDDM, dxdiag Driver Model WDDM 2.0, feature level 10_1. A 2.0 boot that does not reach a confirmed desktop falls back to 1.3 on the next boot and stays there until another package is installed. `WddmProbe` 0x1300 forces 1.3. [WDDM2.md](docs/WDDM2.md) 16.12 and 16.13 |
 | GPU speed | FurMark (1024x640, 60 s) scores 288 and 290 at 594 MHz with the GPU 87.9% busy: the clock is the limit. Dragging a window keeps the GPU 12 to 13% busy and is limited by the CPU's submit path. Sending a batch's two GPU chains as one render cut DWM's submit CPU per job from 0.29 to 0.33 ms to 0.20 to 0.23 ms over three runs, with no errors; that is on branch `merge-submit-default`, not main yet. [PERF.md](docs/PERF.md) |
 | GPU clock and supply | At most 600 MHz (594 MHz used). The GPU supply, `vdd_gpu_s0` (RK806 BUCK5), reads 750 mV, the PMIC's default. A firmware branch raises it to 775 mV on this board, and the board read it back at 775 mV; 702 MHz has not been run. |
 
@@ -84,8 +84,8 @@ All results: [docs/results/](docs/results/README.md). All documents:
 The user-mode half comes from Mesa: the Panfrost Gallium driver and its
 Bifrost shader compiler, under Mesa's D3D10 frontend, with the changes in
 [mesa-patches/](mesa-patches/). The kernel-mode half is new: `malikm`, a plain
-driver with its own job-submission interface, and `maliwddm`, a WDDM 1.3
-driver that also owns the display. A shim in
+driver with its own job-submission interface, and `maliwddm`, a WDDM 2.0
+driver (1.3 on request) that also owns the display. A shim in
 [win32-compat/](win32-compat/) stands in for libdrm between Panfrost and
 either of them.
 

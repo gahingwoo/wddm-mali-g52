@@ -15,7 +15,8 @@
 /* version.c: what DriverEntry decided. */
 extern ULONG MwWddmVersion;     /* DXGK_DRIVERCAPS::WDDMVersion */
 extern ULONG MwDdiInterface;    /* DRIVER_INITIALIZATION_DATA::Version */
-extern ULONG MwWddmProbe;       /* the WddmProbe value in effect, 0 for none */
+extern ULONG MwWddmProbe;       /* the 2.x version in effect (WddmProbe or the default), 0 at 1.3 */
+extern BOOLEAN MwWddmDefault;   /* it is the default: no WddmProbe value */
 extern ULONG MwWddmProbeResult;
 
 #define MW_PROBE_NONE       MW2_RESULT_NONE
@@ -24,6 +25,7 @@ extern ULONG MwWddmProbeResult;
 #define MW_PROBE_UNKNOWN    MW2_RESULT_UNKNOWN
 #define MW_PROBE_NO_KEY     MW2_RESULT_NO_KEY
 #define MW_PROBE_ARM_FAILED MW2_RESULT_ARM_FAILED
+#define MW_PROBE_STAYED_BACK MW2_RESULT_STAYED_BACK
 
 /* What the 2.x driver says about itself (wddm2plan.h), set in DriverEntry. */
 extern MW2_PLAN MwPlan;
@@ -66,6 +68,7 @@ void MwBcInit(PUNICODE_STRING RegistryPath, ULONG BootNumber, ULONG Max);
 void MwBc(PCSTR Fmt, ...);
 BOOLEAN MwBcOn(void);
 void MwBcClose(void);
+void MwBcEnd(void);
 
 /* probe.c: what happens above PASSIVE_LEVEL (the ISR, DPCs, the callbacks
  * into dxgkrnl made at interrupt level), kept in memory at any IRQL and

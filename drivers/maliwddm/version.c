@@ -2,10 +2,14 @@
 /*
  * The WDDM version this driver reports (docs/WDDM2.md, phase P1, the probe).
  *
- * Without a setting the driver is WDDM 1.3, exactly as before. With
+ * Since 2026-11-24 (docs/WDDM2.md 16.13) the driver is WDDM 2.0 without a
+ * setting (MW2_WDDM_DEFAULT, the run G configuration), armed and confirmed
+ * as a probe is. With
  *
  *   HKLM\SYSTEM\CurrentControlSet\Services\maliwddm\Parameters
- *     WddmProbe   REG_DWORD   0x2000 (2.0), 0x2100 (2.1), ... 0x3100 (3.1)
+ *     WddmProbe   REG_DWORD   0x1300 (1.3, exactly as before 2.0 was the
+ *                             default), 0x2000 (2.0), 0x2100 (2.1), ...
+ *                             0x3100 (3.1)
  *
  * it reports that version in DXGK_DRIVERCAPS::WDDMVersion and passes the
  * matching DXGKDDI_INTERFACE_VERSION to DxgkInitialize. Nothing else about
@@ -32,6 +36,13 @@
  *     journal number of that boot, and starts as WDDM 1.3.
  *   - Every 2.x boot re-arms, a confirmed one too: a later boot that hangs
  *     also costs only itself.
+ *
+ *   - A fallback of the default (no WddmProbe) also writes
+ *     WddmProbeFellBackBuild = MW_BUILD. While WddmProbeFellBack and it
+ *     match the default and this build, the driver stays at 1.3
+ *     (MW_PROBE_STAYED_BACK) without arming: no alternating 2.0 and 1.3
+ *     boots. A new package tries 2.0 once more; wddm-probe set/default
+ *     clear it.
  *
  * So a refused version costs one boot. WddmProbeKeep = 1 turns the arming
  * off (for repeating a probe that is known to start; never for a first
@@ -73,7 +84,8 @@ static const MW_WDDM_LEVEL Levels[] = {
 
 ULONG MwWddmVersion = DXGKDDI_WDDMv1_3;
 ULONG MwDdiInterface = DXGKDDI_INTERFACE_VERSION_WDDM1_3;
-ULONG MwWddmProbe;              /* the armed value, 0 when nothing is armed */
+ULONG MwWddmProbe;              /* the 2.x version in effect (WddmProbe's or the default), 0 at 1.3 */
+BOOLEAN MwWddmDefault;          /* MwWddmProbe is the default, no WddmProbe value */
 ULONG MwWddmProbeResult;        /* see MW_PROBE_* in maliwddm.h */
 
 ULONG MwProbeWatchdog;
@@ -190,10 +202,14 @@ void MwVersionInit(PUNICODE_STRING RegistryPath)
 
     /* The decision itself is wddm2plan.h's, checked by tests/wddm2-host. */
     in.Want = ParamRead(L"WddmProbe", 0);
-    level = in.Want != 0 ? FindLevel(in.Want) : NULL;
+    in.Default = MW2_WDDM_DEFAULT;
+    level = FindLevel(Mw2Wanted(in.Want, in.Default));
     in.Known = level != NULL;
     in.Armed = ParamRead(L"WddmProbeArmed", 0);
     in.Keep = ParamRead(L"WddmProbeKeep", 0);
+    in.FellBack = ParamRead(L"WddmProbeFellBack", 0);
+    in.FellBackBuild = ParamRead(L"WddmProbeFellBackBuild", 0xFFFFFFFF);
+    in.Build = (ULONG)MW_BUILD;
     Mw2BootDecide(&in, &out);
 
     if (out.Result == MW_PROBE_UNKNOWN)
@@ -201,17 +217,20 @@ void MwVersionInit(PUNICODE_STRING RegistryPath)
     if (out.FallBack) {
         /* The last boot with this version never reached a confirmed
          * desktop. The boot journal of that boot (Probe\Boot<n>) is left
-         * alone for reading. */
-        ParamDelete(L"WddmProbe");
+         * alone for reading. WddmProbeFellBackBuild keeps a default that
+         * fell back at 1.3 until another package is installed. */
+        if (in.Want != 0)
+            ParamDelete(L"WddmProbe");
         ParamWrite(L"WddmProbeArmed", 0);
-        ParamWrite(L"WddmProbeFellBack", in.Want);
+        ParamWrite(L"WddmProbeFellBack", out.Wanted);
+        ParamWrite(L"WddmProbeFellBackBuild", (ULONG)MW_BUILD);
         ParamWrite(L"WddmProbeFellBackBoot", ParamRead(L"ProbeBoots", 0));
     }
     if (out.Arm) {
-        ParamWrite(L"WddmProbeArmed", in.Want);
-        out.Result = Mw2BootArmed(out.Result, out.Arm, ParamRead(L"WddmProbeArmed", 0), in.Want);
+        ParamWrite(L"WddmProbeArmed", out.Wanted);
+        out.Result = Mw2BootArmed(out.Result, out.Arm, ParamRead(L"WddmProbeArmed", 0), out.Wanted);
         if (out.Result == MW_PROBE_ARM_FAILED)
-            ParamWrite(L"WddmProbeArmFailed", in.Want);
+            ParamWrite(L"WddmProbeArmFailed", out.Wanted);
     }
     MwWddmProbeResult = out.Result;
     if (out.Result != MW_PROBE_ACTIVE)
@@ -219,7 +238,8 @@ void MwVersionInit(PUNICODE_STRING RegistryPath)
 
     MwWddmVersion = level->Caps;
     MwDdiInterface = level->Interface;
-    MwWddmProbe = in.Want;
+    MwWddmProbe = out.Wanted;     /* "in effect": WddmProbe's value, or the default */
+    MwWddmDefault = in.Want == 0;
     /* Wddm2LocalBudget 0 ("nonlocalbudget"): the segment in the non-local
      * budget group, as run F (build 345), which left the local group's
      * budget 0 and bugchecked 0x7E in dxgmms2's LogMemoryState. */
@@ -241,9 +261,9 @@ void MwVersionInit(PUNICODE_STRING RegistryPath)
      * DriverEntry leaves the last DDI it entered on disk. */
     boots = ParamRead(L"ProbeBoots", 0) + 1;
     ParamWrite(L"ProbeBoots", boots);
-    MwBcInit(RegistryPath, boots, ParamRead(L"ProbeJournalMax", 1500));
-    MwBc("DriverEntry: WddmProbe 0x%x armed (keep %u), interface 0x%x, shape %u, budget %u, local budget %u, build %u",
-         MwWddmProbe, in.Keep, MwDdiInterface, MwWddm2Shape, MwWddm2Budget, MwWddm2LocalBudget, (ULONG)MW_BUILD);
+    MwBcInit(RegistryPath, boots, Mw2JournalMax(in.Want, ParamRead(L"ProbeJournalMax", 0xFFFFFFFF)));
+    MwBc("DriverEntry: WddmProbe 0x%x%hs armed (keep %u), interface 0x%x, shape %u, budget %u, local budget %u, build %u",
+         MwWddmProbe, MwWddmDefault ? " (the default)" : "", in.Keep, MwDdiInterface, MwWddm2Shape, MwWddm2Budget, MwWddm2LocalBudget, (ULONG)MW_BUILD);
     MwBc("plan: nodes %u, paging node %u (engine %u), VPR paging node %u, GpuMmu %u, VA %u, "
          "TDR %u, segment aperture %u cpuvisible %u apptarget %u nonlocal %u local %u (flags 0x%x), "
          "CalibrateGpuClock+SetStablePowerState %u (interface needs them: %u), "
@@ -280,7 +300,11 @@ void MwVersionConfirmCheck(ULONG Renders, ULONG Seconds, BOOLEAN Stuck)
         return;
     ParamWrite(L"WddmProbeArmed", 0);
     ParamWrite(L"WddmProbeConfirmed", MwWddmProbe);
-    MwBc("confirmed: %u renders, %u s up; WddmProbeArmed cleared", (ULONG)ProbeRenders, Seconds);
+    MwBc("confirmed: %u renders, %u s up; WddmProbeArmed cleared%hs", (ULONG)ProbeRenders, Seconds,
+         MwWddmDefault ? "; the journal ends here (the default)" : "");
+    /* A daily-driver boot: nothing more into the registry journal. */
+    if (MwWddmDefault)
+        MwBcEnd();
 }
 
 /* WDDM 2.6 makes this DDI mandatory ("Collect Diagnostic Info"). Its
