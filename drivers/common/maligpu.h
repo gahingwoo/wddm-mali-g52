@@ -209,6 +209,7 @@ void MkMmuUnmapPages(MK_GPU *Gpu, ULONG64 Va, ULONG Pages);
 void MkJobStart(MK_GPU *Gpu, ULONG Slot, ULONG64 Jc, BOOLEAN ChainFlag);
 ULONG MkJobTakeStatus(MK_GPU *Gpu, ULONG Slot);
 ULONG MkJobSlotStatus(MK_GPU *Gpu, ULONG Slot);
+ULONG MkJobRawStat(MK_GPU *Gpu);       /* JOB_INT_RAWSTAT, not acknowledged */
 void MkJobHardStop(MK_GPU *Gpu, ULONG Slot);
 
 /* Soft-stop the chain on a slot if it was started with this chain flag. The

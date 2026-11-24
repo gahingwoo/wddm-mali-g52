@@ -279,6 +279,20 @@ typedef struct _MW_SUBMISSION {
     BOOLEAN Started, BehindOther;
 } MW_SUBMISSION;
 
+/* One TDR as the job layer saw it (command.c, TdrSnap). Times in ms
+ * before the reset; 0xFFFFFFFF: never. */
+#define MW_TDR_SNAPS 4
+typedef struct {
+    ULONG Node;                 /* 0 3D, 1 copy, 0xFFFFFFFF adapter-wide */
+    ULONG Running, Slot, RunMs; /* a chain on the GPU, its slot, for how long */
+    ULONG JsStatus, JsHeadLo, JsTailLo, JobRaw, JobPending;
+    ULONG QCount, HeadFence, HeadNext, HeadCount, HeadStarted, HeadAgeMs;
+    ULONG LastSubmitted, LastCompleted;
+    ULONG SinceDoneMs, SinceChainEndMs, SinceIsrMs, SincePollMs, SinceSubmitMs;
+    ULONG PreemptPending, PreemptMs, StopAsked, StopMs;
+    ULONG GpuClk, MilliC, JobsDone, ClkPending;
+} MW_TDR_SNAP;
+
 struct _MW_ADAPTER {
     PDEVICE_OBJECT Pdo;
     DXGKRNL_INTERFACE Dxgk;
@@ -479,6 +493,15 @@ struct _MW_ADAPTER {
      * the interrupt, folded into Therm by ThermDpc. RestoreHoldMs is the
      * setting GpuClkRestoreHoldSec. The registry trace of drops, restores
      * and the fault lock is written by a work item (ClkLogItem). */
+    /* What the job layer saw when dxgkrnl reset the engine or the adapter
+     * (a TDR): taken in SyncReset before anything is reset, written to the
+     * trace as Tdr<n>_* (n = count mod MW_TDR_SNAPS) by the work item.
+     * docs/PERF.md, "TDRs with no job fault". */
+    ULONG TdrNode;              /* the node ResetEngine named; 0xFFFFFFFF: ResetFromTimeout */
+    MW_TDR_SNAP Tdr[MW_TDR_SNAPS];
+    volatile LONG TdrCount;
+    LONG TdrLogged;
+    ULONG64 LastIsrTick, LastDoneTick, LastChainEndTick, LastPollTick, LastSubmitTick;
     volatile LONG HighFaultEvents;
     LONG HighFaultsSeen;
     ULONG64 RestoreHoldMs;
@@ -709,6 +732,7 @@ void MwPcwDetach(MW_ADAPTER *A);
 void MwGpuClkFallback(MW_ADAPTER *A);
 void MwGpuClkBetweenChains(MW_ADAPTER *A);
 void MwGpuClkResetFault(MW_ADAPTER *A);
+void MwTdrLogQueue(MW_ADAPTER *A);
 #define MW_CLK_PENDING 0x80000000u
 extern PDRIVER_OBJECT MwDriverObject;
 void MwSetSetting(MW_ADAPTER *A, PCWSTR Name, ULONG Value);

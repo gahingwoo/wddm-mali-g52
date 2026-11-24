@@ -93,6 +93,8 @@ static void JobEnded(MW_ADAPTER *A, ULONG Flags, BOOLEAN ByPoll)
 {
     ULONG64 now = MwTick(), d = now - A->JobStartTick;
     const MW_SUBMISSION *s = &A->Queue[A->QHead];
+
+    A->LastChainEndTick = now;
     ULONG slot = A->RunningSlot & 1;
     MW_PERF_JOB *r = &A->Ring[A->RingNext % MW_PERF_RING];
 
@@ -449,6 +451,7 @@ static void NotifyCompleted(MW_ADAPTER *A, ULONG Fence)
     MwRing(MW_RING_DMA_DONE, 0, Fence);
     A->Dxgk.DxgkCbNotifyInterrupt(A->Dxgk.DeviceHandle, &n);
     A->LastCompletedFence = Fence;
+    A->LastDoneTick = MwTick();
     A->NeedDpc = TRUE;
     (void)InterlockedCompareExchange64(&A->NotifyTick, (LONG64)MwTick(), 0);
 }
@@ -699,6 +702,7 @@ static BOOLEAN SyncSubmit(PVOID Context)
     MW_CONTEXT *c = s->New->Ctx;
 
     a->Submissions++;
+    a->LastSubmitTick = MwTick();
     a->QueueDepthSum += a->QCount;
     if (a->QCount > a->QueueDepthMax)
         a->QueueDepthMax = a->QCount;
@@ -739,6 +743,7 @@ static BOOLEAN SyncPoll(PVOID Context)
     MW_ADAPTER *a = (MW_ADAPTER *)Context;
 
     a->PollRuns++;
+    a->LastPollTick = MwTick();
     if (Reap(a, TRUE))
         Kick(a);
     MaybeStop(a);
@@ -1165,10 +1170,72 @@ NTSTATUS APIENTRY MwQueryCurrentFence(IN_CONST_HANDLE hAdapter, DXGKARG_QUERYCUR
 
 /* ---- recovery ---- */
 
+/* ms from Then to Now (performance counter), 0xFFFFFFFF for never. */
+static ULONG MsSince(MW_ADAPTER *A, ULONG64 Then, ULONG64 Now)
+{
+    if (Then == 0 || A->PerfHz == 0 || Now < Then)
+        return 0xFFFFFFFFu;
+    return (ULONG)((Now - Then) * 1000 / A->PerfHz);
+}
+
+/* What the job layer looked like when dxgkrnl decided on a reset: before
+ * anything is touched. At the interrupt's level. Which of these says what
+ * is in docs/PERF.md ("TDRs with no job fault"). */
+static void TdrSnap(MW_ADAPTER *a)
+{
+    LONG n = InterlockedIncrement(&a->TdrCount) - 1;
+    MW_TDR_SNAP *t = &a->Tdr[n % MW_TDR_SNAPS];
+    ULONG64 now = MwTick(), it = KeQueryInterruptTime();
+    const MW_SUBMISSION *h = &a->Queue[a->QHead];
+
+    RtlZeroMemory(t, sizeof(*t));
+    t->Node = a->TdrNode;
+    t->Running = a->Running;
+    t->Slot = a->RunningSlot;
+    t->RunMs = a->Running ? (ULONG)((it - a->JobStart) / 10000) : 0;
+    if (a->Gpu.Regs != NULL && a->GpuUp) {
+        t->JsStatus = MkJobSlotStatus(&a->Gpu, a->RunningSlot);
+        t->JsHeadLo = (ULONG)MkJobHead(&a->Gpu, a->RunningSlot);
+        t->JsTailLo = (ULONG)MkJobTail(&a->Gpu, a->RunningSlot);
+        t->JobRaw = MkJobRawStat(&a->Gpu);
+    }
+    t->JobPending = (ULONG)a->Gpu.JobIrqStatus;
+    t->QCount = a->QCount;
+    if (a->QCount != 0) {
+        t->HeadFence = h->FenceId;
+        t->HeadNext = h->Next;
+        t->HeadCount = h->Count;
+        t->HeadStarted = h->Started;
+        t->HeadAgeMs = MsSince(a, h->SubmitTick, now);
+    }
+    t->LastSubmitted = a->LastSubmittedFence;
+    t->LastCompleted = a->LastCompletedFence;
+    t->SinceDoneMs = MsSince(a, a->LastDoneTick, now);
+    t->SinceChainEndMs = MsSince(a, a->LastChainEndTick, now);
+    t->SinceIsrMs = MsSince(a, a->LastIsrTick, now);
+    t->SincePollMs = MsSince(a, a->LastPollTick, now);
+    t->SinceSubmitMs = MsSince(a, a->LastSubmitTick, now);
+    t->PreemptPending = a->PreemptPending;
+    t->PreemptMs = a->PreemptPending ? MsSince(a, a->PreemptTick, now) : 0;
+    t->StopAsked = a->StopAsked;
+    t->StopMs = a->StopAsked ? (ULONG)((it - a->StopAskedAt) / 10000) : 0;
+    t->GpuClk = a->GpuClk;
+    t->MilliC = (ULONG)a->Therm.LastMilliC;
+    t->JobsDone = a->JobsDone;
+    t->ClkPending = a->ClkPending;
+}
+
+static BOOLEAN SyncTdrSnapOnly(PVOID Context)
+{
+    TdrSnap((MW_ADAPTER *)Context);
+    return TRUE;
+}
+
 static BOOLEAN SyncReset(PVOID Context)
 {
     MW_ADAPTER *a = (MW_ADAPTER *)Context;
 
+    TdrSnap(a);
     if (a->Running)
         MkJobHardStop(&a->Gpu, a->RunningSlot);
     a->Running = FALSE;
@@ -1191,7 +1258,9 @@ static BOOLEAN SyncReset(PVOID Context)
 NTSTATUS APIENTRY MwResetFromTimeout(IN_CONST_HANDLE hAdapter)
 {
     MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
+    a->TdrNode = 0xFFFFFFFFu;
     (void)Synchronize(a, SyncReset, a);
+    MwTdrLogQueue(a);
     return STATUS_SUCCESS;
 }
 
@@ -1248,11 +1317,16 @@ NTSTATUS APIENTRY MwResetEngine(IN_CONST_HANDLE hAdapter, DXGKARG_RESETENGINE *A
 {
     MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
     if (Arg->NodeOrdinal == MW_COPY_NODE) {     /* nothing runs there */
+        a->TdrNode = Arg->NodeOrdinal;
+        (void)Synchronize(a, SyncTdrSnapOnly, a);
+        MwTdrLogQueue(a);
         Arg->LastAbortedFenceId = MwCopyNodeFence();
         return STATUS_SUCCESS;
     }
+    a->TdrNode = Arg->NodeOrdinal;
     (void)Synchronize(a, SyncReset, a);
     Arg->LastAbortedFenceId = a->LastCompletedFence;
+    MwTdrLogQueue(a);
     return STATUS_SUCCESS;
 }
 

@@ -268,8 +268,37 @@ static PUCHAR TsadcMapIfRunning(MW_ADAPTER *A)
 static BOOLEAN SyncThermDrop(PVOID Context);
 static BOOLEAN SyncThermRestore(PVOID Context);
 
-/* The registry trace of the guard (MwLog needs PASSIVE_LEVEL), from a
- * work item ThermDpc queues when something changed. */
+/* The TDR snapshots not written yet (command.c, TdrSnap), as
+ * Tdr<n>_<field>, n = the snapshot's number mod MW_TDR_SNAPS. */
+static void TdrLogNew(MW_ADAPTER *A)
+{
+    static const PCWSTR names[] = {
+        L"Node", L"Running", L"Slot", L"RunMs", L"JsStatus", L"JsHeadLo", L"JsTailLo", L"JobRaw",
+        L"JobPending", L"QCount", L"HeadFence", L"HeadNext", L"HeadCount", L"HeadStarted",
+        L"HeadAgeMs", L"LastSubmitted", L"LastCompleted", L"SinceDoneMs", L"SinceChainEndMs",
+        L"SinceIsrMs", L"SincePollMs", L"SinceSubmitMs", L"PreemptPending", L"PreemptMs",
+        L"StopAsked", L"StopMs", L"GpuClk", L"MilliC", L"JobsDone", L"ClkPending",
+    };
+    LONG count = A->TdrCount;
+
+    C_ASSERT(sizeof(MW_TDR_SNAP) == sizeof(names) / sizeof(names[0]) * sizeof(ULONG));
+    if (A->TdrLogged < count - MW_TDR_SNAPS)
+        A->TdrLogged = count - MW_TDR_SNAPS;
+    for (; A->TdrLogged < count; A->TdrLogged++) {
+        const ULONG *v = (const ULONG *)&A->Tdr[A->TdrLogged % MW_TDR_SNAPS];
+        for (ULONG i = 0; i < ARRAYSIZE(names); i++) {
+            WCHAR name[48];
+            UNICODE_STRING us;
+            RtlInitEmptyUnicodeString(&us, name, sizeof(name));
+            if (NT_SUCCESS(RtlUnicodeStringPrintf(&us, L"Tdr%u_%ws", (ULONG)(A->TdrLogged % MW_TDR_SNAPS), names[i])))
+                MwLog(A, name, v[i]);
+        }
+        MwLog(A, L"TdrCount", (ULONG)(A->TdrLogged + 1));
+    }
+}
+
+/* The registry trace of the guard and of TDRs (MwLog needs PASSIVE_LEVEL),
+ * from a work item queued when something changed. */
 static VOID ClkLogWork(PVOID IoObject, PVOID Context, PIO_WORKITEM Item)
 {
     MW_ADAPTER *a = (MW_ADAPTER *)Context;
@@ -283,6 +312,7 @@ static VOID ClkLogWork(PVOID IoObject, PVOID Context, PIO_WORKITEM Item)
     MwLog(a, L"GpuClkFaultLocked", a->Therm.FaultLocked ? 1 : 0);
     MwLog(a, L"GpuClkSwitches", a->ClkSwitches);
     MwLog(a, L"GpuClkDeferred", a->ClkDeferred);
+    TdrLogNew(a);
     InterlockedExchange(&a->ClkLogQueued, 0);
 }
 
@@ -290,6 +320,12 @@ static void ClkLogQueue(MW_ADAPTER *A)
 {
     if (A->ClkLogItem != NULL && InterlockedCompareExchange(&A->ClkLogQueued, 1, 0) == 0)
         IoQueueWorkItemEx(A->ClkLogItem, ClkLogWork, DelayedWorkQueue, A);
+}
+
+/* After a TDR (command.c): the snapshot goes into the trace. */
+void MwTdrLogQueue(MW_ADAPTER *A)
+{
+    ClkLogQueue(A);
 }
 
 /* Once a second while GpuClkHigh is on (thermal_calc.h): faults above
@@ -982,6 +1018,7 @@ static BOOLEAN APIENTRY MwInterruptRoutine(IN_CONST_PVOID Context, IN_ULONG Mess
     UNREFERENCED_PARAMETER(MessageNumber);
     MwDdiEnter(&S_Interrupt);
     if (a->GpuUp && MkIsr(&a->Gpu)) {
+        a->LastIsrTick = t0;
         (void)MwJobInterrupt(a);
         mine = TRUE;
     }

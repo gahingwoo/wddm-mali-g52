@@ -1070,3 +1070,96 @@ should not have a TDR; if one happens, `m5test prof 10` right after it.
    the switch was not the whole cause; keep `m5test prof 10` and the
    event, and stop raising the clock.
 
+## TDRs with no job fault (board retest, 2026-11-24)
+
+Package 7.42.44.26 (`gpu-clk-safe-switch`), `HdmiHpd` 3, fan off,
+FurMark, then fan on (`board-session-prep/gpu-thermal-fallback-2-2026-11-24.log`).
+
+**The switch passed.** The drop at 85 C (21:06:16) to 594 MHz was smooth:
+"% busy" stayed at 88 to 91% and FurMark did not stutter. `m5test clk`:
+5 clock switches, 3 of them waited for a running job chain. Below 75 C
+from 21:07:07, 702 MHz again at 21:08:40: the 90 s hold works.
+
+**Two TDRs (event 4101) anyway**, neither at a switch:
+
+| Time | Clock | Before it | Counted as |
+|---|---|---|---|
+| 21:03:29 | 702 MHz, about 45 s into FurMark | the 8 s line before reads 15% busy | one fault above 600 MHz; 702 MHz back 1 s later |
+| 21:08:23 | 594 MHz (held, cooling) | that line reads 73% | nothing (at 594) |
+
+The job layer saw nothing: jobs done 25366, failed 0, timed out 0, JS
+status 0, no MMU fault, resets 2. So both resets were dxgkrnl's
+(`DxgkDdiResetEngine` or `DxgkDdiResetFromTimeout`, which run `SyncReset`),
+not the driver's. dxgkrnl's rule ("TDR in Windows 8 and later"): a packet
+or a preemption that does not complete within `TdrDelay` (2 s). The
+driver's own chain timeout is also 2 s, so a chain that really hung would
+show the same way: dxgkrnl gets there first and the driver counts nothing.
+
+What the driver kept until now does not tell these apart: the boot
+journal stops at the confirm (120 s), and the chain ring keeps chains,
+not the state at the reset. So this branch adds a snapshot.
+
+### The TDR snapshot
+
+At every `ResetEngine` (node 0 or 1) and `ResetFromTimeout`, before
+anything is reset, `TdrSnap` (command.c) records, at the interrupt's
+level; a work item writes it to `Device Parameters\maliwddm` as
+`Tdr<n>_<field>` (n = 0 to 3, the last four) and `TdrCount`:
+
+| Field | Meaning |
+|---|---|
+| `Node` | 0 3D, 1 the copy node, 0xFFFFFFFF adapter-wide |
+| `Running`, `Slot`, `RunMs` | a chain on the GPU, its slot, for how many ms |
+| `JsStatus`, `JsHeadLo`, `JsTailLo`, `JobRaw`, `JobPending` | the slot's JS_STATUS and JS_HEAD/JS_TAIL, JOB_INT_RAWSTAT, and what the ISR collected but nothing reaped yet |
+| `QCount`, `HeadFence`, `HeadNext`, `HeadCount`, `HeadStarted`, `HeadAgeMs` | the driver's queue and its head submission (chains started of how many, since when) |
+| `LastSubmitted`, `LastCompleted` | the fences |
+| `SinceDoneMs`, `SinceChainEndMs`, `SinceIsrMs`, `SincePollMs`, `SinceSubmitMs` | ms since the last DMA_COMPLETED, chain end, GPU interrupt, poll and submission |
+| `PreemptPending`, `PreemptMs`, `StopAsked`, `StopMs` | an unanswered preemption request or soft-stop, and its age |
+| `GpuClk`, `MilliC`, `JobsDone`, `ClkPending` | the clock (mux * 256 + divider), the temperature, jobs done, a clock change waiting |
+
+How to read it:
+
+- `Running` 1, `RunMs` about 2000, `JsStatus` 0x08 (active), `JobRaw`
+  without the slot's bit: **the GPU is really on one chain for 2 s**.
+  Either it hung (then it hangs at 594 MHz too, so not the clock) or a
+  FurMark chain is that long (then `RunMs` is large on most snapshots, and
+  the answer is longer chains in the UMD, not a driver fix).
+- `Running` 1 but `JsStatus` 0x01 (done) or the slot's bit set in
+  `JobRaw` or `JobPending`: **a completion was missed**; `SinceIsrMs` and
+  `SincePollMs` say whether the interrupt and the 1 ms poll were running.
+- `Running` 0 and `QCount` above 0: **the queue stalled** with work in it
+  (nothing called `Kick`).
+- `Running` 0, `QCount` 0, `LastCompleted` = `LastSubmitted`: **the
+  driver finished everything** and dxgkrnl did not see it: a lost
+  DMA_COMPLETED or DPC (`SinceDoneMs` against 2000).
+- `PreemptPending` 1 with `PreemptMs` near 2000: **a preemption not
+  answered**.
+- `Node` 1: the copy node, which completes inside `SubmitCommand`.
+
+A finding to check against the dump, not changed here: after a reset the
+driver drops its whole queue but reports `LastAbortedFenceId` =
+`LastCompleted`. Microsoft's text says it should be the fence of the
+packet aborted in the middle of execution (the head), and that the
+scheduler resubmits packets submitted later. Whether dxgkrnl resubmitted
+what the driver dropped is in the dump's recovery context.
+
+### What to collect on the next run
+
+1. The same run (fan off, FurMark, then fan on), with the tray log.
+2. After each 4101, at once: `m5test ring csv > ring-<n>.csv` (the last
+   128 chains with their times) and `m5test prof 5`.
+3. At the end: `reg query "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\maliwddm" > devkey.txt`
+   (the `Tdr*` values), `m5test clk`, and the System log's 4101 events
+   (`Get-WinEvent -FilterHashtable @{LogName='System';Id=4101} | Format-List *`).
+4. The LiveKernelReport: copy everything in
+   `C:\Windows\LiveKernelReports\WATCHDOG\` (the `.dmp` of each TDR,
+   0x117 VIDEO_TDR_TIMEOUT_DETECTED). From it `!analyze -v` and `dt
+   dxgkrnl!_TDR_RECOVERY_CONTEXT` give the node, the TDR reason, the fence
+   dxgkrnl waited for and what it resubmitted; the 21:08:37 one from this
+   run as well.
+5. Optional, best evidence: a DxgKrnl ETW capture over the run
+   (`wpr -start tools\windows\dxgkrnl.wprp -filemode`, then `wpr -stop
+   tdr.etl` after a 4101): per-node packet submit and complete times show
+   which packet was outstanding for 2 s and whether the driver ever
+   completed it.
+
