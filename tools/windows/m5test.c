@@ -970,7 +970,8 @@ int main(int argc, char **argv)
         /* clk: report. clk <parent> <div> [keep]: parent 0 GPLL 1188 MHz,
          * 1 CPLL 1000 MHz, 3 SPLL 702 MHz (only with GpuClkHigh and a
          * supply that meets the operating point); keep stores it for every
-         * start. clk forget. */
+         * start. clk forget: back to the default at the next start (702 MHz
+         * with GpuClkHigh on, else the firmware's). */
         static const unsigned pll[8] = { 1188, 1000, 0, 702, 0, 0, 0, 0 };
         static const char *const name[8] = { "GPLL", "CPLL", "?", "SPLL", "?", "?", "?", "?" };
         static const char *const src[4] = { "unknown", "firmware (GpuRail)", "the GpuRailUv setting",
@@ -999,9 +1000,12 @@ int main(int argc, char **argv)
             printf("GPU clock: as the firmware left it (198 MHz on edk2-rk3576)\n");
         if (d.Stored && (d.Stored & 0xFF) != 0 && pll[(d.Stored >> 8) & 7] != 0)
             printf("  at every start: %u MHz\n", pll[(d.Stored >> 8) & 7] / (d.Stored & 0xFF));
-        printf("  GpuClkHigh %u (%s)\n", d.High,
+        printf("  GpuClkHigh %u (%s; %s)\n", d.High,
                d.High == 1 ? "mainline's operating points" :
-               d.High == 2 ? "the vendor's slowest level" : "off: 600 MHz at most");
+               d.High == 2 ? "the vendor's slowest level" : "off: 600 MHz at most",
+               (d.RailSource & 0x200) ? "not set: the default, on only when the firmware put the rail at "
+                                        "775 mV or more; GpuClkHigh 0 turns it off"
+                                      : "set in Device Parameters");
         printf("  supply: %u uV from %s%s\n", d.RailUv, src[d.RailSource & 3],
                (d.RailSource & 0x100) ? "; not a plain RK3576, nothing above 600 MHz" : "");
         if (d.AllowedHz)

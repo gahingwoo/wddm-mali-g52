@@ -374,16 +374,17 @@ static void GpuRailInit(MW_ADAPTER *A)
 {
     UNICODE_STRING name = RTL_CONSTANT_STRING(L"GpuRail");
     MW_GPU_RAIL_REPORT r;
-    ULONG len = sizeof(r), attr = 0, fw = 0, reg;
+    ULONG len = sizeof(r), attr = 0, fw = 0, reg, high;
+    int fromDefault = 0;
 
     A->RailUv = 0;
     A->RailSource = 0;
     A->RailOtpMv = 0;
     A->RailOtpMinMhz = A->RailOtpMaxMhz = 0;
     A->RailNotPlain = FALSE;
-    A->GpuClkHigh = MwSetting(A, L"GpuClkHigh", 0);
-    if (A->GpuClkHigh > 2)
-        A->GpuClkHigh = 0;
+    A->GpuClkHighDefault = FALSE;
+    /* Absent or not: decided once the firmware's report is read (below). */
+    high = MwSetting(A, L"GpuClkHigh", MW_CK_SETTING_ABSENT);
     /* Temperature and clock for Task Manager (QAI 24 to 27, 2.x only). */
     A->PerfData = MwSetting(A, L"PerfData", 1);
     A->PerfSeen = 0;
@@ -419,8 +420,13 @@ static void GpuRailInit(MW_ADAPTER *A)
         A->RailUv = reg;
         A->RailSource = 2;
     }
+    /* On by default only on the firmware's own reading of 775 mV or more
+     * (gpuclk_calc.h, MwClkHighDefault); GpuClkHigh 0 still turns it off. */
+    A->GpuClkHigh = MwClkHighDefault(high, fw, A->RailNotPlain, &fromDefault);
+    A->GpuClkHighDefault = fromDefault != 0;
     MwLog(A, L"GpuRailUv", A->RailUv);
     MwLog(A, L"GpuClkHighSetting", A->GpuClkHigh);
+    MwLog(A, L"GpuClkHighDefault", fromDefault ? 1 : 0);
 
     /* Mapped for the whole start: every clock change is written from the
      * interrupt's level, between two job chains (gpuclk_calc.h). */
@@ -697,7 +703,8 @@ static NTSTATUS GpuClk(MW_ADAPTER *A, MW_ESCAPE_GPUCLK_DATA *D, ULONG Size)
     if (Size >= MW_ESCAPE_GPUCLK_V2_SIZE) {
         D->High = A->GpuClkHigh;
         D->RailUv = A->RailUv;
-        D->RailSource = A->RailSource | (A->RailNotPlain ? 0x100u : 0);
+        D->RailSource = A->RailSource | (A->RailNotPlain ? 0x100u : 0) |
+                        (A->GpuClkHighDefault ? 0x200u : 0);
         D->AllowedHz = GpuAllowedHz(A);
         D->NeedUv702 = A->GpuClkHigh != 0 ? GpuRequiredUv(A, 702000000u) : 0;
         D->Fallbacks = A->GpuClkFallbacks;
@@ -831,9 +838,18 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
     PublishIdentity(a);
     GpuRailInit(a);
     {
-        ULONG clk = MwSetting(a, L"GpuClk", 0);
-        if (a->GpuUp && clk != 0)
+        /* A stored GpuClk wins; with none and GpuClkHigh on (by default
+         * where the firmware set the rail to 775 mV), 702 MHz, under the
+         * temperature guard and the fault policy (gpuclk_calc.h,
+         * MwClkStartWant). GpuClkWrite checks everything again. */
+        ULONG need = GpuRequiredUv(a, 702000000u);
+        BOOLEAN ok702 = a->ThermOn && need != 0 && a->RailUv != 0 && need <= a->RailUv && !a->RailNotPlain;
+        ULONG clk = MwClkStartWant(MwSetting(a, L"GpuClk", 0), a->GpuClkHigh, ok702);
+        if (a->GpuUp && clk != 0) {
+            if (MwSetting(a, L"GpuClk", 0) == 0)
+                MwLog(a, L"GpuClkStartDefault", clk);
             (void)GpuClkWrite(a, clk >> 8, clk & 0xFF);
+        }
     }
 
     /* Render-only: no sources and no children, and the firmware framebuffer

@@ -123,7 +123,7 @@ and is a memory-model change, not something to do for a temperature.
 | 25 | `Temperature` | the hotter of TSADC channels 3 and 5, deci-Celsius, rounded (`thermal_calc.h`'s reading, as the 85 C fallback uses it; no OTP trim, a few degrees) |
 | 25 | `PowerStateOverride` | 1 while the GPU is up |
 | 25 | the rest | 0: no memory clock, bandwidth, fan or power counter here |
-| 24 | `Frequency` | the GPU clock as `CRU_CLKSEL_CON165` has it now (198 MHz as the firmware leaves it, 594 MHz with `GpuClk`, 702 MHz with `GpuClkHigh`), both nodes; 0 on the PVTPLL path |
+| 24 | `Frequency` | the GPU clock as `CRU_CLKSEL_CON165` has it now (198 MHz as the firmware leaves it, 594 MHz with `GpuClk`, 702 MHz with `GpuClkHigh`, which is on by default where the firmware set the rail to 775 mV), both nodes; 0 on the PVTPLL path |
 | 24 | `MaxFrequency` | 594 MHz, the highest rate at or below the 600 MHz default ceiling |
 | 24 | `MaxFrequencyOC` | the highest rate the current setting, supply and temperature guard allow: 594 MHz, or 702 MHz with `GpuClkHigh` and the guard running |
 | 24 | `Voltage` | the supply in mV as the firmware measured it at boot (`GpuRail`) or `GpuRailUv`; 0 if neither |

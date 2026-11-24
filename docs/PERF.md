@@ -657,7 +657,8 @@ Settings in the device's `Device Parameters` key, read once per start:
 
 | Setting | Effect |
 |---|---|
-| `GpuClkHigh` 0 (default) | as before: at most 600 MHz |
+| `GpuClkHigh` not set (default) | since `gpu702-default`: 1 when the firmware's own reading (GpuRail) is at least 775 mV on a plain RK3576, else 0; with it on and no `GpuClk` stored, 702 MHz at start ("702 MHz by default" below) |
+| `GpuClkHigh` 0 | off: at most 600 MHz, whatever the firmware set |
 | `GpuClkHigh` 1 | allows a rate above 600 MHz when the supply meets mainline's operating point at or above it |
 | `GpuClkHigh` 2 | the same with the vendor's slowest-level voltages (stricter) |
 | `GpuRailUv` | a supply in microvolts verified some other way (the firmware log, or Linux `/sys/class/regulator/regulator.N/microvolts` for `vdd_gpu_s0`); with the firmware's reading too, the lower counts |
@@ -902,7 +903,8 @@ case of the CPU load, not of 702 MHz, and not repeated. The fallback
 below would not have fired in it (78.5 C is under 85 C).
 
 The firmware raises the rail on every TaishanPi 3M boot (default on,
-the user's decision); `GpuClkHigh` stays 0 by default in the driver.
+the user's decision); `GpuClkHigh` stayed 0 by default in the driver
+until `gpu702-default` (2026-11-25, last section).
 
 ### The temperature fallback (branch `gpu-thermal-fallback`)
 
@@ -1162,4 +1164,60 @@ what the driver dropped is in the dump's recovery context.
    tdr.etl` after a 4101): per-node packet submit and complete times show
    which packet was outstanding for 2 s and whether the driver ever
    completed it.
+
+## 702 MHz by default where the firmware set 775 mV (2026-11-25)
+
+Branch `gpu702-default`, off `edge-wddm2` (which carries
+`gpu-clk-safe-switch` and `main`). The user's decision of 2026-11-25:
+with the temperature guard, the fault policy and the switch between job
+chains in place, 702 MHz becomes the default, but only on a board whose
+firmware has put `vdd_gpu_s0` at 775 mV.
+
+- **`GpuClkHigh` not set** (no value in Device Parameters): the driver
+  takes 1 (mainline's operating points) when the firmware's `GpuRail`
+  report says the rail is valid and at least 775 mV, on a plain RK3576;
+  otherwise 0. Only the firmware's reading counts here: `GpuRailUv` can
+  still only lower the rail the checks use, never turn the default on.
+  edk2-rk3576 537ea09 (on `main` since 2026-11-24) does the raise on the
+  TaishanPi 3M only. The CM5-IO and the ROCK 4D leave BUCK5 at the PMIC's
+  750 mV (or report nothing), so nothing changes there: no clock above
+  600 MHz, and the start clock is what it was before (the stored
+  `GpuClk`, else the firmware's).
+- **`GpuClkHigh` 0** turns it off as before; 1 and 2 as before.
+- **The start clock.** A stored `GpuClk` (`m5test clk <p> <d> keep`) wins
+  whatever it is, so a board kept at 594 MHz (`m5test clk 0 2 keep`) stays
+  at 594. With none stored and `GpuClkHigh` on (by default or set), the
+  driver asks for SPLL / 1 = 702 MHz, but only when the checks allow it:
+  the supply meets what 702 needs and the temperature guard runs (TSADC
+  started by the firmware). `GpuClkWrite` checks everything again and
+  logs a refusal as before. `m5test clk forget` now means "back to the
+  default" (702 MHz here) from the next start.
+- **Protection, unchanged** (`gpu-clk-safe-switch`): 594 MHz at once at
+  85 C, back after 90 s below 75 C (`GpuClkRestoreHoldSec`); a job fault,
+  timeout or TDR above 600 MHz drops to 594 MHz and two within 10 minutes
+  lock 594 MHz until the next start; every switch between job chains,
+  one field per write; the adapter stopping drops to 594 MHz.
+- **What tells them apart.** `m5test clk` prints "not set: the default"
+  or "set in Device Parameters" after `GpuClkHigh` (escape `RailSource`
+  bit 0x200); the registry trace gets `GpuClkHighDefault` (1 default, 0
+  set) and, when the default clock is used, `GpuClkStartDefault` (0x301).
+
+The decisions are `MwClkHighDefault` and `MwClkStartWant` in
+`drivers/maliwddm/gpuclk_calc.h`, checked by `tests/gpuclk-host` (rails
+from 0 to 900 mV, plain or not, every set value 0 to 5, the stored clock
+winning).
+
+Not run on a board yet. Board steps (TaishanPi 3M, firmware with 537ea09):
+
+1. Before installing, delete `GpuClkHigh` and `GpuClk` from Device
+   Parameters (the board has had `GpuClkHigh` 1 and `GpuClk` 3 1 since
+   2026-11-24, which would hide the default), or keep them and check
+   only that nothing else changed.
+2. Install the package as usual (full restart). `m5test clk`: GpuClkHigh 1
+   "not set: the default", supply 775000 uV from firmware, 702 MHz
+   written by this driver, guard on.
+3. `GpuClkHigh` 0, restart: GpuClkHigh 0 "set", the firmware's clock
+   (198 MHz with no `GpuClk` stored), nothing above 600 MHz.
+4. On a CM5-IO or a ROCK 4D, if one is at hand: GpuClkHigh 0 "not set",
+   nothing above 600 MHz.
 
