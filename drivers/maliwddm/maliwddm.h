@@ -18,6 +18,7 @@
 #include "rotate.h"
 #include "hdmi_calc.h"
 #include "thermal_calc.h"
+#include "perfdata_calc.h"
 
 /* The adapter's own power and ACPI target (video.h; dispmprt.h has it in newer WDKs). */
 #ifndef DISPLAY_ADAPTER_HW_ID
@@ -446,6 +447,14 @@ struct _MW_ADAPTER {
     KDPC ThermDpc;
     MW_THERMAL Therm;
     volatile ULONG GpuClkThermalDrops, GpuClkThermalRestores;
+    /* dxgkrnl's performance queries, QAI 24 to 27 (adapter.c,
+     * perfdata_calc.h): PerfData the setting (default 1, read at start),
+     * PerfSeen one bit per type answered once (24 and 25 are journaled and
+     * traced only the first time: they come twice a second while Task
+     * Manager is open), PerfAnswers how many of each in all. */
+    ULONG PerfData;
+    volatile LONG PerfSeen;
+    volatile ULONG PerfAnswers[4];
     PKTHREAD CopyThread;
     KEVENT CopyEvent;
     FAST_MUTEX CopyLock;

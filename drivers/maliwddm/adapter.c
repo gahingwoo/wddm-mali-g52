@@ -312,6 +312,9 @@ static void GpuRailInit(MW_ADAPTER *A)
     A->GpuClkHigh = MwSetting(A, L"GpuClkHigh", 0);
     if (A->GpuClkHigh > 2)
         A->GpuClkHigh = 0;
+    /* Temperature and clock for Task Manager (QAI 24 to 27, 2.x only). */
+    A->PerfData = MwSetting(A, L"PerfData", 1);
+    A->PerfSeen = 0;
 
     RtlZeroMemory(&r, sizeof(r));
     if (NT_SUCCESS(ExGetFirmwareEnvironmentVariable(&name, &MwGpuRailGuid, &r, &len, &attr)) &&
@@ -993,10 +996,164 @@ static NTSTATUS UmdAdapterInfo(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *In
     return STATUS_SUCCESS;
 }
 
+/* ---- DxgkDdiQueryAdapterInfo 24 to 27: temperature and clock ----
+ * What dxgkrnl and Task Manager do with these is in perfdata_calc.h and
+ * docs/PERFDATA.md. In short: Task Manager's GPU page asks dxgkrnl for
+ * KMTQAITYPE_ADAPTERPERFDATA, dxgkrnl asks this driver for type 25 at
+ * most every 450 ms (at WDDM 2.0 too: run G's trace has QAI_25, size 53,
+ * answered STATUS_NOT_SUPPORTED), and the page shows "GPU Temperature"
+ * when the answer is not 0. All at PASSIVE_LEVEL, from a user thread. */
+
+C_ASSERT(sizeof(DXGK_NODE_PERFDATA) == MW_PD_NODE_SIZE);
+C_ASSERT(sizeof(DXGK_ADAPTER_PERFDATA) == MW_PD_ADAPTER_SIZE);
+C_ASSERT(sizeof(DXGK_ADAPTER_PERFDATACAPS) == MW_PD_CAPS_SIZE);
+C_ASSERT(sizeof(DXGK_GPUVERSION) == MW_PD_GPUVERSION_SIZE);
+C_ASSERT(DXGKQAITYPE_NODEPERFDATA == MW_QAI_NODEPERFDATA);
+C_ASSERT(DXGKQAITYPE_ADAPTERPERFDATA == MW_QAI_ADAPTERPERFDATA);
+C_ASSERT(DXGKQAITYPE_ADAPTERPERFDATA_CAPS == MW_QAI_ADAPTERPERFDATA_CAPS);
+C_ASSERT(DXGKQAITYPE_GPUVERSION == MW_QAI_GPUVERSION);
+
+/* The hotter of TSADC channels 3 and 5 (thermal_calc.h), through the
+ * mapping GpuRailInit made once the CRU said the TSADC runs; no reading
+ * without it (a read of a gated TSADC can be an SError). */
+static int PerfTempMilliC(MW_ADAPTER *A, long *MilliC)
+{
+    PUCHAR ts = A->TsadcVa;
+
+    *MilliC = 0;
+    if (ts == NULL)
+        return 0;
+    return MwThermalHotter(READ_REGISTER_ULONG((PULONG)(ts + MW_TSADC_DATA(MW_THERMAL_CH_A))),
+                           READ_REGISTER_ULONG((PULONG)(ts + MW_TSADC_DATA(MW_THERMAL_CH_B))), MilliC);
+}
+
+/* The GPU clock as the CRU has it now, in Hz; 0 when not known. */
+static ULONG PerfClkHz(MW_ADAPTER *A)
+{
+    PHYSICAL_ADDRESS pa;
+    PUCHAR reg = A->CruClkVa;
+    ULONG v;
+
+    if (reg == NULL) {
+        pa.QuadPart = MW_CRU_CLKSEL165 & ~0xFFFu;
+        reg = (PUCHAR)MmMapIoSpaceEx(pa, PAGE_SIZE, PAGE_READWRITE | PAGE_NOCACHE);
+        if (reg == NULL)
+            return 0;
+    }
+    v = READ_REGISTER_ULONG((PULONG)(reg + (MW_CRU_CLKSEL165 & 0xFFFu)));
+    if (reg != A->CruClkVa)
+        MmUnmapIoSpace(reg, PAGE_SIZE);
+    return (ULONG)MwPerfClkHz(v, MwGpuPll);
+}
+
+/* Zero the whole buffer, copy at most Size bytes of the answer. */
+static NTSTATUS PerfOut(const DXGKARG_QUERYADAPTERINFO *Info, const void *Src, ULONG Size, ULONG Need)
+{
+    if (Info->pOutputData == NULL || Info->OutputDataSize < Need)
+        return STATUS_BUFFER_TOO_SMALL;
+    RtlZeroMemory(Info->pOutputData, Info->OutputDataSize);
+    RtlCopyMemory(Info->pOutputData, Src, Info->OutputDataSize < Size ? Info->OutputDataSize : Size);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS MwQueryPerfData(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info)
+{
+    ULONG in = 0;
+
+    if (Info->pInputData != NULL && Info->InputDataSize >= sizeof(ULONG))
+        in = *(const ULONG UNALIGNED *)Info->pInputData;
+    switch ((ULONG)Info->Type) {
+    case MW_QAI_NODEPERFDATA: {
+        /* Both nodes run on the one GPU clock (the copy node is the
+         * driver's own paging node, wddm2x.c). The supply is the rail the
+         * firmware measured at boot (GpuRail) or GpuRailUv; this driver
+         * never changes it. */
+        DXGK_NODE_PERFDATA d;
+        ULONG oc = A->ThermOn ? GpuAllowedHz(A) : MW_GPU_MAX_HZ;
+
+        if (!MwPerfNodeOk(in, MwNodeCount()))
+            return STATUS_INVALID_PARAMETER;
+        RtlZeroMemory(&d, sizeof(d));
+        d.Frequency = PerfClkHz(A);
+        d.MaxFrequency = MwPerfBestHz(MW_GPU_MAX_HZ, MwGpuPll);
+        d.MaxFrequencyOC = MwPerfBestHz(oc, MwGpuPll);
+        d.Voltage = A->RailUv / 1000u;
+        return PerfOut(Info, &d, sizeof(d), MW_PD_NODE_SIZE);
+    }
+    case MW_QAI_ADAPTERPERFDATA: {
+        DXGK_ADAPTER_PERFDATA d;
+        long mc;
+        int valid;
+
+        if (in != 0)                    /* one physical adapter */
+            return STATUS_INVALID_PARAMETER;
+        valid = PerfTempMilliC(A, &mc);
+        RtlZeroMemory(&d, sizeof(d));
+        d.Temperature = (ULONG)MwPerfDeciC(valid, mc);
+        d.PowerStateOverride = (UCHAR)(A->GpuUp ? 1 : 0);
+        return PerfOut(Info, &d, sizeof(d), MW_PD_ADAPTER_SIZE);
+    }
+    case MW_QAI_ADAPTERPERFDATA_CAPS: {
+        /* No fan of the GPU's own, no PCIe, no memory counter. */
+        DXGK_ADAPTER_PERFDATACAPS d;
+
+        RtlZeroMemory(&d, sizeof(d));
+        d.TemperatureMax = MW_PD_TEMP_MAX_DC;
+        d.TemperatureWarning = MW_PD_TEMP_WARNING_DC;
+        return PerfOut(Info, &d, sizeof(d), MW_PD_CAPS_SIZE);
+    }
+    case MW_QAI_GPUVERSION: {
+        /* An SoC GPU has no video BIOS. */
+        DXGK_GPUVERSION d;
+
+        RtlZeroMemory(&d, sizeof(d));
+        (void)RtlStringCbCopyW(d.BiosVersion, sizeof(d.BiosVersion), L"none (SoC GPU)");
+        (void)RtlStringCbCopyW(d.GpuArchitecture, sizeof(d.GpuArchitecture), L"Mali-G52 MC3 (Bifrost)");
+        return PerfOut(Info, &d, sizeof(d), MW_PD_GPUVERSION_SIZE);
+    }
+    }
+    return STATUS_NOT_SUPPORTED;
+}
+
+/* Once per type, the first answer, in the registry trace: what dxgkrnl
+ * asked with and what it got. */
+static void PerfTraceFirst(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info, NTSTATUS St)
+{
+    ULONG t = (ULONG)Info->Type - MW_QAI_NODEPERFDATA;
+
+    MwLog(A, t == 0 ? L"PerfNodeIn" : t == 1 ? L"PerfAdapterIn" : t == 2 ? L"PerfCapsIn" : L"PerfVersionIn",
+          Info->InputDataSize >= sizeof(ULONG) && Info->pInputData != NULL ?
+          *(const ULONG UNALIGNED *)Info->pInputData : 0xFFFFFFFFu);
+    if (NT_SUCCESS(St) && t == 0)
+        MwLog(A, L"PerfNodeMhz", (ULONG)(((const DXGK_NODE_PERFDATA *)Info->pOutputData)->Frequency / 1000000u));
+    if (NT_SUCCESS(St) && t == 1)
+        MwLog(A, L"PerfTempDeciC", ((const DXGK_ADAPTER_PERFDATA *)Info->pOutputData)->Temperature);
+}
+
 static NTSTATUS APIENTRY MwQueryAdapterInfo(IN_CONST_HANDLE hAdapter, const DXGKARG_QUERYADAPTERINFO *Info)
 {
     MW_ADAPTER *a = (MW_ADAPTER *)hAdapter;
     NTSTATUS st;
+
+    /* QAI 24 to 27 (temperature and clock), 2.x only: at 1.3 they are
+     * STATUS_NOT_SUPPORTED as before. 24 and 25 come twice a second while
+     * something watches, so only their first answer goes into the journal
+     * and the registry trace. */
+    if (MwPerfAnswers((ULONG)Info->Type, MwWddmProbe, a->PerfData)) {
+        ULONG t = (ULONG)Info->Type - MW_QAI_NODEPERFDATA;
+        BOOLEAN first = (InterlockedOr(&a->PerfSeen, 1L << t) & (1L << t)) == 0;
+
+        if (first)
+            MwBc("QAI %u asked: in %u bytes, out %u bytes", (ULONG)Info->Type, Info->InputDataSize, Info->OutputDataSize);
+        st = MwQueryPerfData(a, Info);
+        InterlockedIncrement((volatile LONG *)&a->PerfAnswers[t]);
+        if (first || !MwPerfPolled((ULONG)Info->Type)) {
+            PerfTraceFirst(a, Info, st);
+            MwLog(a, t == 0 ? L"QAI_24" : t == 1 ? L"QAI_25" : t == 2 ? L"QAI_26" : L"QAI_27", (ULONG)st);
+            Mw2xBcQai(a, Info, st);
+        }
+        return st;
+    }
 
     /* The boot journal (probe.c): which QAI, flushed before it is answered. */
     MwBc("QAI %u asked: in %u bytes, out %u bytes", (ULONG)Info->Type, Info->InputDataSize, Info->OutputDataSize);
