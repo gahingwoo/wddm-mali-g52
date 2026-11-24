@@ -137,3 +137,31 @@ MW_PD_INLINE unsigned long MwPerfBestHz(unsigned long Limit, const unsigned long
     }
     return best;
 }
+
+/* ---- the "RK3576 GPU" performance counters (pcw.c, maliwddm.man) ----
+ * Read only when a PDH consumer collects them; independent of the WDDM
+ * version and of the queries above. */
+
+/* "Temperature (C)": whole degrees, the same reading as Task Manager's
+ * (MwPerfDeciC / 10, so the two never disagree); 0 without a reading. */
+MW_PD_INLINE unsigned long MwPcwTempC(int Valid, long MilliC)
+{
+    return MwPerfDeciC(Valid, MilliC) / 10;
+}
+
+/* "Clock (MHz)": rounded to the nearest MHz (594, 702, 198). */
+MW_PD_INLINE unsigned long MwPcwMhz(unsigned long Hz)
+{
+    return (Hz + 500000ul) / 1000000ul;
+}
+
+/* "% busy" is a perf_100nsec_timer: the busy time in 100 ns units, which
+ * PDH divides by the elapsed time between two samples. The driver counts
+ * QueryPerformanceCounter ticks (SlotTicks). No overflow for any uptime:
+ * whole seconds and the remainder are scaled apart. */
+MW_PD_INLINE unsigned long long MwPcwTicksTo100ns(unsigned long long Ticks, unsigned long long Hz)
+{
+    if (Hz == 0)
+        return 0;
+    return (Ticks / Hz) * 10000000ull + (Ticks % Hz) * 10000000ull / Hz;
+}

@@ -45,8 +45,20 @@
       <!-- _KERNEL_MODE is predefined by the WDK toolset; redefining it is C4117. -->
       <PreprocessorDefinitions>%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(GITHUB_RUN_NUMBER)'!=''">MW_BUILD=$(GITHUB_RUN_NUMBER);%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)..\..\include;$(MSBuildThisFileDirectory)..\common;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- $(IntDir): maliwddmCounters.h, which ctrpp writes from maliwddm.man (pcw.c). -->
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)..\..\include;$(MSBuildThisFileDirectory)..\common;$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
+    <ResourceCompile>
+      <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <!-- The "RK3576 GPU" performance counters, as the WDK's Kcs sample builds them. -->
+    <Ctrpp>
+      <AddPrefix>Mw</AddPrefix>
+      <HeaderFileNameForProvider>$(IntDir)%(Filename)Counters.h</HeaderFileNameForProvider>
+      <GenerateResourceSourceFile>true</GenerateResourceSourceFile>
+      <HeaderFileNameForCounter>$(IntDir)%(Filename)_counterIds.h</HeaderFileNameForCounter>
+      <ResourceFileName>$(IntDir)%(Filename)Counters.rc</ResourceFileName>
+    </Ctrpp>
     <Link>
       <AdditionalDependencies>displib.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
@@ -68,11 +80,19 @@
     <ClCompile Include="version.c" />
     <ClCompile Include="probe.c" />
     <ClCompile Include="wddm2x.c" />
+    <ClCompile Include="pcw.c" />
     <ClCompile Include="..\common\maligpu.c" />
   </ItemGroup>
 
   <ItemGroup>
     <Inf Include="maliwddm.inf" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Ctrpp Include="maliwddm.man">
+      <FileType>Manifest</FileType>
+    </Ctrpp>
+    <ResourceCompile Include="maliwddm.rc" />
   </ItemGroup>
 
 

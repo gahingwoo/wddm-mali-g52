@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  maliwddm's performance counters (PCW, kernel mode): the RK3576 GPU's
+  temperature, clock, busy time and thermal hold, for PDH consumers
+  (perfmon, typeperf, a tray monitor). docs/PERFDATA.md section 6.
+
+  Compiled by ctrpp in the build (maliwddm.vcxproj): maliwddmCounters.h
+  (the registration helpers pcw.c calls) and maliwddmCounters.rc (the
+  names, linked into maliwddm.sys). Installed on the board with
+  lodctr /m:<driver store>\maliwddm.man (tools\windows\maliwddm-counters.cmd):
+  the strings are read from maliwddm.sys next to the manifest.
+
+  SPDX-License-Identifier: GPL-2.0
+-->
+<instrumentationManifest
+    xmlns="http://schemas.microsoft.com/win/2004/08/events"
+    xmlns:xs="http://www.w3.org/2001/XMLSchema"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <instrumentation>
+    <counters xmlns="http://schemas.microsoft.com/win/2005/12/counters" schemaVersion="1.1">
+      <provider callback="custom"
+                applicationIdentity="maliwddm.sys"
+                providerType="kernelMode"
+                providerName="maliwddm"
+                providerGuid="{f5aa14ca-df31-4bf4-b28d-74063728197c}">
+        <counterSet guid="{382d7234-6ed6-420e-9aa8-ba6e5abec190}"
+                    uri="wddm-mali-g52.maliwddm.Rk3576Gpu"
+                    name="RK3576 GPU"
+                    description="The RK3576 Mali-G52 as maliwddm sees it: temperature, clock, busy time and the thermal hold"
+                    symbol="Rk3576Gpu"
+                    instances="multiple">
+          <structs>
+            <struct name="GpuValues" type="MW_PCW_GPU_VALUES"/>
+          </structs>
+          <counter id="1"
+                   uri="wddm-mali-g52.maliwddm.Rk3576Gpu.Temperature"
+                   name="Temperature (C)"
+                   description="The hotter of TSADC channels 3 and 5, whole degrees Celsius, no OTP trim; 0 when the TSADC is not running"
+                   struct="GpuValues"
+                   field="TemperatureC"
+                   type="perf_counter_rawcount"
+                   detailLevel="standard"/>
+          <counter id="2"
+                   uri="wddm-mali-g52.maliwddm.Rk3576Gpu.Clock"
+                   name="Clock (MHz)"
+                   description="The GPU clock as CRU_CLKSEL_CON165 has it now, MHz; 0 when not known (PVTPLL path)"
+                   struct="GpuValues"
+                   field="ClockMhz"
+                   type="perf_counter_rawcount"
+                   detailLevel="standard"/>
+          <counter id="3"
+                   uri="wddm-mali-g52.maliwddm.Rk3576Gpu.Busy"
+                   name="% busy"
+                   description="The share of time a job chain ran on the GPU, over the sample interval"
+                   struct="GpuValues"
+                   field="Busy100ns"
+                   type="perf_100nsec_timer"
+                   detailLevel="standard"/>
+          <counter id="4"
+                   uri="wddm-mali-g52.maliwddm.Rk3576Gpu.Throttled"
+                   name="Throttled"
+                   description="1 while the thermal fallback holds the clock at 594 MHz (above 85 C, until below 75 C), else 0"
+                   struct="GpuValues"
+                   field="Throttled"
+                   type="perf_counter_rawcount"
+                   detailLevel="standard"/>
+        </counterSet>
+      </provider>
+    </counters>
+  </instrumentation>
+</instrumentationManifest>

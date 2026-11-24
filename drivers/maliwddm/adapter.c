@@ -679,6 +679,7 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
      * stays with Basic Display, which keeps the desktop up. */
     *Sources = MW_RENDER_ONLY ? 0 : 1;
     *Children = MW_RENDER_ONLY ? 0 : a->Hdmi.Children;
+    MwPcwAttach(a);
     MwLog(a, L"Started", 1);
     return STATUS_SUCCESS;
 }
@@ -727,6 +728,8 @@ void MwAdapterStop(MW_ADAPTER *A)
     if (A->Stopped)
         return;
     A->Stopped = TRUE;
+    /* Before StopGpu unmaps the TSADC and the CRU page (pcw.c). */
+    MwPcwDetach(A);
     MwCommandStop(A);
     MwLog(A, L"Renders", A->Renders);
     MwLog(A, L"Submits", A->Submits);
@@ -759,6 +762,7 @@ static NTSTATUS APIENTRY MwRemoveDevice(IN_CONST_PVOID Context)
 {
     MW_ADAPTER *a = (MW_ADAPTER *)Context;
 
+    MwPcwDetach(a);
     MwBc("RemoveDevice: %hs", a->Stopped ? "already stopped" : "not stopped, stopping the threads and timers first");
     if (!a->Stopped) {
         MwCommandStop(a);
@@ -807,6 +811,7 @@ static VOID APIENTRY MwResetDevice(IN_CONST_PVOID Context)
 
 static VOID APIENTRY MwUnload(VOID)
 {
+    MwPcwExit();
     MwBcClose();
 }
 
@@ -1016,7 +1021,7 @@ C_ASSERT(DXGKQAITYPE_GPUVERSION == MW_QAI_GPUVERSION);
 /* The hotter of TSADC channels 3 and 5 (thermal_calc.h), through the
  * mapping GpuRailInit made once the CRU said the TSADC runs; no reading
  * without it (a read of a gated TSADC can be an SError). */
-static int PerfTempMilliC(MW_ADAPTER *A, long *MilliC)
+int MwGpuTempMilliC(MW_ADAPTER *A, long *MilliC)
 {
     PUCHAR ts = A->TsadcVa;
 
@@ -1028,7 +1033,7 @@ static int PerfTempMilliC(MW_ADAPTER *A, long *MilliC)
 }
 
 /* The GPU clock as the CRU has it now, in Hz; 0 when not known. */
-static ULONG PerfClkHz(MW_ADAPTER *A)
+ULONG MwGpuClkHzNow(MW_ADAPTER *A)
 {
     PHYSICAL_ADDRESS pa;
     PUCHAR reg = A->CruClkVa;
@@ -1074,7 +1079,7 @@ static NTSTATUS MwQueryPerfData(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *I
         if (!MwPerfNodeOk(in, MwNodeCount()))
             return STATUS_INVALID_PARAMETER;
         RtlZeroMemory(&d, sizeof(d));
-        d.Frequency = PerfClkHz(A);
+        d.Frequency = MwGpuClkHzNow(A);
         d.MaxFrequency = MwPerfBestHz(MW_GPU_MAX_HZ, MwGpuPll);
         d.MaxFrequencyOC = MwPerfBestHz(oc, MwGpuPll);
         d.Voltage = A->RailUv / 1000u;
@@ -1087,7 +1092,7 @@ static NTSTATUS MwQueryPerfData(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *I
 
         if (in != 0)                    /* one physical adapter */
             return STATUS_INVALID_PARAMETER;
-        valid = PerfTempMilliC(A, &mc);
+        valid = MwGpuTempMilliC(A, &mc);
         RtlZeroMemory(&d, sizeof(d));
         d.Temperature = (ULONG)MwPerfDeciC(valid, mc);
         d.PowerStateOverride = (UCHAR)(A->GpuUp ? 1 : 0);
@@ -1941,5 +1946,15 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         init.DxgkDdiSetStablePowerState = T_SetStablePowerState;
     }
 
-    return DxgkInitialize(DriverObject, RegistryPath, &init);
+    /* The "RK3576 GPU" counters (pcw.c): whatever the version, and the
+     * driver goes on without them if PCW refuses. */
+    MwPcwInit();
+    {
+        NTSTATUS st = DxgkInitialize(DriverObject, RegistryPath, &init);
+        /* No DriverUnload after a failed DriverEntry: nothing of PCW may
+         * still point into this image. */
+        if (!NT_SUCCESS(st))
+            MwPcwExit();
+        return st;
+    }
 }

@@ -242,6 +242,10 @@ Profiling (m5test prof, m5test ring; docs/PERF.md)
                        that starts the TSADC (edk2-rk3576 with the
                        thermal-safety work; Windows then shows thermal
                        zones). Read at every m5test prof, no reboot.
+    (The "RK3576 GPU" performance counters, Temperature (C), Clock (MHz),
+    % busy and Throttled, are always provided; run maliwddm-counters.cmd
+    install once after each package install so that PDH has their names.
+    docs/PERFDATA.md section 6.)
     PerfData 0         at WDDM 2.x, stop answering dxgkrnl's performance
                        queries (QAI 24 to 27): no GPU temperature in Task
                        Manager, no clock in m5test temp. On (1) by default;

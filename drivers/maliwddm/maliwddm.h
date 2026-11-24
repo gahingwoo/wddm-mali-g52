@@ -648,6 +648,14 @@ DXGKDDI_CONTROLINTERRUPT MwControlInterrupt;
 DXGKDDI_GETSCANLINE MwGetScanLine;
 BOOLEAN MwJobInterrupt(MW_ADAPTER *A);    /* from the ISR, at DIRQL */
 ULONG MwSetting(MW_ADAPTER *A, PCWSTR Name, ULONG Default);
+/* adapter.c: the GPU's temperature (hotter TSADC channel, 0 = no reading)
+ * and clock (Hz, 0 = not known) now; pcw.c: the "RK3576 GPU" counters. */
+int MwGpuTempMilliC(MW_ADAPTER *A, long *MilliC);
+ULONG MwGpuClkHzNow(MW_ADAPTER *A);
+void MwPcwInit(void);
+void MwPcwExit(void);
+void MwPcwAttach(MW_ADAPTER *A);
+void MwPcwDetach(MW_ADAPTER *A);
 void MwGpuClkFallback(MW_ADAPTER *A);
 void MwSetSetting(MW_ADAPTER *A, PCWSTR Name, ULONG Value);
 void MwScanStart(MW_ADAPTER *A);

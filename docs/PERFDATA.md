@@ -1,4 +1,4 @@
-# GPU temperature and clock in Task Manager
+# GPU temperature and clock: Task Manager and performance counters
 
 Branch `gpu-perfdata` (off `wddm2x`, with `gpu-thermal-fallback` picked
 in). Not run on the board yet.
@@ -13,6 +13,10 @@ reports; the clock is there for tools that ask for it (`m5test temp`
 does). WDDM 2.4 (`wddm-probe set 2400`) adds only what dxgkrnl itself
 asks at 2.4: the temperature limits and the GPU version, and the same
 data through `D3DKMTQueryStatistics`.
+
+For PDH consumers (perfmon, typeperf, a tray monitor) the driver also
+provides a performance counter set of its own, "RK3576 GPU", at every
+WDDM version (section 6).
 
 That is a prediction from disassembly plus one fact from the board (run
 G asked the driver for exactly this query at 2.0). Microsoft's own
@@ -235,6 +239,83 @@ and try B.
    and the event 494 text.
 7. Back: `wddm-probe default`, reboot.
 
+## 6. The "RK3576 GPU" performance counters (PCW)
+
+A kernel-mode counter set of the driver's own, for anything that reads
+PDH counters. It does not depend on the WDDM version (1.3 and 2.x alike)
+or on dxgkrnl's queries above, and the setting `PerfData` does not turn it
+off.
+
+| PDH path (English names) | Type | Value |
+|---|---|---|
+| `\RK3576 GPU(gpu0)\Temperature (C)` | `perf_counter_rawcount` | the hotter of TSADC channels 3 and 5, whole degrees (the reading of section 3, truncated as Task Manager truncates it); 0 when the TSADC is not running |
+| `\RK3576 GPU(gpu0)\Clock (MHz)` | `perf_counter_rawcount` | the GPU clock `CRU_CLKSEL_CON165` gives now, rounded: 198, 594 or 702; 0 on the PVTPLL path |
+| `\RK3576 GPU(gpu0)\% busy` | `perf_100nsec_timer` | the time job chains ran on the GPU (`SlotTicks`, both slots, in 100 ns), which PDH turns into a percentage of each sample interval. A chain still running counts when it ends |
+| `\RK3576 GPU(gpu0)\Throttled` | `perf_counter_rawcount` | 1 while the thermal fallback holds 594 MHz (`GpuClkHigh` on, above 85 C until below 75 C), else 0 |
+
+One instance, `gpu0`, while the adapter is started; none before or
+after. Counter set GUID `{382d7234-6ed6-420e-9aa8-ba6e5abec190}`, provider
+`maliwddm`, provider GUID `{f5aa14ca-df31-4bf4-b28d-74063728197c}`.
+
+**How it is built.** `drivers/maliwddm/maliwddm.man` is the counter
+manifest (`providerType="kernelMode"`, `callback="custom"`,
+`applicationIdentity="maliwddm.sys"`). The WDK's ctrpp, run by the
+vcxproj's `Ctrpp` item as in the WDK's Kcs sample, writes
+`maliwddmCounters.h` (the `MwRegisterRk3576Gpu`, `MwAddRk3576Gpu` and
+`MwUnregisterRk3576Gpu` helpers around `PcwRegister`, `PcwAddInstance`
+and `PcwUnregister`) and `maliwddmCounters.rc` (the names, compiled into
+`maliwddm.sys` through `maliwddm.rc`). `drivers/maliwddm/pcw.c`
+registers the set in DriverEntry and answers PCW's callback.
+
+**Cost.** None until a consumer collects: PCW calls the callback only
+then, at PASSIVE_LEVEL. A collection reads two TSADC registers and one
+CRU register, under a fast mutex the adapter's stop also takes (so a
+collection never reads a mapping that is going away). Nothing is logged
+per collection.
+
+**If registration fails** the trace has `PcwRegister` with the status
+(`Device Parameters\maliwddm`, written at every start; 0 = registered),
+and nothing else changes. A DriverEntry whose `DxgkInitialize` fails
+unregisters the set again, since no DriverUnload follows.
+
+**Installing the names.** PDH lists a kernel provider only once its
+manifest is installed with `lodctr /m`. There is no INF directive for a
+counter manifest (the INF reference has `AddEventProvider` for ETW
+manifests in `DDInstall.Events`, nothing for counters), and AddReg of
+lodctr's registry layout would be undocumented. So:
+
+- the INF copies `maliwddm.man` into the driver store next to
+  `maliwddm.sys` (`MW_CopyFiles`, DIRID 13);
+- `maliwddm-counters.cmd install` (in the release folder) finds that
+  folder from `Services\maliwddm\ImagePath` and runs `lodctr
+  /m:<folder>\maliwddm.man`; lodctr records `<folder>\maliwddm.sys`, the
+  manifest's directory plus its `applicationIdentity`, as the file with
+  the names;
+- after every package update the driver store folder is a new one: run
+  `maliwddm-counters install` again (it unregisters by GUID first). With
+  the old folder deleted and no reinstall, the counters are still there
+  but PDH has no names for them.
+
+`maliwddm-counters uninstall` runs `unlodctr /g:` with the provider GUID.
+
+### Board test
+
+1. Install the package. From an administrator prompt in the release
+   folder: `maliwddm-counters install`. Expect lodctr to succeed.
+2. `maliwddm-counters check`: the registry lines show
+   `ApplicationIdentity` in the current driver store folder;
+   `typeperf -qx "RK3576 GPU"` lists the four paths of the table; three
+   samples follow, for example `"67","594","3.1","0"`.
+3. The same at 1.3: `wddm-probe off`, reboot, `maliwddm-counters check`
+   gives the same four counters with values (`wddm-probe default` and
+   reboot to go back).
+4. Load: FurMark or a window drag, `typeperf "\RK3576 GPU(gpu0)\% busy"
+   -si 1 -sc 10`: the busy share follows `m5test prof`'s GPU busy.
+5. `reg query "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\maliwddm" /v PcwRegister`: 0.
+6. Optional, the cost: `m5test perf 10` with and without `typeperf ...
+   -si 1` running; no difference beyond the noise of two runs is
+   expected (state n).
+
 ## Sources
 
 - [DXGK_QUERYADAPTERINFOTYPE](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmddi/ne-d3dkmddi-_dxgk_queryadapterinfotype):
@@ -254,5 +335,12 @@ and try B.
   (`include/dxg/d3dkmdt.h`: the structures under `pragma pack(1)`;
   `d3dkmthk.h`: `KMTQAITYPE_NODEPERFDATA` 61 to `KMTQUITYPE_GPUVERSION` 64,
   `D3DKMT_*_PERFDATA` with `PhysicalAdapterIndex` and `NodeOrdinal`).
+- [Using kernel mode performance counters](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/using-kernel-mode-performance-counters)
+  (manifest, ctrpp, `lodctr /m`, how the binary path is formed) and the
+  [Kcs sample](https://github.com/microsoft/Windows-driver-samples/tree/main/general/perfcounters/kcs)
+  (the `Ctrpp` msbuild item this project copies);
+  [INF DDInstall section](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/inf-ddinstall-section)
+  and [INF AddEventProvider directive](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/inf-addeventprovider-directive):
+  no counter manifest directive.
 - mainline `arch/arm64/boot/dts/rockchip/rk3576.dtsi`, gpu-thermal:
   gpu-alert 85000, gpu-crit 115000; `rockchip,hw-tshut-temp` 120000.

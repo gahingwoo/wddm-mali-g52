@@ -111,8 +111,37 @@ static void clock(void)
     }
 }
 
+static void pcw(void)
+{
+    CHECK(MwPcwTempC(0, 50000) == 0, "no reading is 0");
+    CHECK(MwPcwTempC(1, 67900) == 67, "67.9 C is 67, as Task Manager");
+    for (long m = -40000; m <= 130000; m += 37)
+        CHECK((long)MwPcwTempC(1, m) == MwTaskmgrShows(MwPerfDeciC(1, m)), "%ld mC: counter %lu, Task Manager %ld",
+              m, MwPcwTempC(1, m), MwTaskmgrShows(MwPerfDeciC(1, m)));
+    CHECK(MwPcwMhz(594000000ul) == 594 && MwPcwMhz(702000000ul) == 702 && MwPcwMhz(198000000ul) == 198, "MHz");
+    CHECK(MwPcwMhz(0) == 0, "unknown clock is 0");
+    CHECK(MwPcwTicksTo100ns(24000000ull, 24000000ull) == 10000000ull, "one second at 24 MHz");
+    CHECK(MwPcwTicksTo100ns(12000000ull, 24000000ull) == 5000000ull, "half a second");
+    CHECK(MwPcwTicksTo100ns(5, 0) == 0, "no frequency");
+    /* A year at 1 GHz: no overflow, exact to 100 ns. */
+    {
+        unsigned long long hz = 1000000000ull, t = 365ull * 86400ull * hz + 123456789ull;
+        CHECK(MwPcwTicksTo100ns(t, hz) == 365ull * 86400ull * 10000000ull + 1234567ull, "a year at 1 GHz");
+    }
+    /* Monotonic: PDH must never see the busy time go back. */
+    {
+        unsigned long long prev = 0;
+        for (unsigned long long t = 0; t < 2000000ull; t += 977) {
+            unsigned long long v = MwPcwTicksTo100ns(t, 19200000ull);
+            CHECK(v >= prev, "tick %llu: %llu after %llu", t, v, prev);
+            prev = v;
+        }
+    }
+}
+
 int main(void)
 {
+    pcw();
     answers();
     node_input();
     temperature();

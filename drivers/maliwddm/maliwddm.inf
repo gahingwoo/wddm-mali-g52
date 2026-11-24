@@ -48,6 +48,7 @@ MW_UmdWowFiles = 10,SysWOW64
 
 [SourceDisksFiles]
 maliwddm.sys      = 1
+maliwddm.man      = 1
 maliumd_fwd.dll   = 1
 maliumd_arm64.dll = 1
 maliumd_x64.dll   = 1
@@ -70,6 +71,11 @@ AddReg = MW_Settings
 
 [MW_CopyFiles]
 maliwddm.sys
+; The "RK3576 GPU" performance counter manifest (docs/PERFDATA.md section 6),
+; next to maliwddm.sys, whose resources hold the counter names. No INF
+; directive installs a counter manifest; maliwddm-counters.cmd install runs
+; lodctr /m on this copy. The driver provides the counters either way.
+maliwddm.man
 
 ; 0x00004000 is COPYFLG_IN_USE_RENAME: when dwm.exe or LogonUI.exe has the
 ; old maliumd.dll loaded, setup renames it and puts the new one in place at

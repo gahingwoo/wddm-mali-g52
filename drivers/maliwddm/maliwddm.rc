@@ -1,0 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0
+// maliwddm.sys resources: the names and descriptions of the "RK3576 GPU"
+// performance counters, which ctrpp generates from maliwddm.man. PDH reads
+// them from this file (the manifest's applicationIdentity).
+#include "maliwddmCounters.rc"
