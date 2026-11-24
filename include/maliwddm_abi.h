@@ -183,8 +183,18 @@ typedef struct _MW_UMD_ADAPTER_INFO {
                                          * in the browsers and d3dprobe only (ANGLE then
                                          * uses 1x, which Skia needs); 2 the same in every
                                          * process; 4 and 5 as 1 and 2 (default 1) */
-    mw_u32 Reserved[6];
+    mw_u32 Redirect;                    /* UmdRedirect, MW_UMD_REDIRECT_*: which processes
+                                         * get DXGI redirection by default (Mesa patch
+                                         * 0077); 0 from a KMD that predates it */
+    mw_u32 Reserved[5];
 } MW_UMD_ADAPTER_INFO;
+
+/* MW_UMD_ADAPTER_INFO.Redirect. The files C:\mali\redirect and
+ * C:\mali\noredirect still win over it in the UMD. */
+#define MW_UMD_REDIRECT_UNSAID  0       /* an older KMD: the UMD keeps patch 0076's default */
+#define MW_UMD_REDIRECT_NONE    1       /* no process (the default at WDDM 2.x) */
+#define MW_UMD_REDIRECT_BROWSERS 2      /* msedge, chrome, msedgewebview2, d3dprobe (the default at 1.3) */
+#define MW_UMD_REDIRECT_ALL     3       /* every process */
 
 /* The KMD's counters, for tests and bring-up. */
 typedef struct _MW_ESCAPE_STATS_DATA {

@@ -278,6 +278,9 @@ static void TdrLogNew(MW_ADAPTER *A)
         L"HeadAgeMs", L"LastSubmitted", L"LastCompleted", L"SinceDoneMs", L"SinceChainEndMs",
         L"SinceIsrMs", L"SincePollMs", L"SinceSubmitMs", L"PreemptPending", L"PreemptMs",
         L"StopAsked", L"StopMs", L"GpuClk", L"MilliC", L"JobsDone", L"ClkPending",
+        L"SinceDpcMs", L"NotifyPending", L"LastNotifiedFence", L"LastNotifiedNode",
+        L"CopySubmits", L"CopyFence", L"VsyncOn", L"SinceVsyncMs",
+        L"FlipsUnreported", L"SinceFlipMs", L"SourceVisible",
     };
     LONG count = A->TdrCount;
 
@@ -1047,6 +1050,7 @@ static VOID APIENTRY MwDpcRoutine(IN_CONST_PVOID Context)
             a->DpcMaxTicks = d;
     }
     a->Dxgk.DxgkCbNotifyDpc(a->Dxgk.DeviceHandle);
+    InterlockedExchange64(&a->LastDpcTick, (LONG64)MwTick());
     MwProfEnd(&a->Prof[MW_DDI_DPC], t0);
     (void)MwDdiExit(&S_Dpc, STATUS_SUCCESS);
 }
@@ -1171,6 +1175,15 @@ static NTSTATUS UmdAdapterInfo(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *In
     u.VirtualMode = 0;                  /* WDDM 1.3, physical (WDDM2.md P2 sets it) */
     u.KmdBuild = MW_BUILD;
     u.Msaa = MwSetting(A, L"UmdMsaa", 1);
+    /* UmdRedirect: at WDDM 2.0 the browsers' redirection froze the whole
+     * session on the TaishanPi 3M (2026-11-25, docs/EDGE-PRESENT.md, "The
+     * WDDM 2.0 session hang"), so at 2.x no process gets it by default;
+     * at 1.3 the browsers keep it (round 6 passed). Read at each query:
+     * a new value applies to processes started after it is set. */
+    u.Redirect = MwSetting(A, L"UmdRedirect",
+                           MwWddmProbe != 0 ? MW_UMD_REDIRECT_NONE : MW_UMD_REDIRECT_BROWSERS);
+    if (u.Redirect > MW_UMD_REDIRECT_ALL)
+        u.Redirect = MW_UMD_REDIRECT_NONE;
     if (n > sizeof(u))
         n = sizeof(u);
     u.Size = n;

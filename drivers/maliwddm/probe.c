@@ -243,6 +243,57 @@ static volatile LONG LastSeq;
 static volatile LONG PagingOps[MW_PG_MAX];
 static volatile LONG PagingRefused[MW_PG_MAX];
 
+/* ---- who called: the last DDIs made below DISPATCH_LEVEL ----
+ *
+ * The live dump of the 2026-11-25 session hang (docs/EDGE-PRESENT.md, "The
+ * WDDM 2.0 session hang") had every DDI counter in .data but not one of
+ * the threads that made the last calls, so which process opened the last
+ * allocation and which one made the screen invisible was guessed from the
+ * order alone. Each DDI entered below DISPATCH_LEVEL (the ISR, the DPC and
+ * the interrupt-level ones are left out, they would push everything else
+ * out) is noted with its caller's process image name, pid and tid. The
+ * watchdog writes the last ones to the registry every second (Wd_Recent),
+ * and the next boot keeps the last boot's copy (Prev_*), so a hang that
+ * ends in a power cut still says who called last. */
+#define MW_RECENT           32
+#define MW_RECENT_SHOWN     12
+#define MW_STALL_S          10u     /* the screen invisible and no DDI for this long */
+
+typedef struct {
+    volatile LONG Seq;          /* 0 = empty or being written */
+    ULONG Pid, Tid;
+    LONG64 Tick;
+    PCWSTR Name;
+    CHAR Image[16];
+} MW_RECENT_ENTRY;
+
+static MW_RECENT_ENTRY Recent[MW_RECENT];
+static volatile LONG RecentNext;
+static volatile LONG64 RecentTick;      /* the last one's MwTick */
+
+/* Exported by ntoskrnl, not declared in the WDK headers. */
+NTKERNELAPI PCHAR PsGetProcessImageFileName(PEPROCESS Process);
+
+static void RecentNote(MW_DDI_SLOT *S, LONG Q)
+{
+    LONG r = InterlockedIncrement(&RecentNext) - 1;
+    MW_RECENT_ENTRY *e = &Recent[(ULONG)r % MW_RECENT];
+    PCHAR img = PsGetProcessImageFileName(PsGetCurrentProcess());
+    ULONG i;
+
+    InterlockedExchange(&e->Seq, 0);
+    e->Name = S->Name;
+    e->Pid = HandleToULong(PsGetCurrentProcessId());
+    e->Tid = HandleToULong(PsGetCurrentThreadId());
+    e->Tick = S->LastEnterTick;
+    for (i = 0; i < sizeof(e->Image) - 1 && img != NULL && img[i] != 0; i++)
+        e->Image[i] = img[i];
+    for (; i < sizeof(e->Image); i++)
+        e->Image[i] = 0;
+    InterlockedExchange64(&RecentTick, e->Tick);
+    InterlockedExchange(&e->Seq, Q);
+}
+
 void MwDdiEnter(MW_DDI_SLOT *S)
 {
     LONG q;
@@ -258,6 +309,8 @@ void MwDdiEnter(MW_DDI_SLOT *S)
     InterlockedIncrement(&S->Enters);
     LastSlot = S;
     LastSeq = q;
+    if (KeGetCurrentIrql() < DISPATCH_LEVEL)
+        RecentNote(S, q);
     /* Flushed before the DDI runs: a hang inside it leaves this line. */
     if (BcKey != NULL && S->Enters <= MW_BC_PER_DDI && KeGetCurrentIrql() == PASSIVE_LEVEL) {
         char t[96];
@@ -300,7 +353,7 @@ static BOOLEAN ProbeOn(void)
     return MwWddmProbe != 0 || MwProbeWatchdog != 0;
 }
 
-static NTSTATUS OpenProbeKey(HANDLE Sub, HANDLE *Key)
+static NTSTATUS OpenProbeKey(HANDLE Sub, ACCESS_MASK Access, HANDLE *Key)
 {
     UNICODE_STRING name;
     OBJECT_ATTRIBUTES oa;
@@ -310,7 +363,7 @@ static NTSTATUS OpenProbeKey(HANDLE Sub, HANDLE *Key)
                                  MwWddmProbe != 0 ? MwWddmProbe : (ULONG)DXGKDDI_WDDMv1_3);
     RtlInitUnicodeString(&name, ProbeKeyName);
     InitializeObjectAttributes(&oa, &name, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, Sub, NULL);
-    return ZwCreateKey(Key, KEY_WRITE, &oa, 0, NULL, REG_OPTION_NON_VOLATILE, NULL);
+    return ZwCreateKey(Key, Access, &oa, 0, NULL, REG_OPTION_NON_VOLATILE, NULL);
 }
 
 /* From MwLog, with Device Parameters\maliwddm open: the same value again,
@@ -319,7 +372,7 @@ void MwProbeMirror(HANDLE Sub, PUNICODE_STRING Name, ULONG Value)
 {
     HANDLE key;
 
-    if (!ProbeOn() || !NT_SUCCESS(OpenProbeKey(Sub, &key)))
+    if (!ProbeOn() || !NT_SUCCESS(OpenProbeKey(Sub, KEY_WRITE, &key)))
         return;
     (void)ZwSetValueKey(key, Name, 0, REG_DWORD, &Value, sizeof(Value));
     (void)ZwFlushKey(key);
@@ -327,7 +380,7 @@ void MwProbeMirror(HANDLE Sub, PUNICODE_STRING Name, ULONG Value)
 }
 
 /* Open Device Parameters\maliwddm\Probe<version> for the watchdog. */
-static NTSTATUS OpenForWatchdog(MW_ADAPTER *A, HANDLE *Key)
+static NTSTATUS OpenForWatchdogEx(MW_ADAPTER *A, ACCESS_MASK Access, HANDLE *Key)
 {
     HANDLE dev, sub;
     UNICODE_STRING subName = RTL_CONSTANT_STRING(L"maliwddm");
@@ -342,9 +395,49 @@ static NTSTATUS OpenForWatchdog(MW_ADAPTER *A, HANDLE *Key)
     ZwClose(dev);
     if (!NT_SUCCESS(st))
         return st;
-    st = OpenProbeKey(sub, Key);
+    st = OpenProbeKey(sub, Access, Key);
     ZwClose(sub);
     return st;
+}
+
+static NTSTATUS OpenForWatchdog(MW_ADAPTER *A, HANDLE *Key)
+{
+    return OpenForWatchdogEx(A, KEY_WRITE, Key);
+}
+
+/* Before this boot's watchdog writes anything: the last boot's values of
+ * the ones below, again as Prev_*, so a boot that ended in a power cut
+ * still says, from the next one, what it last saw. PASSIVE_LEVEL. */
+static void KeepLastBoot(MW_ADAPTER *A)
+{
+    static const PCWSTR names[] = {
+        L"Wd_Seconds", L"Wd_Recent", L"Wd_Stall", L"Wd_Visible", L"Wd_SinceDdiMs",
+        L"Wd_Last", L"Wd_Stuck", L"Wd_Flips", L"Wd_Vsyncs",
+        L"Wd_LastSubmittedFence", L"Wd_LastCompletedFence", L"Wd_CopySubmits", L"Wd_CopyFence",
+    };
+    HANDLE key;
+    ULONG size = 4096, got;
+    PKEY_VALUE_PARTIAL_INFORMATION v;
+
+    if (!NT_SUCCESS(OpenForWatchdogEx(A, KEY_READ | KEY_WRITE, &key)))
+        return;
+    v = (PKEY_VALUE_PARTIAL_INFORMATION)ExAllocatePool2(POOL_FLAG_PAGED, size, MW_TAG);
+    if (v != NULL) {
+        for (ULONG i = 0; i < RTL_NUMBER_OF(names); i++) {
+            UNICODE_STRING from, to;
+            WCHAR prev[48];
+            RtlInitUnicodeString(&from, names[i]);
+            if (!NT_SUCCESS(ZwQueryValueKey(key, &from, KeyValuePartialInformation, v, size, &got)))
+                continue;
+            if (!NT_SUCCESS(RtlStringCbPrintfW(prev, sizeof(prev), L"Prev_%ws", names[i] + 3)))
+                continue;
+            RtlInitUnicodeString(&to, prev);
+            (void)ZwSetValueKey(key, &to, 0, v->Type, v->Data, v->DataLength);
+        }
+        ExFreePoolWithTag(v, MW_TAG);
+    }
+    (void)ZwFlushKey(key);
+    ZwClose(key);
 }
 
 static void PutDword(HANDLE Key, PCWSTR Name, ULONG Value)
@@ -359,7 +452,7 @@ static void PutString(HANDLE Key, PCWSTR Name, PCWSTR Value)
     UNICODE_STRING name;
     size_t len = 0;
     RtlInitUnicodeString(&name, Name);
-    (void)RtlStringCbLengthW(Value, 1024, &len);
+    (void)RtlStringCbLengthW(Value, 4096, &len);
     (void)ZwSetValueKey(Key, &name, 0, REG_SZ, (PVOID)Value, (ULONG)(len + sizeof(WCHAR)));
 }
 
@@ -400,7 +493,7 @@ typedef struct {
     LONG Pg[MW_PG_MAX], PgRefused[MW_PG_MAX];
     ULONG Counters[MW_WD_COUNTERS];
     ULONG WorstMs;
-    BOOLEAN WasStuck;
+    BOOLEAN WasStuck, WasStall;
 } MW_WATCHDOG;
 
 static MW_WATCHDOG *Wd;
@@ -409,6 +502,30 @@ static ULONG MsSince(MW_ADAPTER *A, LONG64 Tick)
 {
     ULONG64 d = MwTick() - (ULONG64)Tick;
     return A->PerfHz != 0 ? (ULONG)(d * 1000 / A->PerfHz) : 0;
+}
+
+/* The last MW_RECENT_SHOWN noted DDIs, newest first: "seq name image
+ * pid.tid -ms". The watchdog's thread only (one static buffer). */
+static WCHAR RecentText[MW_RECENT_SHOWN * 72];
+
+static PCWSTR RecentFormat(MW_ADAPTER *A)
+{
+    LONG last = RecentNext;
+    size_t used = 0;
+
+    RecentText[0] = 0;
+    for (LONG n = 0; n < MW_RECENT_SHOWN && last - 1 - n >= 0; n++) {
+        const MW_RECENT_ENTRY *e = &Recent[(ULONG)(last - 1 - n) % MW_RECENT];
+        LONG seq = e->Seq;
+        if (seq == 0 || e->Name == NULL)
+            continue;
+        (void)RtlStringCbPrintfExW(RecentText + used, sizeof(RecentText) - used * sizeof(WCHAR), NULL, NULL, 0,
+                                   L"%s%d %ws %hs %u.%u -%ums", used ? L"; " : L"", seq, e->Name,
+                                   e->Image, e->Pid, e->Tid, MsSince(A, e->Tick));
+        (void)RtlStringCbLengthW(RecentText, sizeof(RecentText), &used);
+        used /= sizeof(WCHAR);
+    }
+    return RecentText[0] ? RecentText : L"none";
 }
 
 static void WatchdogTick(MW_WATCHDOG *W, ULONG Seconds)
@@ -422,6 +539,8 @@ static void WatchdogTick(MW_WATCHDOG *W, ULONG Seconds)
     MW_DDI_SLOT *last = LastSlot;
     ULONG counters[MW_WD_COUNTERS];
     size_t used = 0;
+    BOOLEAN stall;
+    static WCHAR stallText[96];
 
     if (A->PerfHz == 0) {
         LARGE_INTEGER hz;
@@ -455,6 +574,18 @@ static void WatchdogTick(MW_WATCHDOG *W, ULONG Seconds)
         }
     }
 
+    /* The 2026-11-25 hang from here: the screen made invisible, then no
+     * DDI below DISPATCH_LEVEL at all (only vsyncs) while every GUI thread
+     * waited in win32k. Nothing is outstanding in this driver then, so
+     * there is no timeout to detect; it is said, not acted on. */
+    stall = !A->SourceVisible && RecentTick != 0 && MsSince(A, RecentTick) >= MW_STALL_S * 1000;
+    if (stall)
+        (void)RtlStringCbPrintfW(stallText, sizeof(stallText),
+                                 L"screen invisible and no DDI for %u s (vsyncs %u, flips %u)",
+                                 MsSince(A, RecentTick) / 1000, A->Vsyncs, A->Flips);
+    if (stall != W->WasStall)
+        changed = TRUE;
+
     counters[0] = A->Renders;
     counters[1] = A->Submits;
     counters[2] = A->LastSubmittedFence;
@@ -478,6 +609,8 @@ static void WatchdogTick(MW_WATCHDOG *W, ULONG Seconds)
         RingDump();
     /* The one-shot fallback's confirm (version.c), at PASSIVE_LEVEL here. */
     MwVersionConfirmCheck(A->Renders, A->Flips + A->Presents, Seconds, stuck, (ULONG)A->TdrCount);
+    if (stall && !W->WasStall)
+        MwBc("watchdog %us: %ws; last DDIs: %ws", Seconds, stallText, RecentFormat(A));
     if (stuck && !W->WasStuck)
         MwBc("watchdog %us: %ws", Seconds, text);
     else if (!stuck && W->WasStuck)
@@ -497,6 +630,10 @@ static void WatchdogTick(MW_WATCHDOG *W, ULONG Seconds)
         WCHAR lastText[160];
 
         PutDword(key, L"Wd_Seconds", Seconds);
+        PutString(key, L"Wd_Recent", RecentFormat(A));
+        PutDword(key, L"Wd_Visible", A->SourceVisible);
+        PutDword(key, L"Wd_SinceDdiMs", RecentTick != 0 ? MsSince(A, RecentTick) : 0xFFFFFFFFu);
+        PutString(key, L"Wd_Stall", stall ? stallText : L"none");
         if (last != NULL) {
             (void)RtlStringCbPrintfW(lastText, sizeof(lastText), L"seq %d: %ws (enters %d, exits %d)",
                                      LastSeq, last->Name, last->Enters, last->Exits);
@@ -557,8 +694,14 @@ static void WatchdogTick(MW_WATCHDOG *W, ULONG Seconds)
             UartPuts(s8);
         }
     }
+    if (Uart != NULL && stall && !W->WasStall) {
+        char s9[160];
+        (void)RtlStringCbPrintfA(s9, sizeof(s9), "mw:   STALL %ws\n", stallText);
+        UartPuts(s9);
+    }
     RtlCopyMemory(W->Counters, counters, sizeof(counters));
     W->WasStuck = stuck;
+    W->WasStall = stall;
 }
 
 static VOID WatchdogThread(PVOID Context)
@@ -585,6 +728,7 @@ void MwProbeStart(MW_ADAPTER *A)
 
     if (!ProbeOn() || Wd != NULL)
         return;
+    KeepLastBoot(A);
     if (MwProbeUart != 0 && Uart == NULL) {
         PHYSICAL_ADDRESS pa;
         pa.QuadPart = MwProbeUartBase;

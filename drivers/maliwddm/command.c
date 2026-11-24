@@ -450,6 +450,8 @@ static void NotifyCompleted(MW_ADAPTER *A, ULONG Fence)
     n.DmaCompleted.EngineOrdinal = 0;
     MwRing(MW_RING_DMA_DONE, 0, Fence);
     A->Dxgk.DxgkCbNotifyInterrupt(A->Dxgk.DeviceHandle, &n);
+    A->LastNotifiedFence = Fence;
+    A->LastNotifiedNode = 0;
     A->LastCompletedFence = Fence;
     A->LastDoneTick = MwTick();
     A->NeedDpc = TRUE;
@@ -1223,6 +1225,21 @@ static void TdrSnap(MW_ADAPTER *a)
     t->MilliC = (ULONG)a->Therm.LastMilliC;
     t->JobsDone = a->JobsDone;
     t->ClkPending = a->ClkPending;
+    t->SinceDpcMs = MsSince(a, (ULONG64)a->LastDpcTick, now);
+    t->NotifyPending = a->NotifyTick != 0;
+    t->LastNotifiedFence = a->LastNotifiedFence;
+    t->LastNotifiedNode = a->LastNotifiedNode;
+    {
+        ULONG c[2];
+        Mw2xCounters(c, 2);         /* copy-node submits and fence */
+        t->CopySubmits = c[0];
+        t->CopyFence = c[1];
+    }
+    t->VsyncOn = (ULONG)a->VsyncOn;
+    t->SinceVsyncMs = MsSince(a, a->LastVsyncTick, now);
+    t->FlipsUnreported = (ULONG)(a->FlipSeq - a->ReportedSeq);
+    t->SinceFlipMs = MsSince(a, a->FlipTick, now);
+    t->SourceVisible = a->SourceVisible;
 }
 
 static BOOLEAN SyncTdrSnapOnly(PVOID Context)

@@ -291,6 +291,13 @@ typedef struct {
     ULONG SinceDoneMs, SinceChainEndMs, SinceIsrMs, SincePollMs, SinceSubmitMs;
     ULONG PreemptPending, PreemptMs, StopAsked, StopMs;
     ULONG GpuClk, MilliC, JobsDone, ClkPending;
+    /* Whether dxgkrnl was told (2026-11-25: TDRs with everything done).
+     * NotifyPending: a DMA_COMPLETED notified and no DPC since; the last
+     * one notified, on which node; the copy node's fence; the vsync and
+     * the flips a vsync has not reported yet. */
+    ULONG SinceDpcMs, NotifyPending, LastNotifiedFence, LastNotifiedNode;
+    ULONG CopySubmits, CopyFence, VsyncOn, SinceVsyncMs;
+    ULONG FlipsUnreported, SinceFlipMs, SourceVisible;
 } MW_TDR_SNAP;
 
 struct _MW_ADAPTER {
@@ -593,6 +600,8 @@ struct _MW_ADAPTER {
     ULONG64 LastJobEndTick;     /* when the last chain was collected; 0 once the next has started */
     ULONG ReapIsr, ReapPoll, PollRuns;
     volatile LONG64 NotifyTick; /* first DMA_COMPLETED not yet seen by a DPC */
+    volatile LONG64 LastDpcTick;    /* the last MwDpcRoutine (DxgkCbNotifyDpc) */
+    volatile ULONG LastNotifiedFence, LastNotifiedNode;     /* the last DMA_COMPLETED */
     ULONG64 DpcCount, DpcTicks, DpcMaxTicks;
     ULONG64 QueueDepthSum;
     ULONG QueueDepthMax, Submissions;

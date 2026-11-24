@@ -746,3 +746,198 @@ needed): run as `C:\mali\fake\msedge.exe sandbox` and as
    `--disable-gpu-sandbox` (then the sandbox is the second problem) and
    collect the Edge log and `C:\mali\log\msedge.exe-*.txt` (log on).
 
+
+## The WDDM 2.0 session hang (2026-11-25, branch `edge-wddm2-hang`)
+
+### What happened
+
+TaishanPi 3M, WDDM 2.0 (WddmProbeConfirmed 0x2000), package 10.24.57.813
+(`edge-wddm2` d590bc4: patch 0076, the browsers get DXGI redirection by
+default). Edge 158 started in the user's session with a debug port and
+edge://gpu. Within seconds: the debug port never answered, every Edge
+process was unkillable (termination pending), dwm.exe stopped using CPU
+and the desktop froze, GPU performance-counter queries hung, no TDR and no
+LiveKernelReports, and `shutdown /r` never finished. A live dump was taken
+with `Get-StorageDiagnosticInfo -IncludeLiveDump`
+(`board-session-prep/edge-fix-10.24.57.813/hang/LiveDump.dmp`).
+
+### What the dump shows
+
+The file's first 0x29000 bytes are zero: the dump header and the page
+bitmap are missing, so no debugger opens it. The pages after them are
+in physical order (the self-map entries of 64 page-table roots grow with
+the file offset), and the dump holds only part of memory: no ntoskrnl,
+dxgkrnl or dxgmms2 image pages, about 640 threads, and the EPROCESS of
+neither dwm.exe nor csrss.exe. It was read without a header: maliwddm's
+image by content (its pages are contiguous from file page 30137),
+structures by self-pointers (empty list heads, KWAIT_BLOCK.Thread), module
+bases from the adapter's DXGKRNL_INTERFACE (dxgkrnl at
+0xfffff807dfd30000, its DpXxx callbacks resolve exactly) and call sites
+(ntoskrnl at 0xfffff80348a00000), and names from the Microsoft PDBs of
+the board's build (22621.2428). Where a statement below rests on a
+guess, it says so.
+
+From the dump:
+
+- **maliwddm was idle.** Every DDI's enter and exit counters in .data are
+  equal: no thread was inside the driver. Node 0: last submitted fence
+  0xc5d = last completed 0xc5d, nothing queued or running, no job failed
+  or timed out, no fault. The paging node: 1175 submitted, fence 1175. With
+  no work outstanding, dxgkrnl had nothing to time out: that is why no TDR
+  fired, and a TDR could not have fired.
+- **dxgkrnl's last calls were the screen going away.** In DDI sequence
+  order, at about 132 s after boot (performance counter at 24 MHz):
+  OpenAllocation, Escape, Render, the GPU interrupt, a paging buffer and
+  its submission, DestroyAllocation, CloseAllocation, SetPointerPosition
+  and SetVidPnSourceVisibility(FALSE), all within 14 ms. The source was
+  left invisible (SourceVisible 0, VisibleOff 3 against VisibleOn 3; the
+  third off at 132053 ms, the first two at boot). After that the only
+  calls for the next 15 minutes were the emulated vsync's DPCs (68094 in
+  all): no flip, no present, no render, and no DestroyDevice or
+  DestroyContext, not even for the exiting Edge processes.
+- **Every GUI thread waited for one win32k lock.** 37 threads in
+  WrResource, in Edge's processes (pids 4812, 1308, 1520, 5532, by their
+  Chromium thread start address) and in svchost, taskhostw and others,
+  all in `ExEnterCriticalRegionAndAcquireResource{Exclusive,Shared}`
+  called from win32k: from NtUserMsgWaitForMultipleObjectsEx,
+  NtUserGetKeyboardLayout, NtUserMessageCall, NtUserGetHDevName (syscall
+  numbers resolved from the board's win32u.dll) and, for Edge's exiting
+  threads, from `PspExitThread -> PsWin32CallBack`. Every one of them has
+  the same ERESOURCE (0xffffd68195b02a10, in nonpaged pool) in its frames.
+  That page is not in the dump, so its owner cannot be read. 217 more
+  threads had already terminated and wait to be freed, which is the
+  "unkillable" Edge: its processes cannot finish exiting while the lock
+  is held.
+- maliwddm's own watchdog thread kept running until the dump (its last
+  snapshot is two seconds older than the dump), so the registry and the
+  paging path worked; it never saw a DDI stuck.
+
+From the source and the earlier rounds (not from the dump):
+
+- With redirection, DWM opens the composition buffers a browser
+  presents. Rounds 4 and 5 at WDDM 1.3 showed DWM's device being removed
+  by the runtime about 30 ms after it opened such a buffer; round 5 then
+  froze the whole UI in the same way until dwm.exe was killed. Round 6
+  (patch 0074) survived at 1.3, and 0076 made that the default for the
+  browsers at 2.0 too.
+- The sequence above fits DWM losing its device right after opening an
+  allocation and letting go of the screen: the allocations destroyed and
+  closed, the pointer, the source made invisible. Which process made each
+  call is not in the dump (this build recorded no caller), so that it was
+  DWM, and that the allocation was Edge's buffer, is inference.
+
+Guess (not shown by anything above): the win32k lock is held by a thread
+of DWM or csrss in the DWM-restart path, waiting for something only the
+stopped DWM would do. Nothing in maliwddm is waited for.
+
+### The change
+
+1. **Redirection by default is the KMD's call, and off at 2.x** (patch
+   0077, `MW_UMD_ADAPTER_INFO.Redirect`). Device Parameters
+   `UmdRedirect`: 1 no process, 2 the browsers (0076), 3 every process.
+   The default is 1 at WDDM 2.x and 2 at 1.3. It is read at each adapter
+   query, so a new value applies to processes started after it is set,
+   without a reboot. `C:\mali\redirect` and `C:\mali\noredirect` still win
+   over it. A KMD without the field answers 0, which the UMD treats as
+   0076 did. This removes the one change between the working 9.6.46.569
+   and the hanging 10.24.57.813 at 2.0; it does not explain why DWM's
+   device goes, which is still open (below). At 2.0 the browsers are back
+   where they were on 2026-11-24: Edge falls back to software, the
+   desktop stays.
+2. **Who called last, kept across a power cut** (probe.c). Every DDI
+   entered below DISPATCH_LEVEL is noted with the caller's image name,
+   pid and tid. The watchdog writes, every second, under Device
+   Parameters\maliwddm\Probe2000: `Wd_Recent` (the last twelve: sequence,
+   DDI, image, pid.tid, ms ago), `Wd_Visible`, `Wd_SinceDdiMs`, and
+   `Wd_Stall` ("screen invisible and no DDI for N s", the shape of this
+   hang, at 10 s; also in the boot journal and on the UART). The next boot
+   copies the last boot's values to `Prev_*` before writing its own. This
+   only reports: with no work outstanding there is nothing for the driver
+   to time out, and no reset of the GPU releases a win32k lock.
+3. **maliwddm.pdb in the package** (`symbols\`), for the next dump.
+
+### The FurMark TDRs of the same day: a separate problem
+
+Same package, WDDM 2.0, `C:\mali\noredirect`, FurMark through the GL
+ICD, fan off: two event 4101 TDRs (702 MHz at 60 C, 594 MHz at 82 C).
+Every `Tdr<n>_*` snapshot says node 0, nothing running or queued, last
+submitted fence = last completed, the last completion and the last ISR
+2.0 to 2.8 s before the reset, no preemption request (`T_PreemptRequests`
+0), and no failed SubmitCommand (no `Fail_SubmitCommand`). So dxgkrnl
+believed something on node 0 was still outstanding while the driver had
+reported everything it was given.
+
+The Edge hang is the opposite: there dxgkrnl went 15 minutes without a
+TDR, which it would not have done had it believed a node-0 packet was
+outstanding, and the dump shows the driver idle. One lost completion
+cannot be both. They are treated as separate; the change above does not
+touch the completion path.
+
+Read through for this (source, not board-proven): every DMA_COMPLETED is
+notified inside DxgkCbSynchronizeExecution or the ISR, in queue order,
+with NodeOrdinal 0 (the copy node's with 1), and each notify sets
+NeedDpc, which every caller turns into DxgkCbQueueDpc; the DPC calls
+DxgkCbNotifyDpc, and the emulated vsync's DPC does too, 60 times a
+second, so a completion that was notified is seen within one vsync. No
+path found that drops one. What the snapshots cannot tell is what dxgkrnl
+was waiting for, so they now also record (`Tdr<n>_*`, new fields):
+`SinceDpcMs` and `NotifyPending` (was the last completion followed by a
+DPC), `LastNotifiedFence` and `LastNotifiedNode`, the copy node's
+`CopySubmits` and `CopyFence`, `VsyncOn`, `SinceVsyncMs`,
+`FlipsUnreported` (flips no vsync has reported yet), `SinceFlipMs` and
+`SourceVisible`. A TDR with `FlipsUnreported` > 0 or `VsyncOn` 0 points at
+the flip path, `NotifyPending` 1 at the DPC, `CopyFence` < `CopySubmits`
+at the copy node; none of them at something outside this driver.
+
+### Board test (one variable at a time)
+
+Stage only, never hot-install: import the package's new test
+certificate (from `maliwddm.cat`: `openssl pkcs7 -print_certs`, or the
+`.cer` in the package) into Root and TrustedPublisher, `pnputil
+/add-driver ...\driver\maliwddm.inf`, set ConfigFlags 0x20 on
+`HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0` as SYSTEM, reboot.
+Keep `C:\mali\noredirect` for the first boot.
+
+1. **Install, nothing else changed.** `m5test wddm`: confirmed 0x2000.
+   `reg query "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device
+   Parameters\maliwddm\Probe2000"`: `Wd_Recent` lists DDIs with dwm.exe
+   among the callers, `Wd_Stall` none, `Wd_Visible` 1. Desktop as before.
+2. **The new default.** `del C:\mali\noredirect`, no reboot. UMD log on
+   for one run: `C:\mali\fake\msedge.exe sandbox` in the user's session.
+   Expect `CreateDevice: done, DXGI_STATUS_NO_REDIRECTION (a browser, but
+   UmdRedirect 1)` and `OpenAdapter: ... UmdRedirect 1`; the edge path's
+   composition Present1 fails as on 2026-11-24 (not a regression). Then
+   Edge with the debug port: edge://gpu shows software, but the desktop
+   stays alive for 3 minutes, dwm.exe keeps its PID, and Edge closes.
+   This is the pass criterion of this package.
+3. **Only if 2 passed, the risky one, prepared for the hang.**
+   `reg add ...\Device Parameters\maliwddm /v UmdRedirect /t REG_DWORD /d 2 /f`
+   (no reboot), Edge again. If the desktop freezes:
+   - over SSH: `reg query ...\Probe2000 /v Wd_Recent` and `/v Wd_Stall`
+     (they are written every second until the watchdog stops);
+   - then one discriminating step: `taskkill /f /im dwm.exe`, and note
+     whether the desktop comes back (round 5 did) and whether the Edge
+     processes then exit;
+   - if a live dump is taken again, check its first bytes before copying
+     (`Format-Hex -Count 8` must show `PAGEDU64`); this one had none;
+   - after the power cycle, before anything else: `reg query
+     ...\Probe2000` and save every `Prev_*` value.
+   Either way, `reg delete ... /v UmdRedirect /f` afterwards.
+
+4. **FurMark TDR, separately** (with `C:\mali\noredirect`, fan off, as on
+   2026-11-25): after a 4101, `reg query` Device Parameters\maliwddm for
+   `Tdr*` and save it; the new fields say which of the three it was. For
+   a dump of the TDR itself: `C:\Windows\LiveKernelReports\WATCHDOG` was
+   empty. Windows throttles these live dumps (one per component per
+   several days by default). Check before the run, and note what was
+   found: `HKLM\SYSTEM\CurrentControlSet\Control\CrashControl\FullLiveKernelReports`
+   (`ComponentThrottleThreshold`, `SystemThrottleThreshold`, 0 = no
+   throttle, as Microsoft documents for newer builds; not verified on
+   22621), and that `TdrDebugMode` under
+   `HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers` is absent or 2
+   (recover). Reboot after changing either.
+
+What the next run should settle: which process made the OpenAllocation
+before the screen went invisible, and whether killing DWM releases the
+session. Then the removal itself (`removed:` and `recent:` lines of
+dwm.exe's UMD log, patch 0074) is the next thing to read.

@@ -186,6 +186,7 @@ step can be turned back without reinstalling:
 | `UmdVideo` | 0 | 0 none; 1 the video DDI with no profiles; 2 with the decoder's profiles |
 | `UmdMsaa` | 1 | 0: no multisampling, as before 0064; 1: every format Panfrost renders at 4x is a multisample render target at 1x and 4x, in the browsers and d3dprobe only (0066; ANGLE uses 1x); 2: the same in every process; 4 and 5: as 1 and 2 |
 | `UmdFeatureLevel` | 0xa000 (10_0) | the most the UMD reports |
+| `UmdRedirect` | 1 at WDDM 2.x, 2 at 1.3 | which processes get DXGI redirection by default (patch 0077): 1 none; 2 the browsers (0076); 3 every process. `C:\mali\redirect` and `C:\mali\noredirect` override it. EDGE-PRESENT.md, "The WDDM 2.0 session hang" |
 
 A KMD that does not answer the query means `UmdDdi` 100, so a new UMD on
 an old KMD behaves as today. The structure only grows at the end and says

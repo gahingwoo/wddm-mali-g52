@@ -77,6 +77,8 @@ static BOOLEAN SyncCopyDone(PVOID Context)
     n.DmaCompleted.EngineOrdinal = 0;
     MwRing(MW_RING_DMA_DONE, MW_COPY_NODE, c->Fence);
     c->A->Dxgk.DxgkCbNotifyInterrupt(c->A->Dxgk.DeviceHandle, &n);
+    c->A->LastNotifiedFence = c->Fence;
+    c->A->LastNotifiedNode = MW_COPY_NODE;
     InterlockedExchange(&CopyFence, (LONG)c->Fence);
     c->A->Dxgk.DxgkCbQueueDpc(c->A->Dxgk.DeviceHandle);
     return TRUE;
