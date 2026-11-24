@@ -229,12 +229,198 @@ static void test_edid(void)
     CHECK(!MwEdidDtd(e + 54, &m[0]), "interlaced refused");
 }
 
+
+/* ---- the full mode list (MwHdmiModes): every rate the EDID names ---- */
+
+static int has_mode(const MW_TIMING *m, unsigned n, unsigned w, unsigned h, unsigned mhz_lo, unsigned mhz_hi)
+{
+    for (unsigned i = 0; i < n; i++) {
+        unsigned r = MwTimingMilliHz(&m[i]);
+        if (m[i].HDisplay == w && m[i].VDisplay == h && r >= mhz_lo && r <= mhz_hi)
+            return 1;
+    }
+    return 0;
+}
+
+/* A DisplayID type I timing (20 bytes), values as stored (minus one). */
+static void put_did(unsigned char *d, unsigned clk10k, unsigned ha, unsigned hb, unsigned hfp, unsigned hsw,
+                    unsigned va, unsigned vb, unsigned vfp, unsigned vsw, int ph, int pv)
+{
+    unsigned v[8] = { ha - 1, hb - 1, hfp - 1, hsw - 1, va - 1, vb - 1, vfp - 1, vsw - 1 };
+    memset(d, 0, 20);
+    d[0] = (clk10k - 1) & 0xFF;
+    d[1] = ((clk10k - 1) >> 8) & 0xFF;
+    d[2] = (clk10k - 1) >> 16;
+    for (int i = 0; i < 8; i++) {
+        d[4 + 2 * i] = v[i] & 0xFF;
+        d[5 + 2 * i] = (unsigned char)(v[i] >> 8);
+    }
+    if (ph) d[9] |= 0x80;
+    if (pv) d[17] |= 0x80;
+}
+
+/* A 2560x1440 monitor of the kind on the board: preferred 2560x1440@60
+ * (241.70 MHz, the AOC's), @75 and @100 as detailed timings, a range limits
+ * descriptor, standard timings (some DMT, some only CVT), established
+ * timings, a CTA block with an HDMI VSDB, SVDs from 640x480 to 4K60, and a
+ * DisplayID block with 1920x1080@144. */
+static unsigned make_monitor(unsigned char *e, unsigned max_tmds_5mhz)
+{
+    unsigned o;
+    memset(e, 0, 384);
+    e[0] = 0x00; memset(e + 1, 0xFF, 6); e[7] = 0x00;
+    e[18] = 1; e[19] = 4;
+    e[35] = 0x21;                       /* 640x480@60, 800x600@60 */
+    e[36] = 0x0A;                       /* 1024x768@60, @75 */
+    for (int i = 38; i < 54; i++)
+        e[i] = 1;
+    e[38] = 1920 / 8 - 31; e[39] = (3 << 6) | 0;        /* 1920x1080@60: DMT */
+    e[40] = 1920 / 8 - 31; e[41] = (3 << 6) | 60;       /* 1920x1080@120: CVT-RB */
+    e[42] = 1600 / 8 - 31; e[43] = (3 << 6) | 0;        /* 1600x900@60: DMT (RB) */
+    e[44] = 1440 / 8 - 31; e[45] = (0 << 6) | 15;       /* 1440x900@75: CVT-RB within the range */
+    e[46] = 1680 / 8 - 31; e[47] = (0 << 6) | 0;        /* 1680x1050@60: DMT */
+    e[48] = 1280 / 8 - 31; e[49] = (2 << 6) | 15;       /* 1280x1024@75: DMT */
+    put_dtd(e + 54, 241700, 2560, 48, 32, 160, 1440, 3, 5, 41, 1, 1);
+    put_dtd(e + 72, 302130, 2560, 48, 32, 160, 1440, 3, 5, 41, 1, 0);
+    /* range limits: 48-146 Hz, 30-230 kHz, 600 MHz */
+    e[90 + 3] = 0xFD; e[90 + 5] = 48; e[90 + 6] = 146; e[90 + 7] = 30; e[90 + 8] = 230; e[90 + 9] = 60;
+    put_dtd(e + 108, 397980, 2560, 48, 32, 160, 1440, 3, 5, 41, 1, 0);   /* 100 Hz */
+    e[126] = 2;
+    checksum(e);
+    {
+        unsigned char *x = e + 128;
+        o = 4;
+        x[0] = 0x02; x[1] = 3; x[3] = 0x40;
+        /* video data block: 16 (native), 4, 31, 63, 64, 97, 93, 1, 2 */
+        x[o++] = (2 << 5) | 9;
+        x[o++] = 0x80 | 16; x[o++] = 4; x[o++] = 31; x[o++] = 63; x[o++] = 64; x[o++] = 97; x[o++] = 93;
+        x[o++] = 1; x[o++] = 2;
+        /* HDMI VSDB with Max_TMDS_Clock */
+        x[o++] = (3 << 5) | 7;
+        x[o++] = 0x03; x[o++] = 0x0C; x[o++] = 0x00; x[o++] = 0x10; x[o++] = 0x00; x[o++] = 0x00;
+        x[o++] = (unsigned char)max_tmds_5mhz;
+        x[2] = (unsigned char)o;
+        checksum(x);
+    }
+    {
+        unsigned char *x = e + 256;
+        x[0] = 0x70; x[1] = 0x12; x[3] = 0; x[4] = 0;
+        o = 5;
+        x[o++] = 0x03; x[o++] = 0; x[o++] = 20;                  /* type I, one timing */
+        put_did(x + o, 33277, 1920, 160, 48, 32, 1080, 31, 3, 5, 1, 0);   /* 1920x1080@144 */
+        o += 20;
+        x[2] = (unsigned char)(o - 5);
+        checksum(x);
+    }
+    return 384;
+}
+
+static void test_modes(void)
+{
+    unsigned char e[384];
+    MW_TIMING m[48], t, k;
+    MW_EDID_LIMITS lim;
+    unsigned n, len = make_monitor(e, 68);              /* 340 MHz */
+
+    MwEdidLimits(e, len, &lim);
+    CHECK(lim.MaxClock == 340000 && lim.HaveRange && lim.MinVHz == 48 && lim.MaxVHz == 146 &&
+          lim.MaxHKhz == 230 && lim.RangeMaxClock == 600000, "limits %u %u %u-%u", lim.MaxClock, lim.HaveRange,
+          lim.MinVHz, lim.MaxVHz);
+
+    n = MwHdmiModes(e, len, 2560 * 1600, m, 48);
+    printf("modes:");
+    for (unsigned i = 0; i < n; i++)
+        printf(" %ux%u@%u.%03u", m[i].HDisplay, m[i].VDisplay, MwTimingMilliHz(&m[i]) / 1000,
+               MwTimingMilliHz(&m[i]) % 1000);
+    printf("\n");
+    CHECK(n >= 1 && m[0].HDisplay == 2560 && m[0].Clock == 241700, "the preferred mode first");
+    CHECK(has_mode(m, n, 2560, 1440, 74900, 75100), "2560x1440@75");
+    CHECK(!has_mode(m, n, 2560, 1440, 99000, 101000), "2560x1440@100 is 398 MHz: not offered");
+    CHECK(!has_mode(m, n, 2560, 1440, 143000, 145000), "2560x1440@144: not offered");
+    CHECK(has_mode(m, n, 1920, 1080, 59990, 60010) && has_mode(m, n, 1920, 1080, 59930, 59950), "1080p 60 and 59.94");
+    CHECK(has_mode(m, n, 1920, 1080, 49990, 50010), "1080p50 (VIC 31)");
+    CHECK(has_mode(m, n, 1920, 1080, 99990, 100010), "1080p100 (VIC 64)");
+    CHECK(has_mode(m, n, 1920, 1080, 119990, 120010) && has_mode(m, n, 1920, 1080, 119870, 119890),
+          "1080p 120 and 119.88 (VIC 63)");
+    CHECK(has_mode(m, n, 1920, 1080, 143900, 144100), "1080p144 from DisplayID");
+    CHECK(!has_mode(m, n, 3840, 2160, 0, 999999), "4K: not in the reserved framebuffer, 4K60 above 340 MHz");
+    CHECK(has_mode(m, n, 1280, 720, 59990, 60010) && has_mode(m, n, 640, 480, 59900, 60010) &&
+          has_mode(m, n, 720, 480, 59900, 60010), "SVDs 4, 1, 2");
+    CHECK(has_mode(m, n, 640, 480, 59990, 60010) && !has_mode(m, n, 640, 480, 59850, 59900),
+          "VIC 1 at 59.94 and 60, not 59.88");
+    CHECK(has_mode(m, n, 1680, 1050, 59800, 60100) && has_mode(m, n, 1280, 1024, 74900, 75100) &&
+          has_mode(m, n, 1024, 768, 59900, 60100) && has_mode(m, n, 1024, 768, 74900, 75100) &&
+          has_mode(m, n, 800, 600, 60000, 60400) && has_mode(m, n, 1600, 900, 59900, 60100) &&
+          has_mode(m, n, 1440, 900, 74800, 75200), "standard and established timings");
+    /* Every one usable, under the cap, none twice. */
+    for (unsigned i = 0; i < n; i++) {
+        CHECK(MwTimingUsable(&m[i], 2560 * 1600) && m[i].Clock <= 340000, "mode %u usable", i);
+        for (unsigned j = 0; j < i; j++)
+            CHECK(!MwTimingSameMode(&m[i], &m[j]), "modes %u and %u the same", i, j);
+    }
+    /* The CTA modes carry their VIC, the 59.94 variants too. */
+    for (unsigned i = 0; i < n; i++)
+        if (m[i].HDisplay == 1920 && m[i].VDisplay == 1080 && m[i].HTotal == 2200 && m[i].Clock == 297000)
+            CHECK(m[i].Vic == 63, "1080p120 VIC %u", m[i].Vic);
+
+    /* A sink that says 300 MHz: 1080p144 (333 MHz) and 1440p75 (302 MHz) go. */
+    len = make_monitor(e, 60);
+    n = MwHdmiModes(e, len, 2560 * 1600, m, 48);
+    CHECK(!has_mode(m, n, 1920, 1080, 143900, 144100) && !has_mode(m, n, 2560, 1440, 74900, 75100) &&
+          has_mode(m, n, 1920, 1080, 119990, 120010), "VSDB Max_TMDS_Clock 300 MHz");
+
+    /* No range limits: a standard timing that is not DMT (1440x900@75) is
+     * not offered. A small array: no overflow. */
+    len = make_monitor(e, 68);
+    memset(e + 90, 0, 18);
+    e[90 + 3] = 0x10;
+    checksum(e);
+    MwEdidLimits(e, len, &lim);
+    CHECK(!lim.HaveRange, "no range");
+    n = MwHdmiModes(e, len, 2560 * 1600, m, 48);
+    CHECK(!has_mode(m, n, 1440, 900, 74800, 75200) && has_mode(m, n, 1600, 900, 59900, 60100), "CVT needs the range");
+    n = MwHdmiModes(e, len, 2560 * 1600, m, 5);
+    CHECK(n == 5, "capped at 5: %u", n);
+
+    /* CVT reduced blanking against Linux's drm_cvt_mode numbers. */
+    CHECK(MwCvtRb(2560, 1440, 60, &t) && t.Clock == 241500 && t.HTotal == 2720 && t.VTotal == 1481 &&
+          t.HSyncStart == 2608 && t.HSyncEnd == 2640 && t.VSyncStart == 1443 && t.VSyncEnd == 1448 &&
+          t.PHSync == 1 && t.PVSync == 0, "CVT-RB 2560x1440@60: %u %u %u", t.Clock, t.HTotal, t.VTotal);
+    CHECK(MwCvtRb(1920, 1080, 60, &t) && t.Clock == 138500 && t.HTotal == 2080 && t.VTotal == 1111,
+          "CVT-RB 1920x1080@60: %u %u %u", t.Clock, t.HTotal, t.VTotal);
+    CHECK(MwCvtRb(1920, 1200, 60, &t) && t.Clock == 154000 && t.VTotal == 1235, "CVT-RB 1920x1200@60 = DMT: %u %u",
+          t.Clock, t.VTotal);
+
+    /* Every DMT entry is the rate it says, and has a PLL setting. */
+    for (unsigned i = 0; i < sizeof(MwDmtModes) / sizeof(MwDmtModes[0]); i++) {
+        unsigned r;
+        MwDmtTiming(&MwDmtModes[i], &t);
+        r = MwTimingMilliHz(&t);
+        CHECK(r > MwDmtModes[i].Hz * 985u && r < MwDmtModes[i].Hz * 1015u, "DMT %u: %u mHz", i, r);
+        CHECK(MwTimingUsable(&t, 4096 * 2304), "DMT %u usable", i);
+    }
+    for (unsigned i = 0; i < sizeof(MwCeaModes) / sizeof(MwCeaModes[0]); i++) {
+        MwCeaTiming(&MwCeaModes[i], &t);
+        CHECK(MwTimingUsable(&t, 4096 * 2304), "VIC %u usable", MwCeaModes[i].Vic);
+        CHECK(MwCeaVic(&t) == MwCeaModes[i].Vic || MwCeaModes[i].Vic == 33 || MwCeaModes[i].Vic == 62,
+              "VIC %u found back as %u", MwCeaModes[i].Vic, MwCeaVic(&t));
+    }
+
+    /* The firmware's timing made whole again (display.c's made-up 1080p). */
+    memset(&t, 0, sizeof(t));
+    t.Clock = 148500; t.HDisplay = 1920; t.VDisplay = 1080; t.HTotal = 2200; t.VTotal = 1125; t.Fw = 1;
+    CHECK(MwKnownTiming(&t, &k) && k.Vic == 16 && k.HSyncStart == 2008 && !k.Fw, "the firmware's 1080p is VIC 16");
+    t.Clock = 241700; t.HDisplay = 2560; t.VDisplay = 1440; t.HTotal = 2720; t.VTotal = 1481;
+    CHECK(!MwKnownTiming(&t, &k), "the AOC's 241.70 MHz is no table's");
+}
+
 int main(void)
 {
     test_vp();
     test_pll();
     test_infoframes();
     test_edid();
+    test_modes();
     printf("%d checks, %d failures\n", checks, fails);
     return fails != 0;
 }

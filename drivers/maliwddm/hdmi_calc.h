@@ -97,6 +97,17 @@ static const MW_CEA_MODE MwCeaModes[] = {
     { 93, 297000, 3840, 5116, 5204, 5500, 2160, 2168, 2178, 2250, 1 },
     { 94, 297000, 3840, 4896, 4984, 5280, 2160, 2168, 2178, 2250, 1 },
     { 95, 297000, 3840, 4016, 4104, 4400, 2160, 2168, 2178, 2250, 1 },
+    /* CTA-861-G table 1, the rest of what fits 340 MHz progressive. */
+    { 41, 148500, 1280, 1720, 1760, 1980,  720,  725,  730,  750, 1 },
+    { 47, 148500, 1280, 1390, 1430, 1650,  720,  725,  730,  750, 1 },
+    { 60,  59400, 1280, 3040, 3080, 3300,  720,  725,  730,  750, 1 },
+    { 61,  74250, 1280, 3700, 3740, 3960,  720,  725,  730,  750, 1 },
+    { 62,  74250, 1280, 3040, 3080, 3300,  720,  725,  730,  750, 1 },
+    { 63, 297000, 1920, 2008, 2052, 2200, 1080, 1084, 1089, 1125, 1 },
+    { 64, 297000, 1920, 2448, 2492, 2640, 1080, 1084, 1089, 1125, 1 },
+    { 98, 297000, 4096, 5116, 5204, 5500, 2160, 2168, 2178, 2250, 1 },
+    { 99, 297000, 4096, 5064, 5152, 5280, 2160, 2168, 2178, 2250, 1 },
+    {100, 297000, 4096, 4184, 4272, 4400, 2160, 2168, 2178, 2250, 1 },
 };
 
 MW_HC_INLINE void MwCeaTiming(const MW_CEA_MODE *C, MW_TIMING *T)
@@ -220,59 +231,410 @@ MW_HC_INLINE int MwTimingUsable(const MW_TIMING *T, mwh_u32 MaxPixels)
     return MwHdptxCanDo(T->Clock * 10);
 }
 
-/* The modes to offer: the EDID's detailed timings in order (the first is the
- * monitor's preferred mode, which is what the firmware picks), then the
- * safe set, 1920x1080@60 and 1280x720@60, which every HDMI sink in practice
- * takes and which the firmware falls back to when DDC fails. No two with the
- * same active size and totals. Returns the count. */
+/* ---- the modes to offer ----
+ *
+ * Everything the EDID says the monitor takes, at every refresh rate it
+ * lists, that this driver can drive: progressive, 8 bpc RGB, TMDS clock no
+ * higher than the sink allows and no higher than 340 MHz (no scrambling,
+ * see MW_HDMI_MAX_CLOCK_KHZ), a width of whole 4-pixel groups, within VP0
+ * and the reserved framebuffer, and a rate the PHY's ROPLL can make
+ * (MwTimingUsable). In this order, the first being the monitor's preferred
+ * mode (what the firmware picks):
+ *
+ *   1. detailed timings: base block, CTA-861 extensions, DisplayID
+ *      extensions (type I and type VII timings);
+ *   2. CTA-861 short video descriptors (VICs), each also at 1000/1001 of
+ *      its clock when it is a 24, 30, 60 or 120 Hz mode (59.94 Hz etc.);
+ *   3. standard timings: the VESA DMT timing of that size and rate, else
+ *      CVT reduced blanking when the monitor's range limits allow it;
+ *   4. established timings (DMT);
+ *   5. 1920x1080@60 and 1280x720@60, which every HDMI sink in practice
+ *      takes and which the firmware falls back to when DDC fails.
+ *
+ * A mode is left out when one already listed has the same size and a
+ * refresh rate within 0.05% (59.998 and 60.000 Hz are one mode to a user;
+ * 59.94 and 60 are two). Linux (drm_edid.c) builds its list from the same
+ * sources. */
+
+/* The refresh rate in mHz. */
+MW_HC_INLINE mwh_u32 MwTimingMilliHz(const MW_TIMING *T)
+{
+    unsigned long long d = (unsigned long long)T->HTotal * T->VTotal;
+    if (d == 0)
+        return 0;
+    return (mwh_u32)(((unsigned long long)T->Clock * 1000000ull + d / 2) / d);
+}
+
+/* The same mode to a user: the same size, and refresh rates within 0.05%. */
+MW_HC_INLINE int MwTimingSameMode(const MW_TIMING *A, const MW_TIMING *B)
+{
+    mwh_u32 a = MwTimingMilliHz(A), b = MwTimingMilliHz(B), d = a > b ? a - b : b - a;
+    return A->HDisplay == B->HDisplay && A->VDisplay == B->VDisplay && (unsigned long long)d * 2000ull <= a;
+}
+
+/* What the EDID limits: the TMDS clock (the HDMI VSDB's Max_TMDS_Clock when
+ * it gives one, never above 340 MHz) and the display range limits
+ * descriptor, if there is one. A sink with no VSDB gets no lower cap, as
+ * in Linux (max_tmds_clock 0): the base block alone (a DDC read that got
+ * no extension) must not lose the monitor's own 241 MHz mode. */
+typedef struct _MW_EDID_LIMITS {
+    mwh_u32 MaxClock;           /* kHz */
+    mwh_u8 HaveRange;
+    mwh_u32 MinVHz, MaxVHz, MinHKhz, MaxHKhz, RangeMaxClock;   /* RangeMaxClock in kHz, 0 none */
+} MW_EDID_LIMITS;
+
+MW_HC_INLINE void MwEdidLimits(const mwh_u8 *E, mwh_u32 Len, MW_EDID_LIMITS *L)
+{
+    L->MaxClock = MW_HDMI_MAX_CLOCK_KHZ;
+    L->HaveRange = 0;
+    L->MinVHz = L->MaxVHz = L->MinHKhz = L->MaxHKhz = L->RangeMaxClock = 0;
+    if (E == 0 || Len < 128)
+        return;
+    for (mwh_u32 o = 54; o + 18 <= 126; o += 18) {
+        const mwh_u8 *d = E + o;
+        mwh_u8 f;
+        if (d[0] != 0 || d[1] != 0 || d[2] != 0 || d[3] != 0xFD)
+            continue;
+        f = (mwh_u8)(E[18] == 1 && E[19] >= 4 ? d[4] : 0);    /* EDID 1.4: +255 offsets */
+        L->HaveRange = 1;
+        L->MinVHz = d[5] + ((f & 0x01) ? 255u : 0u);
+        L->MaxVHz = d[6] + ((f & 0x02) ? 255u : 0u);
+        L->MinHKhz = d[7] + ((f & 0x04) ? 255u : 0u);
+        L->MaxHKhz = d[8] + ((f & 0x08) ? 255u : 0u);
+        L->RangeMaxClock = (mwh_u32)d[9] * 10000u;
+        if (L->MaxVHz < L->MinVHz || L->MaxHKhz < L->MinHKhz)
+            L->HaveRange = 0;
+        break;
+    }
+    for (mwh_u32 b = 1; (b + 1) * 128 <= Len && b <= 4; b++) {
+        const mwh_u8 *x = E + b * 128;
+        mwh_u32 end = x[2];
+        if (x[0] != 0x02 || x[1] < 3 || end > 127)
+            continue;
+        for (mwh_u32 off = 4; off < end;) {
+            const mwh_u8 *d = x + off;
+            mwh_u32 len = 1u + (d[0] & 0x1F), tag = d[0] >> 5;
+            if (off + len > end)
+                break;
+            if (tag == 3 && len >= 4 && d[1] == 0x03 && d[2] == 0x0C && d[3] == 0x00) {
+                if (len >= 8 && d[7] != 0 && (mwh_u32)d[7] * 5000u < L->MaxClock)
+                    L->MaxClock = (mwh_u32)d[7] * 5000u;
+            }
+            off += len;
+        }
+    }
+}
+
+/* Inside the range limits descriptor, for a mode the EDID does not list as
+ * a timing of its own (CVT). Without one, not. */
+MW_HC_INLINE int MwInRange(const MW_TIMING *T, const MW_EDID_LIMITS *L)
+{
+    mwh_u32 mhz = MwTimingMilliHz(T);
+    mwh_u32 hkhz = T->HTotal ? T->Clock / T->HTotal : 0;
+
+    if (!L->HaveRange)
+        return 0;
+    if (mhz + 500 < L->MinVHz * 1000u || mhz > L->MaxVHz * 1000u + 500)
+        return 0;
+    if (hkhz + 1 < L->MinHKhz || hkhz > L->MaxHKhz + 1)
+        return 0;
+    return L->RangeMaxClock == 0 || T->Clock <= L->RangeMaxClock;
+}
+
+/* VESA DMT timings for established and standard timings (the values
+ * Linux's drm_dmt_modes has). Hz is the nominal rate a standard timing
+ * names. */
+typedef struct _MW_DMT_MODE {
+    mwh_u32 Clock;
+    mwh_u16 H, HSs, HSe, Ht, V, VSs, VSe, Vt;
+    mwh_u8 PH, PV, Hz;
+} MW_DMT_MODE;
+
+static const MW_DMT_MODE MwDmtModes[] = {
+    {  25175,  640,  656,  752,  800,  480,  490,  492,  525, 0, 0, 60 },
+    {  31500,  640,  664,  704,  832,  480,  489,  492,  520, 0, 0, 72 },
+    {  31500,  640,  656,  720,  840,  480,  481,  484,  500, 0, 0, 75 },
+    {  36000,  640,  696,  752,  832,  480,  481,  484,  509, 0, 0, 85 },
+    {  36000,  800,  824,  896, 1024,  600,  601,  603,  625, 1, 1, 56 },
+    {  40000,  800,  840,  968, 1056,  600,  601,  605,  628, 1, 1, 60 },
+    {  50000,  800,  856,  976, 1040,  600,  637,  643,  666, 1, 1, 72 },
+    {  49500,  800,  816,  896, 1056,  600,  601,  604,  625, 1, 1, 75 },
+    {  56250,  800,  832,  896, 1048,  600,  601,  604,  631, 1, 1, 85 },
+    {  65000, 1024, 1048, 1184, 1344,  768,  771,  777,  806, 0, 0, 60 },
+    {  75000, 1024, 1048, 1184, 1328,  768,  771,  777,  806, 0, 0, 70 },
+    {  78750, 1024, 1040, 1136, 1312,  768,  769,  772,  800, 1, 1, 75 },
+    {  94500, 1024, 1072, 1168, 1376,  768,  769,  772,  808, 1, 1, 85 },
+    { 108000, 1152, 1216, 1344, 1600,  864,  865,  868,  900, 1, 1, 75 },
+    {  74250, 1280, 1390, 1430, 1650,  720,  725,  730,  750, 1, 1, 60 },
+    {  79500, 1280, 1344, 1472, 1664,  768,  771,  778,  798, 0, 1, 60 },
+    {  83500, 1280, 1352, 1480, 1680,  800,  803,  809,  831, 0, 1, 60 },
+    { 108000, 1280, 1376, 1488, 1800,  960,  961,  964, 1000, 1, 1, 60 },
+    { 108000, 1280, 1328, 1440, 1688, 1024, 1025, 1028, 1066, 1, 1, 60 },
+    { 135000, 1280, 1296, 1440, 1688, 1024, 1025, 1028, 1066, 1, 1, 75 },
+    { 157500, 1280, 1344, 1504, 1728, 1024, 1025, 1028, 1072, 1, 1, 85 },
+    {  85500, 1360, 1424, 1536, 1792,  768,  771,  777,  795, 1, 1, 60 },
+    { 121750, 1400, 1488, 1632, 1864, 1050, 1053, 1057, 1089, 0, 1, 60 },
+    { 106500, 1440, 1520, 1672, 1904,  900,  903,  909,  934, 0, 1, 60 },
+    { 108000, 1600, 1624, 1704, 1800,  900,  901,  904, 1000, 1, 1, 60 },
+    { 162000, 1600, 1664, 1856, 2160, 1200, 1201, 1204, 1250, 1, 1, 60 },
+    { 202500, 1600, 1664, 1856, 2160, 1200, 1201, 1204, 1250, 1, 1, 75 },
+    { 146250, 1680, 1784, 1960, 2240, 1050, 1053, 1059, 1089, 0, 1, 60 },
+    { 148500, 1920, 2008, 2052, 2200, 1080, 1084, 1089, 1125, 1, 1, 60 },
+    { 154000, 1920, 1968, 2000, 2080, 1200, 1203, 1209, 1235, 1, 0, 60 },
+    { 234000, 1920, 2048, 2256, 2600, 1440, 1441, 1444, 1500, 0, 1, 60 },
+    { 268500, 2560, 2608, 2640, 2720, 1600, 1603, 1609, 1646, 1, 0, 60 },
+};
+
+MW_HC_INLINE void MwDmtTiming(const MW_DMT_MODE *D, MW_TIMING *T)
+{
+    T->Clock = D->Clock;
+    T->HDisplay = D->H; T->HSyncStart = D->HSs; T->HSyncEnd = D->HSe; T->HTotal = D->Ht;
+    T->VDisplay = D->V; T->VSyncStart = D->VSs; T->VSyncEnd = D->VSe; T->VTotal = D->Vt;
+    T->PHSync = D->PH; T->PVSync = D->PV;
+    T->Fw = 0;
+    T->Vic = MwCeaVic(T);
+}
+
+MW_HC_INLINE const MW_DMT_MODE *MwDmtFind(mwh_u32 H, mwh_u32 V, mwh_u32 Hz)
+{
+    for (unsigned i = 0; i < sizeof(MwDmtModes) / sizeof(MwDmtModes[0]); i++)
+        if (MwDmtModes[i].H == H && MwDmtModes[i].V == V && MwDmtModes[i].Hz == Hz)
+            return &MwDmtModes[i];
+    return 0;
+}
+
+/* VESA CVT 1.1 reduced blanking (v1), as Linux's drm_cvt_mode(reduced):
+ * 160 pixels of horizontal blanking (48 front porch, 32 sync), at least
+ * 460 us of vertical blanking, 3 lines front porch, a sync width by
+ * aspect ratio, +HSync -VSync, the clock a multiple of 250 kHz below. */
+MW_HC_INLINE int MwCvtRb(mwh_u32 H, mwh_u32 V, mwh_u32 Hz, MW_TIMING *T)
+{
+    mwh_u32 vsync, hperiod, vbi, tmp1;
+
+    if (H < 8 || V < 8 || Hz < 20 || Hz > 240)
+        return 0;
+    H &= ~7u;
+    if (V * 4 == H * 3) vsync = 4;
+    else if (V * 16 == H * 9) vsync = 5;
+    else if (V * 16 == H * 10) vsync = 6;
+    else if (V * 5 == H * 4 || V * 15 == H * 9) vsync = 7;
+    else vsync = 10;
+    tmp1 = 1000u * 1000000u - 460u * 1000u * Hz;    /* ns per field, less the blanking */
+    hperiod = tmp1 / (V * Hz);                       /* ns per line */
+    if (hperiod == 0)
+        return 0;
+    vbi = 460u * 1000u / hperiod + 1;
+    if (vbi < 3 + vsync + 6)
+        vbi = 3 + vsync + 6;
+    T->HDisplay = (mwh_u16)H;
+    T->HTotal = (mwh_u16)(H + 160);
+    T->HSyncEnd = (mwh_u16)(H + 80);
+    T->HSyncStart = (mwh_u16)(H + 48);
+    T->VDisplay = (mwh_u16)V;
+    T->VSyncStart = (mwh_u16)(V + 3);
+    T->VSyncEnd = (mwh_u16)(V + 3 + vsync);
+    T->VTotal = (mwh_u16)(V + vbi);
+    {
+        unsigned long long clk = (unsigned long long)T->HTotal * 1000000ull / hperiod;   /* kHz */
+        clk -= clk % 250;
+        T->Clock = (mwh_u32)clk;
+    }
+    T->PHSync = 1;
+    T->PVSync = 0;
+    T->Fw = 0;
+    T->Vic = 0;
+    return 1;
+}
+
+/* A DisplayID type I or type VII detailed timing (20 bytes). */
+MW_HC_INLINE int MwDisplayIdTiming(const mwh_u8 *D, int Type7, MW_TIMING *T)
+{
+    mwh_u32 clk = ((mwh_u32)D[0] | (mwh_u32)D[1] << 8 | (mwh_u32)D[2] << 16) + 1;
+    mwh_u32 ha = ((mwh_u32)D[4] | (mwh_u32)D[5] << 8) + 1, hb = ((mwh_u32)D[6] | (mwh_u32)D[7] << 8) + 1;
+    mwh_u32 hfp = ((mwh_u32)D[8] | (mwh_u32)(D[9] & 0x7F) << 8) + 1, hsw = ((mwh_u32)D[10] | (mwh_u32)D[11] << 8) + 1;
+    mwh_u32 va = ((mwh_u32)D[12] | (mwh_u32)D[13] << 8) + 1, vb = ((mwh_u32)D[14] | (mwh_u32)D[15] << 8) + 1;
+    mwh_u32 vfp = ((mwh_u32)D[16] | (mwh_u32)(D[17] & 0x7F) << 8) + 1, vsw = ((mwh_u32)D[18] | (mwh_u32)D[19] << 8) + 1;
+
+    if (D[3] & 0x10)
+        return 0;               /* interlaced */
+    if (hfp + hsw >= hb || vfp + vsw >= vb || ha + hb > 0xFFFF || va + vb > 0xFFFF)
+        return 0;
+    T->Clock = Type7 ? clk : clk * 10;
+    T->HDisplay = (mwh_u16)ha;
+    T->HSyncStart = (mwh_u16)(ha + hfp);
+    T->HSyncEnd = (mwh_u16)(ha + hfp + hsw);
+    T->HTotal = (mwh_u16)(ha + hb);
+    T->VDisplay = (mwh_u16)va;
+    T->VSyncStart = (mwh_u16)(va + vfp);
+    T->VSyncEnd = (mwh_u16)(va + vfp + vsw);
+    T->VTotal = (mwh_u16)(va + vb);
+    T->PHSync = (mwh_u8)(D[9] >> 7);
+    T->PVSync = (mwh_u8)(D[17] >> 7);
+    T->Fw = 0;
+    T->Vic = MwCeaVic(T);
+    return 1;
+}
+
+/* The full timing of a firmware timing of which only the size, the totals
+ * and the clock are known (MW_TIMING.Fw), when it is a CEA-861 or DMT one:
+ * then it can be programmed again (a revert, a restore after a failed mode
+ * set). 0 when it is none of them. */
+MW_HC_INLINE int MwKnownTiming(const MW_TIMING *Fw, MW_TIMING *Out)
+{
+    for (unsigned i = 0; i < sizeof(MwCeaModes) / sizeof(MwCeaModes[0]); i++) {
+        MwCeaTiming(&MwCeaModes[i], Out);
+        if (MwTimingEqual(Out, Fw))
+            return 1;
+    }
+    for (unsigned i = 0; i < sizeof(MwDmtModes) / sizeof(MwDmtModes[0]); i++) {
+        MwDmtTiming(&MwDmtModes[i], Out);
+        if (MwTimingEqual(Out, Fw))
+            return 1;
+    }
+    return 0;
+}
+
+/* Add a mode if it is usable, within the limits and not one already there. */
+MW_HC_INLINE void MwModeAdd(MW_TIMING *Out, mwh_u32 *N, mwh_u32 Max, const MW_TIMING *T, mwh_u32 MaxPixels,
+                            const MW_EDID_LIMITS *L)
+{
+    if (*N >= Max || T->Clock > L->MaxClock || !MwTimingUsable(T, MaxPixels))
+        return;
+    for (mwh_u32 i = 0; i < *N; i++)
+        if (MwTimingSameMode(&Out[i], T))
+            return;
+    Out[(*N)++] = *T;
+}
+
+MW_HC_INLINE void MwCeaAdd(MW_TIMING *Out, mwh_u32 *N, mwh_u32 Max, mwh_u32 Vic, mwh_u32 MaxPixels,
+                           const MW_EDID_LIMITS *L, int Frac)
+{
+    MW_TIMING t;
+
+    if (Vic == 3) Vic = 2;      /* 16:9 of the same timing */
+    if (Vic == 18) Vic = 17;
+    for (unsigned i = 0; i < sizeof(MwCeaModes) / sizeof(MwCeaModes[0]); i++) {
+        mwh_u32 hz, mhz;
+        if (MwCeaModes[i].Vic != Vic)
+            continue;
+        MwCeaTiming(&MwCeaModes[i], &t);
+        MwModeAdd(Out, N, Max, &t, MaxPixels, L);
+        mhz = MwTimingMilliHz(&t);
+        hz = (mhz + 500) / 1000;
+        if (Frac && (hz == 24 || hz == 30 || hz == 60 || hz == 120)) {
+            /* The table's clock is the whole rate (148.5 MHz, 60 Hz): the
+             * other is 1000/1001 of it. VICs 1 and 2 are listed at 59.94 Hz
+             * (25.175, 27 MHz): the other is 1001/1000 of theirs. */
+            if (mhz + 10 >= hz * 1000u)
+                t.Clock = (mwh_u32)(((unsigned long long)t.Clock * 1000ull + 500ull) / 1001ull);
+            else
+                t.Clock = (mwh_u32)(((unsigned long long)t.Clock * 1001ull + 500ull) / 1000ull);
+            MwModeAdd(Out, N, Max, &t, MaxPixels, L);
+        }
+        return;
+    }
+}
+
 MW_HC_INLINE mwh_u32 MwHdmiModes(const mwh_u8 *E, mwh_u32 Len, mwh_u32 MaxPixels,
                                  MW_TIMING *Out, mwh_u32 Max)
 {
     mwh_u32 n = 0;
     MW_TIMING t;
+    MW_EDID_LIMITS lim;
 
+    MwEdidLimits(E, Len, &lim);
     if (Len >= 128) {
-        for (mwh_u32 b = 0; (b + 1) * 128 <= Len && b <= 4 && n < Max; b++) {
+        /* 1. detailed timings */
+        for (mwh_u32 b = 0; (b + 1) * 128 <= Len && b <= 4; b++) {
             const mwh_u8 *x = E + b * 128;
-            mwh_u32 first, last;
-            if (b == 0) {
-                first = 54;
-                last = 126;
-            } else if (x[0] == 0x02 && x[2] >= 4 && x[2] < 127) {
-                first = x[2];
-                last = 127;
-            } else {
+            if (b == 0 || (x[0] == 0x02 && x[2] >= 4 && x[2] < 127)) {
+                mwh_u32 first = b == 0 ? 54 : x[2], last = b == 0 ? 126 : 127;
+                for (mwh_u32 o = first; o + 18 <= last; o += 18)
+                    if (MwEdidDtd(x + o, &t))
+                        MwModeAdd(Out, &n, Max, &t, MaxPixels, &lim);
+            } else if (x[0] == 0x70) {
+                /* DisplayID: data blocks from byte 5, x[2] bytes of them */
+                mwh_u32 end = 5u + x[2];
+                if (end > 127)
+                    end = 127;
+                for (mwh_u32 o = 5; o + 3 <= end;) {
+                    mwh_u32 tag = x[o], plen = x[o + 2];
+                    if (o + 3 + plen > end)
+                        break;
+                    if (tag == 0x03 || tag == 0x22)
+                        for (mwh_u32 k = 0; k + 20 <= plen; k += 20)
+                            if (MwDisplayIdTiming(x + o + 3 + k, tag == 0x22, &t))
+                                MwModeAdd(Out, &n, Max, &t, MaxPixels, &lim);
+                    o += 3 + plen;
+                }
+            }
+        }
+        /* 2. CTA-861 short video descriptors */
+        for (mwh_u32 b = 1; (b + 1) * 128 <= Len && b <= 4; b++) {
+            const mwh_u8 *x = E + b * 128;
+            mwh_u32 end = x[2];
+            if (x[0] != 0x02 || x[1] < 3 || end > 127)
                 continue;
-            }
-            for (mwh_u32 o = first; o + 18 <= last && n < Max; o += 18) {
-                int dup = 0;
-                if (!MwEdidDtd(x + o, &t) || !MwTimingUsable(&t, MaxPixels))
-                    continue;
-                for (mwh_u32 i = 0; i < n; i++)
-                    dup |= MwTimingEqual(&Out[i], &t);
-                if (!dup)
-                    Out[n++] = t;
-            }
-        }
-    }
-    {
-        static const mwh_u8 safe[] = { 16, 4 };
-        for (mwh_u32 s = 0; s < sizeof(safe) && n < Max; s++) {
-            for (unsigned i = 0; i < sizeof(MwCeaModes) / sizeof(MwCeaModes[0]); i++) {
-                int dup = 0;
-                if (MwCeaModes[i].Vic != safe[s])
-                    continue;
-                MwCeaTiming(&MwCeaModes[i], &t);
-                if (!MwTimingUsable(&t, MaxPixels))
+            for (mwh_u32 off = 4; off < end;) {
+                const mwh_u8 *d = x + off;
+                mwh_u32 len = 1u + (d[0] & 0x1F), tag = d[0] >> 5;
+                if (off + len > end)
                     break;
-                for (mwh_u32 k = 0; k < n; k++)
-                    dup |= MwTimingEqual(&Out[k], &t);
-                if (!dup)
-                    Out[n++] = t;
-                break;
+                if (tag == 2)
+                    for (mwh_u32 k = 1; k < len; k++) {
+                        mwh_u32 svd = d[k];
+                        /* 1..64 with the native bit (129..192), else the 8-bit VIC */
+                        mwh_u32 vic = (svd >= 129 && svd <= 192) ? (svd & 0x7F) : svd;
+                        MwCeaAdd(Out, &n, Max, vic, MaxPixels, &lim, 1);
+                    }
+                off += len;
+            }
+        }
+        /* 3. standard timings */
+        for (mwh_u32 o = 38; o < 54; o += 2) {
+            mwh_u32 b0 = E[o], b1 = E[o + 1], h, v, hz;
+            const MW_DMT_MODE *d;
+            if (b0 == 0 || (b0 == 1 && b1 == 1))
+                continue;
+            h = (b0 + 31) * 8;
+            hz = (b1 & 0x3F) + 60;
+            switch (b1 >> 6) {
+            case 0:  v = (E[18] == 1 && E[19] < 3) ? h : h * 10 / 16; break;
+            case 1:  v = h * 3 / 4; break;
+            case 2:  v = h * 4 / 5; break;
+            default: v = h * 9 / 16; break;
+            }
+            d = MwDmtFind(h, v, hz);
+            if (d != 0) {
+                MwDmtTiming(d, &t);
+                MwModeAdd(Out, &n, Max, &t, MaxPixels, &lim);
+            } else if (MwCvtRb(h, v, hz, &t) && MwInRange(&t, &lim)) {
+                MwModeAdd(Out, &n, Max, &t, MaxPixels, &lim);
+            }
+        }
+        /* 4. established timings */
+        {
+            static const struct { mwh_u8 Byte, Bit; mwh_u16 H, V; mwh_u8 Hz; } est[] = {
+                { 35, 0x20, 640, 480, 60 },  { 35, 0x08, 640, 480, 72 },  { 35, 0x04, 640, 480, 75 },
+                { 35, 0x02, 800, 600, 56 },  { 35, 0x01, 800, 600, 60 },  { 36, 0x80, 800, 600, 72 },
+                { 36, 0x40, 800, 600, 75 },  { 36, 0x08, 1024, 768, 60 }, { 36, 0x04, 1024, 768, 70 },
+                { 36, 0x02, 1024, 768, 75 }, { 36, 0x01, 1280, 1024, 75 },
+            };
+            for (unsigned i = 0; i < sizeof(est) / sizeof(est[0]); i++) {
+                const MW_DMT_MODE *d;
+                if (!(E[est[i].Byte] & est[i].Bit))
+                    continue;
+                d = MwDmtFind(est[i].H, est[i].V, est[i].Hz);
+                if (d != 0) {
+                    MwDmtTiming(d, &t);
+                    MwModeAdd(Out, &n, Max, &t, MaxPixels, &lim);
+                }
             }
         }
     }
+    /* 5. the safe pair */
+    MwCeaAdd(Out, &n, Max, 16, MaxPixels, &lim, 0);
+    MwCeaAdd(Out, &n, Max, 4, MaxPixels, &lim, 0);
     return n;
 }
 

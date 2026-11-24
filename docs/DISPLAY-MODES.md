@@ -198,47 +198,154 @@ Expect `ScaledModes` 1, `SourceModes` about 20, `EdidBytes` 0x100.
 9. **Regression** (optional): `ScaledModes` 0, reboot: one resolution again,
    as before.
 
-## Phase 2: retiming the HDMI output from Windows (design only)
+## Phase 2: real modes and refresh rates (`HdmiHpd` 3)
 
-Scaling keeps the monitor at its native timing, which is what laptops and
-most GPUs do by default. Real modes (the monitor resyncing to 1920x1080,
-other refresh rates) already exist at `HdmiHpd` 3: `hdmi.c`'s
-`MwHdmiModeSet` programs VP0's timing, DCLK_VP0, the HDPTX ROPLL and the
-DW-HDMI-QP controller, moves Esmart0 to a framebuffer of the driver's own
-(`MwHpdReserve`) and sets up HDMI audio again, all ported from
-edk2-rk3576 and run on this board on 2026-11-22 and 2026-11-23. It offers
-the EDID's progressive detailed timings up to 340 MHz and 1920x1080@60 and
-1280x720@60. What making that the normal way to change resolution would
-take:
+Branch `display-retime`, off `test-2026-11-24`. Code: `hdmi_calc.h`
+(`MwHdmiModes` and what it uses, host-tested by `tests/hdmi-host`), `hpd.c`
+(the level 3 VidPN, the restore). Built by CI; not run on the board.
 
-1. **The board check first.** Level 3 has run on a DSI boot with HDMI
-   plugged and on plug/unplug; a resolution change from Settings on an HDMI
-   boot at level 3 has not been tried. That is one boot with `HdmiHpd` 3
-   and steps 1, 3, 6 and 7 above (expect the monitor to resync, about 2 s).
-2. **More real modes.** `MwHdmiModes` (hdmi_calc.h) knows detailed timings
-   only. Add the CEA-861 short video descriptors (a VIC table: 720p, 1080p
-   at 50/60, 4K at 24/25/30 within 340 MHz), the EDID's standard and
-   established timings through a DMT table, and CVT reduced blanking for
-   sizes in neither. Each is checked against the PHY (`MwRopllFor`
-   must find a setting), the 340 MHz TMDS cap (no scrambling until Ciocaltea's series
-   lands), 4-pixel alignment and `HdmiMaxPixels`.
-3. **Refresh rates.** Several target modes of one size (2560x1440 at 60 and
-   75 on the AOC): the target mode set lists them all, the monitor mode set
-   too, and the primary's refresh rate must be the committed target's
-   (`Hdmi.RefNum/RefDen`, the cause of the black desktop on 2026-11-22).
-4. **Both at once.** Smaller source modes on top of a retimed target: the
-   window arithmetic here needs the current target size instead of the
-   firmware framebuffer's, and the reserved framebuffer instead of the
-   firmware's. `scale.h` is already independent of where the sizes come
-   from; `MwScanScale` would take them from `Hdmi`.
-5. **Framebuffer size.** The reserved framebuffer is allocated once at
-   start for `HdmiMaxPixels` (2560x1600 by default). 4K modes need 33 MB
-   contiguous below 4 GB, at start, or are not offered.
-6. **Default.** `HdmiHpd` 3 would become the default for HDMI boots only
-   after (1) and a run of plug, unplug, sleep and restart. A failed mode set
-   is a failed commit today, with the window left on the driver's
-   framebuffer and no timing on the wire: it would need to program the
-   previous timing again. Windows' 15 s revert covers a mode the monitor
-   shows black but the hardware accepted.
+The report that started it: the refresh rate cannot be changed either.
+Scaling cannot change it: the target keeps the firmware's timing. Only a
+real mode set can, and `HdmiHpd` 3 has one (`hdmi.c` `MwHdmiModeSet`: VP0's
+timing, DCLK_VP0, the HDPTX ROPLL, the DW-HDMI-QP controller, audio again;
+run on this board on 2026-11-22 and 2026-11-23). What it lacked was modes.
 
-The DSI panel has one timing and is not retimed; it gets scaled modes only.
+### What is offered
+
+Everything the EDID says the monitor takes, at every refresh rate it lists,
+that the driver can drive. In this order (the first is the monitor's
+preferred mode, the one Windows marks Recommended and the firmware picks):
+
+1. Detailed timings: base block, CTA-861 extensions, DisplayID extensions
+   (type I and type VII timings, where monitors put their 120 and 144 Hz
+   modes).
+2. CTA-861 short video descriptors: a VIC table of every progressive VIC up
+   to 340 MHz (1, 2/3, 4, 16, 17/18, 19, 31 to 34, 41, 47, 60 to 64, 93 to
+   95, 98 to 100), each 24, 30, 60 or 120 Hz VIC also at its 1000/1001
+   rate (59.94, 119.88 Hz and so on; VICs 1 and 2 are listed at 59.94 and
+   get 60).
+3. Standard timings: the VESA DMT timing of that size and rate (32 DMT
+   entries, Linux's `drm_dmt_modes` values), else CVT reduced blanking
+   (Linux's `drm_cvt_mode` arithmetic; 2560x1440@60 comes out at 241.5 MHz,
+   2720x1481, as Linux has it) but only when the EDID has a range limits
+   descriptor and the mode is inside it.
+4. Established timings (DMT).
+5. 1920x1080@60 and 1280x720@60, as before.
+
+Then, as before, the firmware's own timing first for the monitor it lit.
+
+Filtered by what the hardware and this driver can drive (`MwModeAdd`):
+
+| Limit | Value | Why |
+|---|---|---|
+| TMDS clock | at most 340 MHz | 8 bpc RGB with no scrambling (`SCRAMB_CONFIG0` 0, SCDC TMDS_CONFIG 0, as the firmware). The HDPTX PHY and the controller go to 600 MHz with HDMI 2.0 scrambling; mainline gets that with Ciocaltea's series (Linux 7.5). Not written here. |
+| Sink TMDS clock | the HDMI VSDB's Max_TMDS_Clock when it gives one | below 340 MHz only (older HDMI 1.x sinks). A sink with no VSDB gets no lower cap, as in Linux. |
+| PHY | `MwRopllFor` finds a ROPLL setting | the firmware's table, else its calculation |
+| Width | a multiple of 4 | VOP2 widens other widths past the primary |
+| Size | within VP0 (4096x2304) and `HdmiMaxPixels` (2560x1600 by default) | the reserved framebuffer |
+| Scan | progressive only | |
+
+Two entries of the same size with refresh rates within 0.05% count as one
+(59.998 and 60.000 Hz are one choice to a user; 59.94 and 60 are two).
+
+For the board's AOC (its `edid.bin` from the 2026-11-22 Linux session, run
+through the same code on the host, not committed): 2560x1440 at 60 and 75
+Hz, 1280x1440@59.91, 1920x1080 at 60, 59.94 and 50, 1280x720 at 60, 59.94
+and 50, 1680x1050, 1440x900, 1280x1024 at 60 and 75, 1024x768 at 60, 70,
+75 and 99.8, 800x600 at 56, 60, 72, 75 and 99.8, 720x576@50, 720x480 and
+640x480 at several rates. 30 modes. **2560x1440@100 is not there:** it is
+397.98 MHz, above the 340 MHz this driver can drive without scrambling.
+That needs HDMI 2.0 scrambling (below).
+
+### How Windows sees it
+
+One target mode per timing, one source mode per size. A size at several
+refresh rates is one entry in Settings > Display > Display resolution and
+several in Advanced display > Choose a refresh rate. Only the monitor's
+preferred mode is marked preferred. The primary's refresh rate is the
+committed target's (`Hdmi.RefNum/RefDen`, the fix of 2026-11-22), so DWM
+flips at 75 Hz in a 75 Hz mode.
+
+### Robustness
+
+- **A failed mode set** (the PHY does not lock, the lanes do not come up)
+  now puts the previous timing back on the wire, on the framebuffer it had,
+  before the commit fails (`Restore`). Windows keeps the old mode, and the
+  monitor shows it again. Before, nothing was left on the wire. The
+  firmware's own timing can be programmed again when it is a detailed
+  timing of the EDID (the usual case) or a CEA-861 or DMT timing
+  (`MwKnownTiming`; for an HDMI boot without EDID that is 1080p60). HDMI
+  to HDMI only: the DSI panel path is unchanged.
+- **Windows' 15 s revert** commits the previous mode, which is a full
+  timing now, so the revert is a mode set like any other.
+- **Hot-plug** re-reads the EDID over DDC on every plug (unchanged) and
+  builds the list again; Windows asks for the new modes after the plug is
+  reported.
+- Trace: `Edid_M<i>`, `Edid_R<i>`, `Edid_C<i>` (each mode's size, refresh in
+  1/100 Hz, clock in kHz, up to 24), `Hpd_Refresh`, `Mset_Status`,
+  `Mset_Restore`, `Mset_RestoreMode`, `Hpd_RestoreOk`.
+
+### Default: stays behind the switch
+
+`HdmiHpd` stays 0 by default; refresh rates need `HdmiHpd` 3. At 0 to 2,
+`ScaledModes` gives resolutions without touching the link. Why not flip it
+now:
+
+- Level 3 has run on the board only on a DSI boot with HDMI plugged
+  (2026-11-22 and 2026-11-23). A mode change from Settings on an HDMI boot
+  at level 3, the 30-mode list, and the restore have never run.
+- Level 3 changes every boot, not only a mode change: the hot-plug thread,
+  a 16 MB contiguous framebuffer reserved at start, the children and the
+  VidPN all go through `hpd.c`. A fault there costs the user a rescue
+  boot; an opt-in costs a registry value.
+- On a DSI boot level 3 adds the HDMI child next to the panel (the
+  exclusive arrangement), which the panel path must not get by default.
+
+Flip it for HDMI boots only (the panel keeps today's path) once the board
+test below passes on three separate boots, revert and hot-plug included,
+since one good boot in four has looked like proof here before.
+
+### HDMI 2.0 scrambling (not done)
+
+What 2560x1440@100 (398 MHz) and 1080p144 at more than 340 MHz would take:
+the sink's HF-VSDB (SCDC present, Max_TMDS_Character_Rate), SCDC writes
+over DDC (TMDS_Config: scrambling on, 1/40 clock ratio; then reading
+Scrambler_Status back), the controller's `SCRAMB_CONFIG0`, the PHY's 1/40
+TMDS clock pattern, and re-enabling it after every hot-plug, which sinks
+forget. Mainline dw-hdmi-qp gets this in Linux 7.5 (Ciocaltea); port it
+from there once it has landed.
+
+### Board test for refresh rates
+
+TaishanPi 3M, HDMI only, the AOC. The package from `display-retime`.
+
+1. Install, then:
+
+       reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters" /v HdmiHpd /t REG_DWORD /d 3 /f
+
+   and reboot. The desktop comes up on HDMI as before.
+   `reg query "...\Device Parameters\maliwddm" | findstr /i "Hpd_Level Hpd_Switch Edid_"`:
+   `Hpd_Level` 3, `Hpd_Switch` 1, `Edid_Modes` about 30, `Edid_M00`
+   0x0A0005A0 with `Edid_R00` 6000, and a 2560x1440 entry with `Edid_R` 7500.
+   If the desktop does not come up: the rescue Windows, set `HdmiHpd` back
+   to 1.
+2. Settings > Display > Advanced display > Choose a refresh rate. Expect 60
+   and 75 Hz at 2560x1440 (not 100: above 340 MHz). Screenshot.
+3. Pick 75 Hz. The monitor goes dark for about 2 s and comes back. Check
+   the monitor's OSD (input information): 2560x1440, 75 Hz. Press Keep
+   changes. Trace: `Hpd_CommitMode` 0x0A0005A0, `Mset_Status` 0,
+   `Hpd_Refresh` 7500. Drag a window for 10 s.
+4. **Revert.** Pick 60 Hz and do not press anything: after 15 s Windows
+   goes back to 75 Hz, the OSD says 75 Hz. Then pick 60 Hz and keep it.
+5. Display resolution 1920 x 1080. OSD: 1920x1080 60 Hz. Choose a refresh
+   rate now lists 60, 59.94 and 50. Pick 50; OSD 50 Hz. Back to 60.
+6. **Hot-plug** at 1920x1080: unplug 5 s, plug back. The picture comes back
+   at 1920x1080, OSD 60 Hz; `Hpd_Changes` up by 2, `Edid_Bytes` 0x100.
+7. **Reboot persistence.** Set 2560x1440 at 75 Hz, restart. The firmware's
+   boot screen is at 60 Hz (the firmware's choice); after login the OSD
+   says 75 Hz again.
+8. Back to 2560x1440 at 60 Hz. To leave the board as it was: `HdmiHpd` 1,
+   reboot.
+
+A failed mode set shows as `Mset_Status` non-zero with `Mset_Restore` 0
+and the old mode back on the monitor; nothing in this test forces one.

@@ -155,6 +155,23 @@ static void LogEdid(MW_ADAPTER *A)
         MwLog(A, L"Edid_Mode0", (ULONG)H->Modes[0].HDisplay << 16 | H->Modes[0].VDisplay);
         MwLog(A, L"Edid_Mode0Clock", H->Modes[0].Clock | (H->Modes[0].Fw ? 0x80000000u : 0));
     }
+    /* Every mode offered: Edid_M<i> is width << 16 | height, Edid_R<i> the
+     * refresh rate in 1/100 Hz (5999 for 59.99 Hz), Edid_C<i> the clock in
+     * kHz. Up to 24 of them. */
+    for (ULONG i = 0; i < H->ModeCount && i < 24; i++) {
+        static PCWSTR const fmt[3] = { L"Edid_M%02u", L"Edid_R%02u", L"Edid_C%02u" };
+        ULONG v[3];
+        v[0] = (ULONG)H->Modes[i].HDisplay << 16 | H->Modes[i].VDisplay;
+        v[1] = (MwTimingMilliHz(&H->Modes[i]) + 5) / 10;
+        v[2] = H->Modes[i].Clock;
+        for (ULONG j = 0; j < 3; j++) {
+            WCHAR buf[16];
+            UNICODE_STRING us;
+            RtlInitEmptyUnicodeString(&us, buf, sizeof(buf));
+            if (NT_SUCCESS(RtlUnicodeStringPrintf(&us, fmt[j], i)))
+                MwLog(A, buf, v[j]);
+        }
+    }
 }
 
 /* A new EDID (or none, Len 0). StateLock taken here. The HDMI modes:
@@ -162,8 +179,15 @@ static void LogEdid(MW_ADAPTER *A)
  *   or none at all), the firmware's timing first. If one of the EDID's
  *   detailed timings is that timing it stands in for it, since it can be
  *   programmed again later; and the wire is then known to be that timing.
- * - at level 3, the EDID's detailed timings and the safe set (hdmi_calc.h).
- * - at level 3 with nothing at all, the safe set. */
+ * - at level 3, every mode the EDID lists that the driver can drive, at
+ *   every refresh rate it lists, and the safe set (hdmi_calc.h
+ *   MwHdmiModes); later entries that are the same mode as an earlier one
+ *   (size, and refresh within 0.05%) are left out.
+ * - at level 3 with nothing at all, the safe set.
+ * The firmware's timing, when no detailed timing is it, is taken from the
+ * CEA-861 and DMT tables if it is one of theirs (MwKnownTiming), so that it
+ * can be programmed again: a revert to it, or a restore after a failed mode
+ * set. Only an unknown timing stays Fw (never programmed). */
 static void UpdateEdid(MW_ADAPTER *A, const UCHAR *E, ULONG Len)
 {
     MW_HDMI *H = &A->Hdmi;
@@ -192,20 +216,24 @@ static void UpdateEdid(MW_ADAPTER *A, const UCHAR *E, ULONG Len)
         n = MwHdmiModes(H->Edid, H->EdidSize, H->ResMaxPixels, m, MW_HDMI_MODES);
     H->ModeCount = 0;
     if (same) {
-        MW_TIMING fw = H->FwTiming;
+        MW_TIMING fw = H->FwTiming, known;
+        BOOLEAN found = FALSE;
         for (ULONG i = 0; i < n; i++)
             if (MwTimingEqual(&m[i], &fw)) {
                 fw = m[i];
-                if (H->WireKind == MW_WIRE_HDMI && H->Wire.Fw && MwTimingEqual(&H->Wire, &fw))
-                    H->Wire = fw;
+                found = TRUE;
                 break;
             }
+        if (!found && H->Switch && MwKnownTiming(&fw, &known))
+            fw = known;
+        if (!fw.Fw && H->WireKind == MW_WIRE_HDMI && H->Wire.Fw && MwTimingEqual(&H->Wire, &fw))
+            H->Wire = fw;
         H->Modes[H->ModeCount++] = fw;
     }
     for (k = 0; k < n && H->ModeCount < MW_HDMI_MODES; k++) {
         BOOLEAN dup = FALSE;
         for (ULONG i = 0; i < H->ModeCount; i++)
-            if (MwTimingEqual(&H->Modes[i], &m[k]))
+            if (MwTimingEqual(&H->Modes[i], &m[k]) || MwTimingSameMode(&H->Modes[i], &m[k]))
                 dup = TRUE;
         if (!dup)
             H->Modes[H->ModeCount++] = m[k];
@@ -820,7 +848,6 @@ static NTSTATUS AddTargetModes(MW_ADAPTER *A, const DXGK_VIDPN_INTERFACE *V, D3D
     D3DKMDT_HVIDPNTARGETMODESET set;
     const DXGK_VIDPNTARGETMODESET_INTERFACE *ti;
     NTSTATUS st;
-    BOOLEAN first = TRUE;
 
     st = V->pfnCreateNewTargetModeSet(Vp, Tgt, &set, &ti);
     if (!NT_SUCCESS(st))
@@ -832,9 +859,13 @@ static NTSTATUS AddTargetModes(MW_ADAPTER *A, const DXGK_VIDPN_INTERFACE *V, D3D
         st = ti->pfnCreateNewModeInfo(set, &mode);
         if (!NT_SUCCESS(st))
             break;
+        /* One target mode per timing: a size at several refresh rates is
+         * several target modes with one source mode (AddSourceModes), which
+         * is what Settings > Display > Advanced display lists as refresh
+         * rates. Preferred: the monitor's preferred mode (the list's first)
+         * alone, also when the source size pinned leaves it out. */
         Signal(A, &M[i], &mode->VideoSignalInfo);
-        mode->Preference = first ? D3DKMDT_MP_PREFERRED : D3DKMDT_MP_NOTPREFERRED;
-        first = FALSE;
+        mode->Preference = i == 0 ? D3DKMDT_MP_PREFERRED : D3DKMDT_MP_NOTPREFERRED;
         st = ti->pfnAddMode(set, mode);
         if (!NT_SUCCESS(st)) {
             ti->pfnReleaseModeInfo(set, mode);
@@ -1107,11 +1138,66 @@ static void Baseline(MW_ADAPTER *A)
     H->BlackLogged = FALSE;
 }
 
+/* After a failed mode set: the timing that was on the wire before, again,
+ * with the window on the framebuffer it had (ours at that size, or the
+ * firmware's). Prev may be the firmware's timing (Fw, syncs unknown): then
+ * the list's own entry for it if one has its syncs, else the CEA-861 or DMT
+ * timing it is (MwKnownTiming). Under HwLock, Busy set. Trace: Mset_Restore
+ * (its status, 0xFFFFFFFF when there was nothing to restore),
+ * Mset_RestoreMode, Hpd_RestoreOk. */
+static void Restore(MW_ADAPTER *A, const MW_TIMING *Prev, BOOLEAN PrevRes)
+{
+    MW_HDMI *H = &A->Hdmi;
+    MW_TIMING back = *Prev;
+    NTSTATUS st;
+    BOOLEAN ok = Prev->Clock != 0;
+
+    if (ok && back.Fw) {
+        ok = FALSE;
+        Lock(&H->StateLock);
+        for (ULONG i = 0; i < H->ModeCount && !ok; i++)
+            if (!H->Modes[i].Fw && MwTimingEqual(&H->Modes[i], Prev)) {
+                back = H->Modes[i];
+                ok = TRUE;
+            }
+        Unlock(&H->StateLock);
+        if (!ok)
+            ok = MwKnownTiming(Prev, &back) != 0;
+    }
+    if (!ok || (PrevRes && (H->ResVa == NULL || (SIZE_T)back.HDisplay * 4 * back.VDisplay > H->ResBytes)) ||
+        (!PrevRes && H->FwFbVa == NULL)) {
+        MwLog(A, L"Mset_Restore", 0xFFFFFFFFu);
+        return;
+    }
+    MwLog(A, L"Mset_RestoreMode", (ULONG)back.HDisplay << 16 | back.VDisplay);
+    if (PrevRes) {
+        st = MwHdmiModeSet(A, &back, H->ResPa.LowPart, (ULONG)back.HDisplay * 4);
+        UseFb(A, TRUE, back.HDisplay, back.VDisplay);
+    } else {
+        st = MwHdmiModeSet(A, &back, H->FwFb.PhysicAddress.LowPart, H->FwFb.Pitch);
+        UseFb(A, FALSE, 0, 0);
+    }
+    MwLog(A, L"Mset_Restore", (ULONG)st);
+    if (NT_SUCCESS(st)) {
+        H->WireKind = MW_WIRE_HDMI;
+        /* The previous entry as Windows knows it (Fw included), so that a
+         * commit of it again finds it already on the wire. */
+        H->Wire = *Prev;
+        H->RestoreOks++;
+        MwLog(A, L"Hpd_RestoreOk", H->RestoreOks);
+    }
+}
+
 /* Make VP0 drive Target at T. PASSIVE_LEVEL, from CommitVidPn. */
 static NTSTATUS Apply(MW_ADAPTER *A, ULONG Target, const MW_TIMING *T)
 {
     MW_HDMI *H = &A->Hdmi;
     NTSTATUS st = STATUS_SUCCESS;
+    MW_TIMING prev;
+    ULONG prevKind = 0;
+    BOOLEAN prevRes = FALSE;
+
+    RtlZeroMemory(&prev, sizeof(prev));
 
     if (H->Dsi && Target == 0) {
         if (H->WireKind == MW_WIRE_DSI)
@@ -1137,6 +1223,10 @@ static NTSTATUS Apply(MW_ADAPTER *A, ULONG Target, const MW_TIMING *T)
         return STATUS_SUCCESS;
     if (T->Fw)                  /* the firmware's timing cannot be set again: its syncs are unknown */
         return STATUS_GRAPHICS_INVALID_VIDPN;
+    /* What is on the wire now, for a restore if this mode set fails. */
+    prevKind = H->WireKind;
+    prev = H->Wire;
+    prevRes = H->OnRes;
     if (H->ResVa == NULL || (SIZE_T)T->HDisplay * 4 * T->VDisplay > H->ResBytes)
         return STATUS_GRAPHICS_INVALID_VIDPN;
     if (H->Dsi)
@@ -1162,6 +1252,14 @@ static NTSTATUS Apply(MW_ADAPTER *A, ULONG Target, const MW_TIMING *T)
         if (st != STATUS_DEVICE_NOT_READY) {
             H->WireKind = MW_WIRE_HDMI;
             RtlZeroMemory(&H->Wire, sizeof(H->Wire));
+            /* The new timing failed (the PHY did not lock, the lanes did
+             * not come up) after VP0 and the PHY were touched: nothing
+             * usable on the wire. The commit fails, so Windows keeps the
+             * old mode and its primaries; put the old timing back for them,
+             * on the framebuffer it had. HDMI to HDMI only: a DSI boot's
+             * panel path is left as it was. */
+            if (prevKind == MW_WIRE_HDMI)
+                Restore(A, &prev, prevRes);
         }
     }
     InterlockedExchange(&H->Busy, 0);
