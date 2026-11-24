@@ -109,7 +109,7 @@ jobs:
           .\out\m3test.exe
           if ($LASTEXITCODE -ne 1) { throw "unexpected exit code $LASTEXITCODE" }
           # The D3DKMT test: no maliwddm adapter here, so it must exit 1.
-          cl /nologo /W4 /WX /O2 /I include tools\windows\m5test.c gdi32.lib /Fe:out\m5test.exe
+          cl /nologo /W4 /WX /O2 /I include tools\windows\m5test.c gdi32.lib advapi32.lib /Fe:out\m5test.exe
           if ($LASTEXITCODE) { throw 'm5test build failed' }
           .\out\m5test.exe
           if ($LASTEXITCODE -ne 1) { throw "m5test: unexpected exit code $LASTEXITCODE" }

@@ -797,6 +797,7 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
     MwLog(a, L"DdiInterface", MwDdiInterface);
     MwLog(a, L"WddmProbe", MwWddmProbe);
     MwLog(a, L"WddmProbeResult", MwWddmProbeResult);
+    MwLog(a, L"WddmFallbackReason", MwWddmFallbackReason);
     MwLog(a, L"Wddm2Shape", MwWddmProbe != 0 ? MwWddm2Shape : 0xFFFFFFFF);
     MwLog(a, L"Nodes", MwNodeCount());
     /* The LUID the "GPU Engine" counters name this adapter by (luid_0x...). */

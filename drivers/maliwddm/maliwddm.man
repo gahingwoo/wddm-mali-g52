@@ -72,6 +72,22 @@
                    field="ThrottledReason"
                    type="perf_counter_rawcount"
                    detailLevel="standard"/>
+          <counter id="6"
+                   uri="wddm-mali-g52.maliwddm.Rk3576Gpu.WddmVersion"
+                   name="WDDM version"
+                   description="The WDDM version this boot runs: 20 for 2.0, 13 for 1.3, 24 for a 2.4 probe"
+                   struct="GpuValues"
+                   field="WddmVersion"
+                   type="perf_counter_rawcount"
+                   detailLevel="standard"/>
+          <counter id="7"
+                   uri="wddm-mali-g52.maliwddm.Rk3576Gpu.WddmFallbackReason"
+                   name="WDDM fallback reason"
+                   description="Why this boot is 1.3: 0 it is not (or no reason recorded), 1 two 2.0 boots in a row showed no frame, 2 the same ending in a TDR storm, 3 three unconfirmed 2.0 boots in a row, 4 an explicit WddmProbe never confirmed, 5 WddmProbe 0x1300 asks for 1.3"
+                   struct="GpuValues"
+                   field="WddmFallbackReason"
+                   type="perf_counter_rawcount"
+                   detailLevel="standard"/>
         </counterSet>
       </provider>
     </counters>

@@ -94,7 +94,7 @@ exit /b 1
 :set
 if "%~2"=="" (echo which version? e.g. wddm-probe set 2000 & exit /b 1)
 reg add %PARAMS% /v WddmProbe /t REG_DWORD /d 0x%~2 /f >nul || exit /b 1
-for %%v in (WddmProbeArmed WddmProbeConfirmed WddmProbeFellBack WddmProbeFellBackBoot WddmProbeFellBackBuild WddmProbeArmFailed WddmProbeUnknown WddmProbeKeep ProbeUart ProbeWatchdog Wddm2Shape Wddm2Budget Wddm2LocalBudget Wddm2PowerDdis Wddm2RotOffset Wddm2AcquireHandle) do reg delete %PARAMS% /v %%v /f >nul 2>&1
+for %%v in (WddmProbeArmed WddmProbeConfirmed WddmProbeFellBack WddmProbeFellBackBoot WddmProbeFellBackBuild WddmProbeFellBackReason WddmProbeStage WddmProbeHardMisses WddmProbeSoftMisses WddmProbeLastMiss WddmProbeArmFailed WddmProbeUnknown WddmProbeKeep ProbeUart ProbeWatchdog Wddm2Shape Wddm2Budget Wddm2LocalBudget Wddm2PowerDdis Wddm2RotOffset Wddm2AcquireHandle) do reg delete %PARAMS% /v %%v /f >nul 2>&1
 if /i "%~1"=="keep" reg add %PARAMS% /v WddmProbeKeep /t REG_DWORD /d 1 /f >nul
 set SHAPE=0
 for %%a in (%3 %4 %5 %6 %7 %8) do (
@@ -165,7 +165,7 @@ echo WDDM 1.3 from the next boot (WddmProbe 0x1300). REBOOT to apply. "wddm-prob
 exit /b 0
 
 :default
-for %%v in (WddmProbe WddmProbeArmed WddmProbeConfirmed WddmProbeFellBack WddmProbeFellBackBoot WddmProbeFellBackBuild WddmProbeArmFailed WddmProbeUnknown WddmProbeKeep ProbeUart ProbeWatchdog Wddm2Shape Wddm2Budget Wddm2LocalBudget Wddm2PowerDdis Wddm2RotOffset Wddm2AcquireHandle) do reg delete %PARAMS% /v %%v /f >nul 2>&1
+for %%v in (WddmProbe WddmProbeArmed WddmProbeConfirmed WddmProbeFellBack WddmProbeFellBackBoot WddmProbeFellBackBuild WddmProbeFellBackReason WddmProbeStage WddmProbeHardMisses WddmProbeSoftMisses WddmProbeLastMiss WddmProbeArmFailed WddmProbeUnknown WddmProbeKeep ProbeUart ProbeWatchdog Wddm2Shape Wddm2Budget Wddm2LocalBudget Wddm2PowerDdis Wddm2RotOffset Wddm2AcquireHandle) do reg delete %PARAMS% /v %%v /f >nul 2>&1
 reg delete %AUTO% /f >nul 2>&1
 echo The default from the next boot: WDDM 2.0, with the fallback to 1.3. REBOOT to apply.
 exit /b 0

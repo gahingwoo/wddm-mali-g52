@@ -477,7 +477,7 @@ static void WatchdogTick(MW_WATCHDOG *W, ULONG Seconds)
     if (BcKey != NULL)
         RingDump();
     /* The one-shot fallback's confirm (version.c), at PASSIVE_LEVEL here. */
-    MwVersionConfirmCheck(A->Renders, Seconds, stuck);
+    MwVersionConfirmCheck(A->Renders, A->Flips + A->Presents, Seconds, stuck, (ULONG)A->TdrCount);
     if (stuck && !W->WasStuck)
         MwBc("watchdog %us: %ws", Seconds, text);
     else if (!stuck && W->WasStuck)

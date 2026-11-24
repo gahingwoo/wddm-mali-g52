@@ -2308,3 +2308,83 @@ The watchdog's `Probe2000` key holds fixed value names and does not grow.
    `WddmProbeArmed` 0. The journal's last line says "the journal ends
    here (the default)".
 3. `wddm-probe off`, reboot: WDDM 1.3 and the desktop as on `main`.
+
+### 16.14 A fallback that tells a failure from a power cut (2026-11-24)
+
+**What happened.** During firmware and Armbian tests the board was power
+cycled several times. One WDDM 2.0 boot was cut before the 2 minute
+confirm (16.13). The next boot fell back to 1.3 (`WddmProbeFellBack`
+0x2000, `WddmProbeFellBackBuild` 0x173, `WddmProbeFellBackBoot` 0x13), and
+because the default's fallback is sticky per build it stayed at 1.3,
+where Task Manager has no GPU page. `wddm-probe default` brought 2.0 back.
+The rule "a boot that never confirms has failed" could not tell a power
+cut from a hang.
+
+**The new rule** (branch `gpu-clk-safe-switch`, `wddm2plan.h`
+`Mw2BootDecide`, version.c, probe.c):
+
+- **Confirm in seconds, not minutes**: 60 renders, 10 presents (flips or
+  presents), 20 s up, no DDI stuck, fewer than three TDRs. LogonUI is
+  enough. The window for a cut to matter shrinks from about two minutes
+  to about twenty seconds after the first frames.
+- **Every armed boot records how far it got**, in
+  `Parameters\WddmProbeStage`, flushed at each step: 1 armed
+  (DriverEntry), 2 started (the watchdog's first second), 3 presented
+  (10 flips or presents), 15 TDR storm (three TDRs before the confirm).
+- **The next boot judges an unconfirmed one by its stage** (the default
+  only):
+
+  | Stage of the last boot | Class (`WddmProbeLastMiss`) | Counts as |
+  |---|---|---|
+  | 1 or 2 | 1 no frame: a hang, a bugcheck, a black screen, or a cut that early | a failure (`WddmProbeHardMisses`) |
+  | 15 | 2 TDR storm | a failure |
+  | 3 | 3 frames, then nothing: a power cut, a reset, a later crash | a miss (`WddmProbeSoftMisses`) |
+
+- **Fall back after two failures in a row, or three unconfirmed boots of
+  any kind in a row.** Otherwise the default runs 2.0 again, armed. A
+  confirmed boot clears both counts. The fallback stays sticky per build
+  as before.
+- **An explicit `WddmProbe` stays one-shot**: one unconfirmed boot falls
+  back, whatever its stage (reason 4). A probe is a test with someone
+  watching; the default is a daily driver.
+- **Why**: `Parameters\WddmProbeFellBackReason`, copied to the device's
+  trace as `WddmFallbackReason` at each start, and the performance
+  counters `\RK3576 GPU(gpu0)\WDDM version` (20, 13, 24) and
+  `\RK3576 GPU(gpu0)\WDDM fallback reason`:
+
+  | Reason | Meaning |
+  |---|---|
+  | 0 | not a fallback |
+  | 1 | two 2.0 boots in a row showed no frame |
+  | 2 | two 2.0 boots in a row failed, the last a TDR storm |
+  | 3 | three unconfirmed 2.0 boots in a row |
+  | 4 | an explicit `WddmProbe` never confirmed |
+  | 5 | not a fallback: `WddmProbe` 0x1300 asks for 1.3 |
+
+- `m5test wddm` prints the stage, the counts, the class of the last miss,
+  and the fallback with its build, boot and reason.
+  `wddm-probe set` and `wddm-probe default` delete the new values with the
+  old ones.
+
+What this does not tell apart: a bugcheck before the first frame and a
+power cut before the first frame look the same (stage 1 or 2), so two of
+those in a row still fall back. That costs a user who cuts the power
+twice during the first seconds of boot one trip to `wddm-probe default`,
+and it keeps a 2.0 that cannot show a picture from looping.
+
+`tests/wddm2-host` runs every pattern of eight boots of four kinds
+(confirmed, no frame, TDR storm, cut; 65536 patterns): never more than
+two failed or three unconfirmed 2.0 boots in a row, never 2.0 again after
+a fallback with the same build, and no fallback unless a limit was
+reached; plus the evening's sequence of cuts, the probe's one-shot, the
+stage steps and the confirm thresholds.
+
+**Board check.**
+
+1. Install the package. `m5test wddm`: stage 3 or more within 20 s of the
+   desktop, armed 0 and confirmed 0x2000 after about 20 s.
+2. Cut the power once at the desktop within 20 s of LogonUI, boot again:
+   2.0, `m5test wddm` shows "1 cut" and the last miss "frames, then no
+   confirm". Boot normally: the counts are 0 again.
+3. `maliwddm-counters check`: `WDDM version` 20, `WDDM fallback reason` 0.
+

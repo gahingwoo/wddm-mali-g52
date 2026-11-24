@@ -8,6 +8,8 @@
  *   \RK3576 GPU(gpu0)\% busy            job chains on the GPU, per interval
  *   \RK3576 GPU(gpu0)\Throttled         1 while the guard holds 594 MHz
  *   \RK3576 GPU(gpu0)\Throttled reason  0 none, 1 thermal, 2 faults (thermal_calc.h)
+ *   \RK3576 GPU(gpu0)\WDDM version      20 for 2.0, 13 for 1.3
+ *   \RK3576 GPU(gpu0)\WDDM fallback reason  why 1.3 (wddm2plan.h MW2_REASON_*)
  *
  * The set is described in maliwddm.man; ctrpp turns it into
  * maliwddmCounters.h (the Register/Add/Unregister helpers used here) and
@@ -27,6 +29,7 @@
  * no adapter, the set has no instance.
  */
 #include "maliwddm.h"
+#include "wddm2.h"
 
 /* The structure maliwddm.man names (struct GpuValues). */
 typedef struct _MW_PCW_GPU_VALUES {
@@ -35,6 +38,8 @@ typedef struct _MW_PCW_GPU_VALUES {
     ULONGLONG Busy100ns;
     ULONG Throttled;
     ULONG ThrottledReason;
+    ULONG WddmVersion;
+    ULONG WddmFallbackReason;
 } MW_PCW_GPU_VALUES;
 
 #pragma warning(push)
@@ -59,6 +64,9 @@ static void Values(MW_ADAPTER *A, MW_PCW_GPU_VALUES *V)
     V->Busy100ns = MwPcwTicksTo100ns(ticks, A->PerfHz);
     V->ThrottledReason = A->ThermOn ? MwThrottleReason(&A->Therm) : MW_THROTTLE_NONE;
     V->Throttled = V->ThrottledReason != MW_THROTTLE_NONE ? 1u : 0u;
+    /* 0x2000 -> 20, 0x1300 -> 13, 0x2400 -> 24. */
+    V->WddmVersion = ((MwWddmVersion >> 12) & 0xF) * 10 + ((MwWddmVersion >> 8) & 0xF);
+    V->WddmFallbackReason = MwWddmFallbackReason;
 }
 
 static NTSTATUS NTAPI PcwCallback(PCW_CALLBACK_TYPE Type, PPCW_CALLBACK_INFORMATION Info, PVOID Context)

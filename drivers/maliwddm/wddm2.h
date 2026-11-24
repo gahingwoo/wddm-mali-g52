@@ -34,7 +34,8 @@ extern ULONG MwWddm2LocalBudget; /* Wddm2LocalBudget: the local budget group, no
 
 void MwVersionInit(PUNICODE_STRING RegistryPath);
 void MwVersionRendered(void);
-void MwVersionConfirmCheck(ULONG Renders, ULONG Seconds, BOOLEAN Stuck);
+void MwVersionConfirmCheck(ULONG Renders, ULONG Presents, ULONG Seconds, BOOLEAN Stuck, ULONG Tdrs);
+extern ULONG MwWddmFallbackReason;
 DXGKDDI_COLLECTDIAGNOSTICINFO MwCollectDiagnosticInfo;
 NTSTATUS MwQueryPhysicalAdapterCaps(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info);
 
