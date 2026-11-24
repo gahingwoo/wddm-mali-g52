@@ -17,6 +17,9 @@
  * m5test perf [seconds], m5test scan [mode] and m5test mem (GPU memory by
  * process) only ask the driver; nothing is submitted.
  *
+ * m5test renderprobe submits renders with no GPU work in six variants and
+ * prints where D3DKMTRender fails (docs/WDDM2.md 16.9).
+ *
  * Build: cl /W4 /I include tools\windows\m5test.c
  */
 #include <windows.h>
@@ -447,6 +450,125 @@ static int mem(D3DKMT_HANDLE adapter)
     return 0;
 }
 
+static unsigned renders_now(D3DKMT_HANDLE adapter)
+{
+    MW_ESCAPE_STATS_DATA s = {0};
+    s.Code = MW_ESCAPE_STATS;
+    return escape(adapter, 0, &s, sizeof(s)) < 0 ? 0xFFFFFFFFu : s.Renders;
+}
+
+/* renderprobe: where D3DKMTRender fails, without a reboot (docs/WDDM2.md
+ * 16.9). At WDDM 2.0 on the board every Render failed with 0xc0000001 and
+ * the driver's DxgkDdiRender was never called, so the failure is inside
+ * dxgkrnl/dxgmms2 before it. Each variant changes one thing against the
+ * first and prints the status and whether DxgkDdiRender ran (the driver's
+ * render count, which counts the renders it accepted). */
+static int render_probe(D3DKMT_HANDLE adapter)
+{
+    /* Len 0: no command, so nothing can reach the GPU when a variant
+     * succeeds. Len 1: one command of type 0, which the driver's
+     * DxgkDdiRender refuses with STATUS_INVALID_PARAMETER (0xc000000d):
+     * that status says DxgkDdiRender was reached. */
+    static const struct { const char *What; unsigned Node, Allocs, Null, Lock, Len; } v[] = {
+        { "A node 0, 1 allocation locked before (as M1)",     0, 1, 0, 1, 0 },
+        { "B node 0, no allocation list",                     0, 0, 0, 0, 0 },
+        { "C node 0, 1 allocation, not locked before",        0, 1, 0, 0, 0 },
+        { "D node 0, 1 allocation, NullRendering",            0, 1, 1, 1, 0 },
+        { "E node 0, no allocations, one bad command",        0, 0, 0, 0, 1 },
+        { "F node 1 (the paging/copy node), no allocations",  1, 0, 0, 0, 0 },
+    };
+    int bad = 0;
+
+    for (unsigned i = 0; i < sizeof(v) / sizeof(v[0]); i++) {
+        D3DKMT_CREATEDEVICE dev = {0};
+        D3DKMT_CREATECONTEXT ctx = {0};
+        D3DKMT_CREATEALLOCATION ca = {0};
+        D3DDDI_ALLOCATIONINFO ai = {0};
+        MW_ALLOCATION_INFO priv = {0};
+        D3DKMT_RENDER render = {0};
+        NTSTATUS st;
+        unsigned before, after;
+
+        dev.hAdapter = adapter;
+        if ((st = pCreateDevice(&dev)) < 0) {
+            printf("%s: CreateDevice 0x%08lx\n", v[i].What, (unsigned long)st);
+            bad++;
+            continue;
+        }
+        ctx.hDevice = dev.hDevice;
+        ctx.NodeOrdinal = v[i].Node;
+        ctx.EngineAffinity = 1;
+        ctx.ClientHint = D3DKMT_CLIENTHINT_DX10;
+        st = pCreateContext(&ctx);
+        if (st < 0) {
+            printf("%s: CreateContext 0x%08lx\n", v[i].What, (unsigned long)st);
+            bad++;
+        } else {
+            if (v[i].Allocs) {
+                priv.Version = MW_ABI_VERSION;
+                priv.Flags = MW_ALLOC_NOEXEC;
+                priv.Size = JOB_BYTES;
+                ai.pPrivateDriverData = &priv;
+                ai.PrivateDriverDataSize = sizeof(priv);
+                ca.hDevice = dev.hDevice;
+                ca.NumAllocations = 1;
+                ca.pAllocationInfo = &ai;
+                st = pCreateAllocation(&ca);
+                if (st >= 0 && v[i].Lock) {
+                    D3DKMT_LOCK lock = {0};
+                    D3DKMT_UNLOCK unlock = {0};
+                    lock.hDevice = dev.hDevice;
+                    lock.hAllocation = ai.hAllocation;
+                    if (pLock(&lock) >= 0) {
+                        unlock.hDevice = dev.hDevice;
+                        unlock.NumAllocations = 1;
+                        unlock.phAllocations = &ai.hAllocation;
+                        (void)pUnlock(&unlock);
+                    }
+                }
+                if (st >= 0) {
+                    memset(&ctx.pAllocationList[0], 0, sizeof(ctx.pAllocationList[0]));
+                    ctx.pAllocationList[0].hAllocation = ai.hAllocation;
+                    ctx.pAllocationList[0].WriteOperation = 1;
+                }
+            }
+            if (v[i].Len)
+                memset(ctx.pCommandBuffer, 0, sizeof(MW_COMMAND));
+            render.hContext = ctx.hContext;
+            render.CommandLength = v[i].Len ? (UINT)sizeof(MW_COMMAND) : 0u;
+            render.AllocationCount = v[i].Allocs && ai.hAllocation ? 1 : 0;
+            render.Flags.NullRendering = v[i].Null;
+            before = renders_now(adapter);
+            st = pRender(&render);
+            Sleep(50);
+            after = renders_now(adapter);
+            printf("%-50s Render 0x%08lx, DxgkDdiRender calls %d\n", v[i].What, (unsigned long)st,
+                   (int)(after - before));
+            if (st < 0)
+                bad++;
+            if (ai.hAllocation) {
+                D3DKMT_DESTROYALLOCATION da = {0};
+                da.hDevice = dev.hDevice;
+                da.phAllocationList = &ai.hAllocation;
+                da.AllocationCount = 1;
+                (void)pDestroyAllocation(&da);
+            }
+            {
+                D3DKMT_DESTROYCONTEXT dc = {0};
+                dc.hContext = ctx.hContext;
+                (void)pDestroyContext(&dc);
+            }
+        }
+        {
+            D3DKMT_DESTROYDEVICE dd = {0};
+            dd.hDevice = dev.hDevice;
+            (void)pDestroyDevice(&dd);
+        }
+    }
+    print_stats(adapter, "after the probe");
+    return bad ? 2 : 0;
+}
+
 int main(int argc, char **argv)
 {
     D3DKMT_HANDLE adapter;
@@ -518,6 +640,8 @@ int main(int argc, char **argv)
     }
     if (argc >= 2 && strcmp(argv[1], "mem") == 0)
         return mem(adapter);
+    if (argc >= 2 && strcmp(argv[1], "renderprobe") == 0)
+        return render_probe(adapter);
     if (argc >= 2 && strcmp(argv[1], "perf") == 0) {
         int seconds = argc >= 3 ? atoi(argv[2]) : 5;
         return perf(adapter, seconds > 0 && seconds <= 600 ? (unsigned)seconds : 5);
