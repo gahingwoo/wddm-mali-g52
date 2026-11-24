@@ -50,7 +50,8 @@ NTSTATUS MwQuerySegment(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info)
 /* The WDDM 2.x form of the same answer (DXGKQAITYPE_QUERYSEGMENT4, 11),
  * asked of a driver that reports 2.0 or later (docs/WDDM2.md). The segment
  * is the one above, field for field, plus the budget flags MwPlan gives
- * (wddm2plan.h, default: non-local budget, application target).
+ * (wddm2plan.h, default: local budget group, application target; the local
+ * group must not be empty, or dxgmms2's commit telemetry divides by 0).
  *
  * Microsoft's reference for DXGK_QUERYSEGMENTOUT4: dxgkrnl calls twice.
  * "First time, NbSegment will be set to 0. The driver should return
@@ -100,6 +101,9 @@ NTSTATUS MwQuerySegment4(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info)
     d->Flags.ApplicationTarget = p->SegApplicationTarget;
     d->Flags.NonLocalBudgetGroup = p->SegNonLocalBudget;
     d->Flags.LocalBudgetGroup = p->SegLocalBudget;
+    /* The bits as wddm2plan.h names them (and the host test checks). */
+    if (d->Flags.Value != Mw2SegmentFlags(p))
+        MwBc("QUERYSEGMENT4: flags 0x%08x, the plan says 0x%08x", d->Flags.Value, Mw2SegmentFlags(p));
     out->NbSegment = p->NbSegment;
     out->PagingBufferSegmentId = p->PagingBufferSegmentId;
     out->PagingBufferSize = 10 * PAGE_SIZE;

@@ -26,6 +26,9 @@ lint:
 	@grep -q 'Mw2xRotationSupport(&upd.ContentTransformation.RotationSupport)' $(SRC)/display.c || { echo "FAIL: display.c paths without Offset0 at 2.x"; exit 1; }
 	@grep -q 'Mw2xRotationSupport(&upd.ContentTransformation.RotationSupport)' $(SRC)/hpd.c || { echo "FAIL: hpd.c paths without Offset0 at 2.x"; exit 1; }
 	@! grep -n 'DxgkCbGetHandleData(' $(SRC)/*.c | grep -v 'MwAllocFromHandle\|return (MW_ALLOCATION \*)A->Dxgk.DxgkCbGetHandleData' || { echo "FAIL: DxgkCbGetHandleData called outside MwAllocFromHandle"; exit 1; }
+	@grep -q 'Mw2BudgetMode(MwWddm2Budget, MwWddm2LocalBudget)' $(SRC)/version.c || { echo "FAIL: the budget group is not Mw2BudgetMode's"; exit 1; }
+	@grep -q 'd->Flags.LocalBudgetGroup = p->SegLocalBudget;' $(SRC)/memory.c || { echo "FAIL: QUERYSEGMENT4 local budget group not from MwPlan"; exit 1; }
+	@! sed -n '/^NTSTATUS MwQuerySegment(/,/^}/p' $(SRC)/memory.c | grep -n 'BudgetGroup\|ApplicationTarget' || { echo "FAIL: the 1.3 segment (QUERYSEGMENT3) gained a budget flag"; exit 1; }
 	@echo "lint: ok"
 
 run: wddm2-host lint

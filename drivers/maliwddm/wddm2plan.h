@@ -118,7 +118,7 @@ typedef struct {
     unsigned PtLevels, PtIndexBits, PtSize, PtAlign, VaBits;
     unsigned long long InternalVaStart, InternalVaEnd;
 
-    /* QUERYSEGMENT4: the one aperture segment, as QUERYSEGMENT3 */
+    /* QUERYSEGMENT4: the one aperture segment, as QUERYSEGMENT3, plus a budget group */
     unsigned NbSegment;
     unsigned PagingBufferSegmentId;
     unsigned SegAperture, SegCpuVisible, SegCacheCoherent;
@@ -132,10 +132,74 @@ typedef struct {
 #define MW2_PAGE            4096u
 #define MW2_HW_VA_BITS      35u
 
-/* Budget = 1 (the default, Parameters\Wddm2Budget): the segment counts
- * against the non-local budget and is an application target, as the
- * aperture segment of Jamie's driver that composited at 2.0. 0 leaves both
- * clear, as the 1.3 segment. */
+/* ---- the segment's budget group (Plan's Budget argument) ----
+ * MW2_BUDGET_NONE: no budget flag, as the 1.3 segment (wddm-probe nobudget).
+ * MW2_BUDGET_NONLOCAL: non-local budget group and application target, as
+ *   the aperture segment of Jamie's driver; what run F (build 345) had.
+ * MW2_BUDGET_LOCAL (the default at 2.x): local budget group and application
+ *   target.
+ *
+ * Why local: dxgmms2 10.0.22621.2428, VIDMM_COMMIT_TELEMETRY::LogMemoryState
+ * (RVA 0xE6160, the trap at +0x160), loops over the physical adapters and
+ * for each takes GetSegmentGroupState(adapter, D3DKMT_MEMORY_SEGMENT_GROUP_
+ * LOCAL) and computes usage (+0x78) * 100 / budget (+0x10), with no test of
+ * the budget: `cbnz x6` over `brk #0xf004`, then `udiv x9, x8, x6`. The
+ * non-local group is divided only on an adapter it names "Discrete"; on an
+ * "Integrated" one, as ours, Local is the only group it looks at, and its
+ * budget configuration has an L_ (local only) set next to the LNL_ one. A
+ * budget comes from the segments in the group; with our one segment in the
+ * non-local group the local budget was 0, and run F bugchecked 0x7E
+ * (0xC0000094, integer divide by zero) there. On a UMA GPU all of its
+ * memory is the system's, so the one aperture segment is the local group.
+ * Parameters\Wddm2Budget 0 gives NONE; Wddm2LocalBudget 0 (wddm-probe
+ * nonlocalbudget) gives NONLOCAL, run F's segment again. */
+#define MW2_BUDGET_NONE         0u
+#define MW2_BUDGET_NONLOCAL     1u
+#define MW2_BUDGET_LOCAL        2u
+
+static __inline unsigned Mw2BudgetMode(unsigned Wddm2Budget, unsigned Wddm2LocalBudget)
+{
+    if (Wddm2Budget == 0)
+        return MW2_BUDGET_NONE;
+    return Wddm2LocalBudget ? MW2_BUDGET_LOCAL : MW2_BUDGET_NONLOCAL;
+}
+
+/* DXGK_SEGMENTFLAGS.Value of the plan's segment, bit for bit as d3dkmddi.h
+ * (Aperture 0, CpuVisible 2, CacheCoherent 4, ApplicationTarget 15,
+ * LocalBudgetGroup 19, NonLocalBudgetGroup 20): what the journal prints and
+ * dxgmms2 tests (VerifyBudgetGroups masks 0x80000 and 0x100000). */
+#define MW2_SEGF_APERTURE           0x00000001u
+#define MW2_SEGF_CPU_VISIBLE        0x00000004u
+#define MW2_SEGF_CACHE_COHERENT     0x00000010u
+#define MW2_SEGF_APPLICATION_TARGET 0x00008000u
+#define MW2_SEGF_LOCAL_BUDGET       0x00080000u
+#define MW2_SEGF_NONLOCAL_BUDGET    0x00100000u
+
+/* Which D3DKMT_MEMORY_SEGMENT_GROUP a segment counts against. */
+#define MW2_GROUP_LOCAL     0u
+#define MW2_GROUP_NONLOCAL  1u
+
+static __inline unsigned Mw2SegmentFlags(const MW2_PLAN *P)
+{
+    return (P->SegAperture ? MW2_SEGF_APERTURE : 0) |
+           (P->SegCpuVisible ? MW2_SEGF_CPU_VISIBLE : 0) |
+           (P->SegCacheCoherent ? MW2_SEGF_CACHE_COHERENT : 0) |
+           (P->SegApplicationTarget ? MW2_SEGF_APPLICATION_TARGET : 0) |
+           (P->SegLocalBudget ? MW2_SEGF_LOCAL_BUDGET : 0) |
+           (P->SegNonLocalBudget ? MW2_SEGF_NONLOCAL_BUDGET : 0);
+}
+
+/* The bytes the plan puts in a budget group: the one segment's size if it
+ * names the group, else 0. The local group's is the divisor of
+ * LogMemoryState above and must not be 0 at 2.x. (VidMm may scale the
+ * budget it derives; it is 0 when this is.) */
+static __inline unsigned long long Mw2GroupBytes(const MW2_PLAN *P, unsigned Group,
+                                                 unsigned long long SegmentSize)
+{
+    unsigned in = Group == MW2_GROUP_LOCAL ? P->SegLocalBudget : P->SegNonLocalBudget;
+    return in ? SegmentSize : 0;
+}
+
 static __inline void Mw2Plan(unsigned Wddm, unsigned Shape, unsigned Budget, MW2_PLAN *P)
 {
     unsigned i;
@@ -165,9 +229,12 @@ static __inline void Mw2Plan(unsigned Wddm, unsigned Shape, unsigned Budget, MW2
     P->PowerDdis = 1;           /* Mw2NeedsPowerDdis: every 2.x interface */
     P->RotationOffset0 = 1;     /* Mw2PathIndependentRotation: every 2.x interface */
     P->AcquireHandleData = 1;   /* GetHandleData returns NULL to a WDDMv2 driver (memory.c) */
-    if (Budget) {
+    if (Budget != MW2_BUDGET_NONE) {
         P->SegApplicationTarget = 1;
-        P->SegNonLocalBudget = 1;
+        if (Budget == MW2_BUDGET_NONLOCAL)
+            P->SegNonLocalBudget = 1;
+        else
+            P->SegLocalBudget = 1;
     }
     if (Shape != MW2_SHAPE_GPUMMU)
         return;

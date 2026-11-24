@@ -81,6 +81,7 @@ ULONG MwProbeUart;
 ULONG64 MwProbeUartBase = 0x2AD40000ULL;
 ULONG MwWddm2Shape = MW_SHAPE_PHYSICAL;
 ULONG MwWddm2Budget = 1;
+ULONG MwWddm2LocalBudget = 1;
 MW2_PLAN MwPlan;
 ULONG MwGpuMmuPtSegment = 1;
 ULONG MwPagingMarker = 1;
@@ -180,6 +181,7 @@ void MwVersionInit(PUNICODE_STRING RegistryPath)
     MwProbeUartBase = ParamRead(L"ProbeUartBase", (ULONG)MwProbeUartBase);
     MwWddm2Shape = ParamRead(L"Wddm2Shape", MW_SHAPE_PHYSICAL);
     MwWddm2Budget = ParamRead(L"Wddm2Budget", 1);
+    MwWddm2LocalBudget = ParamRead(L"Wddm2LocalBudget", 1);
     MwGpuMmuPtSegment = ParamRead(L"GpuMmuPtSegment", 1);
     MwPagingMarker = ParamRead(L"PagingMarker", 1);
     MwWddm2PowerDdis = ParamRead(L"Wddm2PowerDdis", 1);
@@ -218,7 +220,10 @@ void MwVersionInit(PUNICODE_STRING RegistryPath)
     MwWddmVersion = level->Caps;
     MwDdiInterface = level->Interface;
     MwWddmProbe = in.Want;
-    Mw2Plan(MwWddmVersion, MwWddm2Shape, MwWddm2Budget, &MwPlan);
+    /* Wddm2LocalBudget 0 ("nonlocalbudget"): the segment in the non-local
+     * budget group, as run F (build 345), which left the local group's
+     * budget 0 and bugchecked 0x7E in dxgmms2's LogMemoryState. */
+    Mw2Plan(MwWddmVersion, MwWddm2Shape, Mw2BudgetMode(MwWddm2Budget, MwWddm2LocalBudget), &MwPlan);
     /* Wddm2PowerDdis 0 (wddm-probe "nopowerddi") leaves the two DDIs out
      * again, to see dxgkrnl refuse the start cleanly (WDDM2.md 16.6). */
     if (MwWddm2PowerDdis == 0)
@@ -237,15 +242,16 @@ void MwVersionInit(PUNICODE_STRING RegistryPath)
     boots = ParamRead(L"ProbeBoots", 0) + 1;
     ParamWrite(L"ProbeBoots", boots);
     MwBcInit(RegistryPath, boots, ParamRead(L"ProbeJournalMax", 1500));
-    MwBc("DriverEntry: WddmProbe 0x%x armed (keep %u), interface 0x%x, shape %u, budget %u, build %u",
-         MwWddmProbe, in.Keep, MwDdiInterface, MwWddm2Shape, MwWddm2Budget, (ULONG)MW_BUILD);
+    MwBc("DriverEntry: WddmProbe 0x%x armed (keep %u), interface 0x%x, shape %u, budget %u, local budget %u, build %u",
+         MwWddmProbe, in.Keep, MwDdiInterface, MwWddm2Shape, MwWddm2Budget, MwWddm2LocalBudget, (ULONG)MW_BUILD);
     MwBc("plan: nodes %u, paging node %u (engine %u), VPR paging node %u, GpuMmu %u, VA %u, "
-         "TDR %u, segment aperture %u cpuvisible %u apptarget %u nonlocal %u, "
+         "TDR %u, segment aperture %u cpuvisible %u apptarget %u nonlocal %u local %u (flags 0x%x), "
          "CalibrateGpuClock+SetStablePowerState %u (interface needs them: %u), "
          "rotation Offset0 %u (path-independent rotation: %u), AcquireHandleData %u",
          MwPlan.Nodes, MwPlan.PagingNode, MwPlan.Engine[MwPlan.PagingNode], MwPlan.VprPagingNode,
          MwPlan.GpuMmu, MwPlan.VirtualAddressing, MwPlan.PerEngineTdr, MwPlan.SegAperture,
          MwPlan.SegCpuVisible, MwPlan.SegApplicationTarget, MwPlan.SegNonLocalBudget,
+         MwPlan.SegLocalBudget, Mw2SegmentFlags(&MwPlan),
          MwPlan.PowerDdis, Mw2NeedsPowerDdis(MwDdiInterface),
          MwPlan.RotationOffset0, Mw2PathIndependentRotation(MwDdiInterface), MwPlan.AcquireHandleData);
 }

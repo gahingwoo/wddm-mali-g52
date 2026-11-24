@@ -11,8 +11,13 @@ rem   wddm-probe set 2000 uart  (with or without phys/gpummu) the driver's
 rem                           watchdog also prints one line a second on the
 rem                           debug UART (1500000 8n1)
 rem   wddm-probe set 2000 nobudget  the segment without the 2.x budget flags
-rem                           (Wddm2Budget 0; default 1: non-local budget group
-rem                           and application target, as Jamie's G615 driver)
+rem                           (Wddm2Budget 0; default 1: a budget group and
+rem                           application target)
+rem   wddm-probe set 2000 nonlocalbudget  the segment in the non-local budget
+rem                           group, as Jamie's G615 driver (Wddm2LocalBudget 0;
+rem                           default 1: the local group). Leaves the local
+rem                           budget 0: dxgmms2 bugchecks 0x7E, divide by zero
+rem                           in LogMemoryState, as build 345 (WDDM2.md 16.11)
 rem   wddm-probe set 2000 nopowerddi  without DxgkDdiCalibrateGpuClock and
 rem                           DxgkDdiSetStablePowerState (Wddm2PowerDdis 0):
 rem                           dxgkrnl refuses the start, as on 2026-11-23, but
@@ -69,19 +74,20 @@ if /i "%~1"=="keep" goto set
 if /i "%~1"=="check" goto check
 if /i "%~1"=="watch" goto watch
 if /i "%~1"=="off" goto off
-echo usage: wddm-probe set ^<2000^|2100^|...^|3100^> [phys^|gpummu] [uart] [nobudget] [nopowerddi] [norotoffset] [gethandledata] ^| keep ^<v^> [...] ^| watch ^| check ^| off
+echo usage: wddm-probe set ^<2000^|2100^|...^|3100^> [phys^|gpummu] [uart] [nobudget] [nonlocalbudget] [nopowerddi] [norotoffset] [gethandledata] ^| keep ^<v^> [...] ^| watch ^| check ^| off
 exit /b 1
 
 :set
 if "%~2"=="" (echo which version? e.g. wddm-probe set 2000 & exit /b 1)
 reg add %PARAMS% /v WddmProbe /t REG_DWORD /d 0x%~2 /f >nul || exit /b 1
-for %%v in (WddmProbeArmed WddmProbeConfirmed WddmProbeFellBack WddmProbeFellBackBoot WddmProbeArmFailed WddmProbeUnknown WddmProbeKeep ProbeUart ProbeWatchdog Wddm2Shape Wddm2Budget Wddm2PowerDdis Wddm2RotOffset Wddm2AcquireHandle) do reg delete %PARAMS% /v %%v /f >nul 2>&1
+for %%v in (WddmProbeArmed WddmProbeConfirmed WddmProbeFellBack WddmProbeFellBackBoot WddmProbeArmFailed WddmProbeUnknown WddmProbeKeep ProbeUart ProbeWatchdog Wddm2Shape Wddm2Budget Wddm2LocalBudget Wddm2PowerDdis Wddm2RotOffset Wddm2AcquireHandle) do reg delete %PARAMS% /v %%v /f >nul 2>&1
 if /i "%~1"=="keep" reg add %PARAMS% /v WddmProbeKeep /t REG_DWORD /d 1 /f >nul
 set SHAPE=0
 for %%a in (%3 %4 %5 %6 %7 %8) do (
   if /i "%%a"=="uart" reg add %PARAMS% /v ProbeUart /t REG_DWORD /d 1 /f >nul
   if /i "%%a"=="gpummu" set SHAPE=1
   if /i "%%a"=="nobudget" reg add %PARAMS% /v Wddm2Budget /t REG_DWORD /d 0 /f >nul
+  if /i "%%a"=="nonlocalbudget" reg add %PARAMS% /v Wddm2LocalBudget /t REG_DWORD /d 0 /f >nul
   if /i "%%a"=="nopowerddi" reg add %PARAMS% /v Wddm2PowerDdis /t REG_DWORD /d 0 /f >nul
   if /i "%%a"=="norotoffset" reg add %PARAMS% /v Wddm2RotOffset /t REG_DWORD /d 0 /f >nul
   if /i "%%a"=="gethandledata" reg add %PARAMS% /v Wddm2AcquireHandle /t REG_DWORD /d 0 /f >nul
@@ -136,6 +142,7 @@ reg delete %PARAMS% /v ProbeWatchdog /f >nul 2>&1
 reg delete %PARAMS% /v ProbeUart /f >nul 2>&1
 reg delete %PARAMS% /v Wddm2Shape /f >nul 2>&1
 reg delete %PARAMS% /v Wddm2Budget /f >nul 2>&1
+reg delete %PARAMS% /v Wddm2LocalBudget /f >nul 2>&1
 reg delete %PARAMS% /v Wddm2PowerDdis /f >nul 2>&1
 reg delete %PARAMS% /v Wddm2RotOffset /f >nul 2>&1
 reg delete %PARAMS% /v Wddm2AcquireHandle /f >nul 2>&1

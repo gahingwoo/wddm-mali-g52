@@ -52,6 +52,12 @@ static void check_plan(unsigned wddm, unsigned shape, unsigned budget)
     if (wddm < MW2_WDDM_2_0) {
         /* 1.3 is byte for byte what it was: one node, nothing new. */
         CHECK(p.Nodes == 1 && p.PagingNode == 0, "1.3: one node, paging on it");
+        /* The 1.3 segment, whatever the budget knobs say: aperture and CPU
+         * visible (0x5), no group, one segment, paging buffers in it. */
+        CHECK(Mw2SegmentFlags(&p) == (MW2_SEGF_APERTURE | MW2_SEGF_CPU_VISIBLE),
+              "1.3: segment flags 0x5, got 0x%x (budget %u)", Mw2SegmentFlags(&p), budget);
+        CHECK(!p.SegLocalBudget, "1.3: no local budget flag");
+        CHECK(p.NbSegment == 1 && p.PagingBufferSegmentId == 1, "1.3: one segment, paging buffers in it");
         CHECK(!p.GpuMmu && !p.VirtualAddressing && !p.PerEngineTdr && !p.CancelCommandAware,
               "1.3: no 2.x caps");
         CHECK(!p.SegApplicationTarget && !p.SegNonLocalBudget, "1.3: no budget flags");
@@ -78,8 +84,20 @@ static void check_plan(unsigned wddm, unsigned shape, unsigned budget)
     CHECK(p.RotationOffset0, "2.x: Offset0 on every path (path-independent rotation)");
     /* DxgGetHandleDataCB: NULL for a WDDMv2 driver (build 330, black panel). */
     CHECK(p.AcquireHandleData, "2.x: allocations resolved with DxgkCbAcquireHandleData");
-    CHECK(p.SegApplicationTarget == (budget != 0) && p.SegNonLocalBudget == (budget != 0),
-          "2.x: budget flags follow Wddm2Budget %u", budget);
+    CHECK(p.SegApplicationTarget == (budget != MW2_BUDGET_NONE), "2.x: application target with any budget group");
+    CHECK(p.SegNonLocalBudget == (budget == MW2_BUDGET_NONLOCAL), "2.x: non-local group only for NONLOCAL");
+    CHECK(p.SegLocalBudget == (budget == MW2_BUDGET_LOCAL), "2.x: local group for LOCAL");
+    /* dxgmms2 22621.2428 LogMemoryState: usage * 100 / the local group's
+     * budget, unguarded (run F, 0x7E / 0xC0000094). The default must give
+     * the local group bytes; the one-shot knobs may reproduce run F. */
+    if (budget == MW2_BUDGET_LOCAL) {
+        CHECK(Mw2GroupBytes(&p, MW2_GROUP_LOCAL, 1ull << 30) != 0, "2.x: the local budget group is not empty");
+        CHECK(Mw2SegmentFlags(&p) == 0x88005u, "2.x: segment flags 0x88005, got 0x%x", Mw2SegmentFlags(&p));
+    }
+    if (budget == MW2_BUDGET_NONLOCAL) {
+        CHECK(Mw2GroupBytes(&p, MW2_GROUP_LOCAL, 1ull << 30) == 0, "run F's segment: local budget 0");
+        CHECK(Mw2SegmentFlags(&p) == 0x108005u, "run F's segment flags 0x108005, got 0x%x", Mw2SegmentFlags(&p));
+    }
     /* GpuMmu: one bit, the same in DRIVERCAPS, PHYSICALADAPTERCAPS and
      * every node's metadata (all three come from p.GpuMmu). */
     CHECK(p.GpuMmu == (shape == MW2_SHAPE_GPUMMU), "2.x shape %u: GpuMmu %u", shape, p.GpuMmu);
@@ -222,10 +240,36 @@ static void check_fallback(void)
     CHECK(boot(&r, 1) == MW2_WDDM_2_0 && boot(&r, 1) == MW2_WDDM_2_0, "Keep: no fallback (by design)");
 }
 
+/* ---- the knobs to the budget group ---- */
+
+static void check_budget_knobs(void)
+{
+    MW2_PLAN p;
+
+    /* The defaults (Wddm2Budget 1, Wddm2LocalBudget 1) at 2.0: local. */
+    CHECK(Mw2BudgetMode(1, 1) == MW2_BUDGET_LOCAL, "defaults: the local group");
+    CHECK(Mw2BudgetMode(1, 0) == MW2_BUDGET_NONLOCAL, "nonlocalbudget: run F's group");
+    CHECK(Mw2BudgetMode(0, 1) == MW2_BUDGET_NONE && Mw2BudgetMode(0, 0) == MW2_BUDGET_NONE,
+          "nobudget: no group, whatever Wddm2LocalBudget says");
+    Mw2Plan(MW2_WDDM_2_0, MW2_SHAPE_PHYSICAL, Mw2BudgetMode(1, 1), &p);
+    CHECK(Mw2GroupBytes(&p, MW2_GROUP_LOCAL, 1ull << 30) == (1ull << 30),
+          "2.0 defaults: the whole 1 GB segment counts as local");
+    CHECK(Mw2GroupBytes(&p, MW2_GROUP_NONLOCAL, 1ull << 30) == 0, "2.0 defaults: nothing non-local");
+    /* What version.c does before any probe: the 1.3 plan. */
+    Mw2Plan(MW2_WDDM_1_3, 0, 0, &p);
+    CHECK(Mw2SegmentFlags(&p) == 0x5u, "the 1.3 plan's segment flags 0x5");
+    for (unsigned b = 0; b < 2; b++)
+        for (unsigned l = 0; l < 2; l++) {
+            MW2_PLAN q;
+            Mw2Plan(MW2_WDDM_1_3, MW2_SHAPE_PHYSICAL, Mw2BudgetMode(b, l), &q);
+            CHECK(memcmp(&p, &q, sizeof(p)) == 0, "1.3: the plan ignores Wddm2Budget %u Wddm2LocalBudget %u", b, l);
+        }
+}
+
 int main(void)
 {
     for (unsigned shape = 0; shape <= 1; shape++)
-        for (unsigned budget = 0; budget <= 1; budget++) {
+        for (unsigned budget = MW2_BUDGET_NONE; budget <= MW2_BUDGET_LOCAL; budget++) {
             check_plan(MW2_WDDM_1_3, shape, budget);
             check_plan(MW2_WDDM_2_0, shape, budget);
             check_plan(0x2100u, shape, budget);
@@ -245,6 +289,7 @@ int main(void)
     CHECK(Mw2RotationSupportFault(0x3Fu, 1) == 2, "Offset90 on the primary path: dxgkrnl's P3 2");
     CHECK(Mw2RotationSupportFault(0x0Fu, 0) == 3, "no Offset bit on a secondary path is refused too");
     CHECK(Mw2RotationSupportFault(0x0Fu | MW2_ROTATION_OFFSET0, 1) == 0, "what Mw2xRotationSupport makes of 0xF");
+    check_budget_knobs();
     check_segment_pass();
     check_per_node();
     check_fallback();

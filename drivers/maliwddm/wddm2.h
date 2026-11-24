@@ -28,6 +28,7 @@ extern ULONG MwWddmProbeResult;
 /* What the 2.x driver says about itself (wddm2plan.h), set in DriverEntry. */
 extern MW2_PLAN MwPlan;
 extern ULONG MwWddm2Budget;     /* Wddm2Budget: segment budget flags at 2.x (default 1) */
+extern ULONG MwWddm2LocalBudget; /* Wddm2LocalBudget: the local budget group, not non-local (default 1) */
 
 void MwVersionInit(PUNICODE_STRING RegistryPath);
 void MwVersionRendered(void);
