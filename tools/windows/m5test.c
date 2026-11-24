@@ -259,7 +259,8 @@ static void print_umd(const MW_ESCAPE_STATS_DATA *a, const MW_ESCAPE_STATS_DATA 
         printf("  UMD: no reports (a maliumd.dll from before MW_ESCAPE_UMD, or no D3D process)\n");
         return;
     }
-    printf("  UMD (all processes%s; switches 0x%x: 1 GPU copies allowed, 2 one-copy read-back):\n",
+    printf("  UMD (all processes%s; switches 0x%x: 1 GPU copies allowed, 2 one-copy read-back,"
+           " 4 merged submits, 8 copies batched):\n",
            a ? ", this interval" : ", since the start", b->UmdFlags & 0xff);
     for (int k = 0; k < MW_UMD_KINDS; k++) {
         unsigned long long calls = b->Umd[k].Calls - (a ? a->Umd[k].Calls : 0);

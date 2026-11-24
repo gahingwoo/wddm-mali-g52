@@ -944,6 +944,9 @@ static ULONG UmdFlags(MW_ADAPTER *A)
      * cut DWM's submit CPU per job by about a third, no errors. */
     if (MwSetting(A, L"UmdMergeSubmit", 1) != 0)
         f |= MW_UMD_FLAG_MERGE_SUBMIT;
+    /* Off unless 1 until board runs have shown it renders the same. */
+    if (MwSetting(A, L"UmdCopyBatch", 0) == 1)
+        f |= MW_UMD_FLAG_COPY_BATCH;
     return f;
 }
 
