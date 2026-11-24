@@ -292,67 +292,241 @@ processes started after logon, with the existing `C:\mali\redirect` file
 (dwm.exe and the shell keep the devices they made at boot). If that makes
 the composition present work, the default follows in the next package.
 
+## Board result, 2026-11-23 (DriverVer 0.3.59.412)
+
+Files in `board-session-prep/edge4-0.3.59.412/`.
+
+- Run A (no `C:\mali\redirect`): `DXGI_STATUS_NO_REDIRECTION`, and the
+  composition present fails with `pfnPresentCb 0x88760873
+  (D3DDDIERR_INVALIDHANDLE)`, as before.
+- Run B (`C:\mali\redirect` present): `S_OK (redirection allowed)`. Both
+  probe copies on the Mali pass the whole edge path: three Present1, the
+  DComp surface, the shared NT-handle texture, the keyed mutex, `device
+  alive`. Edge's log has no `Present1 failed` and no testDeviceLost.
+  **NO_REDIRECTION was the cause of the composition present failure.**
+- But dwm.exe crashed twice while Edge ran (1:23:41 and 1:23:54 pm):
+  dwmcore.dll 10.0.22621.2215, exception 0x8898008D at +0x1620f8. The
+  screen went black and came back each time.
+
+### What DWM's logs say
+
+0x8898008D is MILERR_NO_HARDWARE_DEVICE (winerror.h; d3dprobe now checks
+the value at compile time). DWM raises it when it has lost its D3D device
+too many times in a short while. The logs show exactly that:
+
+- The runtime calls `RelocateDeviceFuncs1` when it removes a device: it
+  follows the failed present in run A's probe log, and a device that lives
+  never gets it. dwm.exe-5940 got it eight times in 4.5 s (162.0 to
+  166.6 s). Each time DWM made a new device, opened the application
+  surfaces again, and lost the new device within about 30 ms. Then
+  dwmcore failed fast. dwm.exe-1184 made 16 devices: its boot device,
+  then 15 more from 115.7 s on.
+- The first loss is at 115.57 s, 10 ms after the run B probe presented
+  its composition buffer (115.562 s) and DWM opened that buffer
+  (allocation 0x40006b80). DWM had composed the shell's redirected
+  surfaces all session without losing a device.
+- No UMD line says why. There is no `ddi-error`, no failed `dxgi-result`
+  and no CRASH line in any DWM log, and the KMD has no `Fail_` breadcrumb
+  and no `Enter_ResetFromTimeout` (no TDR). maliwddm also never reports a
+  DMA fault to dxgkrnl, so a GPU fault does not remove a device either.
+  What is left is dxgkrnl putting the device into an error state on its
+  own (VidMm or the scheduler), which the runtime finds at its next call.
+
+### The change (352b667, patch 0073)
+
+One code change, plus logging for the cause.
+
+- Every submission listed every live BO for residency, as a write (Mesa
+  expects a job to reach BOs it does not name). That included every
+  application surface DWM had opened, in every DWM job, and in every
+  application job the swap chain buffers DWM was composing. Primaries
+  were already left out unless a job named them. The allocations of all
+  runtime resources (shared, created or opened) now are too. They are
+  pipe resources, so a job that samples or renders to one names it. This
+  is the only behaviour change, and it applies with redirection off too
+  (DWM opens LogonUI's and the shell's shared surfaces either way).
+  Whether it stops the removals is what the test below shows.
+- `RelocateDeviceFuncs` now logs `the runtime moved the function table;
+  the device is being removed`, followed by `removed:` lines: the device's
+  live BOs and its last eight submissions (BOs named and listed, which
+  runtime resources were named, the callback's status, and how long
+  before the removal).
+- The board test records dxgkrnl's own events (etwrec) around the run:
+  if a device is removed again, they say why.
+
+## Board result, 2026-11-24 (DriverVer 2.40.7.189 = 352b667, patch 0073)
+
+TaishanPi 3M, HDMI only, 2560x1440. Files in
+`board-session-prep/edge5-2.40.7.189/`.
+
+- Without redirection, Notepad was opened, typed in, moved and resized 20
+  times, then closed. The desktop and dwm.exe were unchanged: the
+  residency change (runtime resources listed only when named) did not
+  break the desktop.
+- With `C:\mali\redirect` on, the probe on the Mali passed the whole edge
+  path. dwm.exe did not crash, but its log ends at
+  `RelocateDeviceFuncs1: ... the device is being removed`, with no
+  `removed:` line after it and nothing more from dwm.exe. Every process
+  started afterwards hung (SearchHost.exe seven times,
+  ShellExperienceHost.exe, the screenshot script), each with its log ending
+  at a `Flush`. About 1.5 minutes after the switch was deleted the whole
+  UI froze, mouse included, until dwm.exe was killed.
+
+### Decoding the dxgkrnl trace
+
+`tools/etw/dxgk-decode.py` with the board's dxgkrnl.sys gives field names
+but no event names. The event, task and opcode names are in the
+WEVT_TEMPLATE's EVNT, TASK and OPCO tables, which pyfwevt does not
+expose. `tools/etw/dxgk-event-names.py dxgkrnl.sys [ids]` reads them
+now. Read directly, the rare events are Device and Context start and
+stop, PresentHistory, Fence and MonitoredFence. There are no
+device-error or TDR events. Event 70 with Status 0xc0000001, the one the
+decoder's filter shows, is VidMm's InnerIteration stop, 590 times through
+the whole trace: normal paging, not a failure.
+
+- The probe's device lives from 24180046330 to 24190620573 (100 ns
+  units), about 1.06 s. DWM's removal was 0.36 s into it.
+- DWM's context (0xffffa5861c9a95a0, 22887 events) runs to 24188310622
+  and then stops. Its last packets complete normally (QueuePacket stop,
+  not preempted, not timed out; DmaPacket with no fault address). After
+  that dwm.exe never makes another device.
+
+So dxgkrnl did not remove DWM's device. The removal came from the user-mode
+runtime, and after it DWM stopped working instead of rebuilding its device
+as it did in round 4.
+
+### Why DWM stopped: the removal logging deadlocked it
+
+`malikm_note_removed` (352b667) took the shim's lock with
+AcquireSRWLockExclusive. The runtime moves a device's function table
+wherever it notices the removal, and that can be inside a runtime callback
+the shim makes while it holds that lock. An SRW lock taken twice on one
+thread never returns. The log's last line is the one written just before
+that acquire, and nothing follows from any DWM thread. So the logging that
+was meant to explain the removal stopped DWM's render thread for good, and
+everything waiting on DWM hung with it. Round 4 had no such call, and DWM
+rebuilt its device eight to fifteen times before giving up with
+0x8898008D.
+
+### The change (632b8e1, patch 0074)
+
+- wlock/wunlock keep a thread-local "held" flag. `malikm_note_removed`
+  does not take the lock when its thread already holds it; otherwise it
+  tries for 20 ms and gives up. The first `removed:` line says which case
+  it was: `inside a call that holds the shim lock` means the runtime
+  called RelocateDeviceFuncs from inside one of the shim's callbacks.
+- d3d10umd keeps the last 32 entry points of the process after the
+  entry-point trace has stopped (DWM's had, long before the removal), and
+  RelocateDeviceFuncs writes them as `recent:` lines. The last one before
+  `RelocateDeviceFuncs1` is the call the removal came in.
+
+Still not known: why the runtime removes DWM's device about 30 ms after
+DWM opens a composition buffer an application has just presented. The
+`recent:` and `removed:` lines of the next run are where to read it.
+
 ## Board test, one install
 
-Two runs in one session after one install: the same probes with and
-without redirection. The package adds only logging (the callback's
-error by name, and the DXGI context pointer). The KMD is unchanged.
+Same as round 5. This package (logging only, plus the lock fix) should
+leave DWM alive after a removal, rebuilding its device as in round 4, and
+give the removal's call in the log.
 
-Package: CI run 45086553293 (08792ec), artifact
-`wddm-mali-g52-driver-arm64`, DriverVer 11/23/2026,0.3.59.412, UMD from
-Mesa run 45086553333. Test certificate SHA1
-5A91C62ED458E1BD648758C948773D06AC58CA1A (new). d3dprobe.exe from the
-`m3test-arm64` artifact of the same CI run.
+Package: CI run 45322983394 (632b8e1), artifact
+`wddm-mali-g52-driver-arm64`, DriverVer 11/24/2026,3.57.23.142, UMD from
+Mesa run 45322983455 (patches 0001-0074). Test certificate SHA1
+473F2837FD96CFD9A205BD7B7D6C482586249112 (new). d3dprobe.exe, etwrec.exe
+and m5test.exe are in the `m3test-arm64` artifact of the same CI run.
 
-1. Copy the package to `C:\mali\pkg-edge4\` and d3dprobe.exe from the
-   same run's `m3test-arm64` artifact. Copy it to `C:\mali\fake\msedge.exe`
-   and `C:\mali\fake\plainprobe.exe`, replacing the old copies.
-2. Import the new test certificate into Root and TrustedPublisher, as
-   administrator (`certutil -addstore -f Root ...cer`, then the same with
-   `TrustedPublisher`).
-3. `pnputil /add-driver C:\mali\pkg-edge4\driver\maliwddm.inf` (stage only).
+1. Copy the package to `C:\mali\pkg-edge6\`; d3dprobe.exe (to
+   `C:\mali\fake\msedge.exe` and `plainprobe.exe`), etwrec.exe and
+   m5test.exe from the same run's `m3test-arm64` artifact to `C:\mali\`.
+2. Import the new test certificate into Root and TrustedPublisher.
+3. `pnputil /add-driver C:\mali\pkg-edge6\driver\maliwddm.inf` (stage only).
 4. As SYSTEM (task `malireinst`), `ConfigFlags |= 0x20` on
    `HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0`; poll until set.
-5. `C:\mali\log`: delete `off` and the old `*.txt`; the ACL from before
-   stays. Make sure `C:\mali\redirect` does NOT exist. Clean restart.
-6. After logon, in the user's session (`schtasks /it /ru woo`, `.cmd`
-   wrapper), run A, without redirection:
-   - `C:\mali\fake\plainprobe.exe > C:\mali\present-plain-A.txt`
-7. `echo > C:\mali\redirect`, then run B, with redirection, in the same
-   session (nothing restarted):
-   - `C:\mali\fake\plainprobe.exe > C:\mali\present-plain-B.txt`
-   - `C:\mali\fake\msedge.exe > C:\mali\present-msedge-B.txt`
-   - Edge as before (separate profile, `--enable-logging --v=1`, the
-     WebGL page, edge://gpu). Start it only now, so its GPU process is new.
-8. `del C:\mali\redirect`, `echo > C:\mali\log\off`, then collect
-   `C:\mali\present-*.txt`, every `C:\mali\log\*.txt`, the Edge log and
-   the edge://gpu page.
+5. `C:\mali\log`: delete `off` and the old `*.txt`; the ACL stays.
+   `C:\mali\redirect` must NOT exist. Clean restart.
+6. Without redirection: the Notepad round from round 5 (automated is
+   fine).
+7. As administrator: `C:\mali\etwrec.exe start C:\mali\dxgkrnl.etl`, then
+   `echo > C:\mali\redirect`.
+8. In the user's session, with redirection, one at a time, about 20 s
+   each, watching the screen and noting the time of anything that goes
+   black or stops:
+   - `C:\mali\fake\plainprobe.exe > C:\mali\present-plain-D.txt`
+   - Notepad: open, type, move, resize, close (a new process after the
+     switch).
+   - Settings (a WinUI window, D3D).
+   - Edge (separate profile, `--enable-logging --v=1`, the WebGL page,
+     edge://gpu with a screenshot), open 60 s.
+9. As administrator: `C:\mali\etwrec.exe stop`,
+   `C:\mali\m5test.exe mem > C:\mali\m5-mem.txt`, `del C:\mali\redirect`,
+   `echo > C:\mali\log\off`. Then 3 more minutes of normal use (move a
+   window, open Start), to see whether DWM stays responsive.
+10. Collect as in round 5: `present-*.txt`, `m5-mem.txt`, `dxgkrnl.etl`,
+    `dxgkrnl.sys`, all `C:\mali\log\*.txt`, app.evtx and sys.evtx, the
+    Edge log, the screenshot, and the times noted.
 
-If anything on the desktop goes wrong after step 7, `del C:\mali\redirect`
-over SSH puts every new process back to the old path; processes started
-before step 7 never see the switch.
+If the UI freezes anyway: `del C:\mali\redirect` and
+`Stop-Process -Name dwm -Force` over SSH, as in round 5. Note the time.
 
 What to read:
 
-- In each UMD log, `CreateDevice: done, ...`: A's says
-  DXGI_STATUS_NO_REDIRECTION, B's `S_OK (redirection allowed)`. If B's
-  does not, the process could not see the file.
-- present-plain-A.txt: as before, adapter 0 `frame 0: Present1 0x887a0005`,
-  and the log says `pfnPresentCb 0x88760873 (D3DDDIERR_INVALIDHANDLE)`.
-- present-plain-B.txt and present-msedge-B.txt, adapter 0: the three
-  `frame N: Present1` lines answer 0 and the edge path ends `device alive`.
-  That confirms the cause. If B fails the same way, NO_REDIRECTION is not
-  it, and the `DXGI context` pointer in the two logs is where to look next.
-- Edge (B): no `Present1 failed`, no testDeviceLost; edge://gpu "Software
+- `findstr /c:"being removed" /c:"removed:" /c:"recent:" C:\mali\log\dwm.exe-*.txt`.
+  After each `being removed` there must now be `removed:` lines (if not,
+  the deadlock is still there) and up to 32 `recent:` lines. The first
+  `removed:` line says whether the removal came inside a shim callback;
+  the last `recent:` lines before `RelocateDeviceFuncs1` name the DDI it
+  came in.
+- No AppHang for processes started after the switch, and no UI freeze
+  after it is gone. With the deadlock gone DWM may still lose its device
+  and rebuild it. If that happens too often it fails fast with 0x8898008D
+  as in round 4. That would mean the removal is still there, with the
+  hang fixed.
+- Edge: no `Present1 failed`, no testDeviceLost; edge://gpu "Software
   Rendering: No".
-- The desktop in B: windows opened after step 7 (Notepad, a Settings page)
-  should still draw. A black window there is the price of redirection for
-  blt-model applications, and needs the redirected-present path looked at
-  before the default changes.
+
+## Board result, 2026-11-24 (round 6, DriverVer 5.40.16.711 = 632b8e1, patch 0074)
+
+TaishanPi 3M, WDDM 1.3, package of CI run 45322983394 (restamped).
+Files: `board-session-prep/edge6-5.40.16.711/ui-E6/` (screenshots 0 to 7
+and `log.txt`).
+
+**Passed.**
+
+- Edge opened and rendered https://example.com in full: the text and the
+  translate popup. The window moved without trouble.
+- Settings opened.
+- dwm.exe kept the same PID (1176) through the whole run and kept
+  responding. No freeze: round 5 froze DWM in the removal log, and the
+  lock change in 632b8e1 is what differs.
+
+**With WDDM 2.0.** These changes are merged into `wddm2x` together with
+`main` (the package with 2.0 as the default, WDDM2.md 16.13). How they
+meet the 2.x paths:
+
+- Runtime resources are left out of the "every other live BO" part of
+  the allocation list. At 1.3 that part made VidMm page BOs in. At 2.x
+  residency comes from MakeResident (`w_make_resident`), which runs for
+  every BO the shim makes or opens, runtime resources included, so
+  nothing loses residency. The list still names every BO a job names,
+  and at 2.x each allocation it names must be resident; it now names
+  fewer.
+- On `main` the submit path became `wsubmit` (UmdMergeSubmit, one render
+  for a batch's two chains). The change and the submission notes were
+  carried over into it, one note per render.
+- The removal log never waits for the shim lock, and every release goes
+  through `wunlock`. `w_make_resident` runs under the lock and calls
+  `pfnCreatePagingQueueCb`/`pfnMakeResidentCb`. If the runtime ever
+  removes the device from inside one of those, the log sees `nested`
+  and does not deadlock: that is the case 632b8e1 fixed.
+- AcquireHandleData is a KMD change and does not touch these paths.
+
+Not run yet: Edge at 2.0.
 
 ## Not known yet
 
-- Whether NO_REDIRECTION is the cause (the test above).
-- What redirection does to blt-model windowed applications, whose
-  presents then go to a surface DWM opens; `Present` with a non-NULL
-  destination that is not a primary has not been run on the board.
+- Why the runtime removes DWM's device soon after DWM opens a freshly
+  presented composition buffer (rounds 4 and 5). Not dxgkrnl: its trace
+  shows no device error. The next run's `recent:` lines name the call.
+- Redirected presents of blt-model windowed applications: Notepad in
+  round 5 ran only as a process started after DWM had already stopped.

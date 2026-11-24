@@ -47,6 +47,12 @@
 #include <dcomp.h>
 #include <stdio.h>
 
+/* dwm.exe's fail-fast with redirection on (2026-11-23), exception code
+ * 0x8898008D, is this winerror.h code: DWM gives up after its D3D device
+ * has been lost too many times. Checked here so that the name in
+ * docs/EDGE-PRESENT.md is the header's. */
+static_assert(MILERR_NO_HARDWARE_DEVICE == (HRESULT)0x8898008DL, "0x8898008D is not MILERR_NO_HARDWARE_DEVICE");
+
 #pragma comment(lib, "dcomp.lib")
 
 static const char *fl_name(D3D_FEATURE_LEVEL f)

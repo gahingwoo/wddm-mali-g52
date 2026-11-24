@@ -1,0 +1,80 @@
+diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
+index 3de0580..976e4a5 100644
+--- a/src/gallium/frontends/d3d10umd/Device.cpp
++++ b/src/gallium/frontends/d3d10umd/Device.cpp
+@@ -442,6 +442,16 @@ RelocateDeviceFuncs(D3D10DDI_HDEVICE hDevice,                           // IN
+ {
+    LOG_ENTRYPOINT();
+ 
++   /*
++    * The runtime moves the function table when it removes the device (it
++    * came right after every removal seen on the board). Say so, with what
++    * the device last submitted: a removal no failed callback announced
++    * (DWM with redirection on, 2026-11-23) leaves nothing else.
++    */
++   DebugPrintf("%s: the runtime moved the function table; the device is being removed\n",
++               __func__);
++   d3d10_note_removed(CastDevice(hDevice)->hDevice);
++
+    /*
+     * Nothing to do as we don't store a pointer to this entity.
+     */
+@@ -465,6 +475,16 @@ RelocateDeviceFuncs1(D3D10DDI_HDEVICE hDevice,                           // IN
+ {
+    LOG_ENTRYPOINT();
+ 
++   /*
++    * The runtime moves the function table when it removes the device (it
++    * came right after every removal seen on the board). Say so, with what
++    * the device last submitted: a removal no failed callback announced
++    * (DWM with redirection on, 2026-11-23) leaves nothing else.
++    */
++   DebugPrintf("%s: the runtime moved the function table; the device is being removed\n",
++               __func__);
++   d3d10_note_removed(CastDevice(hDevice)->hDevice);
++
+    /*
+     * Nothing to do as we don't store a pointer to this entity.
+     */
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index 273f5e7..581614e 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -279,6 +279,7 @@ void d3d10_primary_begin_create(void *hRTDevice, void *hRTResource, unsigned w,
+                                 unsigned pitch, unsigned vidpn_source);
+ void d3d10_primary_rebind(void *hRTDevice, unsigned allocation, void *hRTResource);
+ void d3d10_wait_idle(void *hRTDevice);
++void d3d10_note_removed(void *hRTDevice);
+ unsigned long long d3d10_perf_now(void);
+ void d3d10_perf_add(unsigned stage, unsigned long long since);
+ void d3d10_perf_frame(void);
+diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+index 6410879..78b3aa4 100644
+--- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
++++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+@@ -243,6 +243,7 @@ void malikm_primary_begin_create(void *hRTDevice, void *hRTResource, unsigned w,
+                                  unsigned pitch, unsigned vidpn_source);
+ void malikm_primary_rebind(void *hRTDevice, unsigned allocation, void *hRTResource);
+ int malikm_wait_idle(void *hRTDevice);
++void malikm_note_removed(void *hRTDevice);
+ #endif
+ 
+ /* A primary the driver renders into: the buffer it creates between this and
+@@ -280,6 +281,17 @@ d3d10_wait_idle(void *hRTDevice)
+ #endif
+ }
+ 
++/* The runtime is removing the device: what it last submitted, to the log. */
++void
++d3d10_note_removed(void *hRTDevice)
++{
++#ifdef GALLIUM_PANFROST
++   malikm_note_removed(hRTDevice);
++#else
++   (void)hRTDevice;
++#endif
++}
++
+ long
+ d3d10_present_allocation(void *hRTDevice, unsigned src_allocation, unsigned dst_allocation,
+                          void *dxgi_context)
