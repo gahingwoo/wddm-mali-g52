@@ -238,6 +238,16 @@ Profiling (m5test prof, m5test ring; docs/PERF.md)
   Settings, DWORDs in Device Parameters, each off (today's behaviour)
   unless set, except UmdMergeSubmit, which is on unless 0:
 
+    UmdCopyBatch 1     a GPU copy (CopySubresourceRegion, CopyResource)
+                       becomes a draw in the batches the UMD already has
+                       open, instead of submitting every open batch, then
+                       the copy as a job of its own. DWM makes hundreds a
+                       second while a window is dragged, each about two
+                       renders of CPU. Off unless 1; running processes
+                       pick a change up within a second or two. Check
+                       first with copytest.exe (docs/PERF.md, "DWM's
+                       copies").
+
     PerfTemp 1         m5test prof reads TSADC_DATA0..5. Only on firmware
                        that starts the TSADC (edk2-rk3576 with the
                        thermal-safety work; Windows then shows thermal

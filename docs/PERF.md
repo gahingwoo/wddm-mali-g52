@@ -691,3 +691,178 @@ for SPLL / 1 = 702 MHz.
    1), JobsFailed 0, `GpuClkFallbacks` 0, the hottest of channels 3 and 5
    below 85 C. Only then `m5test clk 3 1 keep`.
 4. Back: `m5test clk 0 2 keep` (594 MHz) or delete `GpuClkHigh`.
+
+
+## DWM's copies, 2026-11-24
+
+Branch `umd-copy-cost`, off `wddm2x`. With no setting changed the package
+behaves as before: the new switch is off unless set.
+
+### What was measured
+
+HDMI 2560x1440, 15 s of window dragging (`wddm2x-stepG` session):
+
+| | total CPU (8 cores) | dwm.exe CPU | dwm copies on the GPU | dwm uploads |
+|---|---|---|---|---|
+| WDDM 1.3 | about 26% | 15.2 s | +5203 in about 18 s (289 a second), 6216 ms, 1195 us each | +3770, 422 ms |
+| WDDM 2.0 | about 20% | 7.1 s | (since boot: 13914, 14788 ms, 1087 us each) | (8378, 2006 ms) |
+
+In WDDM 1.3 that is 345 ms of CPU a second in copies alone, a third of
+the core dwm.exe used. The run of 2026-11-23 (`gpuperf`, DSI panel) had
+the same price per copy, 889 us, at 43 copies a second, and also gives
+the price of one render: `submit (pfnRenderCb)` 421 us each with 253 BOs
+listed, 380 renders a second, 1.6 s of CPU in 10 s.
+
+### Where a copy's time goes
+
+`CopySubresourceRegion` and `CopyResource` reach
+`panfrost_resource_copy_region` (mesa-patches/0054), which did:
+
+1. `panfrost_flush_all_batches`: every batch the context had open is
+   submitted, which splits the frame DWM is drawing in two;
+2. the blitter's draw from the source into the destination, a new batch;
+3. `panfrost_flush_all_batches` again: that batch is submitted.
+
+A submission is one `pfnRenderCb` (vertex/tiler and fragment chains
+merged since `UmdMergeSubmit`) with every live BO in the allocation list,
+a CPU event and a `SignalSynchronizationObject2`. So a copy cost two
+renders, about 2 x 421 us, plus tens of microseconds for the draw: the
+889 to 1195 us measured. Nothing in that path waits for the GPU: the
+shim's SUBMIT does not wait for in_syncs (the KMD runs one queue in
+order), no WAIT_BO or syncobj wait is made, and the UMD does no cache
+maintenance (the job chains' own flush flags do it on the GPU). The time
+is the submissions.
+
+### What is copied, and by whom
+
+The entry-point log of dwm.exe in the same session (`log/dwm.exe-1208.txt`)
+has 1023 `ResourceCopyRegion`, no `ResourceCopy` and no
+`ResourceResolveSubResource`. They come in twos, after the frame's draws
+and right before `_Present`:
+
+    SetRenderTargets, DrawIndexed x4, ResourceCopyRegion x2, _Present, _RotateResourceIdentities, Flush
+
+This is DWM keeping its rotating back buffers whole: the regions that
+changed in the previous frame are copied from the buffer last presented
+into the one being finished. explorer.exe does the same (464 copies, 190
+presents). The copies are regions, not whole screens: 5775 MB over 14415
+copies is 0.4 MB each, about 400x260 pixels of BGRA8, not 14.7 MB. While
+a window is dragged DWM makes several a frame, which is the 289 a second.
+
+The new log line says it per process when `C:\mali\log` exists when the
+process makes its first copy (every 5 s, plus the first 16 copies in
+full: sizes, formats, bind flags, box, whether the destination is the
+bound render target):
+
+    copies: 1440 on the GPU in 5003 ms (0 batched), 1180 us each, 610.2 MB; sizes <16K .. >=4M ...;
+    largest 2560x1440; whole subresource N, into the bound RT N, into a shared/scan-out resource N,
+    dst screen-sized N, src screen-sized N; open batches at the copy N (x.xx each)
+
+(the numbers above are the format, not a measurement). "open batches at
+the copy" is how many batches the first flush submitted, or with the
+switch on would have.
+
+### The switch: `UmdCopyBatch`
+
+mesa-patches/0075. With `UmdCopyBatch` 1 in Device Parameters (handed to
+the UMD as `MW_UMD_FLAG_COPY_BATCH`, 0x8 in `m5test perf`'s switches),
+neither flush is made. The blitter's draw is recorded like any other draw
+and Panfrost's own resource tracking orders it: reading the source
+submits the batch that writes it first; writing the destination submits
+any other batch that reads or writes it first. That is the same tracking
+every draw that samples a texture rendered a moment before relies on. A
+copy into the render target DWM has bound joins the batch already drawing
+it, so the frame stays one submission and the copy costs one draw. A copy
+between two levels of one texture keeps both flushes. Off unless 1;
+running processes take a change within a second or two. For one process,
+`D3D10UMD_COPYBATCH=0` or `1` in its environment overrides the KMD.
+It applies to every process with the Panfrost UMD, the OpenGL ICD
+(maligl.dll, `glCopyImageSubData`) included, since both take the switches
+from the same escape.
+
+Expected, from the numbers above (estimates, to be confirmed):
+
+- `copy on the GPU`: from about 1100 us to 50 to 150 us each;
+- dwm.exe's `submit (pfnRenderCb)` calls a second fall by about one to
+  two per copy that was made (up to 289 a second fewer at 1.3 on HDMI);
+- the render that a copy used to force now happens at the next flush,
+  so `present, no copy` may take longer each; judge by dwm.exe's total
+  CPU and its renders a second, not by the copy line alone;
+- dwm.exe: about 0.2 to 0.3 of a core less while dragging on 1.3 (15.2 s
+  in 15 s towards 10 to 12 s), less in absolute terms on 2.0 where a
+  render is cheaper (7.1 s towards 5 to 6 s);
+- the GPU does the same work: the same pixels, in fewer chains.
+
+What can go wrong: a stale region (a trail behind a dragged window, a
+rectangle of an older frame) if some order is not tracked. The order
+cases are checked by `copytest.exe` (tools/windows, artifact
+`board-tests-arm64`), which runs on softpipe and WARP in CI with the
+pixels checked and on Panfrost on the emulated driver both ways (pixels
+not checked there: nothing runs the jobs).
+
+### Not done here
+
+- Under WDDM 2.x every BO is made resident by `MakeResident` when it is
+  created, yet each render still lists every live BO (about 250) and the
+  KMD patches each. Listing only the BOs a job names there would cut the
+  421 us a render, for every render, not only copies. It touches the 2.x
+  residency work on `wddm2x`, so it is left for that branch, as a switch.
+- `upload (UpdateSubresource)`: 112 us each on 1.3, 240 us on 2.0. A
+  texture a pending batch reads takes Panfrost's shadow path (wait for
+  the BO, a new BO, a copy of the whole BO on the CPU). Smaller than the
+  copies (23 ms a second on 1.3); next after them.
+- The KMD's DPC, 39 ms a second during a drag (`prof-merge-*`): not
+  dwm.exe's time, and not touched.
+
+### Board test
+
+The KMD changed (the new setting), so the package goes in as in "Board
+tests, one at a time" steps 1 to 3 (stage with `pnputil /add-driver`,
+`ConfigFlags |= 0x20`, full restart). Copy `copytest.exe` from the same
+commit's `board-tests-arm64` artifact and `m5test.exe` from `m3test-arm64`
+to `C:\mali\`. Measure with `C:\mali\log` absent (the entry-point log costs
+CPU), and in an elevated PowerShell (dwm.exe's CPU time needs it).
+
+1. Correctness, before DWM uses it, no setting needed:
+
+       $env:D3D10UMD_COPYBATCH = '0'; C:\mali\copytest.exe hw > C:\mali\copytest-0.txt
+       $env:D3D10UMD_COPYBATCH = '1'; C:\mali\copytest.exe hw > C:\mali\copytest-1.txt
+
+   Both must end with `done: 0 check(s) failed`. A FAIL with 1 and not
+   with 0 means stop: do not set `UmdCopyBatch`.
+2. The same frame shape without DWM's noise, three runs each way:
+
+       foreach ($cb in '0','1','0','1','0','1') { $env:D3D10UMD_COPYBATCH = $cb; C:\mali\copytest.exe hw bench 600 | Select-String bench }
+
+   Compare `CPU .. ms a frame` and `Mcycles a frame`.
+3. Baseline drag, `UmdCopyBatch` unset. Three times: run the line below,
+   then drag a window in circles for the whole 15 s.
+
+       $s = { (Get-Process dwm | % { $_.TotalProcessorTime.TotalSeconds } | Measure-Object -Sum).Sum }
+       $a = & $s; C:\mali\m5test.exe perf 15 > C:\mali\perf-copy0-1.txt; $b = & $s; "dwm CPU $([math]::Round($b - $a, 2)) s" | Tee-Object -Append C:\mali\perf-copy0-1.txt
+
+   (`-2`, `-3` for the next runs.) Keep Task Manager closed: it costs
+   12 s of CPU in 15 s on its own.
+4. On, no restart:
+
+       reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters" /v UmdCopyBatch /t REG_DWORD /d 1 /f
+
+   Wait 5 s; `C:\mali\m5test.exe perf 2` must show the switches with 8 in
+   them (0xf with the defaults). Then step 3 again three times, into
+   `perf-copy1-<n>.txt`.
+5. Look at the screen with it on: drag windows over each other and over
+   the taskbar, open and close the Start menu, scroll a page in Edge,
+   resize a window. Anything left behind (trails, old rectangles) is a
+   failure: photo or screenshot it.
+6. Optional, for the sizes: `mkdir C:\mali\log`, `taskkill /f /im dwm.exe`
+   (Windows starts it again), drag 15 s, send `C:\mali\log\dwm.exe-*.txt`
+   (the `copy N:` and `copies:` lines), then `rmdir /s /q C:\mali\log` and
+   restart dwm.exe again before any measurement.
+7. Back: `reg delete "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters" /v UmdCopyBatch /f`.
+
+Run steps 3 and 4 under WDDM 1.3 and again under 2.0 if both packages are
+on the board. Send `copytest-*.txt`, the bench lines, and the six
+`perf-copy*` files. Per file read: `copy on the GPU` us each and calls a
+second, dwm.exe's `submit` calls a second, `present, no copy` us each,
+and the `dwm CPU` line. Three runs each way, as always: the desktop moves
+by tens of percent between runs of the same setting.

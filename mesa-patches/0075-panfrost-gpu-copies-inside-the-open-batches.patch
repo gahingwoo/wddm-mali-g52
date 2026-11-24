@@ -1,0 +1,204 @@
+diff --git a/src/gallium/drivers/panfrost/pan_blit.c b/src/gallium/drivers/panfrost/pan_blit.c
+index 38d17fc..17b1f26 100644
+--- a/src/gallium/drivers/panfrost/pan_blit.c
++++ b/src/gallium/drivers/panfrost/pan_blit.c
+@@ -102,6 +102,8 @@ panfrost_blit(struct pipe_context *pipe, const struct pipe_blit_info *info)
+ 
+ #ifdef _WIN32
+ #include <windows.h>
++#include <stdlib.h>
++#include <string.h>
+ #include "util/u_surface.h"
+ #include "util/mali_count.h"
+ 
+@@ -138,6 +140,152 @@ pan_copy_bytes(const struct pipe_resource *res, const struct pipe_box *box)
+           util_format_get_nblocksy(res->format, box->height) * MAX2(box->depth, 1);
+ }
+ 
++/* A GPU copy inside the batches it belongs to (UmdCopyBatch).
++ *
++ * The copy above was a job of its own: every batch the context had open
++ * was submitted before it (the frame DWM was drawing, split in two), the
++ * copy's batch right after it. Each submission is a pfnRenderCb with every
++ * live BO in its allocation list, about 420 us of CPU in dwm.exe on the
++ * TaishanPi 3M (m5test prof, 2026-11-23), so a copy cost about two of
++ * them: 889 to 1200 us each, while the copy's own draw costs tens of
++ * microseconds to record and DWM makes hundreds of copies a second while a
++ * window is dragged. Nothing waits for the GPU in that path; the time was
++ * the two submissions.
++ *
++ * With the switch on, neither flush is made. The blitter's draw is
++ * recorded like any other draw and Panfrost's own tracking orders it: the
++ * draw reads the source (the batch that writes it is submitted first) and
++ * writes the destination (any other batch that reads or writes it is
++ * submitted first), exactly as for a draw that samples a texture DWM
++ * rendered a moment before. A copy into the render target DWM has bound
++ * goes into the batch that is already drawing it. A copy within one
++ * resource (between two of its levels) keeps the flushes.
++ *
++ * On when maliwddm hands out MW_UMD_FLAG_COPY_BATCH (setting UmdCopyBatch,
++ * off unless 1; a running process takes a change within a second or two).
++ * D3D10UMD_COPYBATCH=0 or 1 in the environment overrides it for one
++ * process (tools/windows/copytest.cpp, and CI where there is no KMD).
++ */
++static bool
++pan_copy_batched(void)
++{
++   static int env = -2;
++   if (env == -2) {
++      const char *e = getenv("D3D10UMD_COPYBATCH");
++      env = e && *e ? (atoi(e) != 0) : -1;
++   }
++   if (env >= 0)
++      return env;
++   uint32_t f = mali_count_flags();
++   /* ~0 is "no answer from the KMD yet": off until there is one. */
++   return f != 0xFFFFFFFFu && (f & MALI_COUNT_FLAG_VALID) &&
++          (f & MALI_COUNT_FLAG_COPY_BATCH);
++}
++
++/* What the copies were, for the entry-point log (C:\mali\log): a line
++ * every 5 s while copies are made, and the first 16 copies of a process
++ * in full. Counted only while that directory existed at the first copy. */
++void DebugPrintf(const char *format, ...);
++
++struct pan_copy_stats {
++   int on;                      /* -1 unread */
++   uint64_t since;              /* QPC of the period's start */
++   uint64_t hz;
++   unsigned detail;             /* copies written out in full */
++   unsigned n, batched, whole, dst_rt, dst_shared, dst_screen, src_screen;
++   unsigned split;              /* open batches the "before" flush submitted, or would have */
++   unsigned size[5];            /* <16K, <256K, <1M, <4M, >=4M bytes */
++   uint64_t bytes, ticks;
++   unsigned max_w, max_h;
++};
++static struct pan_copy_stats pan_copy_stats = {.on = -1};
++
++static unsigned
++pan_open_batches(struct panfrost_context *ctx)
++{
++   return __bitset_count(ctx->batches.active, BITSET_WORDS(PAN_MAX_BATCHES));
++}
++
++static void
++pan_copy_note(struct panfrost_context *ctx, struct pipe_resource *dst,
++              unsigned dst_level, unsigned dstx, unsigned dsty,
++              struct pipe_resource *src, unsigned src_level,
++              const struct pipe_box *box, bool batched, unsigned open,
++              uint64_t bytes, uint64_t t0)
++{
++   struct pan_copy_stats *s = &pan_copy_stats;
++   uint64_t now = mali_count_now();
++
++   if (s->on < 0) {
++      LARGE_INTEGER f;
++      QueryPerformanceFrequency(&f);
++      s->hz = (uint64_t)f.QuadPart;
++      s->since = now;
++      s->on = GetFileAttributesA("C:\\mali\\log") != INVALID_FILE_ATTRIBUTES;
++   }
++   if (!s->on)
++      return;
++
++   bool whole = box->x == 0 && box->y == 0 && box->z == 0 &&
++                box->width == (int)u_minify(src->width0, src_level) &&
++                box->height == (int)u_minify(src->height0, src_level);
++   bool dst_rt = ctx->pipe_framebuffer.nr_cbufs > 0 &&
++                 ctx->pipe_framebuffer.cbufs[0].texture == dst;
++   bool shared = (dst->bind & (PIPE_BIND_SHARED | PIPE_BIND_SCANOUT |
++                               PIPE_BIND_DISPLAY_TARGET)) != 0;
++
++   if (s->detail < 16) {
++      s->detail++;
++      DebugPrintf("copy %u: %s, src %ux%u fmt %u level %u bind 0x%x box %d,%d %dx%dx%d"
++                  " -> dst %ux%u fmt %u level %u bind 0x%x at %u,%u; %llu bytes,"
++                  " whole %d, dst bound as RT %d, %u batches open\n",
++                  s->detail, batched ? "batched" : "flushed", src->width0, src->height0,
++                  (unsigned)src->format, src_level, src->bind, box->x, box->y,
++                  box->width, box->height, box->depth, dst->width0, dst->height0,
++                  (unsigned)dst->format, dst_level, dst->bind, dstx, dsty,
++                  (unsigned long long)bytes, whole, dst_rt, open);
++   }
++
++   s->n++;
++   s->batched += batched;
++   s->whole += whole;
++   s->dst_rt += dst_rt;
++   s->dst_shared += shared;
++   s->dst_screen += (uint64_t)dst->width0 * dst->height0 >= 1920 * 1080;
++   s->src_screen += (uint64_t)src->width0 * src->height0 >= 1920 * 1080;
++   s->split += open;
++   s->size[bytes < (16 << 10) ? 0 : bytes < (256 << 10) ? 1 : bytes < (1 << 20) ? 2
++           : bytes < (4 << 20) ? 3 : 4]++;
++   s->bytes += bytes;
++   s->ticks += now - t0;
++   if ((uint64_t)box->width * box->height > (uint64_t)s->max_w * s->max_h) {
++      s->max_w = box->width;
++      s->max_h = box->height;
++   }
++
++   if (now - s->since < 5 * s->hz)
++      return;
++   DebugPrintf("copies: %u on the GPU in %llu ms (%u batched), %llu us each, %.1f MB;"
++               " sizes <16K %u <256K %u <1M %u <4M %u >=4M %u; largest %ux%u;"
++               " whole subresource %u, into the bound RT %u, into a shared/scan-out"
++               " resource %u, dst screen-sized %u, src screen-sized %u;"
++               " open batches at the copy %u (%.2f each)\n",
++               s->n, (unsigned long long)((now - s->since) * 1000 / s->hz), s->batched,
++               (unsigned long long)(s->n ? s->ticks * 1000000 / s->hz / s->n : 0),
++               (double)s->bytes / 1e6, s->size[0], s->size[1], s->size[2], s->size[3],
++               s->size[4], s->max_w, s->max_h, s->whole, s->dst_rt, s->dst_shared,
++               s->dst_screen, s->src_screen, s->split,
++               s->n ? (double)s->split / s->n : 0.0);
++   unsigned detail = s->detail;
++   int on = s->on;
++   uint64_t hz = s->hz;
++   memset(s, 0, sizeof(*s));
++   s->detail = detail;
++   s->on = on;
++   s->hz = hz;
++   s->since = now;
++}
++
+ void
+ panfrost_resource_copy_region(struct pipe_context *pipe,
+                               struct pipe_resource *dst, unsigned dst_level,
+@@ -167,12 +315,20 @@ panfrost_resource_copy_region(struct pipe_context *pipe,
+    pan_legalize_format(ctx, pan_resource(dst), util_format_linear(dst->format),
+                        true, false);
+ 
+-   panfrost_flush_all_batches(ctx, "Copy");
++   bool batched = dst != src && pan_copy_batched();
++   unsigned open = pan_open_batches(ctx);
++
++   if (!batched)
++      panfrost_flush_all_batches(ctx, "Copy");
+    panfrost_blitter_save(ctx, PAN_RENDER_BLIT);
+    util_blitter_copy_texture(ctx->blitter, dst, dst_level, dstx, dsty, dstz,
+                              src, src_level, src_box);
+-   panfrost_flush_all_batches(ctx, "Copy");
+-   mali_count_add(MALI_COUNT_COPY_GPU, pan_copy_bytes(src, src_box), count_t0);
++   if (!batched)
++      panfrost_flush_all_batches(ctx, "Copy");
++   uint64_t bytes = pan_copy_bytes(src, src_box);
++   mali_count_add(MALI_COUNT_COPY_GPU, bytes, count_t0);
++   pan_copy_note(ctx, dst, dst_level, dstx, dsty, src, src_level, src_box, batched,
++                 open, bytes, count_t0);
+ }
+ #endif
+ 
+diff --git a/src/util/mali_count.h b/src/util/mali_count.h
+index 62a06d3..4a33bf1 100644
+--- a/src/util/mali_count.h
++++ b/src/util/mali_count.h
+@@ -43,6 +43,9 @@ enum mali_count_kind {
+ /* maliwddm's MW_UMD_FLAG_*. */
+ #define MALI_COUNT_FLAG_COPY_GPU   0x1u
+ #define MALI_COUNT_FLAG_READBACK_1 0x2u
++#define MALI_COUNT_FLAG_MERGE_SUBMIT 0x4u
++#define MALI_COUNT_FLAG_COPY_BATCH 0x8u  /* UmdCopyBatch: GPU copies inside the open batches */
++#define MALI_COUNT_FLAG_VALID      0x80000000u
+ 
+ struct mali_count {
+    uint64_t calls, bytes, ticks;

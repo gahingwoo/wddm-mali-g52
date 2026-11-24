@@ -15,6 +15,7 @@ on:
       - 'tools/windows/gsso.cpp'
       - 'tools/windows/emucheck.cpp'
       - 'tools/windows/gltri.cpp'
+      - 'tools/windows/copytest.cpp'
   workflow_dispatch:
 
 permissions:
@@ -263,8 +264,14 @@ jobs:
           if ($LASTEXITCODE) { throw 'test build failed' }
           cl /nologo /EHsc /O2 /MD tools\windows\gsso.cpp /Fe:gsso.exe
           if ($LASTEXITCODE) { throw 'gsso build failed' }
+          cl /nologo /EHsc /O2 /MD tools\windows\copytest.cpp /Fe:copytest.exe
+          if ($LASTEXITCODE) { throw 'copytest build failed' }
           .\triangle.exe $dll
           if ($LASTEXITCODE) { throw "softpipe smoke test failed ($LASTEXITCODE)" }
+          # The copy orders of mesa-patches/0075 on a driver that runs them:
+          # the expected pixels are right (the same program checks the Mali).
+          .\copytest.exe $dll
+          if ($LASTEXITCODE) { throw "copytest on softpipe failed ($LASTEXITCODE)" }
           # A draw with no input layout ever set (mesa-patches/0070).
           .\triangle.exe $dll nolayout
           if ($LASTEXITCODE) { throw "softpipe draw without an input layout failed ($LASTEXITCODE)" }
@@ -277,7 +284,7 @@ jobs:
           New-Item -ItemType Directory -Force out | Out-Null
           .\present.exe $dll
           if ($LASTEXITCODE) { throw "softpipe present test failed ($LASTEXITCODE)" }
-          Copy-Item $dll, triangle.exe, present.exe, gsso.exe out\
+          Copy-Item $dll, triangle.exe, present.exe, gsso.exe, copytest.exe out\
 
       - name: Panfrost on the emulated driver (MALIKM_FAKE)
         timeout-minutes: 15
@@ -353,6 +360,23 @@ jobs:
           $nl = Run-Triangle 'nolayout' 'triangle.exe' 'nolayout'
           Get-Content nolayout.out, nolayout.err -ErrorAction SilentlyContinue | Select-String -NotMatch 'ioctl|  ->' | Select-Object -Last 10
           if (Test-Path nolayout-crash.txt) { Get-Content nolayout-crash.txt | Select-String -NotMatch 'NatVis|ModLoad' | Select-Object -Last 60 }
+
+          # GPU copies with and without the open batches (mesa-patches/0075):
+          # Panfrost records and submits them; nothing runs the jobs, so the
+          # pixels are only reported (nocheck).
+          $cr = @{}
+          foreach ($cb in '0', '1') {
+            $env:D3D10UMD_COPYBATCH = $cb
+            $cr[$cb] = Run-Triangle "copy$cb" 'copytest.exe' 'nocheck'
+            Get-Content "copy$cb.out", "copy$cb.err" -ErrorAction SilentlyContinue | Select-String -NotMatch 'ioctl|  ->' | Select-Object -Last 14
+            if (Test-Path "copy$cb-crash.txt") { Get-Content "copy$cb-crash.txt" | Select-String -NotMatch 'NatVis|ModLoad' | Select-Object -Last 60 }
+            if (Test-Path "copy$cb-hang.txt") { Get-Content "copy$cb-hang.txt" | Select-String -NotMatch 'NatVis|ModLoad' | Select-Object -Last 150 }
+          }
+          Remove-Item Env:D3D10UMD_COPYBATCH
+          foreach ($cb in '0', '1') {
+            if ($cr[$cb] -ne 0) { throw "copytest.exe with D3D10UMD_COPYBATCH=$cb failed ($($cr[$cb]))" }
+            if (-not (Select-String -Path "copy$cb.out" -Pattern '^done' -Quiet)) { throw "copytest.exe with D3D10UMD_COPYBATCH=$cb did not finish" }
+          }
 
           $all = (Get-Content fake.out, fake.err -ErrorAction SilentlyContinue) -join "`n"
           if ($nl -eq 'hang') { throw 'triangle.exe nolayout hung' }

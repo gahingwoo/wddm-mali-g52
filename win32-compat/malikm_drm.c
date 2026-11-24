@@ -1425,8 +1425,13 @@ w_render_inner(UINT commandLength, UINT allocations)
    return 0;
 }
 
-/* The UMD's kinds are the KMD's, by number. */
+/* The UMD's kinds are the KMD's, by number, and so are its switches. */
 typedef char wumd_kinds_match[(MALI_COUNT_KINDS == MW_UMD_KINDS) ? 1 : -1];
+typedef char wumd_flag_copy_gpu[(MALI_COUNT_FLAG_COPY_GPU == MW_UMD_FLAG_COPY_GPU) ? 1 : -1];
+typedef char wumd_flag_readback[(MALI_COUNT_FLAG_READBACK_1 == MW_UMD_FLAG_READBACK_1) ? 1 : -1];
+typedef char wumd_flag_merge[(MALI_COUNT_FLAG_MERGE_SUBMIT == MW_UMD_FLAG_MERGE_SUBMIT) ? 1 : -1];
+typedef char wumd_flag_copy_batch[(MALI_COUNT_FLAG_COPY_BATCH == MW_UMD_FLAG_COPY_BATCH) ? 1 : -1];
+typedef char wumd_flag_valid[(MALI_COUNT_FLAG_VALID == MW_UMD_FLAG_VALID) ? 1 : -1];
 
 /* The UMD's counters (util/mali_count.h) to maliwddm, at most once a
  * second, and the switches it answers with. Under wddm_lock, from a
