@@ -10,6 +10,7 @@
 | [PERF.md](PERF.md) | Where a frame's time goes and how to get it back | measured 2026-11-14; scan-out on by default since. The 2026-11-23 board numbers are in the README and on branch `merge-submit-default` |
 | [HDMI-HPD.md](HDMI-HPD.md) | HDMI hot-plug, the driver's own mode set and HDMI audio | works on the TaishanPi 3M (`HdmiHpd` 3), 2026-11-22 and 2026-11-23 |
 | [PERFDATA.md](PERFDATA.md) | GPU temperature and clock for Task Manager and the "RK3576 GPU" performance counters: what Task Manager and dxgkrnl ask, what the driver answers, the WDDM 2.4 probe | branch `gpu-perfdata`, 2026-11-24, not run on the board |
+| [DISPLAY-MODES.md](DISPLAY-MODES.md) | Display resolutions: smaller source modes scaled by the VOP2, the switches, the board test, and a design for retiming HDMI from Windows | branch `display-modes`, built, not run on the board |
 | [EDGE-CREATEDEVICE.md](EDGE-CREATEDEVICE.md) | Why Edge could not create a D3D11 device on the Mali, and the fix | Edge gets the Mali at 10_1 on the board |
 | [EDGE-PRESENT.md](EDGE-PRESENT.md) | Edge's device removed at its first present; three UMD bugs | fixes merged; presenting to a composition swap chain still blocked |
 | [D3D11-UMD.md](D3D11-UMD.md) | Plan for the D3D11.1 user-mode driver | plan, 2026-11-21 |

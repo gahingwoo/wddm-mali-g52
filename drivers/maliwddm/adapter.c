@@ -1671,6 +1671,11 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         MwLog(a, L"T_FbWidth", a->Fb.Width);
         MwLog(a, L"T_FbHeight", a->Fb.Height);
         MwLog(a, L"T_FbPitch", a->Fb.Pitch);
+        /* Smaller source modes (scanout.c MwScanScale): the size the window
+         * reads now (0 when it is the firmware's window) and how many flips
+         * of such a primary were scanned out. */
+        MwLog(a, L"T_SclSrc", a->Scaled ? (a->ScrW << 16 | (a->ScrH & 0xFFFF)) : 0);
+        MwLog(a, L"T_SclFlips", a->SclFlips);
         /* Per flip: the time between flips (1000000 / it is the flip rate),
          * flip to the vsync that reported it shown, and the driver's own
          * time in SetVidPnSourceAddress; T_FlipCopyMsTotal is all the CPU

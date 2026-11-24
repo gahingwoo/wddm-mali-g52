@@ -19,6 +19,7 @@
 #include "hdmi_calc.h"
 #include "thermal_calc.h"
 #include "perfdata_calc.h"
+#include "scale.h"
 
 /* The adapter's own power and ACPI target (video.h; dispmprt.h has it in newer WDKs). */
 #ifndef DISPLAY_ADAPTER_HW_ID
@@ -298,13 +299,29 @@ struct _MW_ADAPTER {
      * else made up around the framebuffer's size. */
     ULONG TimingTotalW, TimingTotalH;
     ULONG TimingPixelRate;
-    /* Source modes smaller than the firmware's, for the VOP2 to scale up
-     * (setting ScaledModes, off by default). SrcWidth and SrcHeight are
-     * the committed source mode: the size primaries have and the window
-     * is to scan out. Equal to Fb.Width and Fb.Height unless a smaller
-     * mode is committed. */
+    /* Source modes smaller than the firmware's, for the VOP2's Esmart0
+     * window to scale up to the firmware's timing (scale.h, setting
+     * ScaledModes, on by default; docs/DISPLAY-MODES.md). Modes[0] is the
+     * firmware's size. SrcWidth and SrcHeight are the committed source
+     * mode: the size primaries have. Equal to Fb.Width and Fb.Height unless
+     * a smaller mode is committed.
+     *
+     * The window (scanout.c, MwScanScale): Scaled says Esmart0 is not the
+     * firmware's window now; then ScrW x ScrH is what it reads, from the
+     * top left of the framebuffer or from a primary of that size, and
+     * ScrHow the scaling (MW_SCL_*). Everything that draws into the
+     * framebuffer for the screen (the flip copy, presents, rotation, the
+     * bugcheck screen) draws ScrW x ScrH there (MwScrW, MwScrH). WinVir is
+     * the stride Esmart0 was last given, in 32-bit words. */
     BOOLEAN ScaledModes;
     UINT SrcWidth, SrcHeight;
+    MW_SCL_SIZE Modes[MW_SCL_MAX_MODES];
+    ULONG ModeCount;
+    volatile BOOLEAN Scaled;
+    volatile UINT ScrW, ScrH, ScrHow;
+    ULONG WinVir;
+    ULONG SclApplied, SclFlips;
+    BOOLEAN SclResume;
     /* The committed path's content rotation in degrees, counter-clockwise:
      * 0, 90, 180 or 270 (display.c). The source mode and the primaries keep
      * the panel's own size whatever it is; DWM draws its desktop already
@@ -543,6 +560,18 @@ struct _MW_ADAPTER {
     MW_HDMI Hdmi;
 };
 
+/* The picture's size in the framebuffer: the firmware's, unless the window
+ * is scaling a smaller source mode up (MwScanScale). Any IRQL. */
+static __inline UINT MwScrW(const MW_ADAPTER *A)
+{
+    return A->Scaled ? A->ScrW : A->Fb.Width;
+}
+
+static __inline UINT MwScrH(const MW_ADAPTER *A)
+{
+    return A->Scaled ? A->ScrH : A->Fb.Height;
+}
+
 /* The end of a timed DDI call started at T0. Any IRQL. */
 static __inline void MwProfEnd(MW_PROF *P, ULONG64 T0)
 {
@@ -661,6 +690,8 @@ void MwSetSetting(MW_ADAPTER *A, PCWSTR Name, ULONG Value);
 void MwScanStart(MW_ADAPTER *A);
 void MwScanStop(MW_ADAPTER *A);
 void MwScanToFb(MW_ADAPTER *A);
+BOOLEAN MwScanScale(MW_ADAPTER *A, UINT Width, UINT Height, UINT How);
+void MwScanNativeWindow(MW_ADAPTER *A);
 BOOLEAN MwScanUsable(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
 #define MW_SCAN_WHY_OFF         1   /* scan-out off, or the IOMMU not translating */
 #define MW_SCAN_WHY_NOT_MAPPED  2   /* the primary has no VOP2 address */

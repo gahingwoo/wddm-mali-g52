@@ -161,6 +161,8 @@ jobs:
         run: make -C tests/thermal-host run
       - name: maliwddm's temperature and clock for Task Manager (perfdata_calc.h)
         run: make -C tests/perfdata-host run
+      - name: maliwddm's source modes and VOP2 window scaling (scale.h)
+        run: make -C tests/modes-host run
 
   umd:
     # The UMD for the package: mesa.yml's Panfrost build of the same inputs.

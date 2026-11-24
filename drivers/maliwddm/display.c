@@ -4,10 +4,10 @@
  * Windows (M5.1). One HDMI child (an internal panel instead when the
  * firmware hands over a MIPI DSI panel's backlight, see backlight.c) with
  * the monitor's EDID if the firmware left it in the DSDT, the firmware's
- * framebuffer and timing, identity
- * scaling (and, with ScaledModes, smaller source modes stretched to the
- * firmware's), rotation by 0, 90, 180 or 270 degrees (see "rotation"
- * below). Flips land in MwSetVidPnSourceAddress, which records them;
+ * framebuffer and timing, and as source modes the firmware's size and
+ * (ScaledModes, on by default) smaller ones that the VOP2 scales up to it
+ * (see "source modes" below), rotation by 0, 90, 180 or 270 degrees (see
+ * "rotation" below). Flips land in MwSetVidPnSourceAddress, which records them;
  * scanout.c or the flip copy in command.c puts them on the screen.
  */
 #include "maliwddm.h"
@@ -75,6 +75,45 @@ static UINT VidPnDegrees(const DXGK_VIDPN_INTERFACE *VidPn, D3DKMDT_HVIDPN H,
     return ~0u;
 }
 
+/* The scaling of the path from our source in a VidPN, as scale.h's
+ * MW_SCL_*: ~0u if there is no such path, MW_SCL_DEFAULT_ if its scaling is
+ * not pinned or not one the window does (then the mode's own default). */
+#define MW_SCL_DEFAULT_ 0xFFu
+static UINT SclFromPath(D3DKMDT_VIDPN_PRESENT_PATH_SCALING S)
+{
+    switch (S) {
+    case D3DKMDT_VPPS_IDENTITY:               return MW_SCL_IDENTITY;
+    case D3DKMDT_VPPS_CENTERED:               return MW_SCL_CENTERED;
+    case D3DKMDT_VPPS_STRETCHED:              return MW_SCL_STRETCHED;
+    case D3DKMDT_VPPS_ASPECTRATIOCENTEREDMAX: return MW_SCL_ASPECT;
+    default:                                  return MW_SCL_DEFAULT_;
+    }
+}
+
+static UINT VidPnScaling(const DXGK_VIDPN_INTERFACE *VidPn, D3DKMDT_HVIDPN H,
+                         D3DDDI_VIDEO_PRESENT_SOURCE_ID Src)
+{
+    D3DKMDT_HVIDPNTOPOLOGY topo;
+    const DXGK_VIDPNTOPOLOGY_INTERFACE *topoIf;
+    const D3DKMDT_VIDPN_PRESENT_PATH *path = NULL, *next;
+    NTSTATUS st;
+
+    if (!NT_SUCCESS(VidPn->pfnGetTopology(H, &topo, &topoIf)))
+        return ~0u;
+    st = topoIf->pfnAcquireFirstPathInfo(topo, &path);
+    while (st == STATUS_SUCCESS && path != NULL) {
+        if (path->VidPnSourceId == Src) {
+            UINT how = SclFromPath(path->ContentTransformation.Scaling);
+            topoIf->pfnReleasePathInfo(topo, path);
+            return how;
+        }
+        st = topoIf->pfnAcquireNextPathInfo(topo, path, &next);
+        topoIf->pfnReleasePathInfo(topo, path);
+        path = next;
+    }
+    return ~0u;
+}
+
 static void SetRotation(MW_ADAPTER *A, UINT Deg, PCWSTR Why)
 {
     if (Deg == ~0u)
@@ -98,48 +137,34 @@ void MwSetRotation(MW_ADAPTER *A, UINT Deg, PCWSTR Why)
 
 /* ---- source modes ----
  *
- * The firmware's mode is the only timing there is: the HDMI link is never
- * retimed from Windows. With ScaledModes set the driver also offers
- * smaller source modes of the same shape, for the VOP2's window scaler to
- * stretch to the firmware's size. They are offered only when scan-out is
- * set up: the copy to the framebuffer cannot scale, and would put a small
- * picture in the top left corner. Scan-out does not scale yet either
- * (scanout.c refuses a primary of another size and it is copied), so for
- * now the setting is for trying the VidPN side alone. */
+ * The firmware's mode is the only timing there is at HdmiHpd 0 to 2: the
+ * HDMI link (or the panel) is never retimed from here, and the target has
+ * that one mode. The source modes are the firmware's size and, with
+ * ScaledModes (default 1), smaller ones that the VOP2's Esmart0 window
+ * scales up to it (scale.h has the list: the sizes the EDID names and the
+ * usual desktop sizes, no more than 8 times smaller; scanout.c's
+ * MwScanScale sets the window). A smaller mode of the screen's shape is
+ * offered stretched, one of another shape with its aspect ratio kept and
+ * black bars (D3DKMDT_VPPS_ASPECTRATIOCENTEREDMAX). Settings > Display >
+ * Display resolution lists them; "Recommended" is the firmware's.
+ *
+ * They need scan-out set up (the window's registers are mapped there) and
+ * are not offered at HdmiHpd 3, where hpd.c has its own VidPN with real
+ * HDMI modes. docs/DISPLAY-MODES.md has the rest. */
 
-static const struct { USHORT W, H; } Ladder[] = {
-    { 3840, 2160 }, { 3200, 1800 }, { 2560, 1600 }, { 2560, 1440 }, { 1920, 1200 },
-    { 1920, 1080 }, { 1680, 1050 }, { 1600, 1200 }, { 1600, 900 },  { 1440, 900 },
-    { 1280, 1024 }, { 1280, 800 },  { 1280, 720 },  { 1024, 768 },  { 800, 600 },
-};
-
-/* Mode Index of the source modes: 0 is the firmware's, then the ladder
- * sizes that are smaller, exactly the same shape (so "stretched" keeps
- * the aspect ratio) and no more than 8 times smaller in either direction
- * (the Esmart window's limit in mainline rockchip_vop2_reg.c). FALSE when
- * there is no such mode. */
+/* Mode Index of the source modes: 0 is the firmware's. FALSE past the end. */
 static BOOLEAN SourceModeSize(MW_ADAPTER *Dev, ULONG Index, UINT *W, UINT *H)
 {
-    UINT fw = Dev->Fb.Width, fh = Dev->Fb.Height;
-
     if (Index == 0) {
-        *W = fw;
-        *H = fh;
+        *W = Dev->Fb.Width;
+        *H = Dev->Fb.Height;
         return TRUE;
     }
-    if (!Dev->ScaledModes)
+    if (!Dev->ScaledModes || Index >= Dev->ModeCount)
         return FALSE;
-    for (ULONG i = 0; i < ARRAYSIZE(Ladder); i++) {
-        UINT w = Ladder[i].W, h = Ladder[i].H;
-        if (w >= fw || h >= fh || (ULONG64)w * fh != (ULONG64)h * fw || w * 8 < fw || h * 8 < fh)
-            continue;
-        if (--Index == 0) {
-            *W = w;
-            *H = h;
-            return TRUE;
-        }
-    }
-    return FALSE;
+    *W = Dev->Modes[Index].W;
+    *H = Dev->Modes[Index].H;
+    return TRUE;
 }
 
 static BOOLEAN IsSourceModeSize(MW_ADAPTER *Dev, UINT W, UINT H)
@@ -152,13 +177,18 @@ static BOOLEAN IsSourceModeSize(MW_ADAPTER *Dev, UINT W, UINT H)
     return FALSE;
 }
 
+static BOOLEAN IsNative(MW_ADAPTER *Dev, UINT W, UINT H)
+{
+    return W == Dev->Fb.Width && H == Dev->Fb.Height;
+}
+
 static void FillSourceMode(MW_ADAPTER *Dev, D3DKMDT_VIDPN_SOURCE_MODE *M, UINT W, UINT H)
 {
     M->Type = D3DKMDT_RMT_GRAPHICS;
     M->Format.Graphics.PrimSurfSize.cx = W;
     M->Format.Graphics.PrimSurfSize.cy = H;
     M->Format.Graphics.VisibleRegionSize = M->Format.Graphics.PrimSurfSize;
-    M->Format.Graphics.Stride = (W == Dev->Fb.Width) ? Dev->Fb.Pitch : W * 4;
+    M->Format.Graphics.Stride = IsNative(Dev, W, H) ? Dev->Fb.Pitch : W * 4;
     M->Format.Graphics.PixelFormat = D3DDDIFMT_A8R8G8B8;
     M->Format.Graphics.ColorBasis = D3DKMDT_CB_SRGB;
     M->Format.Graphics.PixelValueAccessMode = D3DKMDT_PVAM_DIRECT;
@@ -353,14 +383,20 @@ NTSTATUS MwDisplayStart(MW_ADAPTER *A)
     if (A->Hdmi.Level >= 3)
         (void)MwHpdReserve(A);
     MwScanStart(A);
-    /* Only with scan-out set up: see SourceModeSize. */
-    A->ScaledModes = MwSetting(A, L"ScaledModes", 0) != 0 && A->ScanReady;
-    {
-        UINT w, h;
-        ULONG n = 0;
-        while (SourceModeSize(A, n, &w, &h))
-            n++;
-        MwLog(A, L"SourceModes", n);
+    /* Only with scan-out set up and not at HdmiHpd 3 (Hdmi.Switch is decided
+     * later, in MwHpdStart; the level is known now): see "source modes". */
+    A->Scaled = FALSE;
+    A->ScrW = A->Fb.Width;
+    A->ScrH = A->Fb.Height;
+    A->ScrHow = MW_SCL_IDENTITY;
+    A->ScaledModes = MwSetting(A, L"ScaledModes", 1) != 0 && A->ScanReady && A->Hdmi.Level < 3;
+    A->ModeCount = MwSclModes(A->Fb.Width, A->Fb.Height, A->EdidSize ? A->Edid : NULL, A->EdidSize,
+                              A->ScaledModes, A->Modes, MW_SCL_MAX_MODES);
+    MwLog(A, L"ScaledModes", A->ScaledModes);
+    MwLog(A, L"SourceModes", A->ModeCount);
+    if (A->ModeCount > 1) {
+        MwLog(A, L"SourceMode1", (ULONG)A->Modes[1].W << 16 | A->Modes[1].H);
+        MwLog(A, L"SourceModeLast", (ULONG)A->Modes[A->ModeCount - 1].W << 16 | A->Modes[A->ModeCount - 1].H);
     }
     return STATUS_SUCCESS;
 }
@@ -503,12 +539,18 @@ NTSTATUS APIENTRY MwIsSupportedVidPn(IN_CONST_HANDLE hAdapter, DXGKARG_ISSUPPORT
     if (!NT_SUCCESS(st))
         return st;
     st = setIf->pfnAcquirePinnedModeInfo(set, &pinned);
-    /* Supported if nothing is pinned yet, or what is pinned is one of ours. */
+    /* Supported if nothing is pinned yet, or what is pinned is one of ours.
+     * A smaller source mode cannot have identity scaling. */
     if (NT_SUCCESS(st)) {
-        Arg->IsVidPnSupported = pinned == NULL ||
-            (pinned->Type == D3DKMDT_RMT_GRAPHICS &&
-             IsSourceModeSize(dev, pinned->Format.Graphics.PrimSurfSize.cx,
-                              pinned->Format.Graphics.PrimSurfSize.cy));
+        UINT w = 0, h = 0;
+        if (pinned != NULL && pinned->Type == D3DKMDT_RMT_GRAPHICS) {
+            w = pinned->Format.Graphics.PrimSurfSize.cx;
+            h = pinned->Format.Graphics.PrimSurfSize.cy;
+        }
+        Arg->IsVidPnSupported = pinned == NULL || IsSourceModeSize(dev, w, h);
+        if (Arg->IsVidPnSupported && pinned != NULL && !IsNative(dev, w, h) &&
+            VidPnScaling(vidpn, Arg->hDesiredVidPn, 0) == MW_SCL_IDENTITY)
+            Arg->IsVidPnSupported = FALSE;
         if (pinned != NULL)
             setIf->pfnReleaseModeInfo(set, pinned);
     }
@@ -527,10 +569,12 @@ NTSTATUS APIENTRY MwRecommendFunctionalVidPn(IN_CONST_HANDLE hAdapter,
 }
 
 /* Give the source and target of a path our modes if nothing is pinned:
- * the firmware's, and with ScaledModes the smaller ones (SourceModeSize).
- * The target has only the firmware's, whatever the source. */
+ * the firmware's, and with ScaledModes the smaller ones (SourceModeSize),
+ * unless the path's scaling is already pinned to identity (Identity), which
+ * only the firmware's size can have. The target has only the firmware's,
+ * whatever the source. */
 static NTSTATUS AddSourceMode(MW_ADAPTER *Dev, const DXGK_VIDPN_INTERFACE *VidPn, D3DKMDT_HVIDPN H,
-                              D3DDDI_VIDEO_PRESENT_SOURCE_ID Src)
+                              D3DDDI_VIDEO_PRESENT_SOURCE_ID Src, BOOLEAN Identity)
 {
     D3DKMDT_HVIDPNSOURCEMODESET set;
     const DXGK_VIDPNSOURCEMODESET_INTERFACE *setIf;
@@ -552,7 +596,7 @@ static NTSTATUS AddSourceMode(MW_ADAPTER *Dev, const DXGK_VIDPN_INTERFACE *VidPn
     st = VidPn->pfnCreateNewSourceModeSet(H, Src, &set, &setIf);
     if (!NT_SUCCESS(st))
         return st;
-    for (ULONG i = 0; NT_SUCCESS(st) && SourceModeSize(Dev, i, &w, &h); i++) {
+    for (ULONG i = 0; NT_SUCCESS(st) && (i == 0 || !Identity) && SourceModeSize(Dev, i, &w, &h); i++) {
         st = setIf->pfnCreateNewModeInfo(set, &mode);
         if (!NT_SUCCESS(st))
             break;
@@ -667,7 +711,8 @@ NTSTATUS APIENTRY MwEnumVidPnCofuncModality(IN_CONST_HANDLE hAdapter,
         NTSTATUS r = STATUS_SUCCESS;
 
         if (!srcPivot) {
-            r = AddSourceMode(dev, vidpn, Arg->hConstrainingVidPn, path->VidPnSourceId);
+            r = AddSourceMode(dev, vidpn, Arg->hConstrainingVidPn, path->VidPnSourceId,
+                              path->ContentTransformation.Scaling == D3DKMDT_VPPS_IDENTITY);
             if (!NT_SUCCESS(r))
                 MwLog(dev, L"Fail_AddSourceMode", (ULONG)r);
         }
@@ -679,8 +724,9 @@ NTSTATUS APIENTRY MwEnumVidPnCofuncModality(IN_CONST_HANDLE hAdapter,
 
         /* Rotation by 0, 90, 180 or 270 degrees (see the top of this file).
          * Identity scaling for the firmware's mode; a smaller source mode
-         * is stretched to it (the same shape, so this keeps the aspect
-         * ratio). Before a source mode is pinned both are possible. */
+         * of its shape stretched to it, one of another shape with its
+         * aspect ratio kept (MwSclDefault). Before a source mode is pinned
+         * all three are possible. */
         if (NT_SUCCESS(r) && !xfPivot &&
             (path->ContentTransformation.Scaling == D3DKMDT_VPPS_UNPINNED ||
              path->ContentTransformation.Rotation == D3DKMDT_VPPR_UNPINNED)) {
@@ -691,13 +737,17 @@ NTSTATUS APIENTRY MwEnumVidPnCofuncModality(IN_CONST_HANDLE hAdapter,
                     PinnedSourceSize(vidpn, Arg->hConstrainingVidPn, path->VidPnSourceId, &w, &h);
                 RtlZeroMemory(&upd.ContentTransformation.ScalingSupport,
                               sizeof(upd.ContentTransformation.ScalingSupport));
-                if (!dev->ScaledModes || (pinned && w == dev->Fb.Width && h == dev->Fb.Height)) {
+                if (!dev->ScaledModes || dev->ModeCount < 2 || (pinned && IsNative(dev, w, h))) {
                     upd.ContentTransformation.ScalingSupport.Identity = 1;
                 } else if (pinned) {
-                    upd.ContentTransformation.ScalingSupport.Stretched = 1;
+                    if (MwSclDefault(w, h, dev->Fb.Width, dev->Fb.Height) == MW_SCL_STRETCHED)
+                        upd.ContentTransformation.ScalingSupport.Stretched = 1;
+                    else
+                        upd.ContentTransformation.ScalingSupport.AspectRatioCenteredMax = 1;
                 } else {
                     upd.ContentTransformation.ScalingSupport.Identity = 1;
                     upd.ContentTransformation.ScalingSupport.Stretched = 1;
+                    upd.ContentTransformation.ScalingSupport.AspectRatioCenteredMax = 1;
                 }
             }
             if (upd.ContentTransformation.Rotation == D3DKMDT_VPPR_UNPINNED) {
@@ -796,9 +846,22 @@ NTSTATUS APIENTRY MwCommitVidPn(IN_CONST_HANDLE hAdapter, const DXGKARG_COMMITVI
         st = ours ? STATUS_SUCCESS : STATUS_GRAPHICS_INVALID_VIDPN;
         dev->PathActive = ours;
         if (ours) dev->CommitsPinned++; else dev->CommitsNotOurs++;
-        /* What primaries will now be, and what scan-out is to stretch to
-         * the firmware's size. The window itself changes at the first flip
-         * to a primary of this size; until then it shows what it did. */
+        /* What primaries will now be, and the window that scales them up
+         * to the firmware's size (scanout.c MwScanScale): set now, onto the
+         * cleared framebuffer, so the copy and the next flip both land in
+         * it. The scaling is the path's, or the mode's own default when it
+         * is not one the window does. */
+        if (ours) {
+            UINT how = IsNative(dev, w, h) ? MW_SCL_IDENTITY : VidPnScaling(vidpn, Arg->hFunctionalVidPn, 0);
+            if (how == ~0u || how == MW_SCL_DEFAULT_ || (how == MW_SCL_IDENTITY && !IsNative(dev, w, h)))
+                how = MwSclDefault(w, h, dev->Fb.Width, dev->Fb.Height);
+            if (!MwScanScale(dev, w, h, how)) {
+                ours = FALSE;
+                st = STATUS_GRAPHICS_INVALID_VIDPN;
+                dev->PathActive = FALSE;
+                MwLog(dev, L"Fail_CommitScale", w << 16 | (h & 0xFFFF));
+            }
+        }
         if (ours && (w != dev->SrcWidth || h != dev->SrcHeight)) {
             dev->SrcWidth = w;
             dev->SrcHeight = h;
@@ -842,6 +905,16 @@ NTSTATUS APIENTRY MwUpdateActiveVidPnPresentPath(IN_CONST_HANDLE hAdapter,
         r != D3DKMDT_VPPR_UNPINNED) {
         MwLog(dev, L"Fail_UpdatePathRotation", (ULONG)r);
         return STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
+    }
+    /* The scaling of a smaller source mode can change here too. */
+    if (!dev->Hdmi.Switch && !IsNative(dev, dev->SrcWidth, dev->SrcHeight)) {
+        UINT how = SclFromPath(Arg->VidPnPresentPathInfo.ContentTransformation.Scaling);
+        if (how == MW_SCL_IDENTITY) {
+            MwLog(dev, L"Fail_UpdatePathScaling", how);
+            return STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
+        }
+        if (how != MW_SCL_DEFAULT_ && !MwScanScale(dev, dev->SrcWidth, dev->SrcHeight, how))
+            return STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
     }
     SetRotation(dev, deg, L"UpdatePathRotation");
     return STATUS_SUCCESS;
@@ -910,8 +983,10 @@ NTSTATUS APIENTRY MwSystemDisplayEnable(IN_CONST_PVOID MiniportDeviceContext,
     dev->Hdmi.ToFbFrom = 7;
     MwScanToFb(dev);            /* the bugcheck screen is drawn in the framebuffer */
     /* Rotated, the screen is the size Windows sees (bdd.cxx does the same),
-     * and SystemDisplayWrite turns it. */
-    MwRotLogicalSize(dev->RotDeg, dev->Fb.Width, dev->Fb.Height, Width, Height);
+     * and SystemDisplayWrite turns it. A smaller source mode: its size, in
+     * the top left of the framebuffer, which the window scales up as it
+     * did the desktop (no register is written here beyond MwScanToFb's). */
+    MwRotLogicalSize(dev->RotDeg, MwScrW(dev), MwScrH(dev), Width, Height);
     *ColorFormat = dev->Fb.ColorFormat;
     return STATUS_SUCCESS;
 }
@@ -921,25 +996,25 @@ VOID APIENTRY MwSystemDisplayWrite(IN_CONST_PVOID MiniportDeviceContext, IN_CONS
                           UINT PositionX, UINT PositionY)
 {
     MW_ADAPTER *dev = (MW_ADAPTER *)MiniportDeviceContext;
-    UINT deg = dev->RotDeg;
+    UINT deg = dev->RotDeg, sw = MwScrW(dev), sh = MwScrH(dev);
     if (dev->FbVa == NULL)
         return;
     if (deg != 0) {
         UINT lw, lh;
         MW_ROT_RECT l;
-        MwRotLogicalSize(deg, dev->Fb.Width, dev->Fb.Height, &lw, &lh);
+        MwRotLogicalSize(deg, sw, sh, &lw, &lh);
         if (PositionX >= lw || PositionY >= lh)
             return;
         l.Left = (long)PositionX;
         l.Top = (long)PositionY;
         l.Right = (long)min(PositionX + SourceWidth, lw);
         l.Bottom = (long)min(PositionY + SourceHeight, lh);
-        MwRotCopy(deg, dev->FbVa, (long)dev->Fb.Pitch, dev->Fb.Width, dev->Fb.Height,
+        MwRotCopy(deg, dev->FbVa, (long)dev->Fb.Pitch, sw, sh,
                   (const unsigned char *)Source, (long)SourceStride, -(long)PositionX, -(long)PositionY, &l);
         return;
     }
-    for (UINT y = 0; y < SourceHeight && PositionY + y < dev->Fb.Height; y++) {
-        UINT w = min(SourceWidth, dev->Fb.Width > PositionX ? dev->Fb.Width - PositionX : 0);
+    for (UINT y = 0; y < SourceHeight && PositionY + y < sh; y++) {
+        UINT w = min(SourceWidth, sw > PositionX ? sw - PositionX : 0);
         RtlCopyMemory(dev->FbVa + (SIZE_T)(PositionY + y) * dev->Fb.Pitch + (SIZE_T)PositionX * 4,
                       (const UCHAR *)Source + (SIZE_T)y * SourceStride, (SIZE_T)w * 4);
     }

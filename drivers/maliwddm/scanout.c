@@ -35,7 +35,21 @@
  * the turned size would need that, and it is copied (MwFlipDegrees).
  *
  * If the IOMMU reports a fault while a primary is shown, MwScanCheck puts
- * the window back on the framebuffer and flips are copied from then on. */
+ * the window back on the framebuffer and flips are copied from then on.
+ *
+ * Smaller source modes (ScaledModes, docs/DISPLAY-MODES.md). The window
+ * scales: committing a source mode smaller than the firmware's sets
+ * Esmart0's size, position and scaler for it (MwScanScale, values from
+ * scale.h) and from then on the window reads that size, from the top left
+ * of the framebuffer or from a primary of that size. So both ways of
+ * putting a frame on the screen keep working unchanged: a flip of a
+ * primary of that size is the same two writes (three when its stride is
+ * not the framebuffer's), and the copy puts the picture where it always
+ * did, in the top left corner, which is now what the window stretches.
+ * The mode back at the firmware's size, the device stopping or handing
+ * the display back, and D3, put the firmware's window back
+ * (MwScanNativeWindow). At HdmiHpd 3 none of this runs: hdmi.c sets real
+ * modes there. */
 
 #include "maliwddm.h"
 
@@ -191,6 +205,8 @@ void MwScanStart(MW_ADAPTER *A)
     for (int i = 0; i < MW_SCAN_SLOTS; i++)
         A->ScanSlot[i] = NULL;
     A->ScanReady = TRUE;
+    A->Scaled = FALSE;
+    A->WinVir = A->Fb.Pitch / 4;
     MwLog(A, L"ScanSlotBytes", A->ScanSlotBytes);
     /* On from the start unless the setting says 0 (m5test scan 4, or
      * reg add ... /v ScanOut /d 0). */
@@ -213,6 +229,10 @@ void MwScanToFb(MW_ADAPTER *A)
 {
     if (!A->ScanReady || !A->ScanShowing || A->Hdmi.Busy || A->Hdmi.Hold)
         return;
+    if (!A->Hdmi.Switch && A->WinVir != A->Fb.Pitch / 4) {
+        A->WinVir = A->Fb.Pitch / 4;
+        W(A, MW_ESMART0_VIR, A->WinVir);
+    }
     W(A, VOP_ESMART0_YRGB_MST, A->Fb.PhysicAddress.LowPart);
     W(A, VOP_CFG_DONE, 0x00018001);
     A->ScanShowing = FALSE;
@@ -232,6 +252,11 @@ ULONG MwScanWhy(MW_ADAPTER *A, MW_ALLOCATION *P)
     if (MwFlipDegrees(A, P) != 0)
         return MW_SCAN_WHY_ROTATED;
     if (A->Hdmi.Switch && (P->Width != A->Fb.Width || P->Height != A->Fb.Height || P->Pitch != A->Fb.Pitch))
+        return MW_SCAN_WHY_SIZE;
+    /* Smaller source modes: only a primary of the size the window reads
+     * now. Without them only primaries of the firmware's size are entered
+     * (MwScanMap), which is the same condition. */
+    if (!A->Hdmi.Switch && A->ScaledModes && (P->Width != MwScrW(A) || P->Height != MwScrH(A)))
         return MW_SCAN_WHY_SIZE;
     return 0;
 }
@@ -304,15 +329,25 @@ void MwScanPower(MW_ADAPTER *A, BOOLEAN On)
     if (!A->ScanReady)
         return;
     if (!On) {
+        /* A smaller source mode: the firmware's window while in D3, the
+         * scaled one back at D0. */
+        A->SclResume = A->Scaled;
+        MwScanNativeWindow(A);
         if (A->ScanOn || A->ScanPaging) {
             A->ScanResume = A->ScanOn != 0;
             d.Mode = 2;
             MwScanSet(A, &d);
         }
-    } else if (A->ScanResume) {
-        A->ScanResume = FALSE;
-        d.Mode = 1;
-        MwScanSet(A, &d);
+    } else {
+        if (A->SclResume) {
+            A->SclResume = FALSE;
+            (void)MwScanScale(A, A->ScrW, A->ScrH, A->ScrHow);
+        }
+        if (A->ScanResume) {
+            A->ScanResume = FALSE;
+            d.Mode = 1;
+            MwScanSet(A, &d);
+        }
     }
 }
 
@@ -322,11 +357,117 @@ BOOLEAN MwScanFlip(MW_ADAPTER *A, MW_ALLOCATION *P)
 {
     if (!MwScanUsable(A, P) || A->Hdmi.Busy || A->Hdmi.Hold)
         return FALSE;
+    /* A primary of a smaller source mode has a stride of its own. One of
+     * the firmware's size has the framebuffer's, and nothing is written. */
+    if (!A->Hdmi.Switch) {
+        ULONG vir = (P->Pitch ? P->Pitch : P->Width * 4) / 4;
+        if (vir != A->WinVir) {
+            A->WinVir = vir;
+            W(A, MW_ESMART0_VIR, vir);
+        }
+        if (A->Scaled)
+            A->SclFlips++;
+    }
     W(A, VOP_ESMART0_YRGB_MST, P->ScanIova);
     W(A, VOP_CFG_DONE, 0x00018001);
     A->ScanShowing = TRUE;
     A->ScanFlips++;
     return TRUE;
+}
+
+/* A primary of one of the smaller source modes, with a stride Esmart0 can
+ * take (whole 32-bit words, VIR is 16 bits of them). */
+static BOOLEAN ScaledPrimary(MW_ADAPTER *A, MW_ALLOCATION *P)
+{
+    ULONG pitch = P->Pitch ? P->Pitch : P->Width * 4;
+
+    if (!A->ScaledModes || P->Width == 0 || P->Height == 0 || (pitch & 3) || pitch < P->Width * 4 ||
+        pitch / 4 > 0xFFFF)
+        return FALSE;
+    for (ULONG i = 1; i < A->ModeCount; i++)
+        if (A->Modes[i].W == P->Width && A->Modes[i].H == P->Height)
+            return TRUE;
+    return FALSE;
+}
+
+/* Esmart0's size, position and scaler, and the window onto the
+ * framebuffer, in one commit. */
+static void WriteWindow(MW_ADAPTER *A, const MW_SCL_WIN *Win)
+{
+    A->WinVir = A->Fb.Pitch / 4;
+    W(A, MW_ESMART0_VIR, A->WinVir);
+    W(A, VOP_ESMART0_YRGB_MST, A->Fb.PhysicAddress.LowPart);
+    W(A, MW_ESMART0_ACT_INFO, Win->ActInfo);
+    W(A, MW_ESMART0_DSP_INFO, Win->DspInfo);
+    W(A, MW_ESMART0_DSP_ST, Win->DspSt);
+    W(A, MW_ESMART0_SCL_FACTOR, Win->SclFactor);
+    W(A, MW_ESMART0_SCL_CTRL, Win->SclCtrl);
+    W(A, VOP_CFG_DONE, 0x00018001);
+    A->ScanShowing = FALSE;
+}
+
+/* The window for the source mode just committed (display.c): Width x Height shown
+ * with scaling How (MW_SCL_*) on the firmware's timing. The framebuffer is
+ * cleared first: until the next flip or copy the window shows its top
+ * left corner. The firmware's size when the window was never changed
+ * writes nothing at all. FALSE if the window cannot show it (no scan-out
+ * set up, HdmiHpd 3, a size scale.h refuses). PASSIVE_LEVEL, from
+ * CommitVidPn, UpdateActiveVidPnPresentPath and D0. */
+BOOLEAN MwScanScale(MW_ADAPTER *A, UINT Width, UINT Height, UINT How)
+{
+    BOOLEAN native = Width == A->Fb.Width && Height == A->Fb.Height;
+    MW_SCL_WIN win;
+
+    if (native)
+        How = MW_SCL_IDENTITY;
+    if (!A->ScanReady || A->VopVa == NULL || A->Hdmi.Switch)
+        return native;
+    if (native && !A->Scaled)
+        return TRUE;
+    if (!native && A->Scaled && Width == A->ScrW && Height == A->ScrH && How == A->ScrHow)
+        return TRUE;
+    if (!MwSclWindow(Width, Height, A->Fb.Width, A->Fb.Height, How, &win)) {
+        MwLog(A, L"Fail_ScanScale", Width << 16 | (Height & 0xFFFF));
+        return FALSE;
+    }
+    /* Under CopyLock: the copy thread is not writing the framebuffer, or
+     * reading a primary of the old size, while the window changes. */
+    ExAcquireFastMutex(&A->CopyLock);
+    if (A->FbVa != NULL)
+        RtlZeroMemory(A->FbVa, A->FbSize);
+    A->ScrW = Width;
+    A->ScrH = Height;
+    A->ScrHow = How;
+    KeMemoryBarrier();
+    A->Scaled = !native;
+    WriteWindow(A, &win);
+    A->SclApplied++;
+    ExReleaseFastMutex(&A->CopyLock);
+    MwLog(A, L"Scl_Src", Width << 16 | (Height & 0xFFFF));
+    MwLog(A, L"Scl_How", How);
+    MwLog(A, L"Scl_Dst", win.W << 16 | (win.H & 0xFFFF));
+    MwLog(A, L"Scl_DstSt", win.DspSt);
+    MwLog(A, L"Scl_Factor", win.SclFactor);
+    MwLog(A, L"Scl_Ctrl", win.SclCtrl);
+    MwLog(A, L"Scl_Applied", A->SclApplied);
+    return TRUE;
+}
+
+/* The firmware's window again, onto the framebuffer: for whatever shows
+ * the framebuffer next at its own size (Basic Display after a hand-back,
+ * the firmware after a restart). ScrW, ScrH and ScrHow are kept for D0.
+ * Nothing if the window was never changed. PASSIVE_LEVEL. */
+void MwScanNativeWindow(MW_ADAPTER *A)
+{
+    MW_SCL_WIN win;
+
+    if (!A->ScanReady || A->VopVa == NULL || A->Hdmi.Switch || !A->Scaled)
+        return;
+    if (!MwSclWindow(A->Fb.Width, A->Fb.Height, A->Fb.Width, A->Fb.Height, MW_SCL_IDENTITY, &win))
+        return;
+    A->Scaled = FALSE;
+    WriteWindow(A, &win);
+    MwLog(A, L"Scl_Native", A->SclApplied);
 }
 
 /* VidMm has given a primary its pages. Under MmuLock. */
@@ -344,7 +485,8 @@ void MwScanMap(MW_ADAPTER *A, MW_ALLOCATION *P, PPFN_NUMBER Pfn, ULONG Pages)
      * unpadded primary that fits a slot is entered, and MwScanWhy decides
      * per flip whether its size is the one on the screen. */
     if (A->Hdmi.Switch ? (P->Pitch != P->Width * 4 || P->Width == 0 || P->Height == 0)
-                       : (P->Width != A->Fb.Width || P->Height != A->Fb.Height || P->Pitch != A->Fb.Pitch)) {
+                       : !(P->Width == A->Fb.Width && P->Height == A->Fb.Height && P->Pitch == A->Fb.Pitch) &&
+                         !ScaledPrimary(A, P)) {
         A->ScanMismatch++;
         A->ScanLastW = P->Width;
         A->ScanLastH = P->Height;
@@ -475,6 +617,7 @@ void MwScanStop(MW_ADAPTER *A)
 
     if (!A->ScanReady)
         return;
+    MwScanNativeWindow(A);
     d.Mode = 2;
     MwScanSet(A, &d);
     A->ScanReady = FALSE;
