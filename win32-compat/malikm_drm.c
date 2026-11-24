@@ -700,6 +700,8 @@ typedef NTSTATUS (APIENTRY *KMT_FN)(void *);
 static struct {
    KMT_FN CreateDevice, DestroyDevice, CreateContext, CreateAllocation, DestroyAllocation,
           Lock, Unlock, Render, Escape, EnumAdapters2, WaitForIdle;
+   /* WDDM 2.x residency; optional, used only when the KMD asks for it */
+   KMT_FN CreatePagingQueue, MakeResident;
 } kmt;
 
 struct wbo {
@@ -915,6 +917,11 @@ static struct wdev {
    int fds[WDEV_FDS];
    int nfds;
    struct wstate st;
+   /* WDDM 2.x: the device's paging queue for MakeResident (w_make_resident);
+    * rq_state 0 not made yet, 1 made, -1 could not be made */
+   D3DKMT_HANDLE rq;
+   volatile UINT64 *rq_fence;
+   int rq_state;
 } wdevs[WDEV_MAX] = {{1}};
 static struct wdev *wactive = &wdevs[0];
 static __declspec(thread) struct wdev *wbinding;
@@ -1062,6 +1069,7 @@ wddm_init(void)
 #define R(n) kmt.n = kmt_resolve(#n)
    R(CreateDevice); R(DestroyDevice); R(CreateContext); R(CreateAllocation); R(DestroyAllocation);
    R(Lock); R(Unlock); R(Render); R(Escape); R(EnumAdapters2); R(WaitForIdle);
+   R(CreatePagingQueue); R(MakeResident);
 #undef R
    if (!kmt.CreateDevice || !kmt.CreateContext || !kmt.CreateAllocation || !kmt.DestroyAllocation ||
        !kmt.Lock || !kmt.Unlock || !kmt.Render || !kmt.Escape || !kmt.EnumAdapters2 || !kmt.WaitForIdle)
@@ -1140,6 +1148,96 @@ w_create(D3DDDI_ALLOCATIONINFO *ai)
    ca.NumAllocations = 1;
    ca.pAllocationInfo = ai;
    return kmt.CreateAllocation(&ca);
+}
+
+/*
+ * WDDM 2.x residency (docs/WDDM2.md 16.10).
+ *
+ * Under WDDM 1.x VidMm paged in whatever a DMA buffer's allocation list
+ * named. Under WDDM 2.x it does not: dxgmms2 10.0.22621.2428
+ * (VIDMM_GLOBAL::ReferenceDmaBuffer) fails the render with 0xc0000001,
+ * "Failed to reference DMA buffer: Allocation is not requested to be
+ * resident", for any allocation no MakeResident has been asked for on the
+ * rendering device. That was every render at 2.0 on the board: DxgkDdiRender
+ * never ran and nothing was drawn with the GPU.
+ *
+ * So, when the KMD says it is a WDDM 2.x adapter (MW_ESCAPE_WDDM; a 1.3 KMD
+ * refuses the escape and nothing here runs), every buffer this shim makes
+ * or opens is made resident on the current device as it is created, through
+ * the runtime's pfnMakeResidentCb or D3DKMTMakeResident, with a paging queue
+ * per device, and the paging fence is waited for on the CPU. Residency stays
+ * until the allocation is destroyed; this shim never evicts.
+ */
+static int wneeds_residency = -1;
+static volatile LONG wres_made, wres_failed;
+
+static void
+w_make_resident(D3DKMT_HANDLE h)
+{
+   struct wdev *d = wactive;
+   D3DDDI_MAKERESIDENT mr = {0};
+   UINT priority = D3DDDI_ALLOCATIONPRIORITY_NORMAL;
+   NTSTATUS st;
+
+   if (wneeds_residency < 0) {
+      MW_ESCAPE_WDDM_DATA w = {0};
+      w.Code = MW_ESCAPE_WDDM;
+      wneeds_residency = w_escape(&w, sizeof(w)) >= 0 && (w.Needs & MW_WDDM_NEEDS_RESIDENCY);
+      DebugPrintf("residency: KMD WDDM 0x%x, needs 0x%x: %s\n", w.WddmVersion, w.Needs,
+                  wneeds_residency ? "every buffer is made resident" : "none (WDDM 1.x)");
+   }
+   if (!wneeds_residency || !h)
+      return;
+   if (d->rq_state == 0) {
+      d->rq_state = -1;
+      if (ddi.on) {
+         D3DDDI_CREATEPAGINGQUEUE q = {0};
+         q.Priority = D3DDDI_PAGINGQUEUE_PRIORITY_NORMAL;
+         if (ddi.cb.pfnCreatePagingQueueCb && ddi.cb.pfnMakeResidentCb &&
+             ddi.cb.pfnCreatePagingQueueCb(ddi.device, &q) >= 0) {
+            d->rq = q.hPagingQueue;
+            d->rq_fence = (volatile UINT64 *)q.FenceValueCPUVirtualAddress;
+            d->rq_state = 1;
+         }
+      } else if (kmt.CreatePagingQueue && kmt.MakeResident) {
+         D3DKMT_CREATEPAGINGQUEUE q = {0};
+         q.hDevice = wdevice;
+         q.Priority = D3DDDI_PAGINGQUEUE_PRIORITY_NORMAL;
+         if (kmt.CreatePagingQueue(&q) >= 0) {
+            d->rq = q.hPagingQueue;
+            d->rq_fence = (volatile UINT64 *)q.FenceValueCPUVirtualAddress;
+            d->rq_state = 1;
+         }
+      }
+      DebugPrintf("residency: device %p (runtime %d): paging queue 0x%x %s\n", (void *)ddi.device,
+                  ddi.on, (unsigned)d->rq, d->rq_state > 0 ? "made" : "NOT made: renders will fail");
+   }
+   if (d->rq_state < 0)
+      return;
+   mr.hPagingQueue = d->rq;
+   mr.NumAllocations = 1;
+   mr.AllocationList = &h;
+   mr.PriorityList = &priority;
+   if (ddi.on) {
+      HRESULT hr = ddi.cb.pfnMakeResidentCb(ddi.device, &mr);
+      st = hr == E_PENDING ? (NTSTATUS)0x00000103 : (hr >= 0 ? 0 : (NTSTATUS)hr);
+   } else {
+      st = kmt.MakeResident(&mr);
+   }
+   if (st >= 0 && d->rq_fence && mr.PagingFenceValue) {
+      /* STATUS_PENDING: the pages come in through the paging queue. */
+      uint64_t t0 = os_time_get_nano();
+      while (*d->rq_fence < mr.PagingFenceValue && os_time_get_nano() - t0 < 2000000000ull)
+         SwitchToThread();
+      if (*d->rq_fence < mr.PagingFenceValue)
+         st = (NTSTATUS)0x00000102;     /* STATUS_TIMEOUT */
+   }
+   if (st < 0 || st == (NTSTATUS)0x00000102) {
+      if (InterlockedIncrement(&wres_failed) <= 16)
+         DebugPrintf("residency: allocation 0x%x: MakeResident 0x%08lx\n", (unsigned)h, (unsigned long)st);
+   } else {
+      InterlockedIncrement(&wres_made);
+   }
 }
 
 static void
@@ -1479,8 +1577,10 @@ malikm_primary_create(void *hRTDevice, void *hRTResource, unsigned w, unsigned h
       a.NumAllocations = 1;
       a.pAllocationInfo = &ai;
       hr = ddi.cb.pfnAllocateCb(ddi.device, &a);
-      if (hr >= 0)
+      if (hr >= 0) {
          handle = ai.hAllocation;
+         w_make_resident(handle);
+      }
       DebugPrintf("primary: %ux%u source %u, pfnAllocateCb 0x%08lx, allocation 0x%x\n",
                   w, h, vidpn_source, (unsigned long)hr, (unsigned)handle);
    }
@@ -1661,6 +1761,7 @@ malikm_present_d3dddi_rows(const void *map, unsigned stride, unsigned w, unsigne
          ai.pPrivateDriverData = &pi;
          ai.PrivateDriverDataSize = sizeof(pi);
          if (w_create(&ai) >= 0) {
+            w_make_resident(ai.hAllocation);
             ddi.present = ai.hAllocation;
             ddi.present_cpu = w_lock(ddi.present);
             ddi.present_w = w;
@@ -1756,6 +1857,7 @@ malikm_present_d3dddi(const void *bgrx, unsigned w, unsigned h, void *dxgi_conte
       ai.PrivateDriverDataSize = sizeof(pi);
       if (w_create(&ai) < 0)
          goto out;
+      w_make_resident(ai.hAllocation);
       ddi.present = ai.hAllocation;
       ddi.present_cpu = w_lock(ddi.present);
       ddi.present_w = w;
@@ -2257,6 +2359,8 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
             return -MK_ENOMEM;
          }
       }
+      /* WDDM 2.x: before any render can name it, whichever way it came. */
+      w_make_resident(ai.hAllocation);
       uint32_t h = 0;
       for (uint32_t i = 0; i < wbo_cap && !h; i++)
          if (!wbo[i].h)
