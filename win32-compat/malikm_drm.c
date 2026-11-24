@@ -1191,7 +1191,7 @@ w_make_resident(D3DKMT_HANDLE h)
    if (d->rq_state == 0) {
       d->rq_state = -1;
       if (ddi.on) {
-         D3DDDI_CREATEPAGINGQUEUE q = {0};
+         D3DDDICB_CREATEPAGINGQUEUE q = {0};
          q.Priority = D3DDDI_PAGINGQUEUE_PRIORITY_NORMAL;
          if (ddi.cb.pfnCreatePagingQueueCb && ddi.cb.pfnMakeResidentCb &&
              ddi.cb.pfnCreatePagingQueueCb(ddi.device, &q) >= 0) {
