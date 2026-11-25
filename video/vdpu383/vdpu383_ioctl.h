@@ -20,7 +20,10 @@
 #define VDPU383_DOS_NAME        L"\\DosDevices\\VDPU383"
 #define VDPU383_USER_PATH       L"\\\\.\\VDPU383"
 
-#define VDPU383_INTERFACE_VERSION   1
+/* 2: buffers are mapped through the decoder's IOMMU (dma is an IO address),
+ * VDPU383_RUN_MMU_FAULT, the IOMMU fields at the end of VDPU383_INFO. The
+ * structures are otherwise those of 1, and a version 1 program works. */
+#define VDPU383_INTERFACE_VERSION   2
 
 #ifndef CTL_CODE
 #define CTL_CODE(t, f, m, a) (((t) << 16) | ((a) << 14) | ((f) << 2) | (m))
@@ -69,6 +72,16 @@ typedef struct VDPU383_INFO {
     unsigned int mmu_last_status[2], mmu_last_fault_addr[2];
     unsigned int runs, timeouts;
     VDPU383_WARMUP_RESULT warmup;       /* the one run at D0 entry */
+    /* version 2; a version 1 driver returns the structure without these
+     * (bytes returned), and a version 2 driver accepts the shorter buffer */
+    unsigned int iommu;                 /* 1: dma addresses are IO addresses, paging on */
+    unsigned int iommu_setting;         /* Device Parameters Iommu (default 1) */
+    unsigned int iommu_dt_dma;          /* the directory, physical */
+    unsigned int iova_pages;            /* 4 KiB pages mapped now */
+    unsigned int mmu_faults;            /* page fault / bus error interrupts */
+    unsigned int mmu_enables;           /* times paging was (re)programmed */
+    unsigned int alloc_failures;
+    unsigned int reserved2[5];
 } VDPU383_INFO;
 
 /* Register access: offsets are bytes into the 4 KiB block, 4-aligned. */
@@ -89,8 +102,12 @@ typedef struct VDPU383_WRITE_REGS_IN {
     VDPU383_REG_OP ops[1];      /* count entries */
 } VDPU383_WRITE_REGS_IN;
 
-/* DMA buffers: physically contiguous, below 4 GiB, mapped write-combined
- * (Normal non-cacheable) into the calling process. */
+/* DMA buffers, mapped write-combined (Normal non-cacheable) into the
+ * calling process. dma is the 32-bit address the decoder uses for the
+ * first byte; the buffer is contiguous at dma..dma+size-1 in that space.
+ * With the IOMMU on (the default, VDPU383_INFO.iommu 1) it is an IO address
+ * and the pages are anywhere in DRAM; with Device Parameters Iommu 0 it is
+ * physical and the buffer physically contiguous below 4 GiB. */
 typedef struct VDPU383_ALLOC_IN {
     unsigned int size;          /* bytes, rounded up to 4 KiB */
 } VDPU383_ALLOC_IN;
@@ -99,9 +116,11 @@ typedef struct VDPU383_ALLOC_OUT {
     unsigned int handle;
     unsigned int dma;           /* bus address the decoder uses (IOMMU off: physical) */
     unsigned int size;
-    unsigned int reserved;
+    unsigned int flags;         /* VDPU383_ALLOC_IOVA; 0 from a version 1 driver */
     unsigned long long user_va; /* in the calling process */
 } VDPU383_ALLOC_OUT;
+
+#define VDPU383_ALLOC_IOVA      0x01    /* dma is an IO address */
 
 typedef struct VDPU383_FREE_IN {
     unsigned int handle;
@@ -126,13 +145,16 @@ typedef struct VDPU383_RUN_IN {
 #define VDPU383_RUN_HW_ERROR    2           /* status has an error bit */
 #define VDPU383_RUN_BAD_ADDRESS 3           /* rejected before start; reg in bad_reg */
 #define VDPU383_RUN_BUSY        4
+#define VDPU383_RUN_MMU_FAULT   5           /* IOMMU page fault or bus error; the core was
+                                             * stopped (IP reset); bad_reg is the faulting
+                                             * IO address, mmu_status the IOMMU status */
 
 typedef struct VDPU383_RUN_OUT {
     unsigned int result;
     unsigned int irq;                       /* link 0x48 in the ISR */
     unsigned int status;                    /* link 0x4C in the ISR */
     unsigned int elapsed_us;
-    unsigned int bad_reg;
+    unsigned int bad_reg;                   /* MMU_FAULT: the IO address */
     unsigned int mmu_status[2];
     unsigned int mmu_int_rawstat[2];
     unsigned int reset_status;              /* link 0x4C after an IP reset, if one was done */
