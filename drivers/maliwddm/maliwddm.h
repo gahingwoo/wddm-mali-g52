@@ -22,6 +22,7 @@
 #include "perfdata_calc.h"
 #include "scale.h"
 #include "dual_calc.h"
+#include "dp_calc.h"
 
 /* The adapter's own power and ACPI target (video.h; dispmprt.h has it in newer WDKs). */
 #ifndef DISPLAY_ADAPTER_HW_ID
@@ -123,7 +124,8 @@ typedef struct _MW_SRC2 {
     BOOLEAN Active;             /* a committed path */
     BOOLEAN Visible;
     BOOLEAN OnRes;              /* its framebuffer is the reserved one */
-    ULONG Target;               /* MW_DUAL_PANEL or MW_DUAL_HDMI */
+    BOOLEAN OnDpRes;            /* UsbcDp: its framebuffer is DP's reserved one */
+    ULONG Target;               /* MW_DUAL_PANEL or MW_DUAL_HDMI (UsbcDp: MW_DPX_HDMI or MW_DPX_DP) */
     UINT Width, Height;         /* the committed source mode */
     PHYSICAL_ADDRESS FbPa;
     PUCHAR FbVa;
@@ -138,6 +140,35 @@ typedef struct _MW_SRC2 {
     ULONG RefNum, RefDen;       /* the committed target mode's refresh rate */
     ULONG Flips, ScanFlips, Copies, CopySkips, NotMapped, Invisible, Vsyncs, ToFbs, Blts;
 } MW_SRC2;
+
+/* UsbcDp (dp.c, dp_calc.h, docs/USBC-DP.md): DisplayPort over USB-C on VP1
+ * next to HDMI on VP0, on an HDMI boot whose firmware entered DisplayPort
+ * Alt Mode. Setting is the Device Parameter (0 by default); On says the DP
+ * child and the second source were reported. With Setting 0 none of this
+ * is used and nothing is mapped. */
+typedef struct _MW_DP {
+    BOOLEAN Setting, On;
+    BOOLEAN Present;            /* the firmware's alt mode is there and the sink's DPCD answered */
+    BOOLEAN Connected;          /* what Windows was last told */
+    BOOLEAN Live;               /* VP1 and the link are running */
+    PUCHAR Ctl, Pma, Grf;
+    mwh_u8 Pad[2];              /* the PHY pads of DP lanes 0 and 1 */
+    UCHAR Dpcd[16];
+    MW_DP_CAPS Caps;
+    MW_DP_TRAIN Train;
+    ULONG Rate;                 /* the trained rate, 0 none */
+    ULONG RopllDone;
+    MW_TIMING Wire;             /* what VP1 drives */
+    UCHAR Edid[MW_EDID_MAX];    /* StateLock, as the HDMI EDID */
+    ULONG EdidSize;
+    MW_TIMING Modes[MW_HDMI_MODES];
+    ULONG ModeCount;
+    PUCHAR ResVa;               /* DP's own framebuffer, as Hdmi.ResVa (MwHpdReserve) */
+    PHYSICAL_ADDRESS ResPa;
+    SIZE_T ResBytes;
+    BOOLEAN OnRes0;             /* source 0's framebuffer is this one */
+    ULONG PollN, Misses, AuxFails, ModeSets, ModeSetFails, TrainFails, Changes;
+} MW_DP;
 
 typedef struct _MW_HDMI {
     ULONG Level;                /* the HdmiHpd setting */
@@ -262,6 +293,8 @@ typedef struct _MW_HDMI {
     ULONG PanelVp;
     ULONG DualCommits, DualFails, LastDualSup;
     MW_SRC2 S2;
+
+    MW_DP Dp;
 } MW_HDMI;
 
 typedef struct _MW_DEVICE {
@@ -922,6 +955,13 @@ NTSTATUS MwHdmiModeSet(MW_ADAPTER *A, const MW_TIMING *T, ULONG FbAddr, ULONG Pi
 NTSTATUS MwHdmiDsiRestore(MW_ADAPTER *A, ULONG FbAddr, ULONG Pitch);
 NTSTATUS MwHdmiPanelToVp2(MW_ADAPTER *A, ULONG FbAddr, ULONG Pitch, BOOLEAN FromVp0);
 void MwHdmiVp2Park(MW_ADAPTER *A);
+/* dp.c (UsbcDp) */
+BOOLEAN MwDpStart(MW_ADAPTER *A);
+BOOLEAN MwDpReadEdid(MW_ADAPTER *A);
+BOOLEAN MwDpSinkThere(MW_ADAPTER *A);
+NTSTATUS MwDpModeSet(MW_ADAPTER *A, const MW_TIMING *T, ULONG FbAddr, ULONG Pitch);
+void MwDpPark(MW_ADAPTER *A);
+void MwDpUnmap(MW_ADAPTER *A);
 ULONG MwHdmiVpRawStatus(MW_ADAPTER *A);
 
 /* hpd.c: hot-plug as Windows sees it */
