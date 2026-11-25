@@ -148,3 +148,4 @@ DW DP 控制器 DP0 0x27E40000 (PD_VO1) <-- VOP2 VP1 (DP0_IF_CTRL 0x18C)
 - 扩展坞如果在 Configure 之后发需要应答的 PD 消息，在 Windows 下就会复位 alt mode（第一阶段没有端口驱动）。
 - DP 的模式列表由 `MwHdmiModes` 生成，所以 HDMI PHY 做不出的模式在 DP 列表里也没有（实际上很少）。
 - HdmiExtend 下 Esmart1 是屏的窗口；这两个功能互斥。
+- primary 的刷新率按尺寸查（`MwDualSourceOf`，和 HdmiExtend 一样）：HDMI 和 DP 分辨率相同时，source 1 的 primary 报告的是 source 0 的刷新率。

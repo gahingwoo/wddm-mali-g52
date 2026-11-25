@@ -226,3 +226,6 @@ branches' CI; firmware option on, `UsbcDp` 1, reboot.
   make is left out of DP's list too (few in practice).
 - Esmart1 is the panel's window in HdmiExtend; the two features exclude
   each other.
+- A primary's refresh rate is looked up by its size (`MwDualSourceOf`, as
+  HdmiExtend does): with HDMI and DP at the same resolution, source 1's
+  primaries report source 0's rate.
