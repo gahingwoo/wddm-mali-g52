@@ -106,6 +106,10 @@ void MwHpdSettings(MW_ADAPTER *A)
      * reported one at a time it works (docs/HDMI-HPD.md). 0 to try the
      * two-display arrangement anyway. */
     H->Exclusive = MwSetting(A, L"HdmiExclusive", 1) != 0;
+    /* The default mode: the largest size at 60 Hz (hdmi_calc.h,
+     * MwHdmiDefaultFirst). 0: the monitor's (or the firmware's) preferred
+     * timing first, as before. */
+    H->Default60 = MwSetting(A, L"HdmiDefault60", 1) != 0;
     H->LastSup = H->LastEnum = 0xFFFFFFFFu;
     H->ResMaxPixels = MwSetting(A, L"HdmiMaxPixels", 2560 * 1600);
     if (H->ResMaxPixels > MW_VP0_MAX_W * MW_VP0_MAX_H)
@@ -119,6 +123,7 @@ void MwHpdSettings(MW_ADAPTER *A)
     MwLog(A, L"Hpd_Source", H->Source);
     MwLog(A, L"Hpd_Diag", H->Diag);
     MwLog(A, L"Hpd_Exclusive", H->Exclusive);
+    MwLog(A, L"Hpd_Default60", H->Default60);
 }
 
 /* Level 3: the framebuffer of the driver's own mode sets, allocated now,
@@ -247,6 +252,10 @@ static void UpdateEdid(MW_ADAPTER *A, const UCHAR *E, ULONG Len)
         if (!dup)
             H->Modes[H->ModeCount++] = m[k];
     }
+    /* The preferred mode, the one Windows takes for a monitor it has no
+     * saved arrangement for: the largest size at 60 Hz. */
+    if (H->Default60 && !H->Dsi)
+        MwHdmiDefaultFirst(H->Modes, H->ModeCount);
     Unlock(&H->StateLock);
     LogEdid(A);
 }

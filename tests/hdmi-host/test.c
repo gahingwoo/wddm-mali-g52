@@ -414,6 +414,87 @@ static void test_modes(void)
     CHECK(!MwKnownTiming(&t, &k), "the AOC's 241.70 MHz is no table's");
 }
 
+/* The default mode (MwHdmiDefaultFirst): the largest size at 60 Hz first,
+ * nothing dropped. */
+static unsigned find_mode(const MW_TIMING *m, unsigned n, unsigned w, unsigned h, unsigned lo, unsigned hi)
+{
+    for (unsigned i = 0; i < n; i++)
+        if (m[i].HDisplay == w && m[i].VDisplay == h && MwTimingMilliHz(&m[i]) >= lo && MwTimingMilliHz(&m[i]) <= hi)
+            return i;
+    return n;
+}
+
+static void test_default60(void)
+{
+    unsigned char e[384];
+    MW_TIMING m[48], c[48], t;
+    unsigned n, i75, i60, len = make_monitor(e, 68);
+
+    n = MwHdmiModes(e, len, 2560 * 1600, m, 48);
+    i75 = find_mode(m, n, 2560, 1440, 74900, 75100);
+    i60 = find_mode(m, n, 2560, 1440, 59900, 60100);
+    CHECK(i75 < n && i60 < n, "the monitor has 1440p60 and 1440p75");
+
+    /* A monitor (or firmware) that puts 1440p75 first: 1440p60 becomes the
+     * default, and 1440p75 is still offered. */
+    memcpy(c, m, sizeof(m));
+    t = c[0];
+    c[0] = c[i75];
+    c[i75] = t;
+    MwHdmiDefaultFirst(c, n);
+    CHECK(c[0].HDisplay == 2560 && c[0].VDisplay == 1440 && MwTimingFrom60(&c[0]) <= 100,
+          "default %ux%u@%u mHz", c[0].HDisplay, c[0].VDisplay, MwTimingMilliHz(&c[0]));
+    CHECK(find_mode(c, n, 2560, 1440, 74900, 75100) < n, "1440p75 still selectable");
+    for (unsigned i = 0; i < n; i++)
+        CHECK(find_mode(c, n, m[i].HDisplay, m[i].VDisplay, MwTimingMilliHz(&m[i]), MwTimingMilliHz(&m[i])) < n,
+              "mode %u kept", i);
+
+    /* Already right: unchanged. */
+    memcpy(c, m, sizeof(m));
+    MwHdmiDefaultFirst(c, n);
+    CHECK(memcmp(c, m, n * sizeof(m[0])) == 0 || MwTimingFrom60(&c[0]) <= MwTimingFrom60(&m[0]),
+          "a 60 Hz first mode stays");
+    CHECK(c[0].HDisplay == 2560 && MwTimingFrom60(&c[0]) <= 100, "1440p60 first");
+
+    /* 1080p: 60.000 before 59.94, 120, 144. */
+    {
+        MW_TIMING k[16];
+        unsigned kn = 0;
+        for (unsigned i = 0; i < n && kn < 16; i++)
+            if (m[i].HDisplay == 1920 && m[i].VDisplay == 1080 && MwTimingFrom60(&m[i]) > 10)
+                k[kn++] = m[i];
+        for (unsigned i = 0; i < n && kn < 16; i++)
+            if (m[i].HDisplay == 1920 && m[i].VDisplay == 1080 && MwTimingFrom60(&m[i]) <= 10)
+                k[kn++] = m[i];
+        MwHdmiDefaultFirst(k, kn);
+        CHECK(kn >= 3 && MwTimingFrom60(&k[0]) <= 10, "1080p: 60.000 first, got %u mHz", MwTimingMilliHz(&k[0]));
+    }
+
+    /* 1440 only at 75 (60 removed): 1440p75 stays the default, not 1080p60. */
+    {
+        unsigned cn = 0;
+        for (unsigned i = 0; i < n; i++)
+            if (i != i60)
+                c[cn++] = m[i];
+        t = c[0];
+        for (unsigned i = 0; i < cn; i++)
+            if (c[i].HDisplay == 1920 && c[i].VDisplay == 1080 && MwTimingFrom60(&c[i]) <= 10) {
+                c[0] = c[i];
+                c[i] = t;
+                break;
+            }
+        MwHdmiDefaultFirst(c, cn);
+        CHECK(c[0].HDisplay == 2560 && c[0].VDisplay == 1440, "largest size kept: %ux%u", c[0].HDisplay, c[0].VDisplay);
+    }
+
+    /* The safe list (no EDID): 1080p60 first. One mode or none: nothing moves. */
+    n = MwHdmiModes(NULL, 0, 2560 * 1600, m, 48);
+    MwHdmiDefaultFirst(m, n);
+    CHECK(n >= 1 && m[0].HDisplay == 1920 && MwTimingFrom60(&m[0]) <= 10, "no EDID: 1080p60");
+    MwHdmiDefaultFirst(m, 1);
+    MwHdmiDefaultFirst(m, 0);
+}
+
 int main(void)
 {
     test_vp();
@@ -421,6 +502,7 @@ int main(void)
     test_infoframes();
     test_edid();
     test_modes();
+    test_default60();
     /* The HdmiHpd level: an explicit value wins, none is 3 on HDMI, 0 on the panel. */
     CHECK(MwHpdLevelFor(MW_HPD_UNSET, 0) == 3 && MwHpdLevelFor(MW_HPD_UNSET, 1) == 0, "defaults");
     for (unsigned v = 0; v <= 3; v++)

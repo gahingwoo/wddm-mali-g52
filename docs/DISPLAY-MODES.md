@@ -334,6 +334,64 @@ With no usable picture: the same over SSH, or from the rescue Windows with
 the main Windows' SYSTEM hive loaded. Deleting the value returns to the
 default.
 
+### Default: the largest size at 60 Hz (branch `default-60hz`)
+
+The user's decision of 2026-11-25: the default HDMI mode is the monitor's
+highest resolution at 60 Hz, not its highest refresh rate. Higher rates
+(2560x1440 at 75 Hz on the AOC) stay in the list and selectable in
+Settings > Display > Advanced display > Choose a refresh rate.
+
+The default is the one target and monitor mode marked preferred, the
+first of the list (`hpd.c`, `AddTargetModes` and
+`MwHpdRecommendMonitorModes`). Windows takes it for a monitor it has no
+saved arrangement for; a saved arrangement (a rate picked in Settings)
+still wins, as before. `UpdateEdid` now moves to the front
+(`MwHdmiDefaultFirst`, `hdmi_calc.h`):
+
+- the largest size in the list (width times height),
+- at the rate closest to 60 Hz that size is offered at: 60.000 Hz before
+  59.94, and 75 Hz only when the size has nothing nearer 60;
+- of two sizes with the same area, the one listed first.
+
+The rest keep their order; nothing is added or dropped. So a monitor or
+firmware timing of 2560x1440@75 that used to come first gives 2560x1440@60
+the preferred mark, and a monitor whose largest size is listed only at
+75 Hz keeps that size rather than dropping to 1920x1080@60. With no EDID
+the safe list already starts at 1080p60. The DSI panel path is unchanged.
+
+`HdmiDefault60` 0 (Device Parameters, read at start) gives the old order
+back. The trace gets `Hpd_Default60`, and `Edid_M00` / `Edid_R00` show the
+default (size, refresh in 1/100 Hz).
+
+`tests/hdmi-host` checks it: 1440p75 put first comes back as 1440p60 first
+with 1440p75 still there and every mode kept, 1080p's 60.000 before 59.94,
+50, 100, 120 and 144, a monitor without 1440p60 keeping 1440p75, and the
+no-EDID list.
+
+Board test (TaishanPi 3M or CM5-IO on HDMI, the AOC or a 75/144 Hz
+monitor):
+
+1. Install the `default-60hz` package (full restart). The board has a saved
+   2560x1440@75 arrangement from 2026-11-24, which would hide the default.
+   Back it up and clear Windows' saved display arrangements (as
+   administrator; Windows builds them again):
+
+       reg export "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" gfx-backup.reg
+       reg delete "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Configuration" /f
+       reg delete "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Connectivity" /f
+
+   then restart.
+2. After login: Settings > Display shows 2560 x 1440 (Recommended), and
+   Advanced display shows 60 Hz, with 75 Hz in the list. The monitor's OSD:
+   2560x1440 60 Hz. Trace (`Device Parameters\maliwddm`): `Hpd_Default60`
+   1, `Edid_M00` 0x0A0005A0, `Edid_R00` 6000.
+3. Pick 75 Hz, Keep changes: OSD 75 Hz. Restart: still 75 Hz (the saved
+   arrangement wins over the default).
+4. Optional: `HdmiDefault60` 0, clear the arrangements again, restart: the
+   monitor's own preferred timing is the default again (on the AOC also
+   60 Hz, its first detailed timing; on a monitor whose first timing is
+   its fastest, that rate).
+
 ### HDMI 2.0 scrambling (not done)
 
 What 2560x1440@100 (398 MHz) and 1080p144 at more than 340 MHz would take:
