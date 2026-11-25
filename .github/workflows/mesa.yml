@@ -618,7 +618,8 @@ jobs:
           }
           if ($r['gpu'] -ne 0 -or $t['gpu'] -notmatch 'feature level 11_0' -or $t['gpu'] -notmatch '(?m)^PASS') { throw "the GPU process at 11_0 failed ($($r['gpu']))" }
           if ($t['chromium'] -notmatch 'feature level 11_0 \(D3D11VideoDecoder needs 11_0\)') { throw 'the Chromium probe did not get 11_0' }
-          if ($t['chromium'] -notmatch 'decoder profiles: 1') { throw 'the Chromium probe at 11_0 lost the H.264 profile' }
+          # 0081 lists H.264, HEVC, VP9 and AV1; at 11_0 the probe must keep all four.
+          if ($t['chromium'] -notmatch 'decoder profiles: 4') { throw 'the Chromium probe at 11_0 lost decoder profiles (want H.264, HEVC, VP9, AV1)' }
           if ($t['chromium'] -match 'blocked by: feature level') { throw 'the Chromium probe is still blocked by the feature level' }
           if ($r['panfrost'] -eq 'hang' -or [int]$r['panfrost'] -lt 0 -or [int]$r['panfrost'] -gt 1) { throw "Panfrost on shader model 5: $($r['panfrost'])" }
           if ($t['panfrost'] -notmatch 'feature level 11_0') { throw 'Panfrost: not at 11_0' }
