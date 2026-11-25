@@ -1,0 +1,2098 @@
+diff --git a/src/gallium/frontends/d3d10umd/Adapter.cpp b/src/gallium/frontends/d3d10umd/Adapter.cpp
+index f240268..8fc15d7 100644
+--- a/src/gallium/frontends/d3d10umd/Adapter.cpp
++++ b/src/gallium/frontends/d3d10umd/Adapter.cpp
+@@ -36,6 +36,7 @@
+ #include "State.h"
+ 
+ #include "Debug.h"
++#include "Video.h"
+ 
+ #include "util/u_debug.h"
+ #include "util/u_memory.h"
+@@ -87,7 +88,7 @@ static unsigned EffectiveMsaa(unsigned setting);
+ 
+ static unsigned
+ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL,
+-            unsigned *pRedirect = NULL)
++            unsigned *pRedirect = NULL, unsigned *pVideo = NULL)
+ {
+    MaliUmdInfo info = {};
+    D3DDDICB_QUERYADAPTERINFO q = {};
+@@ -98,6 +99,8 @@ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL,
+       *pMsaa = 0;
+    if (pRedirect)
+       *pRedirect = 0;
++   if (pVideo)
++      *pVideo = 0;
+ 
+    if (pOpenData->pAdapterCallbacks && pOpenData->pAdapterCallbacks->pfnQueryAdapterInfoCb) {
+       q.pPrivateDriverData = &info;
+@@ -113,6 +116,13 @@ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL,
+       if (pRedirect && SUCCEEDED(hr) && info.Magic == MALI_UMD_INFO_MAGIC &&
+           info.Size >= offsetof(MaliUmdInfo, Redirect) + sizeof(UINT) && info.Redirect <= 3)
+          *pRedirect = info.Redirect;
++      /* UmdVideo (0 by default): the D3D11.1 and video DDIs, in the
++       * processes VideoEffective names. */
++      if (pVideo && SUCCEEDED(hr) && info.Magic == MALI_UMD_INFO_MAGIC &&
++          info.Size >= offsetof(MaliUmdInfo, Video) + sizeof(UINT))
++         *pVideo = VideoEffective(info.Video);
++      if (pVideo)
++         DebugPrintf("OpenAdapter: UmdVideo %u, here %u\n", info.Video, *pVideo);
+       DebugPrintf("OpenAdapter: KMD adapter info 0x%08lx, magic 0x%08x, UmdDdi %u, UmdMsaa %u"
+                   " (here %u), UmdRedirect %u: offering D3D10.%u\n", (unsigned long)hr, info.Magic,
+                   info.Ddi, info.Msaa, pMsaa ? *pMsaa : 0, info.Redirect, ddi == 101 ? 1 : 0);
+@@ -130,6 +140,8 @@ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL,
+          ddi = 101;
+       if (pMsaa)
+          *pMsaa = EffectiveMsaa((unsigned)debug_get_num_option("D3D10UMD_UMDMSAA", 0));
++      if (pVideo)
++         *pVideo = VideoEffective((unsigned)debug_get_num_option("D3D10UMD_UMDVIDEO", 0));
+    }
+    return ddi;
+ }
+@@ -198,7 +210,8 @@ OpenAdapterCommon(__inout D3D10DDIARG_OPENADAPTER *pOpenData)   // IN
+    }
+ 
+    pAdaptor->hRTAdapter = pOpenData->hRTAdapter.handle;
+-   pAdaptor->ddi = QueryUmdDdi(pOpenData, &pAdaptor->msaa, &pAdaptor->redirect);
++   pAdaptor->ddi = QueryUmdDdi(pOpenData, &pAdaptor->msaa, &pAdaptor->redirect,
++                               &pAdaptor->video);
+    pOpenData->hAdapter.pDrvPrivate = pAdaptor;
+ 
+    pOpenData->pAdapterFuncs->pfnCalcPrivateDeviceSize = CalcPrivateDeviceSize;
+@@ -296,10 +309,17 @@ GetSupportedVersions(D3D10DDI_HADAPTER hAdapter,
+    LOG_ENTRYPOINT();
+ 
+    /* The D3D10.0 entries come first; the D3D10.1 ones (and later) only
+-    * where the adapter offers them. */
++    * where the adapter offers them; the D3D11.1 one only in a process that
++    * decodes video (Adapter::video), so DWM, LogonUI and the shell keep the
++    * interface they have always had. */
++   Adapter *pAdapter = CastAdapter(hAdapter);
++   UINT64 list[ARRAYSIZE(SupportedDDIInterfaceVersions) + 1];
+    UINT n = ARRAYSIZE(SupportedDDIInterfaceVersions);
+-   if (CastAdapter(hAdapter)->ddi < 101)
++   if (pAdapter->ddi < 101)
+       n = 3;
++   memcpy(list, SupportedDDIInterfaceVersions, n * sizeof list[0]);
++   if (pAdapter->video)
++      list[n++] = D3D11_1_DDI_SUPPORTED;
+ 
+    if (pSupportedDDIInterfaceVersions && *puEntries < n) {
+       return E_OUTOFMEMORY;
+@@ -308,9 +328,7 @@ GetSupportedVersions(D3D10DDI_HADAPTER hAdapter,
+    *puEntries = n;
+ 
+    if (pSupportedDDIInterfaceVersions) {
+-      memcpy(pSupportedDDIInterfaceVersions,
+-             SupportedDDIInterfaceVersions,
+-             n * sizeof SupportedDDIInterfaceVersions[0]);
++      memcpy(pSupportedDDIInterfaceVersions, list, n * sizeof list[0]);
+    }
+ 
+    return S_OK;
+@@ -332,7 +350,33 @@ GetCaps(D3D10DDI_HADAPTER hAdapter,
+         const D3D10_2DDIARG_GETCAPS *pData)
+ {
+    LOG_ENTRYPOINT();
++   Adapter *pAdapter = CastAdapter(hAdapter);
++
+    memset(pData->pData, 0, pData->DataSize);
++   /* Every answer zero, as always, unless this adapter offers the D3D11.1
++    * interface: nothing changes for a process that does not decode. */
++   switch (pAdapter->video ? (unsigned)pData->Type : 0u) {
++   case D3D11DDICAPS_3DPIPELINESUPPORT:
++      /* Asked by the runtime only of a D3D11.x interface, whose feature
++       * level is this answer: 10_0, and 10_1 where UmdDdi offers it. */
++      if (pData->DataSize >= sizeof(D3D11DDI_3DPIPELINESUPPORT_CAPS)) {
++         D3D11DDI_3DPIPELINESUPPORT_CAPS *caps = (D3D11DDI_3DPIPELINESUPPORT_CAPS *)pData->pData;
++         caps->Caps = D3D11DDI_ENCODE_3DPIPELINESUPPORT_CAP(D3D11DDI_3DPIPELINELEVEL_10_0);
++         if (pAdapter->ddi >= 101)
++            caps->Caps |= D3D11DDI_ENCODE_3DPIPELINESUPPORT_CAP(D3D11DDI_3DPIPELINELEVEL_10_1);
++      }
++      break;
++   case D3D11_1DDICAPS_ARCHITECTURE_INFO:
++      if (pData->DataSize >= sizeof(D3D11_1DDI_ARCHITECTURE_INFO_DATA))
++         ((D3D11_1DDI_ARCHITECTURE_INFO_DATA *)pData->pData)->TileBasedDeferredRenderer = TRUE;
++      break;
++   default:
++      /* Threading (no free threading, no command lists: the runtime
++       * emulates deferred contexts), shader extras, the D3D11.1 options and
++       * minimum precision: none. */
++      break;
++   }
++   DebugPrintf("GetCaps: type %u, %u bytes\n", (unsigned)pData->Type, pData->DataSize);
+    return S_OK;
+ }
+ 
+diff --git a/src/gallium/frontends/d3d10umd/D3D11.cpp b/src/gallium/frontends/d3d10umd/D3D11.cpp
+new file mode 100644
+index 0000000..bb84b97
+--- /dev/null
++++ b/src/gallium/frontends/d3d10umd/D3D11.cpp
+@@ -0,0 +1,738 @@
++/*
++ * D3D11.cpp --
++ *    The D3D11.1 device interface, offered only where video decode is on.
++ *
++ * The D3D11 runtime exposes ID3D11VideoDevice only on a driver whose
++ * device interface is D3D11.1 or later; the D3D10.x interface this
++ * frontend has always offered gets no video at all. So a process that
++ * decodes (Adapter::video, Video.cpp) is offered D3D11_1_DDI_INTERFACE_VERSION
++ * at feature level 10_0 or 10_1, and its device is the same D3D10.x
++ * implementation behind the D3D11.1 table: the entry points whose
++ * signature did not change are the same functions, the ones that gained
++ * parameters are wrapped below, and the D3D11 stages this hardware path
++ * does not have (hull, domain, compute, unordered access, command lists)
++ * are entry points that do nothing. At 10_x the runtime does not call
++ * those; with no D3D11DDICAPS_COMMANDLISTS it emulates deferred contexts
++ * itself.
++ *
++ * Every other process keeps the D3D10.x interface and never reaches this
++ * file.
++ *
++ * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
++ * SPDX-License-Identifier: MIT
++ */
++
++#include "DriverIncludes.h"
++#include "D3D11.h"
++#include "Draw.h"
++#include "DxgiFns.h"
++#include "InputAssembly.h"
++#include "OutputMerger.h"
++#include "Query.h"
++#include "Rasterizer.h"
++#include "Resource.h"
++#include "Shader.h"
++#include "State.h"
++#include "Debug.h"
++
++#include <stddef.h>
++#include <string.h>
++
++/* The few entry points of Device.cpp's own, the same for every device. */
++static D3D11DeviceStatics Statics;
++
++
++/* ----------------------------------------------------------- wrappers */
++
++static VOID APIENTRY
++UpdateSubresourceUP11(D3D10DDI_HDEVICE hDevice, D3D10DDI_HRESOURCE hResource, UINT Sub,
++                      const D3D10_DDI_BOX *pBox, const VOID *pData, UINT RowPitch,
++                      UINT DepthPitch, UINT CopyFlags)
++{
++   /* D3D11_COPY_NO_OVERWRITE and _DISCARD only promise what the caller
++    * will not touch; a synchronized update keeps both promises. */
++   (void)CopyFlags;
++   ResourceUpdateSubResourceUP(hDevice, hResource, Sub, pBox, pData, RowPitch, DepthPitch);
++}
++
++static VOID APIENTRY
++CopyRegion11(D3D10DDI_HDEVICE hDevice, D3D10DDI_HRESOURCE hDst, UINT DstSub, UINT X, UINT Y,
++             UINT Z, D3D10DDI_HRESOURCE hSrc, UINT SrcSub, const D3D10_DDI_BOX *pBox,
++             UINT CopyFlags)
++{
++   (void)CopyFlags;
++   ResourceCopyRegion(hDevice, hDst, DstSub, X, Y, Z, hSrc, SrcSub, pBox);
++}
++
++#define CB11(stage, name)                                                            \
++   static VOID APIENTRY                                                              \
++   name(D3D10DDI_HDEVICE hDevice, UINT Start, UINT Num, const D3D10DDI_HRESOURCE *ph, \
++        const UINT *pFirst, const UINT *pNum)                                         \
++   {                                                                                 \
++      SetConstantBuffers1(stage, hDevice, Start, Num, ph, pFirst, pNum);             \
++   }
++CB11(MESA_SHADER_VERTEX, VsSetConstantBuffers11)
++CB11(MESA_SHADER_FRAGMENT, PsSetConstantBuffers11)
++CB11(MESA_SHADER_GEOMETRY, GsSetConstantBuffers11)
++
++static VOID APIENTRY
++NoSetConstantBuffers11(D3D10DDI_HDEVICE, UINT, UINT, const D3D10DDI_HRESOURCE *,
++                       const UINT *, const UINT *)
++{
++}
++
++static VOID APIENTRY
++SetRenderTargets11(D3D10DDI_HDEVICE hDevice, const D3D10DDI_HRENDERTARGETVIEW *phRTV,
++                   UINT NumRTVs, UINT ClearSlots, D3D10DDI_HDEPTHSTENCILVIEW hDSV,
++                   const D3D11DDI_HUNORDEREDACCESSVIEW *, const UINT *, UINT, UINT, UINT, UINT)
++{
++   /* No unordered access views below feature level 11_0. */
++   SetRenderTargets(hDevice, phRTV, NumRTVs, ClearSlots, hDSV);
++}
++
++static BOOL APIENTRY
++Flush11(D3D10DDI_HDEVICE hDevice, UINT FlushFlags)
++{
++   (void)FlushFlags;
++   Statics.Flush(hDevice);
++   return TRUE;
++}
++
++static VOID APIENTRY
++RelocateDeviceFuncs11(D3D10DDI_HDEVICE, D3D11_1DDI_DEVICEFUNCS *)
++{
++   DebugPrintf("RelocateDeviceFuncs11: the runtime moved the D3D11.1 table\n");
++}
++
++static SIZE_T APIENTRY
++CalcPrivateResourceSize11(D3D10DDI_HDEVICE hDevice, const D3D11DDIARG_CREATERESOURCE *p)
++{
++   /* D3D10DDIARG_CREATERESOURCE is the start of D3D11DDIARG_CREATERESOURCE. */
++   return CalcPrivateResourceSize(hDevice, (const D3D10DDIARG_CREATERESOURCE *)p);
++}
++
++static VOID APIENTRY
++CreateResource11(D3D10DDI_HDEVICE hDevice, const D3D11DDIARG_CREATERESOURCE *p,
++                 D3D10DDI_HRESOURCE hResource, D3D10DDI_HRTRESOURCE hRTResource)
++{
++   CreateResource(hDevice, (const D3D10DDIARG_CREATERESOURCE *)p, hResource, hRTResource);
++}
++
++/* D3D10_1DDIARG_CREATESHADERRESOURCEVIEW is the start of the D3D11 form,
++ * whose union only adds BufferEx (raw buffers, not below 11_0). */
++static SIZE_T APIENTRY
++CalcPrivateShaderResourceViewSize11(D3D10DDI_HDEVICE hDevice,
++                                    const D3D11DDIARG_CREATESHADERRESOURCEVIEW *p)
++{
++   return CalcPrivateShaderResourceViewSize1(hDevice,
++                                             (const D3D10_1DDIARG_CREATESHADERRESOURCEVIEW *)p);
++}
++
++static VOID APIENTRY
++CreateShaderResourceView11(D3D10DDI_HDEVICE hDevice, const D3D11DDIARG_CREATESHADERRESOURCEVIEW *p,
++                           D3D10DDI_HSHADERRESOURCEVIEW h, D3D10DDI_HRTSHADERRESOURCEVIEW hrt)
++{
++   CreateShaderResourceView1(hDevice, (const D3D10_1DDIARG_CREATESHADERRESOURCEVIEW *)p, h, hrt);
++}
++
++static void
++DepthStencilView10(const D3D11DDIARG_CREATEDEPTHSTENCILVIEW *p,
++                   D3D10DDIARG_CREATEDEPTHSTENCILVIEW *o)
++{
++   memset(o, 0, sizeof *o);
++   o->hDrvResource = p->hDrvResource;
++   o->Format = p->Format;
++   o->ResourceDimension = p->ResourceDimension;
++   /* Flags (read-only depth or stencil) dropped: the view then writes. */
++   memcpy(&o->Tex1D, &p->Tex1D,
++          MIN2(sizeof *o - offsetof(D3D10DDIARG_CREATEDEPTHSTENCILVIEW, Tex1D),
++               sizeof *p - offsetof(D3D11DDIARG_CREATEDEPTHSTENCILVIEW, Tex1D)));
++}
++
++static SIZE_T APIENTRY
++CalcPrivateDepthStencilViewSize11(D3D10DDI_HDEVICE hDevice,
++                                  const D3D11DDIARG_CREATEDEPTHSTENCILVIEW *p)
++{
++   D3D10DDIARG_CREATEDEPTHSTENCILVIEW o;
++   DepthStencilView10(p, &o);
++   return CalcPrivateDepthStencilViewSize(hDevice, &o);
++}
++
++static VOID APIENTRY
++CreateDepthStencilView11(D3D10DDI_HDEVICE hDevice, const D3D11DDIARG_CREATEDEPTHSTENCILVIEW *p,
++                         D3D10DDI_HDEPTHSTENCILVIEW h, D3D10DDI_HRTDEPTHSTENCILVIEW hrt)
++{
++   D3D10DDIARG_CREATEDEPTHSTENCILVIEW o;
++   DepthStencilView10(p, &o);
++   CreateDepthStencilView(hDevice, &o, h, hrt);
++}
++
++static void
++BlendDesc10(const D3D11_1_DDI_BLEND_DESC *p, D3D10_1_DDI_BLEND_DESC *o)
++{
++   memset(o, 0, sizeof *o);
++   o->AlphaToCoverageEnable = p->AlphaToCoverageEnable;
++   o->IndependentBlendEnable = p->IndependentBlendEnable;
++   for (unsigned i = 0; i < D3D10_DDI_SIMULTANEOUS_RENDER_TARGET_COUNT; i++) {
++      /* Logic ops are not offered (D3D11_1DDICAPS_D3D11_OPTIONS zero). */
++      o->RenderTarget[i].BlendEnable = p->RenderTarget[i].BlendEnable;
++      o->RenderTarget[i].SrcBlend = p->RenderTarget[i].SrcBlend;
++      o->RenderTarget[i].DestBlend = p->RenderTarget[i].DestBlend;
++      o->RenderTarget[i].BlendOp = p->RenderTarget[i].BlendOp;
++      o->RenderTarget[i].SrcBlendAlpha = p->RenderTarget[i].SrcBlendAlpha;
++      o->RenderTarget[i].DestBlendAlpha = p->RenderTarget[i].DestBlendAlpha;
++      o->RenderTarget[i].BlendOpAlpha = p->RenderTarget[i].BlendOpAlpha;
++      o->RenderTarget[i].RenderTargetWriteMask = p->RenderTarget[i].RenderTargetWriteMask;
++   }
++}
++
++static SIZE_T APIENTRY
++CalcPrivateBlendStateSize11(D3D10DDI_HDEVICE hDevice, const D3D11_1_DDI_BLEND_DESC *p)
++{
++   D3D10_1_DDI_BLEND_DESC o;
++   BlendDesc10(p, &o);
++   return CalcPrivateBlendStateSize1(hDevice, &o);
++}
++
++static VOID APIENTRY
++CreateBlendState11(D3D10DDI_HDEVICE hDevice, const D3D11_1_DDI_BLEND_DESC *p,
++                   D3D10DDI_HBLENDSTATE h, D3D10DDI_HRTBLENDSTATE hrt)
++{
++   D3D10_1_DDI_BLEND_DESC o;
++   BlendDesc10(p, &o);
++   CreateBlendState1(hDevice, &o, h, hrt);
++}
++
++static void
++RasterizerDesc10(const D3D11_1_DDI_RASTERIZER_DESC *p, D3D10_DDI_RASTERIZER_DESC *o)
++{
++   memset(o, 0, sizeof *o);
++   o->FillMode = p->FillMode;
++   o->CullMode = p->CullMode;
++   o->FrontCounterClockwise = p->FrontCounterClockwise;
++   o->DepthBias = p->DepthBias;
++   o->DepthBiasClamp = p->DepthBiasClamp;
++   o->SlopeScaledDepthBias = p->SlopeScaledDepthBias;
++   o->DepthClipEnable = p->DepthClipEnable;
++   o->ScissorEnable = p->ScissorEnable;
++   o->MultisampleEnable = p->MultisampleEnable;
++   o->AntialiasedLineEnable = p->AntialiasedLineEnable;
++   /* ForcedSampleCount: target-independent rasterization is 11_0+. */
++}
++
++static SIZE_T APIENTRY
++CalcPrivateRasterizerStateSize11(D3D10DDI_HDEVICE hDevice, const D3D11_1_DDI_RASTERIZER_DESC *p)
++{
++   D3D10_DDI_RASTERIZER_DESC o;
++   RasterizerDesc10(p, &o);
++   return CalcPrivateRasterizerStateSize(hDevice, &o);
++}
++
++static VOID APIENTRY
++CreateRasterizerState11(D3D10DDI_HDEVICE hDevice, const D3D11_1_DDI_RASTERIZER_DESC *p,
++                        D3D10DDI_HRASTERIZERSTATE h, D3D10DDI_HRTRASTERIZERSTATE hrt)
++{
++   D3D10_DDI_RASTERIZER_DESC o;
++   RasterizerDesc10(p, &o);
++   CreateRasterizerState(hDevice, &o, h, hrt);
++}
++
++/* The shaders: the frontend does not read the signatures (it takes the
++ * declarations from the bytecode), and the D3D11.1 entries are larger, so
++ * none is passed on. */
++static const D3D10DDIARG_STAGE_IO_SIGNATURES NoSignatures = {};
++
++static SIZE_T APIENTRY
++CalcPrivateShaderSize11(D3D10DDI_HDEVICE hDevice, const UINT *pCode,
++                        const D3D11_1DDIARG_STAGE_IO_SIGNATURES *)
++{
++   return CalcPrivateShaderSize(hDevice, pCode, &NoSignatures);
++}
++
++static VOID APIENTRY
++CreateVertexShader11(D3D10DDI_HDEVICE hDevice, const UINT *pCode, D3D10DDI_HSHADER h,
++                     D3D10DDI_HRTSHADER hrt, const D3D11_1DDIARG_STAGE_IO_SIGNATURES *)
++{
++   CreateVertexShader(hDevice, pCode, h, hrt, &NoSignatures);
++}
++
++static VOID APIENTRY
++CreateGeometryShader11(D3D10DDI_HDEVICE hDevice, const UINT *pCode, D3D10DDI_HSHADER h,
++                       D3D10DDI_HRTSHADER hrt, const D3D11_1DDIARG_STAGE_IO_SIGNATURES *)
++{
++   CreateGeometryShader(hDevice, pCode, h, hrt, &NoSignatures);
++}
++
++static VOID APIENTRY
++CreatePixelShader11(D3D10DDI_HDEVICE hDevice, const UINT *pCode, D3D10DDI_HSHADER h,
++                    D3D10DDI_HRTSHADER hrt, const D3D11_1DDIARG_STAGE_IO_SIGNATURES *)
++{
++   CreatePixelShader(hDevice, pCode, h, hrt, &NoSignatures);
++}
++
++/* Stream output from the D3D11 form: one stream, the first buffer's
++ * stride (what D3D10 could express). */
++#define SO11_MAX_ENTRIES 64
++
++static bool
++StreamOutput10(const D3D11DDIARG_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT *p,
++               D3D10DDIARG_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT *o,
++               D3D10DDIARG_STREAM_OUTPUT_DECLARATION_ENTRY *entries)
++{
++   UINT n = 0;
++
++   if (p->NumEntries > SO11_MAX_ENTRIES)
++      return false;
++   for (UINT i = 0; i < p->NumEntries; i++) {
++      if (p->pOutputStreamDecl[i].Stream != 0)
++         continue;
++      entries[n].OutputSlot = p->pOutputStreamDecl[i].OutputSlot;
++      entries[n].RegisterIndex = p->pOutputStreamDecl[i].RegisterIndex;
++      entries[n].RegisterMask = p->pOutputStreamDecl[i].RegisterMask;
++      n++;
++   }
++   memset(o, 0, sizeof *o);
++   o->pShaderCode = p->pShaderCode;
++   o->pOutputStreamDecl = entries;
++   o->NumEntries = n;
++   o->StreamOutputStrideInBytes = p->NumStrides ? p->BufferStridesInBytes[0] : 0;
++   return true;
++}
++
++static SIZE_T APIENTRY
++CalcPrivateGeometryShaderWithStreamOutput11(D3D10DDI_HDEVICE hDevice,
++                                            const D3D11DDIARG_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT *p,
++                                            const D3D11_1DDIARG_STAGE_IO_SIGNATURES *)
++{
++   D3D10DDIARG_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT o;
++   D3D10DDIARG_STREAM_OUTPUT_DECLARATION_ENTRY entries[SO11_MAX_ENTRIES];
++   if (!StreamOutput10(p, &o, entries))
++      return sizeof(Shader);
++   return CalcPrivateGeometryShaderWithStreamOutput(hDevice, &o, &NoSignatures);
++}
++
++static VOID APIENTRY
++CreateGeometryShaderWithStreamOutput11(D3D10DDI_HDEVICE hDevice,
++                                       const D3D11DDIARG_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT *p,
++                                       D3D10DDI_HSHADER h, D3D10DDI_HRTSHADER hrt,
++                                       const D3D11_1DDIARG_STAGE_IO_SIGNATURES *)
++{
++   D3D10DDIARG_CREATEGEOMETRYSHADERWITHSTREAMOUTPUT o;
++   D3D10DDIARG_STREAM_OUTPUT_DECLARATION_ENTRY entries[SO11_MAX_ENTRIES];
++   if (!StreamOutput10(p, &o, entries)) {
++      SetError(hDevice, E_OUTOFMEMORY);
++      return;
++   }
++   CreateGeometryShaderWithStreamOutput(hDevice, &o, h, hrt, &NoSignatures);
++}
++
++/* ------------------------------------- what feature level 10_x has not */
++
++static VOID APIENTRY NoDrawIndirect(D3D10DDI_HDEVICE, D3D10DDI_HRESOURCE, UINT) {}
++static VOID APIENTRY NoCommandListExecute(D3D10DDI_HDEVICE, D3D11DDI_HCOMMANDLIST) {}
++static VOID APIENTRY NoSetShaderResources(D3D10DDI_HDEVICE, UINT, UINT,
++                                          const D3D10DDI_HSHADERRESOURCEVIEW *) {}
++static VOID APIENTRY NoSetShader(D3D10DDI_HDEVICE, D3D10DDI_HSHADER) {}
++static VOID APIENTRY NoSetSamplers(D3D10DDI_HDEVICE, UINT, UINT, const D3D10DDI_HSAMPLER *) {}
++
++static VOID APIENTRY
++NoCreateTessellationShader(D3D10DDI_HDEVICE hDevice, const UINT *, D3D10DDI_HSHADER,
++                           D3D10DDI_HRTSHADER, const D3D11_1DDIARG_TESSELLATION_IO_SIGNATURES *)
++{
++   SetError(hDevice, E_NOTIMPL);
++}
++
++static SIZE_T APIENTRY
++CalcPrivateTessellationShaderSize11(D3D10DDI_HDEVICE, const UINT *,
++                                    const D3D11_1DDIARG_TESSELLATION_IO_SIGNATURES *)
++{
++   return sizeof(Shader);
++}
++
++static VOID APIENTRY
++NoCheckDeferredContextHandleSizes(D3D10DDI_HDEVICE, UINT *pHSizes, D3D11DDI_HANDLESIZE *)
++{
++   *pHSizes = 0;
++}
++
++static SIZE_T APIENTRY NoCalcDeferredContextHandleSize(D3D10DDI_HDEVICE, D3D11DDI_HANDLETYPE, VOID *)
++{
++   return 0;
++}
++
++static SIZE_T APIENTRY
++NoCalcPrivateDeferredContextSize(D3D10DDI_HDEVICE, const D3D11DDIARG_CALCPRIVATEDEFERREDCONTEXTSIZE *)
++{
++   return sizeof(Device);
++}
++
++static VOID APIENTRY
++NoCreateDeferredContext(D3D10DDI_HDEVICE hDevice, const D3D11DDIARG_CREATEDEFERREDCONTEXT *)
++{
++   SetError(hDevice, E_NOTIMPL);
++}
++
++static VOID APIENTRY NoAbandonCommandList(D3D10DDI_HDEVICE) {}
++
++static SIZE_T APIENTRY
++NoCalcPrivateCommandListSize(D3D10DDI_HDEVICE, const D3D11DDIARG_CREATECOMMANDLIST *)
++{
++   return 16;
++}
++
++static VOID APIENTRY
++NoCreateCommandList(D3D10DDI_HDEVICE hDevice, const D3D11DDIARG_CREATECOMMANDLIST *,
++                    D3D11DDI_HCOMMANDLIST, D3D11DDI_HRTCOMMANDLIST)
++{
++   SetError(hDevice, E_NOTIMPL);
++}
++
++static VOID APIENTRY NoDestroyCommandList(D3D10DDI_HDEVICE, D3D11DDI_HCOMMANDLIST) {}
++
++#define SET_SHADER_WITH_IFACES(name, target)                                         \
++   static VOID APIENTRY                                                              \
++   name(D3D10DDI_HDEVICE hDevice, D3D10DDI_HSHADER hShader, UINT, const UINT *,      \
++        const D3D11DDIARG_POINTERDATA *)                                             \
++   {                                                                                 \
++      target(hDevice, hShader);                                                      \
++   }
++SET_SHADER_WITH_IFACES(PsSetShaderWithIfaces11, PsSetShader)
++SET_SHADER_WITH_IFACES(VsSetShaderWithIfaces11, VsSetShader)
++SET_SHADER_WITH_IFACES(GsSetShaderWithIfaces11, GsSetShader)
++
++static VOID APIENTRY
++NoSetShaderWithIfaces(D3D10DDI_HDEVICE, D3D10DDI_HSHADER, UINT, const UINT *,
++                      const D3D11DDIARG_POINTERDATA *)
++{
++}
++
++static VOID APIENTRY
++NoCreateComputeShader(D3D10DDI_HDEVICE hDevice, const UINT *, D3D10DDI_HSHADER, D3D10DDI_HRTSHADER)
++{
++   SetError(hDevice, E_NOTIMPL);
++}
++
++static SIZE_T APIENTRY
++NoCalcPrivateUnorderedAccessViewSize(D3D10DDI_HDEVICE, const D3D11DDIARG_CREATEUNORDEREDACCESSVIEW *)
++{
++   return 16;
++}
++
++static VOID APIENTRY
++NoCreateUnorderedAccessView(D3D10DDI_HDEVICE hDevice, const D3D11DDIARG_CREATEUNORDEREDACCESSVIEW *,
++                            D3D11DDI_HUNORDEREDACCESSVIEW, D3D11DDI_HRTUNORDEREDACCESSVIEW)
++{
++   SetError(hDevice, E_NOTIMPL);
++}
++
++static VOID APIENTRY NoDestroyUnorderedAccessView(D3D10DDI_HDEVICE, D3D11DDI_HUNORDEREDACCESSVIEW) {}
++static VOID APIENTRY NoClearUavUint(D3D10DDI_HDEVICE, D3D11DDI_HUNORDEREDACCESSVIEW, const UINT[4]) {}
++static VOID APIENTRY NoClearUavFloat(D3D10DDI_HDEVICE, D3D11DDI_HUNORDEREDACCESSVIEW, const FLOAT[4]) {}
++static VOID APIENTRY NoSetUnorderedAccessViews(D3D10DDI_HDEVICE, UINT, UINT,
++                                               const D3D11DDI_HUNORDEREDACCESSVIEW *, const UINT *) {}
++static VOID APIENTRY NoDispatch(D3D10DDI_HDEVICE, UINT, UINT, UINT) {}
++static VOID APIENTRY NoSetResourceMinLOD(D3D10DDI_HDEVICE, D3D10DDI_HRESOURCE, FLOAT) {}
++static VOID APIENTRY NoCopyStructureCount(D3D10DDI_HDEVICE, D3D10DDI_HRESOURCE, UINT,
++                                          D3D11DDI_HUNORDEREDACCESSVIEW) {}
++static VOID APIENTRY NoRecycleCommandList(D3D10DDI_HDEVICE, D3D11DDI_HCOMMANDLIST) {}
++
++static HRESULT APIENTRY
++NoRecycleCreateCommandList(D3D10DDI_HDEVICE, const D3D11DDIARG_CREATECOMMANDLIST *,
++                           D3D11DDI_HCOMMANDLIST, D3D11DDI_HRTCOMMANDLIST)
++{
++   return E_NOTIMPL;
++}
++
++static HRESULT APIENTRY
++NoRecycleCreateDeferredContext(D3D10DDI_HDEVICE, const D3D11DDIARG_CREATEDEFERREDCONTEXT *)
++{
++   return E_NOTIMPL;
++}
++
++/* ------------------------------------------------------ D3D11.1 extras */
++
++static VOID APIENTRY
++Discard11(D3D10DDI_HDEVICE, D3D11DDI_HANDLETYPE, VOID *, const D3D10_DDI_RECT *, UINT)
++{
++   /* A hint: the contents may be dropped. Keeping them is allowed. */
++}
++
++static VOID APIENTRY
++AssignDebugBinary11(D3D10DDI_HDEVICE, D3D10DDI_HSHADER, UINT, const VOID *)
++{
++}
++
++static VOID APIENTRY
++CheckDirectFlipSupport11(D3D10DDI_HDEVICE, D3D10DDI_HRESOURCE, D3D10DDI_HRESOURCE, UINT,
++                         BOOL *pSupported)
++{
++   *pSupported = FALSE;
++}
++
++static VOID APIENTRY
++ClearView11(D3D10DDI_HDEVICE hDevice, D3D11DDI_HANDLETYPE viewType, VOID *hView,
++            const FLOAT Color[4], const D3D10_DDI_RECT *, UINT NumRects)
++{
++   /* A whole render target view only; rectangles and the other view
++    * kinds are left alone (logged). */
++   if (viewType == D3D10DDI_HT_RENDERTARGETVIEW && NumRects == 0) {
++      D3D10DDI_HRENDERTARGETVIEW h;
++      FLOAT c[4] = { Color[0], Color[1], Color[2], Color[3] };
++      h.pDrvPrivate = hView;
++      ClearRenderTargetView(hDevice, h, c);
++      return;
++   }
++   DebugPrintf("ClearView11: view type %u with %u rectangles not cleared\n",
++               (unsigned)viewType, NumRects);
++}
++
++/* ------------------------------------------------------------- tables */
++
++void
++D3D11FillDeviceFuncs(D3D11_1DDI_DEVICEFUNCS *f, const D3D11DeviceStatics *s)
++{
++   memset(f, 0, sizeof *f);
++   Statics = *s;
++
++   f->pfnDefaultConstantBufferUpdateSubresourceUP = UpdateSubresourceUP11;
++   f->pfnVsSetConstantBuffers = VsSetConstantBuffers11;
++   f->pfnPsSetShaderResources = PsSetShaderResources;
++   f->pfnPsSetShader = PsSetShader;
++   f->pfnPsSetSamplers = PsSetSamplers;
++   f->pfnVsSetShader = VsSetShader;
++   f->pfnDrawIndexed = DrawIndexed;
++   f->pfnDraw = Draw;
++   f->pfnDynamicIABufferMapNoOverwrite = ResourceMap;
++   f->pfnDynamicIABufferUnmap = ResourceUnmap;
++   f->pfnDynamicConstantBufferMapDiscard = ResourceMap;
++   f->pfnDynamicIABufferMapDiscard = ResourceMap;
++   f->pfnDynamicConstantBufferUnmap = ResourceUnmap;
++   f->pfnPsSetConstantBuffers = PsSetConstantBuffers11;
++   f->pfnIaSetInputLayout = IaSetInputLayout;
++   f->pfnIaSetVertexBuffers = IaSetVertexBuffers;
++   f->pfnIaSetIndexBuffer = IaSetIndexBuffer;
++
++   f->pfnDrawIndexedInstanced = DrawIndexedInstanced;
++   f->pfnDrawInstanced = DrawInstanced;
++   f->pfnDynamicResourceMapDiscard = ResourceMap;
++   f->pfnDynamicResourceUnmap = ResourceUnmap;
++   f->pfnGsSetConstantBuffers = GsSetConstantBuffers11;
++   f->pfnGsSetShader = GsSetShader;
++   f->pfnIaSetTopology = IaSetTopology;
++   f->pfnStagingResourceMap = ResourceMap;
++   f->pfnStagingResourceUnmap = ResourceUnmap;
++   f->pfnVsSetShaderResources = VsSetShaderResources;
++   f->pfnVsSetSamplers = VsSetSamplers;
++   f->pfnGsSetShaderResources = GsSetShaderResources;
++   f->pfnGsSetSamplers = GsSetSamplers;
++   f->pfnSetRenderTargets = SetRenderTargets11;
++   f->pfnShaderResourceViewReadAfterWriteHazard = ShaderResourceViewReadAfterWriteHazard;
++   f->pfnResourceReadAfterWriteHazard = ResourceReadAfterWriteHazard;
++   f->pfnSetBlendState = SetBlendState;
++   f->pfnSetDepthStencilState = SetDepthStencilState;
++   f->pfnSetRasterizerState = SetRasterizerState;
++   f->pfnQueryEnd = QueryEnd;
++   f->pfnQueryBegin = QueryBegin;
++   f->pfnResourceCopyRegion = CopyRegion11;
++   f->pfnResourceUpdateSubresourceUP = UpdateSubresourceUP11;
++   f->pfnSoSetTargets = SoSetTargets;
++   f->pfnDrawAuto = DrawAuto;
++   f->pfnSetViewports = SetViewports;
++   f->pfnSetScissorRects = SetScissorRects;
++   f->pfnClearRenderTargetView = ClearRenderTargetView;
++   f->pfnClearDepthStencilView = ClearDepthStencilView;
++   f->pfnSetPredication = SetPredication;
++   f->pfnQueryGetData = QueryGetData;
++   f->pfnFlush = Flush11;
++   f->pfnGenMips = GenMips;
++   f->pfnResourceCopy = ResourceCopy;
++   f->pfnResourceResolveSubresource = ResourceResolveSubResource;
++
++   f->pfnResourceMap = ResourceMap;
++   f->pfnResourceUnmap = ResourceUnmap;
++   f->pfnResourceIsStagingBusy = ResourceIsStagingBusy;
++   f->pfnRelocateDeviceFuncs = RelocateDeviceFuncs11;
++   f->pfnCalcPrivateResourceSize = CalcPrivateResourceSize11;
++   f->pfnCalcPrivateOpenedResourceSize = CalcPrivateOpenedResourceSize;
++   f->pfnCreateResource = CreateResource11;
++   f->pfnOpenResource = OpenResource;
++   f->pfnDestroyResource = DestroyResource;
++   f->pfnCalcPrivateShaderResourceViewSize = CalcPrivateShaderResourceViewSize11;
++   f->pfnCreateShaderResourceView = CreateShaderResourceView11;
++   f->pfnDestroyShaderResourceView = DestroyShaderResourceView;
++   f->pfnCalcPrivateRenderTargetViewSize = CalcPrivateRenderTargetViewSize;
++   f->pfnCreateRenderTargetView = CreateRenderTargetView;
++   f->pfnDestroyRenderTargetView = DestroyRenderTargetView;
++   f->pfnCalcPrivateDepthStencilViewSize = CalcPrivateDepthStencilViewSize11;
++   f->pfnCreateDepthStencilView = CreateDepthStencilView11;
++   f->pfnDestroyDepthStencilView = DestroyDepthStencilView;
++   f->pfnCalcPrivateElementLayoutSize = CalcPrivateElementLayoutSize;
++   f->pfnCreateElementLayout = CreateElementLayout;
++   f->pfnDestroyElementLayout = DestroyElementLayout;
++   f->pfnCalcPrivateBlendStateSize = CalcPrivateBlendStateSize11;
++   f->pfnCreateBlendState = CreateBlendState11;
++   f->pfnDestroyBlendState = DestroyBlendState;
++   f->pfnCalcPrivateDepthStencilStateSize = CalcPrivateDepthStencilStateSize;
++   f->pfnCreateDepthStencilState = CreateDepthStencilState;
++   f->pfnDestroyDepthStencilState = DestroyDepthStencilState;
++   f->pfnCalcPrivateRasterizerStateSize = CalcPrivateRasterizerStateSize11;
++   f->pfnCreateRasterizerState = CreateRasterizerState11;
++   f->pfnDestroyRasterizerState = DestroyRasterizerState;
++   f->pfnCalcPrivateShaderSize = CalcPrivateShaderSize11;
++   f->pfnCreateVertexShader = CreateVertexShader11;
++   f->pfnCreateGeometryShader = CreateGeometryShader11;
++   f->pfnCreatePixelShader = CreatePixelShader11;
++   f->pfnCalcPrivateGeometryShaderWithStreamOutput = CalcPrivateGeometryShaderWithStreamOutput11;
++   f->pfnCreateGeometryShaderWithStreamOutput = CreateGeometryShaderWithStreamOutput11;
++   f->pfnDestroyShader = DestroyShader;
++   f->pfnCalcPrivateSamplerSize = CalcPrivateSamplerSize;
++   f->pfnCreateSampler = CreateSampler;
++   f->pfnDestroySampler = DestroySampler;
++   f->pfnCalcPrivateQuerySize = CalcPrivateQuerySize;
++   f->pfnCreateQuery = CreateQuery;
++   f->pfnDestroyQuery = DestroyQuery;
++
++   f->pfnCheckFormatSupport = s->CheckFormatSupport;
++   f->pfnCheckMultisampleQualityLevels = s->CheckMultisampleQualityLevels;
++   f->pfnCheckCounterInfo = CheckCounterInfo;
++   f->pfnCheckCounter = CheckCounter;
++
++   f->pfnDestroyDevice = s->DestroyDevice;
++   f->pfnSetTextFilterSize = s->SetTextFilterSize;
++
++   f->pfnResourceConvert = ResourceCopy;
++   f->pfnResourceConvertRegion = CopyRegion11;
++
++   f->pfnDrawIndexedInstancedIndirect = NoDrawIndirect;
++   f->pfnDrawInstancedIndirect = NoDrawIndirect;
++   f->pfnCommandListExecute = NoCommandListExecute;
++   f->pfnHsSetShaderResources = NoSetShaderResources;
++   f->pfnHsSetShader = NoSetShader;
++   f->pfnHsSetSamplers = NoSetSamplers;
++   f->pfnHsSetConstantBuffers = NoSetConstantBuffers11;
++   f->pfnDsSetShaderResources = NoSetShaderResources;
++   f->pfnDsSetShader = NoSetShader;
++   f->pfnDsSetSamplers = NoSetSamplers;
++   f->pfnDsSetConstantBuffers = NoSetConstantBuffers11;
++   f->pfnCreateHullShader = NoCreateTessellationShader;
++   f->pfnCreateDomainShader = NoCreateTessellationShader;
++   f->pfnCheckDeferredContextHandleSizes = NoCheckDeferredContextHandleSizes;
++   f->pfnCalcDeferredContextHandleSize = NoCalcDeferredContextHandleSize;
++   f->pfnCalcPrivateDeferredContextSize = NoCalcPrivateDeferredContextSize;
++   f->pfnCreateDeferredContext = NoCreateDeferredContext;
++   f->pfnAbandonCommandList = NoAbandonCommandList;
++   f->pfnCalcPrivateCommandListSize = NoCalcPrivateCommandListSize;
++   f->pfnCreateCommandList = NoCreateCommandList;
++   f->pfnDestroyCommandList = NoDestroyCommandList;
++   f->pfnCalcPrivateTessellationShaderSize = CalcPrivateTessellationShaderSize11;
++   f->pfnPsSetShaderWithIfaces = PsSetShaderWithIfaces11;
++   f->pfnVsSetShaderWithIfaces = VsSetShaderWithIfaces11;
++   f->pfnGsSetShaderWithIfaces = GsSetShaderWithIfaces11;
++   f->pfnHsSetShaderWithIfaces = NoSetShaderWithIfaces;
++   f->pfnDsSetShaderWithIfaces = NoSetShaderWithIfaces;
++   f->pfnCsSetShaderWithIfaces = NoSetShaderWithIfaces;
++   f->pfnCreateComputeShader = NoCreateComputeShader;
++   f->pfnCsSetShader = NoSetShader;
++   f->pfnCsSetShaderResources = NoSetShaderResources;
++   f->pfnCsSetSamplers = NoSetSamplers;
++   f->pfnCsSetConstantBuffers = NoSetConstantBuffers11;
++   f->pfnCalcPrivateUnorderedAccessViewSize = NoCalcPrivateUnorderedAccessViewSize;
++   f->pfnCreateUnorderedAccessView = NoCreateUnorderedAccessView;
++   f->pfnDestroyUnorderedAccessView = NoDestroyUnorderedAccessView;
++   f->pfnClearUnorderedAccessViewUint = NoClearUavUint;
++   f->pfnClearUnorderedAccessViewFloat = NoClearUavFloat;
++   f->pfnCsSetUnorderedAccessViews = NoSetUnorderedAccessViews;
++   f->pfnDispatch = NoDispatch;
++   f->pfnDispatchIndirect = NoDrawIndirect;
++   f->pfnSetResourceMinLOD = NoSetResourceMinLOD;
++   f->pfnCopyStructureCount = NoCopyStructureCount;
++   f->pfnRecycleCommandList = NoRecycleCommandList;
++   f->pfnRecycleCreateCommandList = NoRecycleCreateCommandList;
++   f->pfnRecycleCreateDeferredContext = NoRecycleCreateDeferredContext;
++   f->pfnRecycleDestroyCommandList = NoDestroyCommandList;
++
++   f->pfnDiscard = Discard11;
++   f->pfnAssignDebugBinary = AssignDebugBinary11;
++   f->pfnDynamicConstantBufferMapNoOverwrite = ResourceMap;
++   f->pfnCheckDirectFlipSupport = CheckDirectFlipSupport11;
++   f->pfnClearView = ClearView11;
++}
++
++/* DXGI 1.2: the 1.0 entry points, and the new ones in their plainest form. */
++
++static HRESULT __stdcall
++ResolveSharedResource12(DXGI_DDI_ARG_RESOLVESHAREDRESOURCE *)
++{
++   return S_OK;
++}
++
++static HRESULT __stdcall
++Blt1_12(DXGI_DDI_ARG_BLT1 *p)
++{
++   /* A whole-source blit is the 1.0 Blt; a source rectangle is not
++    * carried out. */
++   DXGI_DDI_ARG_BLT b;
++   memset(&b, 0, sizeof b);
++   b.hDevice = p->hDevice;
++   b.hDstResource = p->hDstResource;
++   b.DstSubresource = p->DstSubresource;
++   b.DstLeft = p->DstLeft;
++   b.DstTop = p->DstTop;
++   b.DstRight = p->DstRight;
++   b.DstBottom = p->DstBottom;
++   b.hSrcResource = p->hSrcResource;
++   b.SrcSubresource = p->SrcSubresource;
++   b.Flags = p->Flags;
++   b.Rotate = p->Rotate;
++   return _Blt(&b);
++}
++
++static HRESULT __stdcall
++OfferResources12(DXGI_DDI_ARG_OFFERRESOURCES *)
++{
++   return S_OK;
++}
++
++static HRESULT __stdcall
++ReclaimResources12(DXGI_DDI_ARG_RECLAIMRESOURCES *p)
++{
++   if (p->pDiscarded)
++      for (UINT i = 0; i < p->Resources; i++)
++         p->pDiscarded[i] = FALSE;
++   return S_OK;
++}
++
++static HRESULT __stdcall
++GetMultiplaneOverlayCaps12(DXGI_DDI_ARG_GETMULTIPLANEOVERLAYCAPS *p)
++{
++   memset(&p->MultiplaneOverlayCaps, 0, sizeof p->MultiplaneOverlayCaps);
++   return S_OK;
++}
++
++static HRESULT __stdcall
++NoMultiplaneOverlay12(void *)
++{
++   return E_NOTIMPL;
++}
++
++void
++D3D11FillDxgi12Funcs(DXGI1_2_DDI_BASE_FUNCTIONS *f)
++{
++   f->pfnPresent = _Present;
++   f->pfnGetGammaCaps = _GetGammaCaps;
++   f->pfnSetDisplayMode = _SetDisplayMode;
++   f->pfnSetResourcePriority = _SetResourcePriority;
++   f->pfnQueryResourceResidency = _QueryResourceResidency;
++   f->pfnRotateResourceIdentities = _RotateResourceIdentities;
++   f->pfnBlt = _Blt;
++   f->pfnResolveSharedResource = ResolveSharedResource12;
++   f->pfnBlt1 = Blt1_12;
++   f->pfnOfferResources = OfferResources12;
++   f->pfnReclaimResources = ReclaimResources12;
++   f->pfnGetMultiplaneOverlayCaps = GetMultiplaneOverlayCaps12;
++   f->pfnGetMultiplaneOverlayFilterRange = NoMultiplaneOverlay12;
++   f->pfnCheckMultiplaneOverlaySupport =
++      (HRESULT (__stdcall *)(DXGI_DDI_ARG_CHECKMULTIPLANEOVERLAYSUPPORT *))NoMultiplaneOverlay12;
++   f->pfnPresentMultiplaneOverlay =
++      (HRESULT (__stdcall *)(DXGI_DDI_ARG_PRESENTMULTIPLANEOVERLAY *))NoMultiplaneOverlay12;
++}
+diff --git a/src/gallium/frontends/d3d10umd/D3D11.h b/src/gallium/frontends/d3d10umd/D3D11.h
+new file mode 100644
+index 0000000..9ba64e1
+--- /dev/null
++++ b/src/gallium/frontends/d3d10umd/D3D11.h
+@@ -0,0 +1,26 @@
++/*
++ * D3D11.h --
++ *    The D3D11.1 device interface over the D3D10.x implementation.
++ *
++ * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
++ * SPDX-License-Identifier: MIT
++ */
++
++#ifndef D3D11_H
++#define D3D11_H
++
++#include "DriverIncludes.h"
++
++/* Entry points Device.cpp keeps static. */
++struct D3D11DeviceStatics {
++   void (APIENTRY *DestroyDevice)(D3D10DDI_HDEVICE);
++   void (APIENTRY *Flush)(D3D10DDI_HDEVICE);
++   void (APIENTRY *CheckFormatSupport)(D3D10DDI_HDEVICE, DXGI_FORMAT, UINT *);
++   void (APIENTRY *CheckMultisampleQualityLevels)(D3D10DDI_HDEVICE, DXGI_FORMAT, UINT, UINT *);
++   void (APIENTRY *SetTextFilterSize)(D3D10DDI_HDEVICE, UINT, UINT);
++};
++
++void D3D11FillDeviceFuncs(D3D11_1DDI_DEVICEFUNCS *f, const D3D11DeviceStatics *statics);
++void D3D11FillDxgi12Funcs(DXGI1_2_DDI_BASE_FUNCTIONS *f);
++
++#endif /* D3D11_H */
+diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
+index 36ef023..1521c97 100644
+--- a/src/gallium/frontends/d3d10umd/Device.cpp
++++ b/src/gallium/frontends/d3d10umd/Device.cpp
+@@ -43,6 +43,8 @@
+ #include "Format.h"
+ 
+ #include "Debug.h"
++#include "D3D11.h"
++#include "Video.h"
+ 
+ #include "util/u_sampler.h"
+ #include "util/u_framebuffer.h"
+@@ -74,6 +76,7 @@ static void APIENTRY CheckMultisampleQualityLevels(D3D10DDI_HDEVICE hDevice,
+                                           UINT SampleCount,
+                                           __out UINT *pNumQualityLevels);
+ static void APIENTRY SetTextFilterSize(D3D10DDI_HDEVICE hDevice, UINT Width, UINT Height);
++static HRESULT CreateDeviceResult(const Adapter *pAdapter);
+ 
+ 
+ /*
+@@ -160,6 +163,7 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+    case D3D10_1_x_DDI_INTERFACE_VERSION:
+    case D3D10_1_7_DDI_INTERFACE_VERSION:
+ #endif
++   case D3D11_1_DDI_INTERFACE_VERSION:
+       break;
+    default:
+       DebugPrintf("%s: unsupported interface version 0x%08x\n",
+@@ -174,6 +178,10 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+       DebugPrintf("%s: the D3D10.1 interface is not offered on this adapter\n", __func__);
+       return E_FAIL;
+    }
++   if (pCreateData->Interface == D3D11_1_DDI_INTERFACE_VERSION && !pAdapter->video) {
++      DebugPrintf("%s: the D3D11.1 interface is offered only where UmdVideo applies\n", __func__);
++      return E_FAIL;
++   }
+ 
+    Device *pDevice = CastDevice(pCreateData->hDrvDevice);
+    memset(pDevice, 0, sizeof *pDevice);
+@@ -193,6 +201,8 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+    pDevice->screen = screen;
+    pDevice->pipe = pipe;
+    pDevice->msaa = pAdapter->msaa;
++   pDevice->video = pAdapter->video;
++   pDevice->ddi11_1 = pCreateData->Interface == D3D11_1_DDI_INTERFACE_VERSION;
+    pDevice->caps_logged = 0;
+    pDevice->cso = cso_create_context(pipe, CSO_NO_VBUF);
+    /* The first draw binds the vertex elements, even if IaSetInputLayout
+@@ -233,6 +243,27 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+ 
+    st_debug_parse();
+ 
++   /*
++    * The D3D11.1 interface: its own table (D3D11.cpp), the video entry
++    * points through the sub-object query (Video.cpp), DXGI's 1.2 table.
++    */
++   if (pDevice->ddi11_1) {
++      D3D11DeviceStatics statics;
++      statics.DestroyDevice = DestroyDevice;
++      statics.Flush = Flush;
++      statics.CheckFormatSupport = CheckFormatSupport;
++      statics.CheckMultisampleQualityLevels = CheckMultisampleQualityLevels;
++      statics.SetTextFilterSize = SetTextFilterSize;
++      D3D11FillDeviceFuncs(pCreateData->p11_1DeviceFuncs, &statics);
++      if (pCreateData->ppfnRetrieveSubObject)
++         *pCreateData->ppfnRetrieveSubObject = VideoRetrieveSubObject;
++      D3D11FillDxgi12Funcs(pCreateData->DXGIBaseDDI.pDXGIDDIBaseFunctions3);
++      DebugPrintf("CreateDevice: D3D11.1 interface, video %u, flags 0x%x (pipeline level %u)\n",
++                  pDevice->video, pCreateData->Flags,
++                  (unsigned)D3D11DDI_EXTRACT_3DPIPELINELEVEL_FROM_FLAGS(pCreateData->Flags));
++      return CreateDeviceResult(pAdapter);
++   }
++
+    /*
+     * Fill in the D3D10 DDI functions
+     */
+@@ -398,6 +429,12 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+     * 2 (the browsers) at WDDM 1.3 and 1 (none) at 2.x; a KMD that predates
+     * the field answers 0, which keeps the browsers' default.
+     */
++   return CreateDeviceResult(pAdapter);
++}
++
++static HRESULT
++CreateDeviceResult(const Adapter *pAdapter)
++{
+    if (GetFileAttributesA("C:\\mali\\noredirect") != INVALID_FILE_ATTRIBUTES) {
+       DebugPrintf("CreateDevice: done, DXGI_STATUS_NO_REDIRECTION (C:\\mali\\noredirect)\n");
+       return DXGI_STATUS_NO_REDIRECTION;
+@@ -769,6 +806,11 @@ CheckFormatSupportImpl(Device *pDevice,         // IN
+ 
+    *pFormatCaps = 0;
+ 
++   if (Format == DXGI_FORMAT_NV12) {
++      *pFormatCaps = VideoNv12FormatSupport(pDevice);
++      return;
++   }
++
+    enum pipe_format format = FormatTranslate(Format, false);
+    if (format == PIPE_FORMAT_NONE) {
+       *pFormatCaps = D3D10_DDI_FORMAT_SUPPORT_NOT_SUPPORTED;
+diff --git a/src/gallium/frontends/d3d10umd/Resource.cpp b/src/gallium/frontends/d3d10umd/Resource.cpp
+index 67522a2..2aa5beb 100644
+--- a/src/gallium/frontends/d3d10umd/Resource.cpp
++++ b/src/gallium/frontends/d3d10umd/Resource.cpp
+@@ -32,6 +32,7 @@
+ 
+ 
+ #include "Resource.h"
++#include "Video.h"
+ #include "Format.h"
+ #include "State.h"
+ #include "Query.h"
+@@ -426,7 +427,28 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+                                                   pCreateResource->ArraySize );
+    pResource->buffer = templat.target == PIPE_BUFFER;
+ 
+-   if (pCreateResource->Format == DXGI_FORMAT_UNKNOWN) {
++   /*
++    * NV12 (a video device only, Video.cpp): one R8_UNORM texture holding
++    * the luma rows and, below them, half as many rows of interleaved
++    * chroma, at one pitch. A map then hands out exactly what D3D promises
++    * for NV12, a whole-resource copy copies both planes, and the decoder
++    * writes both planes with two uploads.
++    */
++   bool nv12 = pCreateResource->Format == DXGI_FORMAT_NV12;
++   if (nv12) {
++      Device *pDevice = CastDevice(hDevice);
++      UINT h = pCreateResource->pMipInfoList[0].TexelHeight;
++      if (!VideoNv12FormatSupport(pDevice) ||
++          (templat.target != PIPE_TEXTURE_2D_ARRAY && templat.target != PIPE_TEXTURE_2D) ||
++          pCreateResource->MipLevels != 1 || (h & 1) ||
++          (pCreateResource->pMipInfoList[0].TexelWidth & 1) || pCreateResource->SampleDesc.Count > 1) {
++         DebugPrintf("%s: NV12 %ux%u, %u levels: not offered here\n", __func__,
++                     pCreateResource->pMipInfoList[0].TexelWidth, h, pCreateResource->MipLevels);
++         SetError(hDevice, E_INVALIDARG);
++         return;
++      }
++      templat.format = PIPE_FORMAT_R8_UNORM;
++   } else if (pCreateResource->Format == DXGI_FORMAT_UNKNOWN) {
+       assert(pCreateResource->ResourceDimension == D3D10DDIRESOURCE_BUFFER);
+       templat.format = PIPE_FORMAT_R8_UINT;
+    } else {
+@@ -443,6 +465,13 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+    templat.nr_storage_samples = pCreateResource->SampleDesc.Count;
+    templat.bind       = translate_resource_flags(pCreateResource->BindFlags);
+    templat.usage      = translate_resource_usage(pCreateResource->Usage);
++   if (nv12) {
++      templat.height0 = templat.height0 * 3 / 2;
++      /* No plane views yet (V4): a decoder output and a copy source. */
++      templat.bind &= PIPE_BIND_SAMPLER_VIEW;
++      pResource->nv12 = true;
++      pResource->nv12_luma_height = pCreateResource->pMipInfoList[0].TexelHeight;
++   }
+ 
+    if (templat.target != PIPE_BUFFER) {
+       if (!screen->is_format_supported(screen,
+@@ -1261,6 +1290,20 @@ ResourceCopyRegion(D3D10DDI_HDEVICE hDevice,                // IN
+       src_box.depth  = u_minify(src_resource->depth0,  src_level);
+    }
+ 
++   /* NV12 with a source box: the box is in luma rows; the chroma rows of
++    * the same area are half as many, below the luma (CreateResource). */
++   if (pSrcResource->nv12 && pDstResource->nv12 && pSrcBox) {
++      struct pipe_box uv = src_box;
++      uv.y = pSrcResource->nv12_luma_height + src_box.y / 2;
++      uv.height = src_box.height / 2;
++      pipe->resource_copy_region(pipe, dst_resource, dst_level, DstX, DstY, DstZ + dst_layer,
++                                 src_resource, src_level, &src_box);
++      pipe->resource_copy_region(pipe, dst_resource, dst_level, DstX,
++                                 pDstResource->nv12_luma_height + DstY / 2, DstZ + dst_layer,
++                                 src_resource, src_level, &uv);
++      return;
++   }
++
+    if (areResourcesCompatible(src_resource, dst_resource) ||
+        areResourcesBitIdentical(src_resource, dst_resource)) {
+       pipe->resource_copy_region(pipe,
+diff --git a/src/gallium/frontends/d3d10umd/Shader.cpp b/src/gallium/frontends/d3d10umd/Shader.cpp
+index 194a00a..9d2dabc 100644
+--- a/src/gallium/frontends/d3d10umd/Shader.cpp
++++ b/src/gallium/frontends/d3d10umd/Shader.cpp
+@@ -206,6 +206,22 @@ SetConstantBuffers(mesa_shader_stage shader_type,    // IN
+                    UINT StartBuffer,                     // IN
+                    UINT NumBuffers,                      // IN
+                    const D3D10DDI_HRESOURCE *phBuffers) // IN
++{
++   SetConstantBuffers1(shader_type, hDevice, StartBuffer, NumBuffers, phBuffers, NULL, NULL);
++}
++
++/*
++ * The D3D11.1 form (D3D11.cpp): a window of each buffer, FirstConstant and
++ * NumConstants counted in 16-byte constants, when the runtime gives them.
++ */
++void
++SetConstantBuffers1(mesa_shader_stage shader_type,
++                    D3D10DDI_HDEVICE hDevice,
++                    UINT StartBuffer,
++                    UINT NumBuffers,
++                    const D3D10DDI_HRESOURCE *phBuffers,
++                    const UINT *pFirstConstant,
++                    const UINT *pNumConstants)
+ {
+    Device *pDevice = CastDevice(hDevice);
+    struct pipe_context *pipe = pDevice->pipe;
+@@ -216,6 +232,13 @@ SetConstantBuffers(mesa_shader_stage shader_type,    // IN
+       cb.buffer = CastPipeResource(phBuffers[i]);
+       cb.buffer_offset = 0;
+       cb.buffer_size = cb.buffer ? cb.buffer->width0 : 0;
++      if (cb.buffer && pFirstConstant && pNumConstants) {
++         unsigned first = pFirstConstant[i] * 16, size = pNumConstants[i] * 16;
++         if (first < cb.buffer->width0) {
++            cb.buffer_offset = first;
++            cb.buffer_size = MIN2(size, cb.buffer->width0 - first);
++         }
++      }
+       pipe->set_constant_buffer(pipe,
+                                 shader_type,
+                                 StartBuffer + i,
+diff --git a/src/gallium/frontends/d3d10umd/Shader.h b/src/gallium/frontends/d3d10umd/Shader.h
+index 0da6530..72d78f3 100644
+--- a/src/gallium/frontends/d3d10umd/Shader.h
++++ b/src/gallium/frontends/d3d10umd/Shader.h
+@@ -49,6 +49,10 @@ DeleteEmptyShader(Device *pDevice,
+ unsigned
+ ShaderFindOutputMapping(Shader *shader, unsigned registerIndex);
+ 
++void SetConstantBuffers1(mesa_shader_stage shader_type, D3D10DDI_HDEVICE hDevice,
++                         UINT StartBuffer, UINT NumBuffers, const D3D10DDI_HRESOURCE *phBuffers,
++                         const UINT *pFirstConstant, const UINT *pNumConstants);
++
+ SIZE_T APIENTRY
+ CalcPrivateShaderSize(D3D10DDI_HDEVICE hDevice,
+                       __in_ecount (pShaderCode[1]) const UINT *pShaderCode,
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index 4c50562..6952fbd 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -63,6 +63,11 @@ struct Adapter
+     * the browsers; 1 none; 2 the browsers; 3 every process (Device.cpp,
+     * CreateDevice). */
+    unsigned redirect;
++   /* Video decode as it applies to this process (maliwddm's UmdVideo,
++    * Video.cpp, VideoEffective): 0 none; 1 the D3D11.1 DDI and the video
++    * DDI with no decoder profiles; 2 with the VDPU383's profiles. Nonzero
++    * makes this adapter offer the D3D11.1 interface (Adapter.cpp). */
++   unsigned video;
+ };
+ 
+ 
+@@ -89,6 +94,8 @@ struct Device
+    struct pipe_screen *screen;
+    struct pipe_context *pipe;
+    unsigned msaa;               /* the adapter's (Adapter::msaa) */
++   unsigned video;              /* the adapter's (Adapter::video) */
++   bool ddi11_1;                /* created on the D3D11.1 interface */
+    unsigned caps_logged;        /* format answers logged so far (Device.cpp, LogCaps) */
+    unsigned errors_logged;      /* errors reported to the runtime so far (SetError) */
+    unsigned stilldrawing_logged; /* of them DXGI_DDI_ERR_WASSTILLDRAWING, an answer */
+@@ -320,6 +327,12 @@ struct Resource
+     * rendered into and presented as it is, with no copy. Moves with the
+     * buffer in a rotation. */
+    bool direct_primary;
++   /* DXGI_FORMAT_NV12: one R8_UNORM resource with the chroma rows below the
++    * luma rows, nv12_luma_height of them and half as many again, so that a
++    * map hands out Y then interleaved UV at one pitch, as D3D lays NV12
++    * out (Video.cpp). */
++   bool nv12;
++   unsigned nv12_luma_height;
+ };
+ 
+ /* Run-time switches, each a file under C:\mali whose existence brings the
+diff --git a/src/gallium/frontends/d3d10umd/Video.cpp b/src/gallium/frontends/d3d10umd/Video.cpp
+new file mode 100644
+index 0000000..a8cd81f
+--- /dev/null
++++ b/src/gallium/frontends/d3d10umd/Video.cpp
+@@ -0,0 +1,511 @@
++/*
++ * Video.cpp --
++ *    D3D11 video decode: the D3D11.1 video DDI, H.264 on the RK3576 VDPU383.
++ *
++ * What a player does (FFmpeg's d3d11va, mpv, Media Foundation's H.264
++ * decoder, Chromium's D3D11VideoDecoder) and where it lands here:
++ *
++ *    ID3D11VideoDevice::GetVideoDecoderProfile...   VideoGetVideoDecoderProfile*
++ *    CreateTexture2D(NV12, BIND_DECODER, array)     Resource.cpp (NV12 as R8, Y over UV)
++ *    CreateVideoDecoderOutputView                   VideoCreateVideoDecoderOutputView
++ *    CreateVideoDecoder                             VideoCreateVideoDecoder (vdec_h264_create)
++ *    GetDecoderBuffer / ReleaseDecoderBuffer        the runtime's buffers, Resource.cpp
++ *    DecoderBeginFrame                              VideoVideoDecoderBeginFrame
++ *    SubmitDecoderBuffers                           VideoVideoDecoderSubmitBuffers (copied)
++ *    DecoderEndFrame                                VideoVideoDecoderEndFrame: decode, copy
++ *
++ * The picture is decoded by the VDPU383 into a surface of the decoder's own
++ * (video/vdec.c; one per DXVA surface index, references are read from
++ * there) and copied into the application's texture at the end of the
++ * frame. That copy is the price of milestone V3a: the decoder writes
++ * contiguous memory of vdpu383.sys, the texture is an allocation of
++ * maliwddm's, and only the KMD could map one into the other (V3b in
++ * docs/VIDEO-DECODE.md).
++ *
++ * Off unless maliwddm's UmdVideo is set, and then only in the processes
++ * VideoEffective names: the D3D11.1 interface this needs is offered
++ * nowhere else.
++ *
++ * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++#include "DriverIncludes.h"
++#include "Video.h"
++#include "State.h"
++#include "Debug.h"
++
++#include "util/box.h"
++#include "util/u_inlines.h"
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "video/vdec.h"
++
++
++/* ----------------------------------------------------------- settings */
++
++static bool
++ProcessIs(const char *const *names, unsigned count)
++{
++   char path[MAX_PATH];
++   DWORD n = GetModuleFileNameA(NULL, path, sizeof path);
++   const char *base = path;
++
++   if (n == 0 || n >= sizeof path)
++      return false;
++   for (const char *c = path; *c; c++)
++      if (*c == '\\' || *c == '/')
++         base = c + 1;
++   for (unsigned i = 0; i < count; i++)
++      if (_stricmp(base, names[i]) == 0)
++         return true;
++   return false;
++}
++
++/*
++ * UmdVideo (maliwddm Device Parameters, default 0):
++ *   0  nothing changes anywhere.
++ *   1  the D3D11.1 interface and the video DDI with no decoder profiles,
++ *      in the processes below: a player sees a video device and decodes
++ *      in software, which checks the new interface alone.
++ *   2  the same with the VDPU383's H.264 profile.
++ *   3  2 in every process but the compositor and the logon screen
++ *      (for players not on the list; Media Foundation decodes in the
++ *      application's process).
++ */
++unsigned
++VideoEffective(unsigned setting)
++{
++   static const char *const players[] = {
++      "mpv.exe", "ffmpeg.exe", "ffplay.exe", "ffprobe.exe", "vlc.exe",
++      "vdectest.exe", "d3dprobe.exe",
++   };
++   static const char *const never[] = {
++      "dwm.exe", "logonui.exe", "consent.exe",
++   };
++
++   if (setting == 0 || setting > 3)
++      return 0;
++   if (ProcessIs(never, ARRAYSIZE(never)))
++      return 0;
++   if (setting == 3)
++      return 2;
++   return ProcessIs(players, ARRAYSIZE(players)) ? setting : 0;
++}
++
++/* -------------------------------------------------------------- GUIDs */
++
++/* D3D11_DECODER_PROFILE_H264_VLD_NOFGT (DXVA_ModeH264_E) */
++static const GUID ProfileH264 =
++   { 0x1b81be68, 0xa0c7, 0x11d3, { 0xb9, 0x84, 0x00, 0xc0, 0x4f, 0x2e, 0x73, 0xc5 } };
++/* DXVA_NoEncrypt */
++static const GUID NoEncrypt =
++   { 0x1b81bed0, 0xa0c7, 0x11d3, { 0xb9, 0x84, 0x00, 0xc0, 0x4f, 0x2e, 0x73, 0xc5 } };
++
++/* The VDPU383's H.264 limit (vendor: 4096x2304; the board has run CIF). */
++#define VIDEO_MAX_WIDTH  4096
++#define VIDEO_MAX_HEIGHT 2304
++
++static bool
++ProfilesOffered(const Device *pDevice)
++{
++   return pDevice->video >= 2 && vdec_available();
++}
++
++/* ------------------------------------------------------------ objects */
++
++struct VideoOutputView {
++   Resource *resource;
++   UINT slice;
++};
++
++struct VideoDecoder {
++   UINT width, height;
++   vdec_h264 *dec;
++   VideoOutputView *target;
++   bool have_pp, have_qm;
++   V383_DXVA_PicParams_H264 pp;
++   V383_DXVA_Qmatrix_H264 qm;
++   uint8_t *bitstream;
++   unsigned bitstream_len, bitstream_cap;
++   unsigned slices;
++   unsigned frames, errors, logged;
++};
++
++static inline VideoDecoder *
++CastDecoder(D3D11_1DDI_HDECODE h)
++{
++   return (VideoDecoder *)h.pDrvPrivate;
++}
++
++static inline VideoOutputView *
++CastOutputView(D3D11_1DDI_HVIDEODECODEROUTPUTVIEW h)
++{
++   return (VideoOutputView *)h.pDrvPrivate;
++}
++
++UINT
++VideoNv12FormatSupport(Device *pDevice)
++{
++   /* NV12 exists on a D3D11.1 device only. As a decoder output now;
++    * sampled as two planes and video processor input come with V4. */
++   if (!pDevice->ddi11_1 || !pDevice->video)
++      return 0;
++   return D3D11_1DDI_FORMAT_SUPPORT_DECODER_OUTPUT;
++}
++
++/* -------------------------------------------------------- decoder caps */
++
++static VOID APIENTRY
++VideoGetVideoDecoderProfileCount(D3D10DDI_HDEVICE hDevice, UINT *pCount)
++{
++   Device *pDevice = CastDevice(hDevice);
++   *pCount = ProfilesOffered(pDevice) ? 1 : 0;
++   DebugPrintf("video: %u decoder profile(s) (UmdVideo here %u, decoder %s)\n", *pCount,
++               pDevice->video, vdec_available() ? "available" : "absent");
++}
++
++static VOID APIENTRY
++VideoGetVideoDecoderProfile(D3D10DDI_HDEVICE hDevice, UINT Index, GUID *pGuid)
++{
++   (void)hDevice;
++   (void)Index;
++   *pGuid = ProfileH264;
++}
++
++static bool
++DescSupported(Device *pDevice, const GUID *guid, DXGI_FORMAT format)
++{
++   return ProfilesOffered(pDevice) && IsEqualGUID(*guid, ProfileH264) && format == DXGI_FORMAT_NV12;
++}
++
++static VOID APIENTRY
++VideoCheckVideoDecoderFormat(D3D10DDI_HDEVICE hDevice, const GUID *pGuid, DXGI_FORMAT Format,
++                             BOOL *pSupported)
++{
++   *pSupported = DescSupported(CastDevice(hDevice), pGuid, Format);
++}
++
++static VOID APIENTRY
++VideoGetVideoDecoderConfigCount(D3D10DDI_HDEVICE hDevice, const D3D11_1DDI_VIDEO_DECODER_DESC *pDesc,
++                                UINT *pCount)
++{
++   *pCount = DescSupported(CastDevice(hDevice), &pDesc->Guid, pDesc->OutputFormat) &&
++             pDesc->SampleWidth <= VIDEO_MAX_WIDTH && pDesc->SampleHeight <= VIDEO_MAX_HEIGHT ? 1 : 0;
++}
++
++static VOID APIENTRY
++VideoGetVideoDecoderConfig(D3D10DDI_HDEVICE hDevice, const D3D11_1DDI_VIDEO_DECODER_DESC *pDesc,
++                           UINT Index, D3D11_1DDI_VIDEO_DECODER_CONFIG *pConfig)
++{
++   (void)hDevice;
++   (void)pDesc;
++   (void)Index;
++   memset(pConfig, 0, sizeof *pConfig);
++   pConfig->guidConfigBitstreamEncryption = NoEncrypt;
++   pConfig->guidConfigMBcontrolEncryption = NoEncrypt;
++   pConfig->guidConfigResidDiffEncryption = NoEncrypt;
++   /* 2: DXVA_Slice_H264_Short, the bitstream with its start codes, which
++    * is what the VDPU383 reads (and the only form Chromium accepts). */
++   pConfig->ConfigBitstreamRaw = 2;
++}
++
++static const D3D11_1DDI_VIDEO_DECODER_BUFFER_TYPE BufferTypes[] = {
++   D3D11_1DDI_VIDEO_DECODER_BUFFER_PICTURE_PARAMETERS,
++   D3D11_1DDI_VIDEO_DECODER_BUFFER_INVERSE_QUANTIZATION_MATRIX,
++   D3D11_1DDI_VIDEO_DECODER_BUFFER_SLICE_CONTROL,
++   D3D11_1DDI_VIDEO_DECODER_BUFFER_BITSTREAM,
++};
++
++static UINT
++BitstreamBufferSize(UINT width, UINT height)
++{
++   UINT size = width * height * 3 / 4;
++   return MAX2(1u << 20, MIN2(size, 16u << 20));
++}
++
++static VOID APIENTRY
++VideoGetVideoDecoderBufferTypeCount(D3D10DDI_HDEVICE, const D3D11_1DDI_VIDEO_DECODER_DESC *,
++                                    UINT *pCount)
++{
++   *pCount = ARRAYSIZE(BufferTypes);
++}
++
++static VOID APIENTRY
++VideoGetVideoDecoderBufferInfo(D3D10DDI_HDEVICE, const D3D11_1DDI_VIDEO_DECODER_DESC *pDesc,
++                               UINT Index, D3D11_1DDI_VIDEO_DECODER_BUFFER_INFO *pInfo)
++{
++   memset(pInfo, 0, sizeof *pInfo);
++   if (Index >= ARRAYSIZE(BufferTypes))
++      return;
++   pInfo->Type = BufferTypes[Index];
++   switch (pInfo->Type) {
++   case D3D11_1DDI_VIDEO_DECODER_BUFFER_PICTURE_PARAMETERS:
++      pInfo->Size = 4096;
++      break;
++   case D3D11_1DDI_VIDEO_DECODER_BUFFER_INVERSE_QUANTIZATION_MATRIX:
++      pInfo->Size = 4096;
++      break;
++   case D3D11_1DDI_VIDEO_DECODER_BUFFER_SLICE_CONTROL:
++      pInfo->Size = 64 * 1024;
++      break;
++   default:
++      pInfo->Size = BitstreamBufferSize(pDesc->SampleWidth, pDesc->SampleHeight);
++      break;
++   }
++   /* Written by the CPU, read back by the CPU here: staging memory. */
++   pInfo->Usage = D3D10_DDI_USAGE_STAGING;
++}
++
++/* ------------------------------------------------------------ decoder */
++
++static SIZE_T APIENTRY
++VideoCalcPrivateVideoDecoderSize(D3D10DDI_HDEVICE, const D3D11_1DDIARG_CREATEVIDEODECODER *)
++{
++   return sizeof(VideoDecoder);
++}
++
++static HRESULT APIENTRY
++VideoCreateVideoDecoder(D3D10DDI_HDEVICE hDevice, const D3D11_1DDIARG_CREATEVIDEODECODER *pCreate,
++                        D3D11_1DDI_HDECODE hDecode, D3D11_1DDI_HRTDECODE)
++{
++   Device *pDevice = CastDevice(hDevice);
++   VideoDecoder *d = CastDecoder(hDecode);
++   char err[160] = "";
++
++   memset(d, 0, sizeof *d);
++   if (!DescSupported(pDevice, &pCreate->Desc.Guid, pCreate->Desc.OutputFormat) ||
++       pCreate->Config.ConfigBitstreamRaw != 2) {
++      DebugPrintf("video: CreateVideoDecoder refused (profile, format %u or bitstream form %u)\n",
++                  (unsigned)pCreate->Desc.OutputFormat, pCreate->Config.ConfigBitstreamRaw);
++      return E_INVALIDARG;
++   }
++   d->width = pCreate->Desc.SampleWidth;
++   d->height = pCreate->Desc.SampleHeight;
++   d->dec = vdec_h264_create(d->width, d->height, err, sizeof err);
++   if (!d->dec) {
++      DebugPrintf("video: CreateVideoDecoder %ux%u: %s\n", d->width, d->height, err);
++      return E_OUTOFMEMORY;
++   }
++   DebugPrintf("video: H.264 decoder %ux%u created\n", d->width, d->height);
++   return S_OK;
++}
++
++static VOID APIENTRY
++VideoDestroyVideoDecoder(D3D10DDI_HDEVICE, D3D11_1DDI_HDECODE hDecode)
++{
++   VideoDecoder *d = CastDecoder(hDecode);
++   vdec_stats st;
++
++   vdec_get_stats(&st);
++   DebugPrintf("video: decoder %ux%u destroyed after %u frames, %u errors; process total %u "
++               "pictures, %u errors, %u us in the decoder, driver runs %u%s\n",
++               d->width, d->height, d->frames, d->errors, st.pictures, st.errors,
++               st.hw_us_total, st.driver_runs, st.fake ? " (fake)" : "");
++   vdec_h264_destroy(d->dec);
++   free(d->bitstream);
++   memset(d, 0, sizeof *d);
++}
++
++static HRESULT APIENTRY
++VideoVideoDecoderBeginFrame(D3D10DDI_HDEVICE, D3D11_1DDI_HDECODE hDecode,
++                            const D3D11_1DDIARG_VIDEODECODERBEGINFRAME *pBegin)
++{
++   VideoDecoder *d = CastDecoder(hDecode);
++
++   if (pBegin->pContentKey)
++      return E_INVALIDARG;
++   d->target = CastOutputView(pBegin->hOutputView);
++   d->have_pp = d->have_qm = false;
++   d->bitstream_len = 0;
++   d->slices = 0;
++   return S_OK;
++}
++
++/* The bytes of a decoder buffer (the runtime's staging buffer). */
++static bool
++ReadBuffer(Device *pDevice, const D3D11_1DDI_VIDEO_DECODER_BUFFER_DESC *desc, void *dst,
++           unsigned max, unsigned *got)
++{
++   Resource *r = CastResource(desc->hResource);
++   struct pipe_transfer *transfer;
++   unsigned size = desc->DataSize;
++
++   *got = 0;
++   if (!r || !r->resource || !r->buffer)
++      return false;
++   if (desc->DataOffset >= r->resource->width0)
++      return false;
++   size = MIN2(size, r->resource->width0 - desc->DataOffset);
++   size = MIN2(size, max);
++   const uint8_t *map = (const uint8_t *)pipe_buffer_map(pDevice->pipe, r->resource, PIPE_MAP_READ,
++                                                         &transfer);
++   if (!map)
++      return false;
++   memcpy(dst, map + desc->DataOffset, size);
++   pipe_buffer_unmap(pDevice->pipe, transfer);
++   *got = size;
++   return true;
++}
++
++static HRESULT APIENTRY
++VideoVideoDecoderSubmitBuffers(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HDECODE hDecode, UINT Count,
++                               const D3D11_1DDI_VIDEO_DECODER_BUFFER_DESC *pDescs)
++{
++   Device *pDevice = CastDevice(hDevice);
++   VideoDecoder *d = CastDecoder(hDecode);
++   unsigned got;
++
++   for (UINT i = 0; i < Count; i++) {
++      const D3D11_1DDI_VIDEO_DECODER_BUFFER_DESC *b = &pDescs[i];
++
++      if (b->pIV || b->PartialEncryption)
++         return E_INVALIDARG;
++      switch (b->BufferType) {
++      case D3D11_1DDI_VIDEO_DECODER_BUFFER_PICTURE_PARAMETERS:
++         memset(&d->pp, 0, sizeof d->pp);
++         d->have_pp = ReadBuffer(pDevice, b, &d->pp, sizeof d->pp, &got) && got >= sizeof d->pp;
++         break;
++      case D3D11_1DDI_VIDEO_DECODER_BUFFER_INVERSE_QUANTIZATION_MATRIX:
++         memset(&d->qm, 0, sizeof d->qm);
++         d->have_qm = ReadBuffer(pDevice, b, &d->qm, sizeof d->qm, &got) && got >= sizeof d->qm;
++         break;
++      case D3D11_1DDI_VIDEO_DECODER_BUFFER_SLICE_CONTROL:
++         /* The short form only says where each slice starts; the decoder
++          * finds the slices from their start codes. */
++         d->slices += b->DataSize / 10;     /* sizeof(DXVA_Slice_H264_Short) */
++         break;
++      case D3D11_1DDI_VIDEO_DECODER_BUFFER_BITSTREAM: {
++         unsigned need = d->bitstream_len + b->DataSize;
++         if (need > d->bitstream_cap) {
++            uint8_t *n = (uint8_t *)realloc(d->bitstream, need);
++            if (!n)
++               return E_OUTOFMEMORY;
++            d->bitstream = n;
++            d->bitstream_cap = need;
++         }
++         if (ReadBuffer(pDevice, b, d->bitstream + d->bitstream_len, b->DataSize, &got))
++            d->bitstream_len += got;
++         break;
++      }
++      default:
++         break;
++      }
++   }
++   return S_OK;
++}
++
++/* The decoded picture into the application's texture: luma rows, then the
++ * interleaved chroma rows below them (Resource.cpp's NV12). */
++static bool
++CopyToTarget(Device *pDevice, VideoOutputView *v, const vdec_picture *pic)
++{
++   Resource *r = v->resource;
++   struct pipe_context *pipe = pDevice->pipe;
++   struct pipe_box box;
++   unsigned w, h;
++
++   if (!r || !r->resource || !r->nv12)
++      return false;
++   w = MIN2(r->resource->width0, pic->stride);
++   h = MIN2(r->nv12_luma_height, pic->luma_rows);
++   u_box_3d(0, 0, v->slice, w, h, 1, &box);
++   pipe->texture_subdata(pipe, r->resource, 0, PIPE_MAP_WRITE, &box, pic->data, pic->stride, 0);
++   u_box_3d(0, r->nv12_luma_height, v->slice, w, h / 2, 1, &box);
++   pipe->texture_subdata(pipe, r->resource, 0, PIPE_MAP_WRITE, &box,
++                         pic->data + (size_t)pic->stride * pic->luma_rows, pic->stride, 0);
++   return true;
++}
++
++static VOID APIENTRY
++VideoVideoDecoderEndFrame(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HDECODE hDecode)
++{
++   Device *pDevice = CastDevice(hDevice);
++   VideoDecoder *d = CastDecoder(hDecode);
++   vdec_picture pic;
++   char err[160] = "";
++   bool ok = false;
++
++   if (!d->target || !d->have_pp || !d->bitstream_len) {
++      snprintf(err, sizeof err, "incomplete frame (view %d, parameters %d, %u bitstream bytes)",
++               d->target != NULL, d->have_pp, d->bitstream_len);
++   } else if (vdec_h264_decode(d->dec, &d->pp, d->have_qm ? &d->qm : NULL, d->bitstream,
++                               d->bitstream_len, &pic, err, sizeof err) == 0) {
++      ok = CopyToTarget(pDevice, d->target, &pic);
++      if (!ok)
++         snprintf(err, sizeof err, "the output view is not an NV12 texture");
++   }
++
++   d->frames++;
++   if (!ok) {
++      d->errors++;
++      /* The frame is wrong, not the device: nothing reported that would
++       * remove it (mesa-patches 0069). */
++      if (d->logged++ < 20)
++         DebugPrintf("video: frame %u (surface %u, %u slices): %s\n", d->frames,
++                     V383_PIC_INDEX(d->pp.CurrPic), d->slices, err);
++   } else if (d->frames <= 3 || (d->frames % 300) == 0) {
++      DebugPrintf("video: frame %u decoded into slice %u (surface %u, %u slices, %u bytes)\n",
++                  d->frames, d->target->slice, V383_PIC_INDEX(d->pp.CurrPic), d->slices,
++                  d->bitstream_len);
++   }
++   d->target = NULL;
++}
++
++/* -------------------------------------------------------- output view */
++
++static SIZE_T APIENTRY
++VideoCalcPrivateVideoDecoderOutputViewSize(D3D10DDI_HDEVICE,
++                                           const D3D11_1DDIARG_CREATEVIDEODECODEROUTPUTVIEW *)
++{
++   return sizeof(VideoOutputView);
++}
++
++static HRESULT APIENTRY
++VideoCreateVideoDecoderOutputView(D3D10DDI_HDEVICE, const D3D11_1DDIARG_CREATEVIDEODECODEROUTPUTVIEW *p,
++                                  D3D11_1DDI_HVIDEODECODEROUTPUTVIEW hView,
++                                  D3D11_1DDI_HRTVIDEODECODEROUTPUTVIEW)
++{
++   VideoOutputView *v = CastOutputView(hView);
++   Resource *r = CastResource(p->hDrvResource);
++
++   memset(v, 0, sizeof *v);
++   if (!r || !r->nv12 || !IsEqualGUID(p->DecodeProfile, ProfileH264) ||
++       p->FirstArraySlice >= r->resource->array_size)
++      return E_INVALIDARG;
++   v->resource = r;
++   v->slice = p->FirstArraySlice;
++   return S_OK;
++}
++
++static VOID APIENTRY
++VideoDestroyVideoDecoderOutputView(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEODECODEROUTPUTVIEW hView)
++{
++   memset(CastOutputView(hView), 0, sizeof(VideoOutputView));
++}
++
++/* ------------------------------------------- the rest, and the table */
++
++#include "VideoStubs.h"
++
++HRESULT APIENTRY
++VideoRetrieveSubObject(D3D10DDI_HDEVICE hDevice, UINT32 SubDeviceID, SIZE_T ParamSize,
++                       void *pParams, SIZE_T OutputParamSize, void *pOutputParamsBuffer)
++{
++   (void)hDevice;
++   if (SubDeviceID != D3D11_1DDI_VIDEO_FUNCTIONS || ParamSize < sizeof(D3D11_1DDI_VIDEO_INPUT) ||
++       !pParams) {
++      DebugPrintf("video: RetrieveSubObject %u (%u bytes) not offered\n", (unsigned)SubDeviceID,
++                  (unsigned)ParamSize);
++      return E_NOTIMPL;
++   }
++   D3D11_1DDI_VIDEO_INPUT *in = (D3D11_1DDI_VIDEO_INPUT *)pParams;
++   VideoFillFuncs(in->p11VideoDeviceFuncs);
++   if (pOutputParamsBuffer && OutputParamSize)
++      memset(pOutputParamsBuffer, 0, OutputParamSize);
++   DebugPrintf("video: the video function table handed over (relocate %d)\n", in->Relocate);
++   return S_OK;
++}
+diff --git a/src/gallium/frontends/d3d10umd/Video.h b/src/gallium/frontends/d3d10umd/Video.h
+new file mode 100644
+index 0000000..4d14bb7
+--- /dev/null
++++ b/src/gallium/frontends/d3d10umd/Video.h
+@@ -0,0 +1,25 @@
++/*
++ * Video.h --
++ *    D3D11 video decode (the D3D11.1 video DDI) on the RK3576 VDPU383.
++ *
++ * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++#ifndef VIDEO_H
++#define VIDEO_H
++
++#include "DriverIncludes.h"
++
++/* maliwddm's UmdVideo as it applies to this process (State.h Adapter::video). */
++unsigned VideoEffective(unsigned setting);
++
++/* The sub-object query of the D3D11.1 interface: the video function table. */
++HRESULT APIENTRY VideoRetrieveSubObject(D3D10DDI_HDEVICE hDevice, UINT32 SubDeviceID,
++                                        SIZE_T ParamSize, void *pParams,
++                                        SIZE_T OutputParamSize, void *pOutputParamsBuffer);
++
++/* CheckFormatSupport's answer for DXGI_FORMAT_NV12 on this device. */
++UINT VideoNv12FormatSupport(struct Device *pDevice);
++
++#endif /* VIDEO_H */
+diff --git a/src/gallium/frontends/d3d10umd/VideoStubs.h b/src/gallium/frontends/d3d10umd/VideoStubs.h
+new file mode 100644
+index 0000000..814e925
+--- /dev/null
++++ b/src/gallium/frontends/d3d10umd/VideoStubs.h
+@@ -0,0 +1,349 @@
++/* Generated from the WDK's d3d10umddi.h (D3D11_1DDI_VIDEODEVICEFUNCS) by
++ * tools/gen-video-stubs.py in wddm-mali-g52; the entry points this driver does not carry out. */
++
++static HRESULT APIENTRY
++VideoStubVideoDecoderExtension(D3D10DDI_HDEVICE, D3D11_1DDI_HDECODE, CONST D3D11_1DDIARG_VIDEODECODEREXTENSION*)
++{ return E_NOTIMPL; }
++
++static SIZE_T APIENTRY
++VideoStubCalcPrivateVideoProcessorEnumSize(D3D10DDI_HDEVICE, _In_ CONST D3D11_1DDIARG_CREATEVIDEOPROCESSORENUM*)
++{ return 64; }
++
++static HRESULT APIENTRY
++VideoStubCreateVideoProcessorEnum(D3D10DDI_HDEVICE, CONST D3D11_1DDIARG_CREATEVIDEOPROCESSORENUM*, D3D11_1DDI_HVIDEOPROCESSORENUM, D3D11_1DDI_HRTVIDEOPROCESSORENUM)
++{ return E_NOTIMPL; }
++
++static VOID APIENTRY
++VideoStubDestroyVideoProcessorEnum(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM)
++{}
++
++static VOID APIENTRY
++VideoStubCheckVideoProcessorFormat(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM, DXGI_FORMAT, UINT*)
++{}
++
++static VOID APIENTRY
++VideoStubGetVideoProcessorCaps(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM, D3D11_1DDI_VIDEO_PROCESSOR_CAPS*)
++{}
++
++static VOID APIENTRY
++VideoStubGetVideoProcessorRateConversionCaps(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM, UINT, D3D11_1DDI_VIDEO_PROCESSOR_RATE_CONVERSION_CAPS*)
++{}
++
++static VOID APIENTRY
++VideoStubGetVideoProcessorCustomRate(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM, UINT, UINT, D3D11_1DDI_VIDEO_PROCESSOR_CUSTOM_RATE*)
++{}
++
++static VOID APIENTRY
++VideoStubGetVideoProcessorFilterRange(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM, D3D11_1DDI_VIDEO_PROCESSOR_FILTER, D3D11_1DDI_VIDEO_PROCESSOR_FILTER_RANGE*)
++{}
++
++static SIZE_T APIENTRY
++VideoStubCalcPrivateVideoProcessorSize(D3D10DDI_HDEVICE, _In_ CONST D3D11_1DDIARG_CREATEVIDEOPROCESSOR*)
++{ return 64; }
++
++static HRESULT APIENTRY
++VideoStubCreateVideoProcessor(D3D10DDI_HDEVICE, CONST D3D11_1DDIARG_CREATEVIDEOPROCESSOR*, D3D11_1DDI_HVIDEOPROCESSOR, D3D11_1DDI_HRTVIDEOPROCESSOR)
++{ return E_NOTIMPL; }
++
++static VOID APIENTRY
++VideoStubDestroyVideoProcessor(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR)
++{}
++
++static VOID APIENTRY
++VideoStubVideoProcessorSetOutputTargetRect(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, BOOL, CONST RECT*)
++{}
++
++static VOID APIENTRY
++VideoStubVideoProcessorSetOutputBackgroundColor(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, BOOL, CONST D3D11_1DDI_VIDEO_COLOR*)
++{}
++
++static VOID APIENTRY
++VideoStubVideoProcessorSetOutputColorSpace(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, CONST D3D11_1DDI_VIDEO_PROCESSOR_COLOR_SPACE*)
++{}
++
++static VOID APIENTRY
++VideoStubVideoProcessorSetOutputAlphaFillMode(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, D3D11_1DDI_VIDEO_PROCESSOR_ALPHA_FILL_MODE, UINT)
++{}
++
++static VOID APIENTRY
++VideoStubVideoProcessorSetOutputConstriction(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, BOOL, SIZE)
++{}
++
++static VOID APIENTRY
++VideoStubVideoProcessorSetOutputStereoMode(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, BOOL)
++{}
++
++static HRESULT APIENTRY
++VideoStubVideoProcessorSetOutputExtension(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, CONST GUID*, UINT, void*)
++{ return E_NOTIMPL; }
++
++static HRESULT APIENTRY
++VideoStubVideoProcessorGetOutputExtension(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, CONST GUID*, UINT, void*)
++{ return E_NOTIMPL; }
++
++static VOID APIENTRY
++VideoStubVideoProcessorSetStreamFrameFormat(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, D3D11_1DDI_VIDEO_FRAME_FORMAT)
++{}
++
++static VOID APIENTRY
++VideoStubVideoProcessorSetStreamColorSpace(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, CONST D3D11_1DDI_VIDEO_PROCESSOR_COLOR_SPACE*)
++{}
++
++static VOID APIENTRY
++VideoStubVideoProcessorSetStreamOutputRate(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, D3D11_1DDI_VIDEO_PROCESSOR_OUTPUT_RATE, BOOL, CONST DXGI_RATIONAL*)
++{}
++
++static VOID APIENTRY
++VideoStubVideoProcessorSetStreamSourceRect(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, BOOL, CONST RECT*)
++{}
++
++static VOID APIENTRY
++VideoStubVideoProcessorSetStreamDestRect(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, BOOL, CONST RECT*)
++{}
++
++static VOID APIENTRY
++VideoStubVideoProcessorSetStreamAlpha(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, BOOL, FLOAT)
++{}
++
++static VOID APIENTRY
++VideoStubVideoProcessorSetStreamPalette(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, UINT, CONST UINT*)
++{}
++
++static VOID APIENTRY
++VideoStubVideoProcessorSetStreamPixelAspectRatio(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, BOOL, CONST DXGI_RATIONAL*, CONST DXGI_RATIONAL*)
++{}
++
++static VOID APIENTRY
++VideoStubVideoProcessorSetStreamLumaKey(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, BOOL, FLOAT, FLOAT)
++{}
++
++static VOID APIENTRY
++VideoStubVideoProcessorSetStreamStereoFormat(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, BOOL, D3D11_1DDI_VIDEO_PROCESSOR_STEREO_FORMAT, BOOL, BOOL, D3D11_1DDI_VIDEO_PROCESSOR_STEREO_FLIP_MODE, int)
++{}
++
++static VOID APIENTRY
++VideoStubVideoProcessorSetStreamAutoProcessingMode(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, BOOL)
++{}
++
++static VOID APIENTRY
++VideoStubVideoProcessorSetStreamFilter(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, D3D11_1DDI_VIDEO_PROCESSOR_FILTER, BOOL, int)
++{}
++
++static HRESULT APIENTRY
++VideoStubVideoProcessorSetStreamExtension(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, CONST GUID*, UINT, void*)
++{ return E_NOTIMPL; }
++
++static HRESULT APIENTRY
++VideoStubVideoProcessorGetStreamExtension(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, CONST GUID*, UINT, void*)
++{ return E_NOTIMPL; }
++
++static HRESULT APIENTRY
++VideoStubVideoProcessorBlt(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, D3D11_1DDI_HVIDEOPROCESSOROUTPUTVIEW, UINT, UINT, CONST D3D11_1DDI_VIDEO_PROCESSOR_STREAM*)
++{ return E_NOTIMPL; }
++
++static SIZE_T APIENTRY
++VideoStubCalcPrivateVideoProcessorInputViewSize(D3D10DDI_HDEVICE, _In_ CONST D3D11_1DDIARG_CREATEVIDEOPROCESSORINPUTVIEW*)
++{ return 64; }
++
++static HRESULT APIENTRY
++VideoStubCreateVideoProcessorInputView(D3D10DDI_HDEVICE, _In_ CONST D3D11_1DDIARG_CREATEVIDEOPROCESSORINPUTVIEW*, D3D11_1DDI_HVIDEOPROCESSORINPUTVIEW, D3D11_1DDI_HRTVIDEOPROCESSORINPUTVIEW)
++{ return E_NOTIMPL; }
++
++static VOID APIENTRY
++VideoStubDestroyVideoProcessorInputView(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORINPUTVIEW)
++{}
++
++static SIZE_T APIENTRY
++VideoStubCalcPrivateVideoProcessorOutputViewSize(D3D10DDI_HDEVICE, _In_ CONST D3D11_1DDIARG_CREATEVIDEOPROCESSOROUTPUTVIEW*)
++{ return 64; }
++
++static HRESULT APIENTRY
++VideoStubCreateVideoProcessorOutputView(D3D10DDI_HDEVICE, _In_ CONST D3D11_1DDIARG_CREATEVIDEOPROCESSOROUTPUTVIEW*, D3D11_1DDI_HVIDEOPROCESSOROUTPUTVIEW, D3D11_1DDI_HRTVIDEOPROCESSOROUTPUTVIEW)
++{ return E_NOTIMPL; }
++
++static VOID APIENTRY
++VideoStubDestroyVideoProcessorOutputView(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOROUTPUTVIEW)
++{}
++
++static VOID APIENTRY
++VideoStubVideoProcessorInputViewReadAfterWriteHazard(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORINPUTVIEW, D3D10DDI_HRESOURCE)
++{}
++
++static HRESULT APIENTRY
++VideoStubGetContentProtectionCaps(D3D10DDI_HDEVICE hDevice, CONST GUID* pCryptoType, CONST GUID* pDecodeProfile, D3D11_1DDI_VIDEO_CONTENT_PROTECTION_CAPS* pCaps)
++{ return E_NOTIMPL; }
++
++static HRESULT APIENTRY
++VideoStubGetCryptoKeyExchangeType(D3D10DDI_HDEVICE hDevice, CONST GUID* pCryptoType, CONST GUID* pDecodeProfile, UINT Index, GUID* pKeyExchangeType)
++{ return E_NOTIMPL; }
++
++static SIZE_T APIENTRY
++VideoStubCalcPrivateCryptoSessionSize(D3D10DDI_HDEVICE hDevice, CONST D3D11_1DDIARG_CREATECRYPTOSESSION* pCreateData)
++{ return 64; }
++
++static HRESULT APIENTRY
++VideoStubCreateCryptoSession(D3D10DDI_HDEVICE hDevice, CONST D3D11_1DDIARG_CREATECRYPTOSESSION* pCreateData, D3D11_1DDI_HCRYPTOSESSION hCryptoSession, D3D11_1DDI_HRTCRYPTOSESSION hRTCryptoSession)
++{ return E_NOTIMPL; }
++
++static VOID APIENTRY
++VideoStubDestroyCryptoSession(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HCRYPTOSESSION hCryptoSession)
++{}
++
++static VOID APIENTRY
++VideoStubGetCertificateSize(D3D10DDI_HDEVICE hDevice, CONST D3D11_1DDI_CERTIFICATE_INFO* pCertificateInfo, UINT* pCertificateSize)
++{}
++
++static VOID APIENTRY
++VideoStubGetCertificate(D3D10DDI_HDEVICE hDevice, CONST D3D11_1DDI_CERTIFICATE_INFO* pCertificateInfo, UINT CertificateSize, _Out_writes_bytes_(CertificateSize) BYTE* pCertificate)
++{}
++
++static HRESULT APIENTRY
++VideoStubNegotiateCryptoSessionKeyExchange(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HCRYPTOSESSION hCryptoSession, UINT DataSize, BYTE* pData)
++{ return E_NOTIMPL; }
++
++static VOID APIENTRY
++VideoStubEncryptionBlt(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HCRYPTOSESSION hCryptoSession, D3D10DDI_HRESOURCE hSrcResource, D3D10DDI_HRESOURCE hDstResource, UINT IVSize, CONST VOID* pIV)
++{}
++
++static VOID APIENTRY
++VideoStubDecryptionBlt(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HCRYPTOSESSION hCryptoSession, D3D10DDI_HRESOURCE hSrcResource, D3D10DDI_HRESOURCE hDstResource, CONST D3D11_1DDI_ENCRYPTED_BLOCK_INFO* pEncryptedBlockInfo, UINT ContentKeySize, CONST VOID* pContentKey, UINT IVSize, CONST VOID* pIV)
++{}
++
++static VOID APIENTRY
++VideoStubStartSessionKeyRefresh(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HCRYPTOSESSION hCryptoSession, UINT RandomNumberSize, VOID* pRandomNumber)
++{}
++
++static VOID APIENTRY
++VideoStubFinishSessionKeyRefresh(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HCRYPTOSESSION hCryptoSession)
++{}
++
++static VOID APIENTRY
++VideoStubGetEncryptionBltKey(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HCRYPTOSESSION hCryptoSession, UINT KeySize, VOID* pReadbackKey)
++{}
++
++static SIZE_T APIENTRY
++VideoStubCalcPrivateAuthenticatedChannelSize(D3D10DDI_HDEVICE hDevice, CONST D3D11_1DDIARG_CREATEAUTHENTICATEDCHANNEL* pCreateData)
++{ return 64; }
++
++static HRESULT APIENTRY
++VideoStubCreateAuthenticatedChannel(D3D10DDI_HDEVICE hDevice, D3D11_1DDIARG_CREATEAUTHENTICATEDCHANNEL* pCreateData, D3D11_1DDI_HAUTHCHANNEL hAuthChannel, D3D11_1DDI_HRTAUTHCHANNEL hRTAuthChannel)
++{ return E_NOTIMPL; }
++
++static VOID APIENTRY
++VideoStubDestroyAuthenticatedChannel(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HAUTHCHANNEL hAuthChannel)
++{}
++
++static HRESULT APIENTRY
++VideoStubNegotiateAuthenticatedChannelKeyExchange(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HAUTHCHANNEL hCAuthChannel, UINT DataSize, VOID* pData)
++{ return E_NOTIMPL; }
++
++static HRESULT APIENTRY
++VideoStubQueryAuthenticatedChannel(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HAUTHCHANNEL hCAuthChannel, UINT InputDataSize, CONST VOID* pInputData, UINT OutputDataSize, VOID* pOutputData)
++{ return E_NOTIMPL; }
++
++static HRESULT APIENTRY
++VideoStubConfigureAuthenticatedChannel(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HAUTHCHANNEL hCAuthChannel, UINT InputDataSize, CONST VOID* pInputData, D3D11_1DDI_AUTHENTICATED_CONFIGURE_OUTPUT* pOutputData)
++{ return E_NOTIMPL; }
++
++static HRESULT APIENTRY
++VideoStubVideoDecoderGetHandle(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HDECODE, HANDLE* pContentProtectionHandle)
++{ return E_NOTIMPL; }
++
++static HRESULT APIENTRY
++VideoStubCryptoSessionGetHandle(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HCRYPTOSESSION hCryptoSession, HANDLE* pHandle)
++{ return E_NOTIMPL; }
++
++static VOID APIENTRY
++VideoStubVideoProcessorSetStreamRotation(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, BOOL, D3D11_1DDI_VIDEO_PROCESSOR_ROTATION)
++{}
++
++static VOID APIENTRY
++VideoStubGetCaptureHandle(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_GETCAPTUREHANDLEDATA* pHandleData)
++{}
++
++static void
++VideoFillFuncs(D3D11_1DDI_VIDEODEVICEFUNCS *f)
++{
++   f->pfnGetVideoDecoderProfileCount = VideoGetVideoDecoderProfileCount;
++   f->pfnGetVideoDecoderProfile = VideoGetVideoDecoderProfile;
++   f->pfnCheckVideoDecoderFormat = VideoCheckVideoDecoderFormat;
++   f->pfnGetVideoDecoderConfigCount = VideoGetVideoDecoderConfigCount;
++   f->pfnGetVideoDecoderConfig = VideoGetVideoDecoderConfig;
++   f->pfnGetVideoDecoderBufferTypeCount = VideoGetVideoDecoderBufferTypeCount;
++   f->pfnGetVideoDecoderBufferInfo = VideoGetVideoDecoderBufferInfo;
++   f->pfnCalcPrivateVideoDecoderSize = VideoCalcPrivateVideoDecoderSize;
++   f->pfnCreateVideoDecoder = VideoCreateVideoDecoder;
++   f->pfnDestroyVideoDecoder = VideoDestroyVideoDecoder;
++   f->pfnVideoDecoderExtension = VideoStubVideoDecoderExtension;
++   f->pfnVideoDecoderBeginFrame = VideoVideoDecoderBeginFrame;
++   f->pfnVideoDecoderEndFrame = VideoVideoDecoderEndFrame;
++   f->pfnVideoDecoderSubmitBuffers = VideoVideoDecoderSubmitBuffers;
++   f->pfnCalcPrivateVideoProcessorEnumSize = VideoStubCalcPrivateVideoProcessorEnumSize;
++   f->pfnCreateVideoProcessorEnum = VideoStubCreateVideoProcessorEnum;
++   f->pfnDestroyVideoProcessorEnum = VideoStubDestroyVideoProcessorEnum;
++   f->pfnCheckVideoProcessorFormat = VideoStubCheckVideoProcessorFormat;
++   f->pfnGetVideoProcessorCaps = VideoStubGetVideoProcessorCaps;
++   f->pfnGetVideoProcessorRateConversionCaps = VideoStubGetVideoProcessorRateConversionCaps;
++   f->pfnGetVideoProcessorCustomRate = VideoStubGetVideoProcessorCustomRate;
++   f->pfnGetVideoProcessorFilterRange = VideoStubGetVideoProcessorFilterRange;
++   f->pfnCalcPrivateVideoProcessorSize = VideoStubCalcPrivateVideoProcessorSize;
++   f->pfnCreateVideoProcessor = VideoStubCreateVideoProcessor;
++   f->pfnDestroyVideoProcessor = VideoStubDestroyVideoProcessor;
++   f->pfnVideoProcessorSetOutputTargetRect = VideoStubVideoProcessorSetOutputTargetRect;
++   f->pfnVideoProcessorSetOutputBackgroundColor = VideoStubVideoProcessorSetOutputBackgroundColor;
++   f->pfnVideoProcessorSetOutputColorSpace = VideoStubVideoProcessorSetOutputColorSpace;
++   f->pfnVideoProcessorSetOutputAlphaFillMode = VideoStubVideoProcessorSetOutputAlphaFillMode;
++   f->pfnVideoProcessorSetOutputConstriction = VideoStubVideoProcessorSetOutputConstriction;
++   f->pfnVideoProcessorSetOutputStereoMode = VideoStubVideoProcessorSetOutputStereoMode;
++   f->pfnVideoProcessorSetOutputExtension = VideoStubVideoProcessorSetOutputExtension;
++   f->pfnVideoProcessorGetOutputExtension = VideoStubVideoProcessorGetOutputExtension;
++   f->pfnVideoProcessorSetStreamFrameFormat = VideoStubVideoProcessorSetStreamFrameFormat;
++   f->pfnVideoProcessorSetStreamColorSpace = VideoStubVideoProcessorSetStreamColorSpace;
++   f->pfnVideoProcessorSetStreamOutputRate = VideoStubVideoProcessorSetStreamOutputRate;
++   f->pfnVideoProcessorSetStreamSourceRect = VideoStubVideoProcessorSetStreamSourceRect;
++   f->pfnVideoProcessorSetStreamDestRect = VideoStubVideoProcessorSetStreamDestRect;
++   f->pfnVideoProcessorSetStreamAlpha = VideoStubVideoProcessorSetStreamAlpha;
++   f->pfnVideoProcessorSetStreamPalette = VideoStubVideoProcessorSetStreamPalette;
++   f->pfnVideoProcessorSetStreamPixelAspectRatio = VideoStubVideoProcessorSetStreamPixelAspectRatio;
++   f->pfnVideoProcessorSetStreamLumaKey = VideoStubVideoProcessorSetStreamLumaKey;
++   f->pfnVideoProcessorSetStreamStereoFormat = VideoStubVideoProcessorSetStreamStereoFormat;
++   f->pfnVideoProcessorSetStreamAutoProcessingMode = VideoStubVideoProcessorSetStreamAutoProcessingMode;
++   f->pfnVideoProcessorSetStreamFilter = VideoStubVideoProcessorSetStreamFilter;
++   f->pfnVideoProcessorSetStreamExtension = VideoStubVideoProcessorSetStreamExtension;
++   f->pfnVideoProcessorGetStreamExtension = VideoStubVideoProcessorGetStreamExtension;
++   f->pfnVideoProcessorBlt = VideoStubVideoProcessorBlt;
++   f->pfnCalcPrivateVideoDecoderOutputViewSize = VideoCalcPrivateVideoDecoderOutputViewSize;
++   f->pfnCreateVideoDecoderOutputView = VideoCreateVideoDecoderOutputView;
++   f->pfnDestroyVideoDecoderOutputView = VideoDestroyVideoDecoderOutputView;
++   f->pfnCalcPrivateVideoProcessorInputViewSize = VideoStubCalcPrivateVideoProcessorInputViewSize;
++   f->pfnCreateVideoProcessorInputView = VideoStubCreateVideoProcessorInputView;
++   f->pfnDestroyVideoProcessorInputView = VideoStubDestroyVideoProcessorInputView;
++   f->pfnCalcPrivateVideoProcessorOutputViewSize = VideoStubCalcPrivateVideoProcessorOutputViewSize;
++   f->pfnCreateVideoProcessorOutputView = VideoStubCreateVideoProcessorOutputView;
++   f->pfnDestroyVideoProcessorOutputView = VideoStubDestroyVideoProcessorOutputView;
++   f->pfnVideoProcessorInputViewReadAfterWriteHazard = VideoStubVideoProcessorInputViewReadAfterWriteHazard;
++   f->pfnGetContentProtectionCaps = VideoStubGetContentProtectionCaps;
++   f->pfnGetCryptoKeyExchangeType = VideoStubGetCryptoKeyExchangeType;
++   f->pfnCalcPrivateCryptoSessionSize = VideoStubCalcPrivateCryptoSessionSize;
++   f->pfnCreateCryptoSession = VideoStubCreateCryptoSession;
++   f->pfnDestroyCryptoSession = VideoStubDestroyCryptoSession;
++   f->pfnGetCertificateSize = VideoStubGetCertificateSize;
++   f->pfnGetCertificate = VideoStubGetCertificate;
++   f->pfnNegotiateCryptoSessionKeyExchange = VideoStubNegotiateCryptoSessionKeyExchange;
++   f->pfnEncryptionBlt = VideoStubEncryptionBlt;
++   f->pfnDecryptionBlt = VideoStubDecryptionBlt;
++   f->pfnStartSessionKeyRefresh = VideoStubStartSessionKeyRefresh;
++   f->pfnFinishSessionKeyRefresh = VideoStubFinishSessionKeyRefresh;
++   f->pfnGetEncryptionBltKey = VideoStubGetEncryptionBltKey;
++   f->pfnCalcPrivateAuthenticatedChannelSize = VideoStubCalcPrivateAuthenticatedChannelSize;
++   f->pfnCreateAuthenticatedChannel = VideoStubCreateAuthenticatedChannel;
++   f->pfnDestroyAuthenticatedChannel = VideoStubDestroyAuthenticatedChannel;
++   f->pfnNegotiateAuthenticatedChannelKeyExchange = VideoStubNegotiateAuthenticatedChannelKeyExchange;
++   f->pfnQueryAuthenticatedChannel = VideoStubQueryAuthenticatedChannel;
++   f->pfnConfigureAuthenticatedChannel = VideoStubConfigureAuthenticatedChannel;
++   f->pfnVideoDecoderGetHandle = VideoStubVideoDecoderGetHandle;
++   f->pfnCryptoSessionGetHandle = VideoStubCryptoSessionGetHandle;
++   f->pfnVideoProcessorSetStreamRotation = VideoStubVideoProcessorSetStreamRotation;
++   f->pfnGetCaptureHandle = VideoStubGetCaptureHandle;
++}
++
+diff --git a/src/gallium/frontends/d3d10umd/meson.build b/src/gallium/frontends/d3d10umd/meson.build
+index 614db91..0c65fd6 100644
+--- a/src/gallium/frontends/d3d10umd/meson.build
++++ b/src/gallium/frontends/d3d10umd/meson.build
+@@ -24,6 +24,13 @@ libd3d10umd = static_library(
+     'ShaderParse.c',
+     'ShaderTGSI.c',
+     'D3DKMT.cpp',
++    'D3D11.cpp',
++    'Video.cpp',
++    # wddm-mali-g52's video/ (mesa.yml copies it here): the VDPU383
++    # backend and its register builder.
++    'video/vdec.c',
++    'video/vdpu383/lib/vdpu383_h264.c',
++    'video/vdpu383/lib/vdpu383_cabac.c',
+   ),
+   c_args : _c_args_d3d10umd,
+   cpp_args : _c_args_d3d10umd,

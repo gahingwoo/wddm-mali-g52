@@ -14,6 +14,8 @@
 | [EDGE-CREATEDEVICE.md](EDGE-CREATEDEVICE.md) | Why Edge could not create a D3D11 device on the Mali, and the fix | Edge gets the Mali at 10_1 on the board |
 | [EDGE-PRESENT.md](EDGE-PRESENT.md) | Edge's device removed at its first present; three UMD bugs | fixes merged; presenting to a composition swap chain still blocked |
 | [D3D11-UMD.md](D3D11-UMD.md) | Plan for the D3D11.1 user-mode driver | plan, 2026-11-21 |
+| [VIDEO-DECODE.md](VIDEO-DECODE.md) | Hardware video decode for players: why D3D11 video decode in the UMD, the VDPU383 backend, the switches, the board test | branch `video-decode`, CI only, 2026-11-24 |
+| [CHROMIUM-VIDEO.md](CHROMIUM-VIDEO.md) | Hardware decode for Chrome and Edge first: what the RK3576 decodes (H.264, HEVC, VP9, AV1 in one block; mainline drives only H.264/HEVC), what Chromium asks of a D3D11 decoder (feature level 11_0, VideoDevice1, shared NV12), the order of the work | plan, 2026-11-25; probe in CI |
 | [FEASIBILITY-D3D11-WDDM2.md](FEASIBILITY-D3D11-WDDM2.md) | What Direct3D 11 and WDDM 2.x would take | study, 2026-11-13 |
 | [WDDM2.md](WDDM2.md) | WDDM 2.x and 3.x design study: GpuMmu on the Mali MMU, options, phased plan | study 2026-11-21, plan approved; implementation on `wddm2` (progress log, UMD contract) |
 | [BOARD-DAY.md](BOARD-DAY.md) | Checklist for the October 2026 board sessions | historical |

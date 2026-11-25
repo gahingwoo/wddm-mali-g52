@@ -255,6 +255,12 @@ person-weeks WDDM2.md gives option (c), decode excluded.
 
 ### U4: video DDI scaffolding (2 to 3 weeks)
 
+**2026-11-24:** superseded in part by [VIDEO-DECODE.md](VIDEO-DECODE.md)
+(branch `video-decode`): the D3D11.1 interface is offered only in the
+processes `UmdVideo` names, instead of after U1 and U2 for every process,
+and the video DDI with H.264 is written (milestone V3a). The decode node
+of U5 becomes V3b there.
+
 - `D3D11_1DDI_VIDEODEVICEFUNCS` filled in with `UmdVideo` 1 or 2:
   - `GetVideoDecoderProfileCount`, `GetVideoDecoderProfile`,
     `CheckVideoDecoderFormat`, `GetVideoDecoderConfigCount`,

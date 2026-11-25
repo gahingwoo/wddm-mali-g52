@@ -1,0 +1,1761 @@
+diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
+index 1521c97..c30c4eb 100644
+--- a/src/gallium/frontends/d3d10umd/Device.cpp
++++ b/src/gallium/frontends/d3d10umd/Device.cpp
+@@ -45,6 +45,7 @@
+ #include "Debug.h"
+ #include "D3D11.h"
+ #include "Video.h"
++#include "VideoProcessor.h"
+ 
+ #include "util/u_sampler.h"
+ #include "util/u_framebuffer.h"
+@@ -482,6 +483,7 @@ DestroyDevice(D3D10DDI_HDEVICE hDevice)   // IN
+    struct pipe_context *pipe = pDevice->pipe;
+ 
+    pipe->flush(pipe, NULL, 0);
++   VideoDeviceDestroy(pDevice);
+ 
+    for (i = 0; i < PIPE_MAX_SO_BUFFERS; ++i) {
+       pipe_so_target_reference(&pDevice->so_targets[i], NULL);
+@@ -873,6 +875,9 @@ CheckFormatSupportImpl(Device *pDevice,         // IN
+                                       PIPE_BIND_SAMPLER_VIEW))
+          *pFormatCaps |= D3D10_DDI_FORMAT_SUPPORT_MULTISAMPLE_LOAD;
+    }
++
++   /* Video processor input and output (D3D11.1 with UmdVideo only). */
++   *pFormatCaps |= VideoFormatSupport(pDevice, Format);
+ }
+ 
+ 
+diff --git a/src/gallium/frontends/d3d10umd/Resource.cpp b/src/gallium/frontends/d3d10umd/Resource.cpp
+index 2aa5beb..600c3ca 100644
+--- a/src/gallium/frontends/d3d10umd/Resource.cpp
++++ b/src/gallium/frontends/d3d10umd/Resource.cpp
+@@ -33,6 +33,7 @@
+ 
+ #include "Resource.h"
+ #include "Video.h"
++#include "VideoProcessor.h"
+ #include "Format.h"
+ #include "State.h"
+ #include "Query.h"
+@@ -467,8 +468,10 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+    templat.usage      = translate_resource_usage(pCreateResource->Usage);
+    if (nv12) {
+       templat.height0 = templat.height0 * 3 / 2;
+-      /* No plane views yet (V4): a decoder output and a copy source. */
+-      templat.bind &= PIPE_BIND_SAMPLER_VIEW;
++      /* Sampled by the video processor whatever the application bound
++       * (a decoder output usually has BIND_DECODER only); shader resource
++       * views see the plane textures instead (VideoNv12CreatePlanes). */
++      templat.bind = PIPE_BIND_SAMPLER_VIEW;
+       pResource->nv12 = true;
+       pResource->nv12_luma_height = pCreateResource->pMipInfoList[0].TexelHeight;
+    }
+@@ -615,6 +618,14 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+       return;
+    }
+ 
++   if (nv12 && (pCreateResource->BindFlags & D3D10_DDI_BIND_SHADER_RESOURCE) &&
++       !VideoNv12CreatePlanes(screen, pResource, &templat)) {
++      DebugPrintf("%s: NV12 plane textures: out of memory\n", __func__);
++      pipe_resource_reference(&pResource->resource, NULL);
++      SetError(hDevice, E_OUTOFMEMORY);
++      return;
++   }
++
+    if (pCreateResource->pPrimaryDesc) {
+       pResource->primary = true;
+       pResource->rt_resource = hRTResource.handle;
+@@ -892,6 +903,7 @@ DestroyResource(D3D10DDI_HDEVICE hDevice,       // IN
+       }
+    }
+    free(pResource->transfers);
++   VideoNv12DestroyPlanes(pResource);
+ 
+    if (pResource->direct_primary) {
+       /* The buffer is the runtime's allocation, as a shared resource's is:
+@@ -1226,6 +1238,8 @@ ResourceCopy(D3D10DDI_HDEVICE hDevice,          // IN
+                           src_resource, level,
+                           &box);
+          }
++         if (pDstResource->nv12)
++            VideoNv12AfterCopy(pipe, pDstResource, layer, 0, 0, pSrcResource, &box);
+       }
+    }
+ }
+@@ -1301,6 +1315,7 @@ ResourceCopyRegion(D3D10DDI_HDEVICE hDevice,                // IN
+       pipe->resource_copy_region(pipe, dst_resource, dst_level, DstX,
+                                  pDstResource->nv12_luma_height + DstY / 2, DstZ + dst_layer,
+                                  src_resource, src_level, &uv);
++      VideoNv12AfterCopy(pipe, pDstResource, DstZ + dst_layer, DstX, DstY, pSrcResource, &src_box);
+       return;
+    }
+ 
+@@ -1318,6 +1333,8 @@ ResourceCopyRegion(D3D10DDI_HDEVICE hDevice,                // IN
+                     src_resource, src_level,
+                     &src_box);
+    }
++   if (pDstResource->nv12)
++      VideoNv12AfterCopy(pipe, pDstResource, DstZ + dst_layer, DstX, DstY, pSrcResource, &src_box);
+ }
+ 
+ 
+@@ -1516,6 +1533,8 @@ ResourceUpdateSubResourceUP(D3D10DDI_HDEVICE hDevice,                // IN
+          pipe_texture_unmap(pipe, transfer);
+       }
+       mali_count_add(MALI_COUNT_UPLOAD, countBytes(dst_resource, &box), count_t0);
++      if (pDstResource->nv12)
++         VideoNv12Refresh(pipe, pDstResource, box.z);
+    }
+ }
+ 
+diff --git a/src/gallium/frontends/d3d10umd/Shader.cpp b/src/gallium/frontends/d3d10umd/Shader.cpp
+index 9d2dabc..e6a8e99 100644
+--- a/src/gallium/frontends/d3d10umd/Shader.cpp
++++ b/src/gallium/frontends/d3d10umd/Shader.cpp
+@@ -1406,6 +1406,23 @@ CreateShaderResourceView1(
+    resource = CastPipeResource(pCreateSRView->hDrvResource);
+    format = FormatTranslate(pCreateSRView->Format, false);
+ 
++   /* NV12: R8_UNORM is the luma plane, R8G8_UNORM the chroma plane, each
++    * a texture of its own (Resource::nv12_plane, VideoProcessor.cpp). */
++   Resource *pNv12 = CastResource(pCreateSRView->hDrvResource);
++   if (pNv12 && pNv12->nv12) {
++      int plane = pCreateSRView->Format == DXGI_FORMAT_R8_UNORM     ? 0
++                : pCreateSRView->Format == DXGI_FORMAT_R8G8_UNORM ? 1 : -1;
++      if (plane < 0 || !pNv12->nv12_plane[plane] ||
++          pCreateSRView->ResourceDimension != D3D10DDIRESOURCE_TEXTURE2D) {
++         DebugPrintf("%s: NV12 view as format %u: not offered (plane textures %d)\n", __func__,
++                     (unsigned)pCreateSRView->Format, pNv12->nv12_plane[0] != NULL);
++         pSRView->handle = NULL;
++         SetError(hDevice, E_INVALIDARG);
++         return;
++      }
++      resource = pNv12->nv12_plane[plane];
++   }
++
+    u_sampler_view_default_template(&desc,
+                                    resource,
+                                    format);
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index 6952fbd..bd0570d 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -158,6 +158,10 @@ struct Device
+     * depends on whether a depth-stencil view is bound (see
+     * BindDepthStencilState). */
+    struct DepthStencilState *bound_dss;
++
++   /* The video processor's own pipe context, made at the first
++    * VideoProcessorBlt (VideoProcessor.cpp). */
++   struct VideoProcessorContext *vp;
+ };
+ 
+ 
+@@ -333,6 +337,10 @@ struct Resource
+     * out (Video.cpp). */
+    bool nv12;
+    unsigned nv12_luma_height;
++   /* With BIND_SHADER_RESOURCE: the planes as shader resource views see
++    * them, R8 width x height and R8G8 width/2 x height/2, kept in step
++    * with the texture (VideoProcessor.cpp). NULL otherwise. */
++   struct pipe_resource *nv12_plane[2];
+ };
+ 
+ /* Run-time switches, each a file under C:\mali whose existence brings the
+diff --git a/src/gallium/frontends/d3d10umd/Video.cpp b/src/gallium/frontends/d3d10umd/Video.cpp
+index a8cd81f..a7f4aba 100644
+--- a/src/gallium/frontends/d3d10umd/Video.cpp
++++ b/src/gallium/frontends/d3d10umd/Video.cpp
+@@ -32,6 +32,7 @@
+ 
+ #include "DriverIncludes.h"
+ #include "Video.h"
++#include "VideoProcessor.h"
+ #include "State.h"
+ #include "Debug.h"
+ 
+@@ -150,11 +151,14 @@ CastOutputView(D3D11_1DDI_HVIDEODECODEROUTPUTVIEW h)
+ UINT
+ VideoNv12FormatSupport(Device *pDevice)
+ {
+-   /* NV12 exists on a D3D11.1 device only. As a decoder output now;
+-    * sampled as two planes and video processor input come with V4. */
++   /* NV12 exists on a D3D11.1 device only: a decoder output, a video
++    * processor input, and sampled as two planes (R8 and R8G8 views,
++    * VideoProcessor.cpp). Not a render target, not mappable but as
++    * staging. */
+    if (!pDevice->ddi11_1 || !pDevice->video)
+       return 0;
+-   return D3D11_1DDI_FORMAT_SUPPORT_DECODER_OUTPUT;
++   return D3D11_1DDI_FORMAT_SUPPORT_DECODER_OUTPUT | D3D11_1DDI_FORMAT_SUPPORT_VIDEO_PROCESSOR_INPUT |
++          D3D10_DDI_FORMAT_SUPPORT_SHADER_SAMPLE;
+ }
+ 
+ /* -------------------------------------------------------- decoder caps */
+@@ -417,6 +421,9 @@ CopyToTarget(Device *pDevice, VideoOutputView *v, const vdec_picture *pic)
+    u_box_3d(0, r->nv12_luma_height, v->slice, w, h / 2, 1, &box);
+    pipe->texture_subdata(pipe, r->resource, 0, PIPE_MAP_WRITE, &box,
+                          pic->data + (size_t)pic->stride * pic->luma_rows, pic->stride, 0);
++   /* And the plane textures of shader resource views, if it has them. */
++   VideoNv12WritePlanes(pipe, r, v->slice, pic->data, pic->data + (size_t)pic->stride * pic->luma_rows,
++                        pic->stride, w, h);
+    return true;
+ }
+ 
+diff --git a/src/gallium/frontends/d3d10umd/VideoProcessor.cpp b/src/gallium/frontends/d3d10umd/VideoProcessor.cpp
+new file mode 100644
+index 0000000..8499e19
+--- /dev/null
++++ b/src/gallium/frontends/d3d10umd/VideoProcessor.cpp
+@@ -0,0 +1,979 @@
++/*
++ * VideoProcessor.cpp --
++ *    The D3D11 video processor (ID3D11VideoProcessor, VideoProcessorBlt)
++ *    and NV12 as two shader resource views: what a player that does not
++ *    convert NV12 itself needs to show a decoded picture (Media
++ *    Foundation's Media Engine, Edge's copy path).
++ *
++ * One input stream, progressive (an interlaced stream is shown as its
++ * frame), no filters, no rotation. Input NV12 (Resource.cpp's layout),
++ * B8G8R8A8, B8G8R8X8, R8G8B8A8; output the three RGB formats. Source
++ * rectangle, destination rectangle, target rectangle, background colour
++ * (RGB or YCbCr), BT.601 or BT.709, studio or full range in and out,
++ * alpha fill. Scaling is bilinear (chroma too).
++ *
++ * The blit is drawn in a pipe context of its own, created at the first
++ * blit: the device's context keeps exactly the state the application set
++ * (this frontend sets most of it straight on the pipe and could not put
++ * it back). The device's context is flushed and waited for first, so the
++ * blit reads what was decoded or drawn before it, and the blit is waited
++ * for before it returns, so whatever the device does next sees its
++ * output. Two waits per blit: simple and correct, not fast.
++ *
++ * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++#include "DriverIncludes.h"
++#include "Video.h"
++#include "VideoProcessor.h"
++#include "VideoShaders.h"
++#include "State.h"
++#include "Debug.h"
++
++#include "cso_cache/cso_context.h"
++#include "util/box.h"
++#include "util/os_time.h"
++#include "util/u_draw_quad.h"
++#include "util/u_inlines.h"
++#include "util/u_sampler.h"
++#include "util/u_simple_shaders.h"
++#include "util/u_surface.h"
++
++#include <math.h>
++#include <stdio.h>
++#include <string.h>
++
++/* ------------------------------------------------------------ objects */
++
++struct VideoProcessorEnum {
++   D3D11_1DDI_VIDEO_PROCESSOR_CONTENT_DESC desc;
++};
++
++struct VideoProcessorStream {
++   D3D11_1DDI_VIDEO_FRAME_FORMAT frame_format;
++   D3D11_1DDI_VIDEO_PROCESSOR_COLOR_SPACE cs;
++   BOOL src_enabled, dst_enabled, alpha_enabled;
++   RECT src, dst;
++   float alpha;
++};
++
++struct VideoProcessor {
++   D3D11_1DDI_VIDEO_PROCESSOR_CONTENT_DESC desc;
++   BOOL target_enabled;
++   RECT target;
++   BOOL bg_ycbcr;
++   D3D11_1DDI_VIDEO_COLOR bg;
++   D3D11_1DDI_VIDEO_PROCESSOR_COLOR_SPACE out_cs;
++   D3D11_1DDI_VIDEO_PROCESSOR_ALPHA_FILL_MODE alpha_mode;
++   VideoProcessorStream stream;
++   unsigned blts, logged;
++};
++
++struct VideoProcessorInputView {
++   Resource *resource;
++   UINT slice;
++};
++
++struct VideoProcessorOutputView {
++   Resource *resource;
++   UINT level, slice;
++};
++
++/* The device's video processor context (Device::vp). */
++struct VideoProcessorContext {
++   struct pipe_context *pipe;
++   struct cso_context *cso;
++   void *vs;
++   void *fs[4];                 /* [nv12 * 2 + array] */
++   struct pipe_resource *vbuf;  /* 4 vertices: position, source texel */
++   struct pipe_resource *cbuf;  /* CONST[0..5], VideoShaders.c */
++};
++
++static inline VideoProcessorEnum *
++CastEnum(D3D11_1DDI_HVIDEOPROCESSORENUM h)
++{
++   return (VideoProcessorEnum *)h.pDrvPrivate;
++}
++
++static inline VideoProcessor *
++CastVp(D3D11_1DDI_HVIDEOPROCESSOR h)
++{
++   return (VideoProcessor *)h.pDrvPrivate;
++}
++
++static inline VideoProcessorInputView *
++CastInputView(D3D11_1DDI_HVIDEOPROCESSORINPUTVIEW h)
++{
++   return (VideoProcessorInputView *)h.pDrvPrivate;
++}
++
++static inline VideoProcessorOutputView *
++CastVpOutputView(D3D11_1DDI_HVIDEOPROCESSOROUTPUTVIEW h)
++{
++   return (VideoProcessorOutputView *)h.pDrvPrivate;
++}
++
++/* ------------------------------------------------------------ formats */
++
++#define VP_MAX_SIZE 8192
++
++UINT
++VideoProcessorFormat(DXGI_FORMAT format)
++{
++   switch (format) {
++   case DXGI_FORMAT_NV12:
++      return D3D11_1DDI_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT;
++   case DXGI_FORMAT_B8G8R8A8_UNORM:
++   case DXGI_FORMAT_B8G8R8X8_UNORM:
++   case DXGI_FORMAT_R8G8B8A8_UNORM:
++      return D3D11_1DDI_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT |
++             D3D11_1DDI_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT;
++   default:
++      return 0;
++   }
++}
++
++UINT
++VideoFormatSupport(Device *pDevice, DXGI_FORMAT format)
++{
++   UINT vp, caps = 0;
++
++   if (!pDevice->ddi11_1 || !pDevice->video)
++      return 0;
++   vp = VideoProcessorFormat(format);
++   if (vp & D3D11_1DDI_VIDEO_PROCESSOR_FORMAT_SUPPORT_INPUT)
++      caps |= D3D11_1DDI_FORMAT_SUPPORT_VIDEO_PROCESSOR_INPUT;
++   if (vp & D3D11_1DDI_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT)
++      caps |= D3D11_1DDI_FORMAT_SUPPORT_VIDEO_PROCESSOR_OUTPUT;
++   return caps;
++}
++
++/* --------------------------------------------------------------- enum */
++
++SIZE_T APIENTRY
++VideoCalcPrivateVideoProcessorEnumSize(D3D10DDI_HDEVICE, const D3D11_1DDIARG_CREATEVIDEOPROCESSORENUM *)
++{
++   return sizeof(VideoProcessorEnum);
++}
++
++HRESULT APIENTRY
++VideoCreateVideoProcessorEnum(D3D10DDI_HDEVICE hDevice, const D3D11_1DDIARG_CREATEVIDEOPROCESSORENUM *p,
++                              D3D11_1DDI_HVIDEOPROCESSORENUM hEnum, D3D11_1DDI_HRTVIDEOPROCESSORENUM)
++{
++   Device *pDevice = CastDevice(hDevice);
++   VideoProcessorEnum *e = CastEnum(hEnum);
++   const D3D11_1DDI_VIDEO_PROCESSOR_CONTENT_DESC *d = &p->Desc;
++
++   memset(e, 0, sizeof *e);
++   if (!pDevice->video || d->InputWidth == 0 || d->InputHeight == 0 || d->OutputWidth == 0 ||
++       d->OutputHeight == 0 || d->InputWidth > VP_MAX_SIZE || d->InputHeight > VP_MAX_SIZE ||
++       d->OutputWidth > VP_MAX_SIZE || d->OutputHeight > VP_MAX_SIZE) {
++      DebugPrintf("video: CreateVideoProcessorEnum %ux%u -> %ux%u refused\n", d->InputWidth,
++                  d->InputHeight, d->OutputWidth, d->OutputHeight);
++      return E_INVALIDARG;
++   }
++   e->desc = *d;
++   DebugPrintf("video: video processor enum %ux%u -> %ux%u, frame format %u, usage %u\n",
++               d->InputWidth, d->InputHeight, d->OutputWidth, d->OutputHeight,
++               (unsigned)d->InputFrameFormat, (unsigned)d->Usage);
++   return S_OK;
++}
++
++VOID APIENTRY
++VideoDestroyVideoProcessorEnum(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM hEnum)
++{
++   memset(CastEnum(hEnum), 0, sizeof(VideoProcessorEnum));
++}
++
++VOID APIENTRY
++VideoCheckVideoProcessorFormat(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM, DXGI_FORMAT Format,
++                               UINT *pSupport)
++{
++   *pSupport = VideoProcessorFormat(Format);
++}
++
++VOID APIENTRY
++VideoGetVideoProcessorCaps(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM,
++                           D3D11_1DDI_VIDEO_PROCESSOR_CAPS *pCaps)
++{
++   memset(pCaps, 0, sizeof *pCaps);
++   pCaps->DeviceCaps = D3D11_1DDI_VIDEO_PROCESSOR_DEVICE_CAPS_RGB_RANGE_CONVERSION |
++                       D3D11_1DDI_VIDEO_PROCESSOR_DEVICE_CAPS_YCbCr_MATRIX_CONVERSION |
++                       D3D11_1DDI_VIDEO_PROCESSOR_DEVICE_CAPS_NOMINAL_RANGE;
++   pCaps->FeatureCaps = D3D11_1DDI_VIDEO_PROCESSOR_FEATURE_CAPS_ALPHA_FILL |
++                        D3D11_1DDI_VIDEO_PROCESSOR_FEATURE_CAPS_ALPHA_STREAM;
++   pCaps->RateConversionCapsCount = 1;
++   pCaps->MaxInputStreams = 1;
++   pCaps->MaxStreamStates = 1;
++}
++
++VOID APIENTRY
++VideoGetVideoProcessorRateConversionCaps(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM, UINT,
++                                         D3D11_1DDI_VIDEO_PROCESSOR_RATE_CONVERSION_CAPS *pCaps)
++{
++   memset(pCaps, 0, sizeof *pCaps);
++   /* Bob is what an interlaced stream needs at the least; the blit shows
++    * the frame as it is (see the top of the file). */
++   pCaps->ConversionCaps = D3D11_1DDI_VIDEO_PROCESSOR_CONVERSION_CAPS_DEINTERLACE_BOB;
++}
++
++VOID APIENTRY
++VideoGetVideoProcessorCustomRate(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM, UINT, UINT,
++                                 D3D11_1DDI_VIDEO_PROCESSOR_CUSTOM_RATE *pRate)
++{
++   memset(pRate, 0, sizeof *pRate);
++}
++
++VOID APIENTRY
++VideoGetVideoProcessorFilterRange(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM,
++                                  D3D11_1DDI_VIDEO_PROCESSOR_FILTER,
++                                  D3D11_1DDI_VIDEO_PROCESSOR_FILTER_RANGE *pRange)
++{
++   memset(pRange, 0, sizeof *pRange);
++}
++
++/* ---------------------------------------------------------- processor */
++
++SIZE_T APIENTRY
++VideoCalcPrivateVideoProcessorSize(D3D10DDI_HDEVICE, const D3D11_1DDIARG_CREATEVIDEOPROCESSOR *)
++{
++   return sizeof(VideoProcessor);
++}
++
++HRESULT APIENTRY
++VideoCreateVideoProcessor(D3D10DDI_HDEVICE, const D3D11_1DDIARG_CREATEVIDEOPROCESSOR *p,
++                          D3D11_1DDI_HVIDEOPROCESSOR hVp, D3D11_1DDI_HRTVIDEOPROCESSOR)
++{
++   VideoProcessor *vp = CastVp(hVp);
++   VideoProcessorEnum *e = CastEnum(p->hVideoProcessorEnum);
++
++   memset(vp, 0, sizeof *vp);
++   if (!e || p->RateConversionCapsIndex != 0)
++      return E_INVALIDARG;
++   vp->desc = e->desc;
++   /* The D3D11 defaults: opaque alpha, a black background, RGB 0-255
++    * out, BT.601 studio range in, the whole surfaces. */
++   vp->alpha_mode = D3D11_1DDI_VIDEO_PROCESSOR_ALPHA_FILL_MODE_OPAQUE;
++   vp->bg.RGBA.A = 1.0f;
++   vp->stream.alpha = 1.0f;
++   DebugPrintf("video: video processor created (%ux%u -> %ux%u)\n", e->desc.InputWidth,
++               e->desc.InputHeight, e->desc.OutputWidth, e->desc.OutputHeight);
++   return S_OK;
++}
++
++VOID APIENTRY
++VideoDestroyVideoProcessor(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR hVp)
++{
++   VideoProcessor *vp = CastVp(hVp);
++
++   DebugPrintf("video: video processor destroyed after %u blits\n", vp->blts);
++   memset(vp, 0, sizeof *vp);
++}
++
++VOID APIENTRY
++VideoVideoProcessorSetOutputTargetRect(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR hVp, BOOL Enable,
++                                       const RECT *pRect)
++{
++   VideoProcessor *vp = CastVp(hVp);
++   vp->target_enabled = Enable && pRect;
++   if (vp->target_enabled)
++      vp->target = *pRect;
++}
++
++VOID APIENTRY
++VideoVideoProcessorSetOutputBackgroundColor(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR hVp,
++                                            BOOL YCbCr, const D3D11_1DDI_VIDEO_COLOR *pColor)
++{
++   VideoProcessor *vp = CastVp(hVp);
++   vp->bg_ycbcr = YCbCr;
++   vp->bg = *pColor;
++}
++
++VOID APIENTRY
++VideoVideoProcessorSetOutputColorSpace(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR hVp,
++                                       const D3D11_1DDI_VIDEO_PROCESSOR_COLOR_SPACE *pCs)
++{
++   CastVp(hVp)->out_cs = *pCs;
++}
++
++VOID APIENTRY
++VideoVideoProcessorSetOutputAlphaFillMode(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR hVp,
++                                          D3D11_1DDI_VIDEO_PROCESSOR_ALPHA_FILL_MODE Mode, UINT)
++{
++   CastVp(hVp)->alpha_mode = Mode;
++}
++
++VOID APIENTRY
++VideoVideoProcessorSetOutputConstriction(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, BOOL, SIZE)
++{
++   /* Not offered (no FEATURE_CAPS_CONSTRICTION). */
++}
++
++VOID APIENTRY
++VideoVideoProcessorSetOutputStereoMode(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, BOOL)
++{
++}
++
++VOID APIENTRY
++VideoVideoProcessorSetStreamFrameFormat(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR hVp, UINT Stream,
++                                        D3D11_1DDI_VIDEO_FRAME_FORMAT Format)
++{
++   if (Stream == 0)
++      CastVp(hVp)->stream.frame_format = Format;
++}
++
++VOID APIENTRY
++VideoVideoProcessorSetStreamColorSpace(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR hVp, UINT Stream,
++                                       const D3D11_1DDI_VIDEO_PROCESSOR_COLOR_SPACE *pCs)
++{
++   if (Stream == 0)
++      CastVp(hVp)->stream.cs = *pCs;
++}
++
++VOID APIENTRY
++VideoVideoProcessorSetStreamOutputRate(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT,
++                                       D3D11_1DDI_VIDEO_PROCESSOR_OUTPUT_RATE, BOOL, const DXGI_RATIONAL *)
++{
++}
++
++VOID APIENTRY
++VideoVideoProcessorSetStreamSourceRect(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR hVp, UINT Stream,
++                                       BOOL Enable, const RECT *pRect)
++{
++   VideoProcessor *vp = CastVp(hVp);
++   if (Stream != 0)
++      return;
++   vp->stream.src_enabled = Enable && pRect;
++   if (vp->stream.src_enabled)
++      vp->stream.src = *pRect;
++}
++
++VOID APIENTRY
++VideoVideoProcessorSetStreamDestRect(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR hVp, UINT Stream,
++                                     BOOL Enable, const RECT *pRect)
++{
++   VideoProcessor *vp = CastVp(hVp);
++   if (Stream != 0)
++      return;
++   vp->stream.dst_enabled = Enable && pRect;
++   if (vp->stream.dst_enabled)
++      vp->stream.dst = *pRect;
++}
++
++VOID APIENTRY
++VideoVideoProcessorSetStreamAlpha(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR hVp, UINT Stream,
++                                  BOOL Enable, FLOAT Alpha)
++{
++   VideoProcessor *vp = CastVp(hVp);
++   if (Stream != 0)
++      return;
++   vp->stream.alpha_enabled = Enable;
++   vp->stream.alpha = Alpha;
++}
++
++VOID APIENTRY
++VideoVideoProcessorSetStreamAutoProcessingMode(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, BOOL)
++{
++}
++
++VOID APIENTRY
++VideoVideoProcessorSetStreamFilter(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT,
++                                   D3D11_1DDI_VIDEO_PROCESSOR_FILTER, BOOL, int)
++{
++}
++
++VOID APIENTRY
++VideoVideoProcessorSetStreamRotation(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, BOOL,
++                                     D3D11_1DDI_VIDEO_PROCESSOR_ROTATION)
++{
++   /* Not offered (no FEATURE_CAPS_ROTATION). */
++}
++
++/* -------------------------------------------------------------- views */
++
++SIZE_T APIENTRY
++VideoCalcPrivateVideoProcessorInputViewSize(D3D10DDI_HDEVICE,
++                                            const D3D11_1DDIARG_CREATEVIDEOPROCESSORINPUTVIEW *)
++{
++   return sizeof(VideoProcessorInputView);
++}
++
++HRESULT APIENTRY
++VideoCreateVideoProcessorInputView(D3D10DDI_HDEVICE, const D3D11_1DDIARG_CREATEVIDEOPROCESSORINPUTVIEW *p,
++                                   D3D11_1DDI_HVIDEOPROCESSORINPUTVIEW hView,
++                                   D3D11_1DDI_HRTVIDEOPROCESSORINPUTVIEW)
++{
++   VideoProcessorInputView *v = CastInputView(hView);
++   Resource *r = CastResource(p->hDrvResource);
++
++   memset(v, 0, sizeof *v);
++   if (!r || !r->resource || r->buffer || p->MipSlice != 0 ||
++       p->FirstArraySlice >= r->resource->array_size ||
++       (r->resource->target != PIPE_TEXTURE_2D && r->resource->target != PIPE_TEXTURE_2D_ARRAY)) {
++      DebugPrintf("video: video processor input view refused (slice %u, level %u)\n",
++                  p->FirstArraySlice, p->MipSlice);
++      return E_INVALIDARG;
++   }
++   v->resource = r;
++   v->slice = p->FirstArraySlice;
++   return S_OK;
++}
++
++VOID APIENTRY
++VideoDestroyVideoProcessorInputView(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORINPUTVIEW hView)
++{
++   memset(CastInputView(hView), 0, sizeof(VideoProcessorInputView));
++}
++
++SIZE_T APIENTRY
++VideoCalcPrivateVideoProcessorOutputViewSize(D3D10DDI_HDEVICE,
++                                             const D3D11_1DDIARG_CREATEVIDEOPROCESSOROUTPUTVIEW *)
++{
++   return sizeof(VideoProcessorOutputView);
++}
++
++HRESULT APIENTRY
++VideoCreateVideoProcessorOutputView(D3D10DDI_HDEVICE, const D3D11_1DDIARG_CREATEVIDEOPROCESSOROUTPUTVIEW *p,
++                                    D3D11_1DDI_HVIDEOPROCESSOROUTPUTVIEW hView,
++                                    D3D11_1DDI_HRTVIDEOPROCESSOROUTPUTVIEW)
++{
++   VideoProcessorOutputView *v = CastVpOutputView(hView);
++   Resource *r = CastResource(p->hDrvResource);
++
++   memset(v, 0, sizeof *v);
++   if (!r || !r->resource || r->buffer || r->nv12 || p->ArraySize > 1 ||
++       p->MipSlice > r->resource->last_level || p->FirstArraySlice >= r->resource->array_size ||
++       !(r->resource->bind & PIPE_BIND_RENDER_TARGET)) {
++      DebugPrintf("video: video processor output view refused (slice %u, level %u, nv12 %d)\n",
++                  p->FirstArraySlice, p->MipSlice, r ? r->nv12 : 0);
++      return E_INVALIDARG;
++   }
++   v->resource = r;
++   v->level = p->MipSlice;
++   v->slice = p->FirstArraySlice;
++   return S_OK;
++}
++
++VOID APIENTRY
++VideoDestroyVideoProcessorOutputView(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOROUTPUTVIEW hView)
++{
++   memset(CastVpOutputView(hView), 0, sizeof(VideoProcessorOutputView));
++}
++
++VOID APIENTRY
++VideoVideoProcessorInputViewReadAfterWriteHazard(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORINPUTVIEW,
++                                                 D3D10DDI_HRESOURCE)
++{
++   /* Every blit waits for the device's context first. */
++}
++
++/* ------------------------------------------------------------- colour */
++
++/*
++ * out = M * (a, b, c, 1), M 3x4: the input range taken to 0..1 (luma) and
++ * -0.5..0.5 (chroma), YCbCr to RGB (Kr, Kb of BT.601 or BT.709), the
++ * result taken to the output range (vdectest --vp checks it against its
++ * own model).
++ */
++static void
++vp_color_matrix(bool ycbcr, bool bt709, bool in_full, bool out_limited, float m[3][4])
++{
++   float in_s[3], in_o[3];
++   float c[3][3];
++   const float os = out_limited ? 219.0f / 255.0f : 1.0f;
++   const float oo = out_limited ? 16.0f / 255.0f : 0.0f;
++
++   if (ycbcr) {
++      const float kr = bt709 ? 0.2126f : 0.299f;
++      const float kb = bt709 ? 0.0722f : 0.114f;
++      const float kg = 1.0f - kr - kb;
++
++      in_s[0] = in_full ? 1.0f : 255.0f / 219.0f;
++      in_o[0] = in_full ? 0.0f : -16.0f / 219.0f;
++      in_s[1] = in_s[2] = in_full ? 1.0f : 255.0f / 224.0f;
++      in_o[1] = in_o[2] = in_full ? -128.0f / 255.0f : -128.0f / 224.0f;
++      float t[3][3] = {
++         { 1.0f, 0.0f, 2.0f - 2.0f * kr },
++         { 1.0f, -2.0f * kb * (1.0f - kb) / kg, -2.0f * kr * (1.0f - kr) / kg },
++         { 1.0f, 2.0f - 2.0f * kb, 0.0f },
++      };
++      memcpy(c, t, sizeof c);
++   } else {
++      /* RGB: in_full false is RGB 16-235 in. */
++      for (int i = 0; i < 3; i++) {
++         in_s[i] = in_full ? 1.0f : 255.0f / 219.0f;
++         in_o[i] = in_full ? 0.0f : -16.0f / 219.0f;
++      }
++      float t[3][3] = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
++      memcpy(c, t, sizeof c);
++   }
++   for (int r = 0; r < 3; r++) {
++      float off = 0.0f;
++      for (int k = 0; k < 3; k++) {
++         m[r][k] = os * c[r][k] * in_s[k];
++         off += c[r][k] * in_o[k];
++      }
++      m[r][3] = os * off + oo;
++   }
++}
++
++static bool
++StreamIsFull(const VideoProcessor *vp, bool ycbcr)
++{
++   if (ycbcr)
++      return vp->stream.cs.Nominal_Range == D3D11_1DDI_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255;
++   return vp->stream.cs.RGB_Range == 0;
++}
++
++/* The background colour as RGB in the output range. */
++static void
++BackgroundColor(const VideoProcessor *vp, float rgba[4])
++{
++   const bool out_limited = vp->out_cs.RGB_Range != 0;
++
++   if (vp->bg_ycbcr) {
++      float m[3][4];
++      const float v[3] = { vp->bg.YCbCr.Y, vp->bg.YCbCr.Cb, vp->bg.YCbCr.Cr };
++      vp_color_matrix(true, vp->out_cs.YCbCr_Matrix != 0,
++                      vp->out_cs.Nominal_Range == D3D11_1DDI_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255,
++                      out_limited, m);
++      for (int r = 0; r < 3; r++)
++         rgba[r] = CLAMP(m[r][0] * v[0] + m[r][1] * v[1] + m[r][2] * v[2] + m[r][3], 0.0f, 1.0f);
++      rgba[3] = vp->bg.YCbCr.A;
++   } else {
++      const float s = out_limited ? 219.0f / 255.0f : 1.0f, o = out_limited ? 16.0f / 255.0f : 0.0f;
++      rgba[0] = vp->bg.RGBA.R * s + o;
++      rgba[1] = vp->bg.RGBA.G * s + o;
++      rgba[2] = vp->bg.RGBA.B * s + o;
++      rgba[3] = vp->bg.RGBA.A;
++   }
++   if (vp->alpha_mode != D3D11_1DDI_VIDEO_PROCESSOR_ALPHA_FILL_MODE_BACKGROUND)
++      rgba[3] = 1.0f;
++}
++
++/* ------------------------------------------------------------ context */
++
++static VideoProcessorContext *
++GetContext(Device *pDevice)
++{
++   VideoProcessorContext *c = pDevice->vp;
++   struct pipe_screen *screen = pDevice->screen;
++
++   if (c)
++      return c->pipe ? c : NULL;
++   c = (VideoProcessorContext *)calloc(1, sizeof *c);
++   if (!c)
++      return NULL;
++   pDevice->vp = c;
++   c->pipe = screen->context_create(screen, NULL, 0);
++   if (!c->pipe) {
++      DebugPrintf("video: no context for the video processor\n");
++      return NULL;
++   }
++   c->cso = cso_create_context(c->pipe, 0);
++   static const enum tgsi_semantic names[] = { TGSI_SEMANTIC_POSITION, TGSI_SEMANTIC_GENERIC };
++   static const unsigned indexes[] = { 0, 0 };
++   c->vs = util_make_vertex_passthrough_shader(c->pipe, 2, names, indexes, false);
++   c->vbuf = pipe_buffer_create(screen, PIPE_BIND_VERTEX_BUFFER, PIPE_USAGE_DEFAULT, 4 * 8 * sizeof(float));
++   c->cbuf = pipe_buffer_create(screen, PIPE_BIND_CONSTANT_BUFFER, PIPE_USAGE_DEFAULT, 8 * 4 * sizeof(float));
++   if (!c->cso || !c->vs || !c->vbuf || !c->cbuf) {
++      DebugPrintf("video: video processor context incomplete (cso %d, vs %d, buffers %d %d)\n",
++                  c->cso != NULL, c->vs != NULL, c->vbuf != NULL, c->cbuf != NULL);
++      VideoDeviceDestroy(pDevice);
++      pDevice->vp = (VideoProcessorContext *)calloc(1, sizeof *c);   /* tried: NULL pipe */
++      return NULL;
++   }
++   DebugPrintf("video: video processor context created\n");
++   return c;
++}
++
++void
++VideoDeviceDestroy(Device *pDevice)
++{
++   VideoProcessorContext *c = pDevice->vp;
++
++   if (!c)
++      return;
++   if (c->pipe) {
++      if (c->cso) {
++         cso_unbind_context(c->cso);
++         cso_destroy_context(c->cso);
++      }
++      if (c->vs)
++         c->pipe->delete_vs_state(c->pipe, c->vs);
++      for (unsigned i = 0; i < ARRAYSIZE(c->fs); i++)
++         if (c->fs[i])
++            c->pipe->delete_fs_state(c->pipe, c->fs[i]);
++      pipe_resource_reference(&c->vbuf, NULL);
++      pipe_resource_reference(&c->cbuf, NULL);
++      c->pipe->destroy(c->pipe);
++   }
++   free(c);
++   pDevice->vp = NULL;
++}
++
++static void
++Wait(struct pipe_screen *screen, struct pipe_context *pipe)
++{
++   struct pipe_fence_handle *fence = NULL;
++
++   pipe->flush(pipe, &fence, 0);
++   if (fence) {
++      screen->fence_finish(screen, NULL, fence, OS_TIMEOUT_INFINITE);
++      screen->fence_reference(screen, &fence, NULL);
++   }
++}
++
++/* ---------------------------------------------------------------- blt */
++
++static bool
++Clip(RECT *r, LONG w, LONG h)
++{
++   r->left = CLAMP(r->left, 0, w);
++   r->right = CLAMP(r->right, 0, w);
++   r->top = CLAMP(r->top, 0, h);
++   r->bottom = CLAMP(r->bottom, 0, h);
++   return r->right > r->left && r->bottom > r->top;
++}
++
++static bool
++Intersect(RECT *d, const RECT *a, const RECT *b)
++{
++   d->left = MAX2(a->left, b->left);
++   d->top = MAX2(a->top, b->top);
++   d->right = MIN2(a->right, b->right);
++   d->bottom = MIN2(a->bottom, b->bottom);
++   return d->right > d->left && d->bottom > d->top;
++}
++
++/* Stream 0 onto the bound surface: dst (output texels) from src (source
++ * texels), drawn inside scissor. */
++static bool
++DrawStream(Device *pDevice, VideoProcessorContext *c, VideoProcessor *vp, Resource *in, UINT slice,
++           const RECT *src, const RECT *dst, const RECT *scissor, unsigned out_w, unsigned out_h)
++{
++   struct pipe_context *pipe = c->pipe;
++   struct pipe_resource *tex = in->resource;
++   const bool nv12 = in->nv12;
++   const bool array = tex->target == PIPE_TEXTURE_2D_ARRAY;
++   const unsigned tex_h = tex->height0;
++   const unsigned plane_h = nv12 ? in->nv12_luma_height : tex_h;
++   void **fs = &c->fs[(nv12 ? 2 : 0) + (array ? 1 : 0)];
++
++   if (!*fs)
++      *fs = vp_create_fs(pipe, nv12, array);
++   if (!*fs) {
++      DebugPrintf("video: no video processor shader (nv12 %d, array %d)\n", nv12, array);
++      return false;
++   }
++
++   /* Constants (VideoShaders.c). */
++   float k[6][4];
++   memset(k, 0, sizeof k);
++   k[0][0] = 1.0f / tex->width0;
++   k[0][1] = 1.0f / tex_h;
++   k[0][2] = 0.5f;
++   k[0][3] = plane_h - 0.5f;
++   k[1][0] = tex->width0 / 2 - 1.0f;
++   k[1][1] = plane_h / 2 - 1.0f;
++   k[1][2] = (float)plane_h;
++   vp_color_matrix(nv12, vp->stream.cs.YCbCr_Matrix != 0, StreamIsFull(vp, nv12),
++                   vp->out_cs.RGB_Range != 0, (float (*)[4])&k[2][0]);
++   const float stream_alpha = vp->stream.alpha_enabled ? CLAMP(vp->stream.alpha, 0.0f, 1.0f) : 1.0f;
++   switch (vp->alpha_mode) {
++   case D3D11_1DDI_VIDEO_PROCESSOR_ALPHA_FILL_MODE_SOURCE_STREAM:
++      /* NV12 has none: the shader's source alpha is 1. */
++      k[5][0] = 0.0f;
++      k[5][1] = stream_alpha;
++      break;
++   case D3D11_1DDI_VIDEO_PROCESSOR_ALPHA_FILL_MODE_BACKGROUND:
++      k[5][0] = vp->bg_ycbcr ? vp->bg.YCbCr.A : vp->bg.RGBA.A;
++      break;
++   default:
++      k[5][0] = 1.0f;
++      break;
++   }
++   pipe_buffer_write(pipe, c->cbuf, 0, sizeof k, k);
++
++   /* A strip of two triangles over dst, carrying the source texel
++    * position (edges of src at the edges of dst). */
++   const float x0 = 2.0f * dst->left / out_w - 1.0f, x1 = 2.0f * dst->right / out_w - 1.0f;
++   const float y0 = 2.0f * dst->top / out_h - 1.0f, y1 = 2.0f * dst->bottom / out_h - 1.0f;
++   const float s0 = (float)src->left, s1 = (float)src->right;
++   const float t0 = (float)src->top, t1 = (float)src->bottom;
++   const float verts[4][8] = {
++      { x0, y0, 0, 1, s0, t0, 0, 0 },
++      { x1, y0, 0, 1, s1, t0, 0, 0 },
++      { x0, y1, 0, 1, s0, t1, 0, 0 },
++      { x1, y1, 0, 1, s1, t1, 0, 0 },
++   };
++   pipe_buffer_write(pipe, c->vbuf, 0, sizeof verts, verts);
++
++   struct pipe_sampler_view templ;
++   u_sampler_view_default_template(&templ, tex, tex->format);
++   templ.target = array ? PIPE_TEXTURE_2D_ARRAY : PIPE_TEXTURE_2D;
++   templ.u.tex.first_layer = templ.u.tex.last_layer = slice;
++   templ.u.tex.first_level = templ.u.tex.last_level = 0;
++   struct pipe_sampler_view *view = pipe->create_sampler_view(pipe, tex, &templ);
++   if (!view)
++      return false;
++
++   struct pipe_sampler_state ss;
++   memset(&ss, 0, sizeof ss);
++   ss.wrap_s = ss.wrap_t = ss.wrap_r = PIPE_TEX_WRAP_CLAMP_TO_EDGE;
++   ss.min_img_filter = ss.mag_img_filter = PIPE_TEX_FILTER_LINEAR;
++   ss.min_mip_filter = PIPE_TEX_MIPFILTER_NONE;
++   const struct pipe_sampler_state *pss = &ss;
++   cso_set_samplers(c->cso, MESA_SHADER_FRAGMENT, 1, &pss);
++   pipe->set_sampler_views(pipe, MESA_SHADER_FRAGMENT, 0, 1, 0, &view);
++
++   struct pipe_constant_buffer cb;
++   memset(&cb, 0, sizeof cb);
++   cb.buffer = c->cbuf;
++   cb.buffer_size = sizeof k;
++   pipe->set_constant_buffer(pipe, MESA_SHADER_FRAGMENT, 0, &cb);
++
++   struct pipe_blend_state blend;
++   memset(&blend, 0, sizeof blend);
++   blend.rt[0].colormask = vp->alpha_mode == D3D11_1DDI_VIDEO_PROCESSOR_ALPHA_FILL_MODE_DESTINATION
++                              ? PIPE_MASK_RGB : PIPE_MASK_RGBA;
++   cso_set_blend(c->cso, &blend);
++
++   struct pipe_depth_stencil_alpha_state dsa;
++   memset(&dsa, 0, sizeof dsa);
++   cso_set_depth_stencil_alpha(c->cso, &dsa);
++
++   struct pipe_rasterizer_state rs;
++   memset(&rs, 0, sizeof rs);
++   rs.half_pixel_center = 1;
++   rs.bottom_edge_rule = 1;
++   rs.depth_clip_near = 1;
++   rs.depth_clip_far = 1;
++   rs.scissor = 1;
++   cso_set_rasterizer(c->cso, &rs);
++
++   struct pipe_scissor_state sc;
++   sc.minx = scissor->left;
++   sc.miny = scissor->top;
++   sc.maxx = scissor->right;
++   sc.maxy = scissor->bottom;
++   pipe->set_scissor_states(pipe, 0, 1, &sc);
++   cso_set_viewport_dims(c->cso, (float)out_w, (float)out_h, false);
++
++   cso_set_vertex_shader_handle(c->cso, c->vs);
++   cso_set_fragment_shader_handle(c->cso, *fs);
++
++   struct cso_velems_state ve;
++   memset(&ve, 0, sizeof ve);
++   ve.count = 2;
++   for (unsigned i = 0; i < 2; i++) {
++      ve.velems[i].src_format = PIPE_FORMAT_R32G32B32A32_FLOAT;
++      ve.velems[i].src_offset = i * 4 * sizeof(float);
++      ve.velems[i].src_stride = 8 * sizeof(float);
++   }
++   cso_set_vertex_elements(c->cso, &ve);
++   util_draw_vertex_buffer(pipe, c->cso, c->vbuf, 0, MESA_PRIM_TRIANGLE_STRIP, 4, 2);
++
++   Wait(pDevice->screen, pipe);
++
++   struct pipe_sampler_view *none = NULL;
++   pipe->set_sampler_views(pipe, MESA_SHADER_FRAGMENT, 0, 0, 1, &none);
++   pipe->sampler_view_release(pipe, view);
++   return true;
++}
++
++HRESULT APIENTRY
++VideoVideoProcessorBlt(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HVIDEOPROCESSOR hVp,
++                       D3D11_1DDI_HVIDEOPROCESSOROUTPUTVIEW hOutput, UINT OutputFrame, UINT StreamCount,
++                       const D3D11_1DDI_VIDEO_PROCESSOR_STREAM *pStreams)
++{
++   Device *pDevice = CastDevice(hDevice);
++   VideoProcessor *vp = CastVp(hVp);
++   VideoProcessorOutputView *ov = CastVpOutputView(hOutput);
++   const char *why = NULL;
++
++   (void)OutputFrame;
++   if (!ov || !ov->resource || !ov->resource->resource)
++      return E_INVALIDARG;
++
++   VideoProcessorContext *c = GetContext(pDevice);
++   if (!c)
++      return E_OUTOFMEMORY;
++
++   struct pipe_resource *out = ov->resource->resource;
++   const unsigned out_w = u_minify(out->width0, ov->level);
++   const unsigned out_h = u_minify(out->height0, ov->level);
++   RECT target = { 0, 0, (LONG)out_w, (LONG)out_h };
++   if (vp->target_enabled) {
++      target = vp->target;
++      if (!Clip(&target, out_w, out_h))
++         target.right = target.left;    /* empty: nothing is written */
++   }
++
++   /* What the device's context did before the blit (a decode, a copy, a
++    * draw into the input) lands before the blit reads it. */
++   Wait(pDevice->screen, pDevice->pipe);
++
++   struct pipe_surface surf;
++   memset(&surf, 0, sizeof surf);
++   surf.format = out->format;
++   surf.texture = out;
++   surf.level = ov->level;
++   surf.first_layer = surf.last_layer = ov->slice;
++
++   struct pipe_framebuffer_state fb;
++   memset(&fb, 0, sizeof fb);
++   fb.width = out_w;
++   fb.height = out_h;
++   fb.nr_cbufs = 1;
++   fb.cbufs[0] = surf;
++   cso_set_framebuffer(c->cso, &fb);
++
++   if (target.right > target.left) {
++      union pipe_color_union color;
++      BackgroundColor(vp, color.f);
++      c->pipe->clear_render_target(c->pipe, &surf, &color, target.left, target.top,
++                                   target.right - target.left, target.bottom - target.top, false);
++   }
++
++   const D3D11_1DDI_VIDEO_PROCESSOR_STREAM *s = StreamCount ? &pStreams[0] : NULL;
++   VideoProcessorInputView *iv = s && s->Enable ? CastInputView(s->hInputSurface) : NULL;
++   if (iv && iv->resource && iv->resource->resource && target.right > target.left) {
++      Resource *in = iv->resource;
++      const LONG in_w = in->resource->width0;
++      const LONG in_h = in->nv12 ? in->nv12_luma_height : in->resource->height0;
++      RECT src = { 0, 0, in_w, in_h };
++      RECT dst = { 0, 0, (LONG)out_w, (LONG)out_h };
++      RECT scissor;
++
++      if (vp->stream.src_enabled) {
++         src = vp->stream.src;
++         if (!Clip(&src, in_w, in_h))
++            why = "empty source rectangle";
++      }
++      if (vp->stream.dst_enabled)
++         dst = vp->stream.dst;
++      if (!why && !Intersect(&scissor, &target, &dst))
++         why = "destination outside the target rectangle";
++      if (!why && !Clip(&scissor, out_w, out_h))
++         why = "destination outside the surface";
++      if (!why && !DrawStream(pDevice, c, vp, in, iv->slice, &src, &dst, &scissor, out_w, out_h))
++         why = "the draw failed";
++   } else {
++      why = "no stream";
++   }
++   if (why)
++      Wait(pDevice->screen, c->pipe);
++
++   /* Nothing stays bound to the application's surface. */
++   memset(&fb, 0, sizeof fb);
++   cso_set_framebuffer(c->cso, &fb);
++
++   vp->blts++;
++   if (vp->blts <= 3 || (vp->blts % 300) == 0 || (why && vp->logged++ < 10))
++      DebugPrintf("video: blit %u -> %ux%u surface, target (%ld,%ld)-(%ld,%ld)%s%s\n", vp->blts,
++                  out_w, out_h, target.left, target.top, target.right, target.bottom,
++                  why ? ": " : "", why ? why : "");
++   return S_OK;
++}
++
++/* ---------------------------------------------------- NV12 plane views */
++
++/*
++ * An NV12 texture made with BIND_SHADER_RESOURCE gets two more textures,
++ * the planes as D3D11 hands them to shaders: R8_UNORM width x height
++ * (plane 0) and R8G8_UNORM width/2 x height/2 (plane 1). A shader resource
++ * view of the NV12 texture as R8_UNORM is a view of plane 0, as R8G8_UNORM
++ * of plane 1 (Shader.cpp). The NV12 texture itself stays what it is, the
++ * one that is decoded into, mapped and copied; the planes follow it:
++ *
++ *    a decoded picture    written into both (Video.cpp, CopyToTarget)
++ *    a copy, an update    planes copied from the source's planes, or read
++ *                         back from the texture (VideoNv12Refresh)
++ */
++bool
++VideoNv12CreatePlanes(struct pipe_screen *screen, Resource *r, const struct pipe_resource *templat)
++{
++   struct pipe_resource t = *templat;
++
++   t.bind = PIPE_BIND_SAMPLER_VIEW;
++   t.height0 = r->nv12_luma_height;
++   t.format = PIPE_FORMAT_R8_UNORM;
++   r->nv12_plane[0] = screen->resource_create(screen, &t);
++   t.width0 = templat->width0 / 2;
++   t.height0 = r->nv12_luma_height / 2;
++   t.format = PIPE_FORMAT_R8G8_UNORM;
++   r->nv12_plane[1] = screen->resource_create(screen, &t);
++   if (!r->nv12_plane[0] || !r->nv12_plane[1]) {
++      VideoNv12DestroyPlanes(r);
++      return false;
++   }
++   return true;
++}
++
++void
++VideoNv12DestroyPlanes(Resource *r)
++{
++   pipe_resource_reference(&r->nv12_plane[0], NULL);
++   pipe_resource_reference(&r->nv12_plane[1], NULL);
++}
++
++void
++VideoNv12WritePlanes(struct pipe_context *pipe, Resource *r, unsigned layer, const uint8_t *luma,
++                     const uint8_t *chroma, unsigned stride, unsigned width, unsigned rows)
++{
++   struct pipe_box box;
++
++   if (!r->nv12_plane[0])
++      return;
++   width = MIN2(width, r->nv12_plane[0]->width0) & ~1u;
++   rows = MIN2(rows, r->nv12_luma_height) & ~1u;
++   u_box_3d(0, 0, layer, width, rows, 1, &box);
++   pipe->texture_subdata(pipe, r->nv12_plane[0], 0, PIPE_MAP_WRITE, &box, luma, stride, 0);
++   u_box_3d(0, 0, layer, width / 2, rows / 2, 1, &box);
++   pipe->texture_subdata(pipe, r->nv12_plane[1], 0, PIPE_MAP_WRITE, &box, chroma, stride, 0);
++}
++
++/* The planes of one layer from the NV12 texture: a read back, for the
++ * rare writes that are not decodes (UpdateSubresource, a copy from a
++ * texture with no planes). */
++void
++VideoNv12Refresh(struct pipe_context *pipe, Resource *r, unsigned layer)
++{
++   struct pipe_transfer *xfer;
++   struct pipe_resource *tex = r->resource;
++
++   if (!r->nv12_plane[0] || !tex)
++      return;
++   const uint8_t *map = (const uint8_t *)pipe_texture_map(pipe, tex, 0, layer, PIPE_MAP_READ, 0, 0,
++                                                          tex->width0, tex->height0, &xfer);
++   if (!map)
++      return;
++   VideoNv12WritePlanes(pipe, r, layer, map, map + (size_t)xfer->stride * r->nv12_luma_height,
++                        xfer->stride, tex->width0, r->nv12_luma_height);
++   pipe_texture_unmap(pipe, xfer);
++}
++
++/* After a copy into dst's layer: the planes copied from src's when it has
++ * them, else read back. Boxes in luma texels. */
++void
++VideoNv12AfterCopy(struct pipe_context *pipe, Resource *dst, unsigned dst_layer, unsigned dx,
++                   unsigned dy, Resource *src, const struct pipe_box *src_box)
++{
++   if (!dst->nv12_plane[0])
++      return;
++   if (src && src->nv12 && src->nv12_plane[0]) {
++      struct pipe_box b = *src_box;
++      b.height = MIN2(b.height, (int)src->nv12_luma_height - b.y);
++      pipe->resource_copy_region(pipe, dst->nv12_plane[0], 0, dx, dy, dst_layer, src->nv12_plane[0], 0, &b);
++      b.x /= 2;
++      b.y /= 2;
++      b.width /= 2;
++      b.height /= 2;
++      pipe->resource_copy_region(pipe, dst->nv12_plane[1], 0, dx / 2, dy / 2, dst_layer,
++                                 src->nv12_plane[1], 0, &b);
++      return;
++   }
++   VideoNv12Refresh(pipe, dst, dst_layer);
++}
+diff --git a/src/gallium/frontends/d3d10umd/VideoProcessor.h b/src/gallium/frontends/d3d10umd/VideoProcessor.h
+new file mode 100644
+index 0000000..04f8a3a
+--- /dev/null
++++ b/src/gallium/frontends/d3d10umd/VideoProcessor.h
+@@ -0,0 +1,76 @@
++/*
++ * VideoProcessor.h --
++ *    The D3D11 video processor and NV12 plane views (VideoProcessor.cpp).
++ *
++ * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++#ifndef VIDEO_PROCESSOR_H
++#define VIDEO_PROCESSOR_H
++
++#include "DriverIncludes.h"
++
++struct Device;
++struct Resource;
++struct pipe_box;
++struct pipe_context;
++struct pipe_resource;
++struct pipe_screen;
++
++/* D3D11_1DDI_VIDEO_PROCESSOR_FORMAT_SUPPORT_* of a format. */
++UINT VideoProcessorFormat(DXGI_FORMAT format);
++/* The D3D11_1DDI_FORMAT_SUPPORT_VIDEO_PROCESSOR_* bits CheckFormatSupport adds. */
++UINT VideoFormatSupport(struct Device *pDevice, DXGI_FORMAT format);
++/* The device's video processor context, at DestroyDevice. */
++void VideoDeviceDestroy(struct Device *pDevice);
++
++/* NV12 plane textures (BIND_SHADER_RESOURCE): Resource::nv12_plane. */
++bool VideoNv12CreatePlanes(struct pipe_screen *screen, struct Resource *r,
++                           const struct pipe_resource *templat);
++void VideoNv12DestroyPlanes(struct Resource *r);
++void VideoNv12WritePlanes(struct pipe_context *pipe, struct Resource *r, unsigned layer,
++                          const uint8_t *luma, const uint8_t *chroma, unsigned stride,
++                          unsigned width, unsigned rows);
++void VideoNv12Refresh(struct pipe_context *pipe, struct Resource *r, unsigned layer);
++void VideoNv12AfterCopy(struct pipe_context *pipe, struct Resource *dst, unsigned dst_layer,
++                        unsigned dx, unsigned dy, struct Resource *src,
++                        const struct pipe_box *src_box);
++
++/* The video DDI's processor entry points (VideoFillFuncs, VideoStubs.h). */
++SIZE_T APIENTRY VideoCalcPrivateVideoProcessorEnumSize(D3D10DDI_HDEVICE, const D3D11_1DDIARG_CREATEVIDEOPROCESSORENUM *);
++HRESULT APIENTRY VideoCreateVideoProcessorEnum(D3D10DDI_HDEVICE hDevice, const D3D11_1DDIARG_CREATEVIDEOPROCESSORENUM *p, D3D11_1DDI_HVIDEOPROCESSORENUM hEnum, D3D11_1DDI_HRTVIDEOPROCESSORENUM);
++VOID APIENTRY VideoDestroyVideoProcessorEnum(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM hEnum);
++VOID APIENTRY VideoCheckVideoProcessorFormat(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM, DXGI_FORMAT Format, UINT *pSupport);
++VOID APIENTRY VideoGetVideoProcessorCaps(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM, D3D11_1DDI_VIDEO_PROCESSOR_CAPS *pCaps);
++VOID APIENTRY VideoGetVideoProcessorRateConversionCaps(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM, UINT, D3D11_1DDI_VIDEO_PROCESSOR_RATE_CONVERSION_CAPS *pCaps);
++VOID APIENTRY VideoGetVideoProcessorCustomRate(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM, UINT, UINT, D3D11_1DDI_VIDEO_PROCESSOR_CUSTOM_RATE *pRate);
++VOID APIENTRY VideoGetVideoProcessorFilterRange(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM, D3D11_1DDI_VIDEO_PROCESSOR_FILTER, D3D11_1DDI_VIDEO_PROCESSOR_FILTER_RANGE *pRange);
++SIZE_T APIENTRY VideoCalcPrivateVideoProcessorSize(D3D10DDI_HDEVICE, const D3D11_1DDIARG_CREATEVIDEOPROCESSOR *);
++HRESULT APIENTRY VideoCreateVideoProcessor(D3D10DDI_HDEVICE, const D3D11_1DDIARG_CREATEVIDEOPROCESSOR *p, D3D11_1DDI_HVIDEOPROCESSOR hVp, D3D11_1DDI_HRTVIDEOPROCESSOR);
++VOID APIENTRY VideoDestroyVideoProcessor(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR hVp);
++VOID APIENTRY VideoVideoProcessorSetOutputTargetRect(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR hVp, BOOL Enable, const RECT *pRect);
++VOID APIENTRY VideoVideoProcessorSetOutputBackgroundColor(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR hVp, BOOL YCbCr, const D3D11_1DDI_VIDEO_COLOR *pColor);
++VOID APIENTRY VideoVideoProcessorSetOutputColorSpace(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR hVp, const D3D11_1DDI_VIDEO_PROCESSOR_COLOR_SPACE *pCs);
++VOID APIENTRY VideoVideoProcessorSetOutputAlphaFillMode(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR hVp, D3D11_1DDI_VIDEO_PROCESSOR_ALPHA_FILL_MODE Mode, UINT);
++VOID APIENTRY VideoVideoProcessorSetOutputConstriction(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, BOOL, SIZE);
++VOID APIENTRY VideoVideoProcessorSetOutputStereoMode(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, BOOL);
++VOID APIENTRY VideoVideoProcessorSetStreamFrameFormat(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR hVp, UINT Stream, D3D11_1DDI_VIDEO_FRAME_FORMAT Format);
++VOID APIENTRY VideoVideoProcessorSetStreamColorSpace(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR hVp, UINT Stream, const D3D11_1DDI_VIDEO_PROCESSOR_COLOR_SPACE *pCs);
++VOID APIENTRY VideoVideoProcessorSetStreamOutputRate(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, D3D11_1DDI_VIDEO_PROCESSOR_OUTPUT_RATE, BOOL, const DXGI_RATIONAL *);
++VOID APIENTRY VideoVideoProcessorSetStreamSourceRect(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR hVp, UINT Stream, BOOL Enable, const RECT *pRect);
++VOID APIENTRY VideoVideoProcessorSetStreamDestRect(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR hVp, UINT Stream, BOOL Enable, const RECT *pRect);
++VOID APIENTRY VideoVideoProcessorSetStreamAlpha(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR hVp, UINT Stream, BOOL Enable, FLOAT Alpha);
++VOID APIENTRY VideoVideoProcessorSetStreamAutoProcessingMode(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, BOOL);
++VOID APIENTRY VideoVideoProcessorSetStreamFilter(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, D3D11_1DDI_VIDEO_PROCESSOR_FILTER, BOOL, int);
++VOID APIENTRY VideoVideoProcessorSetStreamRotation(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, BOOL, D3D11_1DDI_VIDEO_PROCESSOR_ROTATION);
++SIZE_T APIENTRY VideoCalcPrivateVideoProcessorInputViewSize(D3D10DDI_HDEVICE, const D3D11_1DDIARG_CREATEVIDEOPROCESSORINPUTVIEW *);
++HRESULT APIENTRY VideoCreateVideoProcessorInputView(D3D10DDI_HDEVICE, const D3D11_1DDIARG_CREATEVIDEOPROCESSORINPUTVIEW *p, D3D11_1DDI_HVIDEOPROCESSORINPUTVIEW hView, D3D11_1DDI_HRTVIDEOPROCESSORINPUTVIEW);
++VOID APIENTRY VideoDestroyVideoProcessorInputView(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORINPUTVIEW hView);
++SIZE_T APIENTRY VideoCalcPrivateVideoProcessorOutputViewSize(D3D10DDI_HDEVICE, const D3D11_1DDIARG_CREATEVIDEOPROCESSOROUTPUTVIEW *);
++HRESULT APIENTRY VideoCreateVideoProcessorOutputView(D3D10DDI_HDEVICE, const D3D11_1DDIARG_CREATEVIDEOPROCESSOROUTPUTVIEW *p, D3D11_1DDI_HVIDEOPROCESSOROUTPUTVIEW hView, D3D11_1DDI_HRTVIDEOPROCESSOROUTPUTVIEW);
++VOID APIENTRY VideoDestroyVideoProcessorOutputView(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOROUTPUTVIEW hView);
++VOID APIENTRY VideoVideoProcessorInputViewReadAfterWriteHazard(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORINPUTVIEW, D3D10DDI_HRESOURCE);
++HRESULT APIENTRY VideoVideoProcessorBlt(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HVIDEOPROCESSOR hVp, D3D11_1DDI_HVIDEOPROCESSOROUTPUTVIEW hOutput, UINT OutputFrame, UINT StreamCount, const D3D11_1DDI_VIDEO_PROCESSOR_STREAM *pStreams);
++
++#endif /* VIDEO_PROCESSOR_H */
+diff --git a/src/gallium/frontends/d3d10umd/VideoShaders.c b/src/gallium/frontends/d3d10umd/VideoShaders.c
+new file mode 100644
+index 0000000..d05734b
+--- /dev/null
++++ b/src/gallium/frontends/d3d10umd/VideoShaders.c
+@@ -0,0 +1,166 @@
++/*
++ * VideoShaders.c --
++ *    The video processor's fragment shaders (VideoProcessor.cpp).
++ *
++ * One shader per source kind and texture target:
++ *
++ *    NV12  the one R8_UNORM texture of Resource.cpp, luma rows then the
++ *          interleaved chroma rows below them. Luma is sampled with the
++ *          sampler's bilinear filter, clamped to the luma rows. Chroma is
++ *          four texel fetches each of Cb and Cr (bytes 2i and 2i+1 of a
++ *          chroma row), interpolated here: a filtered sample of an R8
++ *          texture would mix Cb with Cr.
++ *    RGB   any RGBA texture, sampled bilinearly.
++ *
++ * Both multiply (Y, Cb, Cr, 1) or (R, G, B, 1) by the 3x4 matrix in
++ * CONST[2..4] (range expansion, YCbCr to RGB, output range in one), and
++ * write alpha CONST[5].x + CONST[5].y * source alpha.
++ *
++ *    IN[0].xy   the source position in texels of the source (luma) plane
++ *    CONST[0]   1/width, 1/height of the texture, then the first and last
++ *               luma row centre (clamp)
++ *    CONST[1]   the last chroma column and row, the first chroma row, 0
++ *
++ * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++#include "VideoShaders.h"
++
++#include "pipe/p_context.h"
++#include "pipe/p_shader_tokens.h"
++#include "tgsi/tgsi_ureg.h"
++
++static void
++emit_convert(struct ureg_program *ureg, struct ureg_dst out, struct ureg_src v,
++             struct ureg_src src_alpha)
++{
++   struct ureg_src rrow = ureg_DECL_constant(ureg, 2);
++   struct ureg_src grow = ureg_DECL_constant(ureg, 3);
++   struct ureg_src brow = ureg_DECL_constant(ureg, 4);
++   struct ureg_src alpha = ureg_DECL_constant(ureg, 5);
++   struct ureg_dst o = ureg_saturate(out);
++
++   ureg_DP4(ureg, ureg_writemask(o, TGSI_WRITEMASK_X), rrow, v);
++   ureg_DP4(ureg, ureg_writemask(o, TGSI_WRITEMASK_Y), grow, v);
++   ureg_DP4(ureg, ureg_writemask(o, TGSI_WRITEMASK_Z), brow, v);
++   ureg_MAD(ureg, ureg_writemask(o, TGSI_WRITEMASK_W), ureg_scalar(alpha, TGSI_SWIZZLE_Y),
++            src_alpha, ureg_scalar(alpha, TGSI_SWIZZLE_X));
++}
++
++/* One chroma texel pair at the float texel position in pos.xy (x already
++ * the Cb byte), into dst.x (Cb) and dst.y (Cr). */
++static void
++fetch_cbcr(struct ureg_program *ureg, enum tgsi_texture_type target, struct ureg_src sampler,
++           struct ureg_dst pos, struct ureg_dst dst, struct ureg_dst ipos, struct ureg_dst texel)
++{
++   struct ureg_src one = ureg_imm4f(ureg, 1.0f, 0.0f, 0.0f, 0.0f);
++
++   ureg_F2I(ureg, ipos, ureg_src(pos));
++   ureg_TXF(ureg, texel, target, ureg_src(ipos), sampler);
++   ureg_MOV(ureg, ureg_writemask(dst, TGSI_WRITEMASK_X), ureg_scalar(ureg_src(texel), TGSI_SWIZZLE_X));
++   ureg_ADD(ureg, ureg_writemask(pos, TGSI_WRITEMASK_X), ureg_src(pos), one);
++   ureg_F2I(ureg, ipos, ureg_src(pos));
++   ureg_TXF(ureg, texel, target, ureg_src(ipos), sampler);
++   ureg_MOV(ureg, ureg_writemask(dst, TGSI_WRITEMASK_Y), ureg_scalar(ureg_src(texel), TGSI_SWIZZLE_X));
++}
++
++void *
++vp_create_fs(struct pipe_context *pipe, bool nv12, bool array)
++{
++   enum tgsi_texture_type target = array ? TGSI_TEXTURE_2D_ARRAY : TGSI_TEXTURE_2D;
++   struct ureg_program *ureg = ureg_create(MESA_SHADER_FRAGMENT);
++
++   if (!ureg)
++      return NULL;
++
++   struct ureg_src in = ureg_DECL_fs_input(ureg, TGSI_SEMANTIC_GENERIC, 0, TGSI_INTERPOLATE_LINEAR);
++   struct ureg_dst out = ureg_DECL_output(ureg, TGSI_SEMANTIC_COLOR, 0);
++   struct ureg_src sampler = ureg_DECL_sampler(ureg, 0);
++   struct ureg_src c0 = ureg_DECL_constant(ureg, 0);
++   struct ureg_src zero = ureg_imm4f(ureg, 0.0f, 0.0f, 0.0f, 0.0f);
++   struct ureg_src half = ureg_imm4f(ureg, 0.5f, 0.5f, -0.5f, -0.5f);
++   struct ureg_src onef = ureg_imm4f(ureg, 1.0f, 1.0f, 1.0f, 1.0f);
++   struct ureg_dst coord = ureg_DECL_temporary(ureg);
++   struct ureg_dst tex = ureg_DECL_temporary(ureg);
++   struct ureg_dst v = ureg_DECL_temporary(ureg);
++
++   ureg_DECL_sampler_view(ureg, 0, target, TGSI_RETURN_TYPE_FLOAT, TGSI_RETURN_TYPE_FLOAT,
++                          TGSI_RETURN_TYPE_FLOAT, TGSI_RETURN_TYPE_FLOAT);
++
++   /* The filtered sample: x as it is, y clamped to the first and last
++    * row centre of the luma (or RGB) plane, both normalised. */
++   ureg_MOV(ureg, coord, zero);
++   ureg_MOV(ureg, ureg_writemask(coord, TGSI_WRITEMASK_X), ureg_scalar(in, TGSI_SWIZZLE_X));
++   ureg_MAX(ureg, ureg_writemask(coord, TGSI_WRITEMASK_Y), ureg_scalar(in, TGSI_SWIZZLE_Y),
++            ureg_scalar(c0, TGSI_SWIZZLE_Z));
++   ureg_MIN(ureg, ureg_writemask(coord, TGSI_WRITEMASK_Y), ureg_src(coord),
++            ureg_scalar(c0, TGSI_SWIZZLE_W));
++   ureg_MUL(ureg, ureg_writemask(coord, TGSI_WRITEMASK_XY), ureg_src(coord), c0);
++   ureg_TEX(ureg, tex, target, ureg_src(coord), sampler);
++
++   if (!nv12) {
++      ureg_MOV(ureg, v, onef);
++      ureg_MOV(ureg, ureg_writemask(v, TGSI_WRITEMASK_XYZ), ureg_src(tex));
++      emit_convert(ureg, out, ureg_src(v), ureg_scalar(ureg_src(tex), TGSI_SWIZZLE_W));
++      ureg_END(ureg);
++      return ureg_create_shader_and_destroy(ureg, pipe);
++   }
++
++   struct ureg_src c1 = ureg_DECL_constant(ureg, 1);
++   struct ureg_dst frac = ureg_DECL_temporary(ureg);
++   struct ureg_dst i0 = ureg_DECL_temporary(ureg);
++   struct ureg_dst i1 = ureg_DECL_temporary(ureg);
++   struct ureg_dst pos = ureg_DECL_temporary(ureg);
++   struct ureg_dst ipos = ureg_DECL_temporary(ureg);
++   struct ureg_dst texel = ureg_DECL_temporary(ureg);
++   struct ureg_dst a00 = ureg_DECL_temporary(ureg);
++   struct ureg_dst a10 = ureg_DECL_temporary(ureg);
++   struct ureg_dst a01 = ureg_DECL_temporary(ureg);
++   struct ureg_dst a11 = ureg_DECL_temporary(ureg);
++   struct ureg_src two = ureg_imm4f(ureg, 2.0f, 1.0f, 0.0f, 0.0f);
++
++   /* The chroma position, in chroma texels with centres at integers:
++    * half the luma position, less half a texel. */
++   ureg_MAD(ureg, ureg_writemask(frac, TGSI_WRITEMASK_XY), in, half, ureg_swizzle(half, 2, 3, 2, 3));
++   ureg_FLR(ureg, ureg_writemask(i0, TGSI_WRITEMASK_XY), ureg_src(frac));
++   ureg_ADD(ureg, ureg_writemask(i1, TGSI_WRITEMASK_XY), ureg_src(i0), onef);
++   ureg_FRC(ureg, ureg_writemask(frac, TGSI_WRITEMASK_XY), ureg_src(frac));
++   ureg_MAX(ureg, ureg_writemask(i0, TGSI_WRITEMASK_XY), ureg_src(i0), zero);
++   ureg_MIN(ureg, ureg_writemask(i0, TGSI_WRITEMASK_XY), ureg_src(i0), c1);
++   ureg_MAX(ureg, ureg_writemask(i1, TGSI_WRITEMASK_XY), ureg_src(i1), zero);
++   ureg_MIN(ureg, ureg_writemask(i1, TGSI_WRITEMASK_XY), ureg_src(i1), c1);
++   /* Texel coordinates: x is the Cb byte, 2i; y is a row below the luma. */
++   ureg_MUL(ureg, ureg_writemask(i0, TGSI_WRITEMASK_XY), ureg_src(i0), two);
++   ureg_MUL(ureg, ureg_writemask(i1, TGSI_WRITEMASK_XY), ureg_src(i1), two);
++   ureg_ADD(ureg, ureg_writemask(i0, TGSI_WRITEMASK_Y), ureg_src(i0), ureg_scalar(c1, TGSI_SWIZZLE_Z));
++   ureg_ADD(ureg, ureg_writemask(i1, TGSI_WRITEMASK_Y), ureg_src(i1), ureg_scalar(c1, TGSI_SWIZZLE_Z));
++
++   /* pos.zw stay 0: layer 0 of the view, level 0. */
++   ureg_MOV(ureg, pos, zero);
++   ureg_MOV(ureg, ureg_writemask(pos, TGSI_WRITEMASK_X), ureg_scalar(ureg_src(i0), TGSI_SWIZZLE_X));
++   ureg_MOV(ureg, ureg_writemask(pos, TGSI_WRITEMASK_Y), ureg_scalar(ureg_src(i0), TGSI_SWIZZLE_Y));
++   fetch_cbcr(ureg, target, sampler, pos, a00, ipos, texel);
++   ureg_MOV(ureg, ureg_writemask(pos, TGSI_WRITEMASK_X), ureg_scalar(ureg_src(i1), TGSI_SWIZZLE_X));
++   fetch_cbcr(ureg, target, sampler, pos, a10, ipos, texel);
++   ureg_MOV(ureg, ureg_writemask(pos, TGSI_WRITEMASK_X), ureg_scalar(ureg_src(i0), TGSI_SWIZZLE_X));
++   ureg_MOV(ureg, ureg_writemask(pos, TGSI_WRITEMASK_Y), ureg_scalar(ureg_src(i1), TGSI_SWIZZLE_Y));
++   fetch_cbcr(ureg, target, sampler, pos, a01, ipos, texel);
++   ureg_MOV(ureg, ureg_writemask(pos, TGSI_WRITEMASK_X), ureg_scalar(ureg_src(i1), TGSI_SWIZZLE_X));
++   fetch_cbcr(ureg, target, sampler, pos, a11, ipos, texel);
++
++   /* Bilinear: along x on both rows, then along y. */
++   ureg_LRP(ureg, ureg_writemask(a00, TGSI_WRITEMASK_XY), ureg_scalar(ureg_src(frac), TGSI_SWIZZLE_X),
++            ureg_src(a10), ureg_src(a00));
++   ureg_LRP(ureg, ureg_writemask(a01, TGSI_WRITEMASK_XY), ureg_scalar(ureg_src(frac), TGSI_SWIZZLE_X),
++            ureg_src(a11), ureg_src(a01));
++   ureg_LRP(ureg, ureg_writemask(a00, TGSI_WRITEMASK_XY), ureg_scalar(ureg_src(frac), TGSI_SWIZZLE_Y),
++            ureg_src(a01), ureg_src(a00));
++
++   ureg_MOV(ureg, v, onef);
++   ureg_MOV(ureg, ureg_writemask(v, TGSI_WRITEMASK_X), ureg_scalar(ureg_src(tex), TGSI_SWIZZLE_X));
++   ureg_MOV(ureg, ureg_writemask(v, TGSI_WRITEMASK_YZ), ureg_swizzle(ureg_src(a00), 0, 0, 1, 1));
++   emit_convert(ureg, out, ureg_src(v), onef);
++   ureg_END(ureg);
++   return ureg_create_shader_and_destroy(ureg, pipe);
++}
+diff --git a/src/gallium/frontends/d3d10umd/VideoShaders.h b/src/gallium/frontends/d3d10umd/VideoShaders.h
+new file mode 100644
+index 0000000..554abb8
+--- /dev/null
++++ b/src/gallium/frontends/d3d10umd/VideoShaders.h
+@@ -0,0 +1,28 @@
++/*
++ * VideoShaders.h --
++ *    The video processor's fragment shaders (VideoShaders.c).
++ *
++ * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
++ * SPDX-License-Identifier: GPL-2.0-only
++ */
++
++#ifndef VIDEO_SHADERS_H
++#define VIDEO_SHADERS_H
++
++#include <stdbool.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++struct pipe_context;
++
++/* nv12: the NV12 layout of Resource.cpp, else an RGBA texture; array: the
++ * view is a 2D array (layer 0 of it), else 2D. */
++void *vp_create_fs(struct pipe_context *pipe, bool nv12, bool array);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
+diff --git a/src/gallium/frontends/d3d10umd/VideoStubs.h b/src/gallium/frontends/d3d10umd/VideoStubs.h
+index 814e925..d7582bc 100644
+--- a/src/gallium/frontends/d3d10umd/VideoStubs.h
++++ b/src/gallium/frontends/d3d10umd/VideoStubs.h
+@@ -5,74 +5,6 @@ static HRESULT APIENTRY
+ VideoStubVideoDecoderExtension(D3D10DDI_HDEVICE, D3D11_1DDI_HDECODE, CONST D3D11_1DDIARG_VIDEODECODEREXTENSION*)
+ { return E_NOTIMPL; }
+ 
+-static SIZE_T APIENTRY
+-VideoStubCalcPrivateVideoProcessorEnumSize(D3D10DDI_HDEVICE, _In_ CONST D3D11_1DDIARG_CREATEVIDEOPROCESSORENUM*)
+-{ return 64; }
+-
+-static HRESULT APIENTRY
+-VideoStubCreateVideoProcessorEnum(D3D10DDI_HDEVICE, CONST D3D11_1DDIARG_CREATEVIDEOPROCESSORENUM*, D3D11_1DDI_HVIDEOPROCESSORENUM, D3D11_1DDI_HRTVIDEOPROCESSORENUM)
+-{ return E_NOTIMPL; }
+-
+-static VOID APIENTRY
+-VideoStubDestroyVideoProcessorEnum(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM)
+-{}
+-
+-static VOID APIENTRY
+-VideoStubCheckVideoProcessorFormat(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM, DXGI_FORMAT, UINT*)
+-{}
+-
+-static VOID APIENTRY
+-VideoStubGetVideoProcessorCaps(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM, D3D11_1DDI_VIDEO_PROCESSOR_CAPS*)
+-{}
+-
+-static VOID APIENTRY
+-VideoStubGetVideoProcessorRateConversionCaps(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM, UINT, D3D11_1DDI_VIDEO_PROCESSOR_RATE_CONVERSION_CAPS*)
+-{}
+-
+-static VOID APIENTRY
+-VideoStubGetVideoProcessorCustomRate(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM, UINT, UINT, D3D11_1DDI_VIDEO_PROCESSOR_CUSTOM_RATE*)
+-{}
+-
+-static VOID APIENTRY
+-VideoStubGetVideoProcessorFilterRange(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORENUM, D3D11_1DDI_VIDEO_PROCESSOR_FILTER, D3D11_1DDI_VIDEO_PROCESSOR_FILTER_RANGE*)
+-{}
+-
+-static SIZE_T APIENTRY
+-VideoStubCalcPrivateVideoProcessorSize(D3D10DDI_HDEVICE, _In_ CONST D3D11_1DDIARG_CREATEVIDEOPROCESSOR*)
+-{ return 64; }
+-
+-static HRESULT APIENTRY
+-VideoStubCreateVideoProcessor(D3D10DDI_HDEVICE, CONST D3D11_1DDIARG_CREATEVIDEOPROCESSOR*, D3D11_1DDI_HVIDEOPROCESSOR, D3D11_1DDI_HRTVIDEOPROCESSOR)
+-{ return E_NOTIMPL; }
+-
+-static VOID APIENTRY
+-VideoStubDestroyVideoProcessor(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR)
+-{}
+-
+-static VOID APIENTRY
+-VideoStubVideoProcessorSetOutputTargetRect(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, BOOL, CONST RECT*)
+-{}
+-
+-static VOID APIENTRY
+-VideoStubVideoProcessorSetOutputBackgroundColor(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, BOOL, CONST D3D11_1DDI_VIDEO_COLOR*)
+-{}
+-
+-static VOID APIENTRY
+-VideoStubVideoProcessorSetOutputColorSpace(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, CONST D3D11_1DDI_VIDEO_PROCESSOR_COLOR_SPACE*)
+-{}
+-
+-static VOID APIENTRY
+-VideoStubVideoProcessorSetOutputAlphaFillMode(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, D3D11_1DDI_VIDEO_PROCESSOR_ALPHA_FILL_MODE, UINT)
+-{}
+-
+-static VOID APIENTRY
+-VideoStubVideoProcessorSetOutputConstriction(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, BOOL, SIZE)
+-{}
+-
+-static VOID APIENTRY
+-VideoStubVideoProcessorSetOutputStereoMode(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, BOOL)
+-{}
+-
+ static HRESULT APIENTRY
+ VideoStubVideoProcessorSetOutputExtension(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, CONST GUID*, UINT, void*)
+ { return E_NOTIMPL; }
+@@ -81,30 +13,6 @@ static HRESULT APIENTRY
+ VideoStubVideoProcessorGetOutputExtension(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, CONST GUID*, UINT, void*)
+ { return E_NOTIMPL; }
+ 
+-static VOID APIENTRY
+-VideoStubVideoProcessorSetStreamFrameFormat(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, D3D11_1DDI_VIDEO_FRAME_FORMAT)
+-{}
+-
+-static VOID APIENTRY
+-VideoStubVideoProcessorSetStreamColorSpace(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, CONST D3D11_1DDI_VIDEO_PROCESSOR_COLOR_SPACE*)
+-{}
+-
+-static VOID APIENTRY
+-VideoStubVideoProcessorSetStreamOutputRate(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, D3D11_1DDI_VIDEO_PROCESSOR_OUTPUT_RATE, BOOL, CONST DXGI_RATIONAL*)
+-{}
+-
+-static VOID APIENTRY
+-VideoStubVideoProcessorSetStreamSourceRect(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, BOOL, CONST RECT*)
+-{}
+-
+-static VOID APIENTRY
+-VideoStubVideoProcessorSetStreamDestRect(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, BOOL, CONST RECT*)
+-{}
+-
+-static VOID APIENTRY
+-VideoStubVideoProcessorSetStreamAlpha(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, BOOL, FLOAT)
+-{}
+-
+ static VOID APIENTRY
+ VideoStubVideoProcessorSetStreamPalette(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, UINT, CONST UINT*)
+ {}
+@@ -121,14 +29,6 @@ static VOID APIENTRY
+ VideoStubVideoProcessorSetStreamStereoFormat(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, BOOL, D3D11_1DDI_VIDEO_PROCESSOR_STEREO_FORMAT, BOOL, BOOL, D3D11_1DDI_VIDEO_PROCESSOR_STEREO_FLIP_MODE, int)
+ {}
+ 
+-static VOID APIENTRY
+-VideoStubVideoProcessorSetStreamAutoProcessingMode(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, BOOL)
+-{}
+-
+-static VOID APIENTRY
+-VideoStubVideoProcessorSetStreamFilter(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, D3D11_1DDI_VIDEO_PROCESSOR_FILTER, BOOL, int)
+-{}
+-
+ static HRESULT APIENTRY
+ VideoStubVideoProcessorSetStreamExtension(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, CONST GUID*, UINT, void*)
+ { return E_NOTIMPL; }
+@@ -137,38 +37,6 @@ static HRESULT APIENTRY
+ VideoStubVideoProcessorGetStreamExtension(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, CONST GUID*, UINT, void*)
+ { return E_NOTIMPL; }
+ 
+-static HRESULT APIENTRY
+-VideoStubVideoProcessorBlt(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, D3D11_1DDI_HVIDEOPROCESSOROUTPUTVIEW, UINT, UINT, CONST D3D11_1DDI_VIDEO_PROCESSOR_STREAM*)
+-{ return E_NOTIMPL; }
+-
+-static SIZE_T APIENTRY
+-VideoStubCalcPrivateVideoProcessorInputViewSize(D3D10DDI_HDEVICE, _In_ CONST D3D11_1DDIARG_CREATEVIDEOPROCESSORINPUTVIEW*)
+-{ return 64; }
+-
+-static HRESULT APIENTRY
+-VideoStubCreateVideoProcessorInputView(D3D10DDI_HDEVICE, _In_ CONST D3D11_1DDIARG_CREATEVIDEOPROCESSORINPUTVIEW*, D3D11_1DDI_HVIDEOPROCESSORINPUTVIEW, D3D11_1DDI_HRTVIDEOPROCESSORINPUTVIEW)
+-{ return E_NOTIMPL; }
+-
+-static VOID APIENTRY
+-VideoStubDestroyVideoProcessorInputView(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORINPUTVIEW)
+-{}
+-
+-static SIZE_T APIENTRY
+-VideoStubCalcPrivateVideoProcessorOutputViewSize(D3D10DDI_HDEVICE, _In_ CONST D3D11_1DDIARG_CREATEVIDEOPROCESSOROUTPUTVIEW*)
+-{ return 64; }
+-
+-static HRESULT APIENTRY
+-VideoStubCreateVideoProcessorOutputView(D3D10DDI_HDEVICE, _In_ CONST D3D11_1DDIARG_CREATEVIDEOPROCESSOROUTPUTVIEW*, D3D11_1DDI_HVIDEOPROCESSOROUTPUTVIEW, D3D11_1DDI_HRTVIDEOPROCESSOROUTPUTVIEW)
+-{ return E_NOTIMPL; }
+-
+-static VOID APIENTRY
+-VideoStubDestroyVideoProcessorOutputView(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOROUTPUTVIEW)
+-{}
+-
+-static VOID APIENTRY
+-VideoStubVideoProcessorInputViewReadAfterWriteHazard(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSORINPUTVIEW, D3D10DDI_HRESOURCE)
+-{}
+-
+ static HRESULT APIENTRY
+ VideoStubGetContentProtectionCaps(D3D10DDI_HDEVICE hDevice, CONST GUID* pCryptoType, CONST GUID* pDecodeProfile, D3D11_1DDI_VIDEO_CONTENT_PROTECTION_CAPS* pCaps)
+ { return E_NOTIMPL; }
+@@ -253,10 +121,6 @@ static HRESULT APIENTRY
+ VideoStubCryptoSessionGetHandle(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HCRYPTOSESSION hCryptoSession, HANDLE* pHandle)
+ { return E_NOTIMPL; }
+ 
+-static VOID APIENTRY
+-VideoStubVideoProcessorSetStreamRotation(D3D10DDI_HDEVICE, D3D11_1DDI_HVIDEOPROCESSOR, UINT, BOOL, D3D11_1DDI_VIDEO_PROCESSOR_ROTATION)
+-{}
+-
+ static VOID APIENTRY
+ VideoStubGetCaptureHandle(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_GETCAPTUREHANDLEDATA* pHandleData)
+ {}
+@@ -278,50 +142,50 @@ VideoFillFuncs(D3D11_1DDI_VIDEODEVICEFUNCS *f)
+    f->pfnVideoDecoderBeginFrame = VideoVideoDecoderBeginFrame;
+    f->pfnVideoDecoderEndFrame = VideoVideoDecoderEndFrame;
+    f->pfnVideoDecoderSubmitBuffers = VideoVideoDecoderSubmitBuffers;
+-   f->pfnCalcPrivateVideoProcessorEnumSize = VideoStubCalcPrivateVideoProcessorEnumSize;
+-   f->pfnCreateVideoProcessorEnum = VideoStubCreateVideoProcessorEnum;
+-   f->pfnDestroyVideoProcessorEnum = VideoStubDestroyVideoProcessorEnum;
+-   f->pfnCheckVideoProcessorFormat = VideoStubCheckVideoProcessorFormat;
+-   f->pfnGetVideoProcessorCaps = VideoStubGetVideoProcessorCaps;
+-   f->pfnGetVideoProcessorRateConversionCaps = VideoStubGetVideoProcessorRateConversionCaps;
+-   f->pfnGetVideoProcessorCustomRate = VideoStubGetVideoProcessorCustomRate;
+-   f->pfnGetVideoProcessorFilterRange = VideoStubGetVideoProcessorFilterRange;
+-   f->pfnCalcPrivateVideoProcessorSize = VideoStubCalcPrivateVideoProcessorSize;
+-   f->pfnCreateVideoProcessor = VideoStubCreateVideoProcessor;
+-   f->pfnDestroyVideoProcessor = VideoStubDestroyVideoProcessor;
+-   f->pfnVideoProcessorSetOutputTargetRect = VideoStubVideoProcessorSetOutputTargetRect;
+-   f->pfnVideoProcessorSetOutputBackgroundColor = VideoStubVideoProcessorSetOutputBackgroundColor;
+-   f->pfnVideoProcessorSetOutputColorSpace = VideoStubVideoProcessorSetOutputColorSpace;
+-   f->pfnVideoProcessorSetOutputAlphaFillMode = VideoStubVideoProcessorSetOutputAlphaFillMode;
+-   f->pfnVideoProcessorSetOutputConstriction = VideoStubVideoProcessorSetOutputConstriction;
+-   f->pfnVideoProcessorSetOutputStereoMode = VideoStubVideoProcessorSetOutputStereoMode;
++   f->pfnCalcPrivateVideoProcessorEnumSize = VideoCalcPrivateVideoProcessorEnumSize;
++   f->pfnCreateVideoProcessorEnum = VideoCreateVideoProcessorEnum;
++   f->pfnDestroyVideoProcessorEnum = VideoDestroyVideoProcessorEnum;
++   f->pfnCheckVideoProcessorFormat = VideoCheckVideoProcessorFormat;
++   f->pfnGetVideoProcessorCaps = VideoGetVideoProcessorCaps;
++   f->pfnGetVideoProcessorRateConversionCaps = VideoGetVideoProcessorRateConversionCaps;
++   f->pfnGetVideoProcessorCustomRate = VideoGetVideoProcessorCustomRate;
++   f->pfnGetVideoProcessorFilterRange = VideoGetVideoProcessorFilterRange;
++   f->pfnCalcPrivateVideoProcessorSize = VideoCalcPrivateVideoProcessorSize;
++   f->pfnCreateVideoProcessor = VideoCreateVideoProcessor;
++   f->pfnDestroyVideoProcessor = VideoDestroyVideoProcessor;
++   f->pfnVideoProcessorSetOutputTargetRect = VideoVideoProcessorSetOutputTargetRect;
++   f->pfnVideoProcessorSetOutputBackgroundColor = VideoVideoProcessorSetOutputBackgroundColor;
++   f->pfnVideoProcessorSetOutputColorSpace = VideoVideoProcessorSetOutputColorSpace;
++   f->pfnVideoProcessorSetOutputAlphaFillMode = VideoVideoProcessorSetOutputAlphaFillMode;
++   f->pfnVideoProcessorSetOutputConstriction = VideoVideoProcessorSetOutputConstriction;
++   f->pfnVideoProcessorSetOutputStereoMode = VideoVideoProcessorSetOutputStereoMode;
+    f->pfnVideoProcessorSetOutputExtension = VideoStubVideoProcessorSetOutputExtension;
+    f->pfnVideoProcessorGetOutputExtension = VideoStubVideoProcessorGetOutputExtension;
+-   f->pfnVideoProcessorSetStreamFrameFormat = VideoStubVideoProcessorSetStreamFrameFormat;
+-   f->pfnVideoProcessorSetStreamColorSpace = VideoStubVideoProcessorSetStreamColorSpace;
+-   f->pfnVideoProcessorSetStreamOutputRate = VideoStubVideoProcessorSetStreamOutputRate;
+-   f->pfnVideoProcessorSetStreamSourceRect = VideoStubVideoProcessorSetStreamSourceRect;
+-   f->pfnVideoProcessorSetStreamDestRect = VideoStubVideoProcessorSetStreamDestRect;
+-   f->pfnVideoProcessorSetStreamAlpha = VideoStubVideoProcessorSetStreamAlpha;
++   f->pfnVideoProcessorSetStreamFrameFormat = VideoVideoProcessorSetStreamFrameFormat;
++   f->pfnVideoProcessorSetStreamColorSpace = VideoVideoProcessorSetStreamColorSpace;
++   f->pfnVideoProcessorSetStreamOutputRate = VideoVideoProcessorSetStreamOutputRate;
++   f->pfnVideoProcessorSetStreamSourceRect = VideoVideoProcessorSetStreamSourceRect;
++   f->pfnVideoProcessorSetStreamDestRect = VideoVideoProcessorSetStreamDestRect;
++   f->pfnVideoProcessorSetStreamAlpha = VideoVideoProcessorSetStreamAlpha;
+    f->pfnVideoProcessorSetStreamPalette = VideoStubVideoProcessorSetStreamPalette;
+    f->pfnVideoProcessorSetStreamPixelAspectRatio = VideoStubVideoProcessorSetStreamPixelAspectRatio;
+    f->pfnVideoProcessorSetStreamLumaKey = VideoStubVideoProcessorSetStreamLumaKey;
+    f->pfnVideoProcessorSetStreamStereoFormat = VideoStubVideoProcessorSetStreamStereoFormat;
+-   f->pfnVideoProcessorSetStreamAutoProcessingMode = VideoStubVideoProcessorSetStreamAutoProcessingMode;
+-   f->pfnVideoProcessorSetStreamFilter = VideoStubVideoProcessorSetStreamFilter;
++   f->pfnVideoProcessorSetStreamAutoProcessingMode = VideoVideoProcessorSetStreamAutoProcessingMode;
++   f->pfnVideoProcessorSetStreamFilter = VideoVideoProcessorSetStreamFilter;
+    f->pfnVideoProcessorSetStreamExtension = VideoStubVideoProcessorSetStreamExtension;
+    f->pfnVideoProcessorGetStreamExtension = VideoStubVideoProcessorGetStreamExtension;
+-   f->pfnVideoProcessorBlt = VideoStubVideoProcessorBlt;
++   f->pfnVideoProcessorBlt = VideoVideoProcessorBlt;
+    f->pfnCalcPrivateVideoDecoderOutputViewSize = VideoCalcPrivateVideoDecoderOutputViewSize;
+    f->pfnCreateVideoDecoderOutputView = VideoCreateVideoDecoderOutputView;
+    f->pfnDestroyVideoDecoderOutputView = VideoDestroyVideoDecoderOutputView;
+-   f->pfnCalcPrivateVideoProcessorInputViewSize = VideoStubCalcPrivateVideoProcessorInputViewSize;
+-   f->pfnCreateVideoProcessorInputView = VideoStubCreateVideoProcessorInputView;
+-   f->pfnDestroyVideoProcessorInputView = VideoStubDestroyVideoProcessorInputView;
+-   f->pfnCalcPrivateVideoProcessorOutputViewSize = VideoStubCalcPrivateVideoProcessorOutputViewSize;
+-   f->pfnCreateVideoProcessorOutputView = VideoStubCreateVideoProcessorOutputView;
+-   f->pfnDestroyVideoProcessorOutputView = VideoStubDestroyVideoProcessorOutputView;
+-   f->pfnVideoProcessorInputViewReadAfterWriteHazard = VideoStubVideoProcessorInputViewReadAfterWriteHazard;
++   f->pfnCalcPrivateVideoProcessorInputViewSize = VideoCalcPrivateVideoProcessorInputViewSize;
++   f->pfnCreateVideoProcessorInputView = VideoCreateVideoProcessorInputView;
++   f->pfnDestroyVideoProcessorInputView = VideoDestroyVideoProcessorInputView;
++   f->pfnCalcPrivateVideoProcessorOutputViewSize = VideoCalcPrivateVideoProcessorOutputViewSize;
++   f->pfnCreateVideoProcessorOutputView = VideoCreateVideoProcessorOutputView;
++   f->pfnDestroyVideoProcessorOutputView = VideoDestroyVideoProcessorOutputView;
++   f->pfnVideoProcessorInputViewReadAfterWriteHazard = VideoVideoProcessorInputViewReadAfterWriteHazard;
+    f->pfnGetContentProtectionCaps = VideoStubGetContentProtectionCaps;
+    f->pfnGetCryptoKeyExchangeType = VideoStubGetCryptoKeyExchangeType;
+    f->pfnCalcPrivateCryptoSessionSize = VideoStubCalcPrivateCryptoSessionSize;
+@@ -343,7 +207,7 @@ VideoFillFuncs(D3D11_1DDI_VIDEODEVICEFUNCS *f)
+    f->pfnConfigureAuthenticatedChannel = VideoStubConfigureAuthenticatedChannel;
+    f->pfnVideoDecoderGetHandle = VideoStubVideoDecoderGetHandle;
+    f->pfnCryptoSessionGetHandle = VideoStubCryptoSessionGetHandle;
+-   f->pfnVideoProcessorSetStreamRotation = VideoStubVideoProcessorSetStreamRotation;
++   f->pfnVideoProcessorSetStreamRotation = VideoVideoProcessorSetStreamRotation;
+    f->pfnGetCaptureHandle = VideoStubGetCaptureHandle;
+ }
+ 
+diff --git a/src/gallium/frontends/d3d10umd/meson.build b/src/gallium/frontends/d3d10umd/meson.build
+index 0c65fd6..d186b26 100644
+--- a/src/gallium/frontends/d3d10umd/meson.build
++++ b/src/gallium/frontends/d3d10umd/meson.build
+@@ -26,6 +26,8 @@ libd3d10umd = static_library(
+     'D3DKMT.cpp',
+     'D3D11.cpp',
+     'Video.cpp',
++    'VideoProcessor.cpp',
++    'VideoShaders.c',
+     # wddm-mali-g52's video/ (mesa.yml copies it here): the VDPU383
+     # backend and its register builder.
+     'video/vdec.c',
