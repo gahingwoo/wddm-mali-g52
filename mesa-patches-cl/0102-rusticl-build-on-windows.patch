@@ -1,0 +1,182 @@
+diff --git a/src/gallium/frontends/rusticl/meson.build b/src/gallium/frontends/rusticl/meson.build
+index e6d1cd4..24e0633 100644
+--- a/src/gallium/frontends/rusticl/meson.build
++++ b/src/gallium/frontends/rusticl/meson.build
+@@ -225,6 +225,10 @@ rusticl_llvm_gen = static_library(
+ rusticl_libc_bindings_rs = rust.bindgen(
+   input : 'rusticl_libc_bindings.h',
+   output : 'rusticl_libc_bindings.rs',
++  # wddm-mali-g52: the POSIX headers of win32-compat on Windows.
++  include_directories : [
++    inc_include,
++  ],
+   dependencies: [
+     dep_valgrind,
+   ],
+diff --git a/src/gallium/frontends/rusticl/rusticl_libc_bindings.h b/src/gallium/frontends/rusticl/rusticl_libc_bindings.h
+index f02ccb0..1d0b008 100644
+--- a/src/gallium/frontends/rusticl/rusticl_libc_bindings.h
++++ b/src/gallium/frontends/rusticl/rusticl_libc_bindings.h
+@@ -4,6 +4,15 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#ifdef _WIN32
++/* wddm-mali-g52: Windows has no dlfcn.h; rusticl_system_bindings.c has a
++ * dlsym that finds nothing (no EGL or GLX to share with), and close is the
++ * CRT's POSIX name for _close. */
++#include <io.h>
++#include <stdlib.h>
++void *dlsym(void *handle, const char *symbol);
++#else
+ #include <dlfcn.h>
+ #include <unistd.h>
+ #include <stdlib.h>
++#endif
+diff --git a/src/gallium/frontends/rusticl/rusticl_system_bindings.c b/src/gallium/frontends/rusticl/rusticl_system_bindings.c
+index c4c029e..fbb76f8 100644
+--- a/src/gallium/frontends/rusticl/rusticl_system_bindings.c
++++ b/src/gallium/frontends/rusticl/rusticl_system_bindings.c
+@@ -25,3 +25,16 @@ mesa_version_string(void)
+ {
+     return PACKAGE_VERSION MESA_GIT_SHA1;
+ }
++
++#ifdef _WIN32
++/* wddm-mali-g52: rusticl looks up eglGetProcAddress and glXGetProcAddress
++ * with dlsym(NULL, ...) for GL sharing; Windows has neither, so sharing is
++ * reported as unavailable. */
++void *
++dlsym(void *handle, const char *symbol)
++{
++   (void)handle;
++   (void)symbol;
++   return NULL;
++}
++#endif
+diff --git a/src/gallium/targets/rusticl/meson.build b/src/gallium/targets/rusticl/meson.build
+index 2b214ad..3d3e3db 100644
+--- a/src/gallium/targets/rusticl/meson.build
++++ b/src/gallium/targets/rusticl/meson.build
+@@ -6,6 +6,12 @@ opencl_version = '1'
+ rusticl_ld_args = []
+ rusticl_ld_depends = []
+ 
++rusticl_vs_module_defs = []
++if host_machine.system() == 'windows'
++  # wddm-mali-g52: a DLL exports only what a .def file names.
++  rusticl_vs_module_defs = files('rusticl.def')
++endif
++
+ if with_ld_version_script
+   rusticl_ld_args += ['-Wl,--version-script', join_paths(meson.current_source_dir(), 'rusticl.sym')]
+   rusticl_ld_depends += files('rusticl.sym')
+@@ -54,6 +60,7 @@ librusticl = shared_library(
+     rusticl_ld_args,
+   ],
+   link_depends : rusticl_ld_depends,
++  vs_module_defs : rusticl_vs_module_defs,
+   version : '@0@.0.0'.format(opencl_version),
+   install : true,
+ )
+diff --git a/src/gallium/targets/rusticl/rusticl.def b/src/gallium/targets/rusticl/rusticl.def
+new file mode 100644
+index 0000000..8d9a487
+--- /dev/null
++++ b/src/gallium/targets/rusticl/rusticl.def
+@@ -0,0 +1,6 @@
++; The OpenCL ICD entry points (rusticl.sym's list) for the Windows DLL
++; (wddm-mali-g52): the Khronos loader looks these up with GetProcAddress.
++EXPORTS
++	clGetPlatformInfo
++	clGetExtensionFunctionAddress
++	clIcdGetPlatformIDsKHR
+diff --git a/src/gallium/targets/rusticl/rusticl_target.c b/src/gallium/targets/rusticl/rusticl_target.c
+index 308e23b..16902e9 100644
+--- a/src/gallium/targets/rusticl/rusticl_target.c
++++ b/src/gallium/targets/rusticl/rusticl_target.c
+@@ -1,2 +1,84 @@
+ #include "target-helpers/drm_helper.h"
+ #include "target-helpers/sw_helper.h"
++
++#if defined(_WIN32) && defined(GALLIUM_PANFROST)
++/*
++ * wddm-mali-g52: what Panfrost and the libdrm shim (win32-compat/malikm_drm.c)
++ * call that the Direct3D UMD defines in its own frontend: its log, and the
++ * slow-operation log, which is off here. The log goes to the debugger, and
++ * to C:\mali\log\<exe>-<pid>-cl.txt when that folder exists, as the
++ * OpenGL ICD's does (mesa-patches/0060).
++ */
++#include <windows.h>
++#include <stdarg.h>
++#include <stdint.h>
++
++static void
++cl_pan_log_append(const char *buf, int len)
++{
++   static HANDLE log = NULL;
++   DWORD done;
++
++   if (log == NULL) {
++      HANDLE f = INVALID_HANDLE_VALUE;
++      if (GetFileAttributesA("C:\\mali\\log") != INVALID_FILE_ATTRIBUTES) {
++         char exe[MAX_PATH], path[MAX_PATH];
++         const char *base = exe;
++         DWORD n = GetModuleFileNameA(NULL, exe, sizeof exe);
++         exe[n < sizeof exe ? n : sizeof exe - 1] = 0;
++         for (const char *c = exe; *c; c++)
++            if (*c == '\\' || *c == '/')
++               base = c + 1;
++         snprintf(path, sizeof path, "C:\\mali\\log\\%s-%lu-cl.txt", base,
++                  (unsigned long)GetCurrentProcessId());
++         f = CreateFileA(path, FILE_APPEND_DATA,
++                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
++                         NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
++      }
++      if (InterlockedCompareExchangePointer((PVOID volatile *)&log, f, NULL) != NULL &&
++          f != INVALID_HANDLE_VALUE)
++         CloseHandle(f);
++   }
++   if (log != INVALID_HANDLE_VALUE)
++      WriteFile(log, buf, (DWORD)len, &done, NULL);
++}
++
++void
++DebugPrintf(const char *format, ...)
++{
++   char buf[2048];
++   int off, len;
++   va_list ap;
++
++   off = snprintf(buf, sizeof buf, "%10lu %5lu ", (unsigned long)GetTickCount(),
++                  (unsigned long)GetCurrentThreadId());
++   va_start(ap, format);
++   len = vsnprintf(buf + off, sizeof buf - off, format, ap);
++   va_end(ap);
++   if (len < 0)
++      return;
++   if (len > (int)(sizeof buf - off - 1))
++      len = (int)(sizeof buf - off - 1);
++   OutputDebugStringA(buf + off);
++   cl_pan_log_append(buf, off + len);
++}
++
++uint64_t
++mali_slow_now(void)
++{
++   return 0;
++}
++
++uint64_t
++mali_slow_over(uint64_t t0)
++{
++   (void)t0;
++   return 0;
++}
++
++void
++mali_slow_log(uint64_t ticks, const char *op, const char *fmt, ...)
++{
++   (void)ticks; (void)op; (void)fmt;
++}
++#endif
