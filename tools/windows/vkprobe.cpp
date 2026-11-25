@@ -672,9 +672,31 @@ window_test(VkPhysicalDevice pd, uint32_t qfi, double seconds)
    return frames ? 0 : 5;
 }
 
+// A crash says where: the module and offset of the faulting address.
+static LONG WINAPI
+crash_filter(EXCEPTION_POINTERS *e)
+{
+   void *pc = e->ExceptionRecord->ExceptionAddress;
+   HMODULE mod = NULL;
+   char name[MAX_PATH] = "?";
+   GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                      GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)pc, &mod);
+   if (mod)
+      GetModuleFileNameA(mod, name, sizeof name);
+   printf("CRASH: exception 0x%08lx at %p = %s+0x%llx", e->ExceptionRecord->ExceptionCode, pc,
+          name, (unsigned long long)((char *)pc - (char *)mod));
+   if (e->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION)
+      printf(", %s 0x%llx", e->ExceptionRecord->ExceptionInformation[0] ? "writing" : "reading",
+             (unsigned long long)e->ExceptionRecord->ExceptionInformation[1]);
+   printf("\n");
+   fflush(stdout);
+   return EXCEPTION_CONTINUE_SEARCH;
+}
+
 int
 main(int argc, char **argv)
 {
+   SetUnhandledExceptionFilter(crash_filter);
    const char *icd = NULL;
    double window_s = 0;
    for (int i = 1; i < argc; i++) {

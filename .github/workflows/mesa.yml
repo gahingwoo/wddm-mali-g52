@@ -1419,7 +1419,8 @@ jobs:
             } else {
               $code = $p.ExitCode
               if ($code -lt 0 -and $cdb) {
-                & $cdb -g -G -y "$pwd\out" -c '.lines -e; kn 40; r; q' $exe "`"$dll`"" $extra.Split(' ') 2>&1 | Out-File "$tag-crash.txt"
+                $a = @($dll) + @($extra.Split(' ') | Where-Object { $_ })
+                & $cdb -g -G -y "$pwd\out" -c '.lines -e; .ecxr; kn 40; r; q' $exe @a 2>&1 | Out-File "$tag-crash.txt"
               }
             }
             Write-Host "== ${tag}: exit code $code"
