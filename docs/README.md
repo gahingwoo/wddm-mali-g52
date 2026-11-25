@@ -1,25 +1,21 @@
 # Documents
 
-| File | What it is | State |
-|---|---|---|
-| [PLAN.md](PLAN.md) | The goal, the milestones M0 to M5, and the risks | original plan, kept as written |
-| [M2-PLAN.md](M2-PLAN.md) | Why Mesa's D3D10 frontend came before any WDDM code | carried out |
-| [M3.md](M3.md) | Design of `malikm` and the shim under Panfrost | current |
-| [M5-PLAN.md](M5-PLAN.md) | First plan for the WDDM driver, with sources | superseded after M5.1 |
-| [M5.2-PLAN.md](M5.2-PLAN.md) | The full WDDM driver in steps (a) to (d) | carried out; step (d) reached 2026-11-13 |
-| [PERF.md](PERF.md) | Where a frame's time goes and how to get it back | measured 2026-11-14; scan-out on by default since. The 2026-11-23 board numbers are in the README and on branch `merge-submit-default` |
-| [HDMI-HPD.md](HDMI-HPD.md) | HDMI hot-plug, the driver's own mode set and HDMI audio | works on the TaishanPi 3M (`HdmiHpd` 3), 2026-11-22 and 2026-11-23 |
-| [PERFDATA.md](PERFDATA.md) | GPU temperature and clock for Task Manager and the "RK3576 GPU" performance counters: what Task Manager and dxgkrnl ask, what the driver answers, the WDDM 2.4 probe | 2026-11-24: Task Manager shows the GPU temperature and the counters read on the TaishanPi 3M |
-| [DISPLAY-MODES.md](DISPLAY-MODES.md) | Display resolutions and refresh rates: smaller source modes scaled by the VOP2 (`ScaledModes`), real HDMI modes at every refresh rate the EDID lists (`HdmiHpd` 3, the default on HDMI boots), the switches, the board tests and how to go back | refresh rates work on the board (2026-11-24, 75 Hz on the AOC); the HDMI default is on branch `hdmi-retime-default` |
-| [EDGE-CREATEDEVICE.md](EDGE-CREATEDEVICE.md) | Why Edge could not create a D3D11 device on the Mali, and the fix | Edge gets the Mali at 10_1 on the board |
-| [EDGE-PRESENT.md](EDGE-PRESENT.md) | Edge's device removed at its first present; three UMD bugs | fixes merged; presenting to a composition swap chain still blocked |
-| [D3D11-UMD.md](D3D11-UMD.md) | Plan for the D3D11.1 user-mode driver | plan, 2026-11-21 |
-| [VIDEO-DECODE.md](VIDEO-DECODE.md) | Hardware video decode for players: why D3D11 video decode in the UMD, the VDPU383 backend, the switches, the board test | branch `video-decode`, CI only, 2026-11-24 |
-| [CHROMIUM-VIDEO.md](CHROMIUM-VIDEO.md) | Hardware decode for Chrome and Edge first: what the RK3576 decodes (H.264, HEVC, VP9, AV1 in one block; mainline drives only H.264/HEVC), what Chromium asks of a D3D11 decoder (feature level 11_0, VideoDevice1, shared NV12), the order of the work | plan, 2026-11-25; probe in CI |
-| [FEASIBILITY-D3D11-WDDM2.md](FEASIBILITY-D3D11-WDDM2.md) | What Direct3D 11 and WDDM 2.x would take | study, 2026-11-13 |
-| [WDDM2.md](WDDM2.md) | WDDM 2.x and 3.x design study: GpuMmu on the Mali MMU, options, phased plan | study 2026-11-21, plan approved; implementation on `wddm2` (progress log, UMD contract) |
-| [BOARD-DAY.md](BOARD-DAY.md) | Checklist for the October 2026 board sessions | historical |
-| [results/](results/README.md) | What was measured, one folder per milestone | |
-
-The code refers to `docs/M5.2-PLAN.md` by path, so the plans stay where they
-are.
+| File | What it covers |
+|---|---|
+| [SETTINGS.md](SETTINGS.md) | Every registry switch, with its default and meaning |
+| [M3.md](M3.md) | Mesa and Panfrost on Windows, `malikm`, the shim, GPU bring-up, tests without a board |
+| [M5.2-PLAN.md](M5.2-PLAN.md) | `maliwddm`'s memory and submission model |
+| [WDDM2.md](WDDM2.md) | WDDM 2.0: how it works, the fallback to 1.3, debugging a failed start |
+| [D3D11-UMD.md](D3D11-UMD.md) | What the Direct3D UMD offers and how the KMD tells it |
+| [PERF.md](PERF.md) | The present path, the GPU clock, the thermal guard, TDRs |
+| [PERFDATA.md](PERFDATA.md) | GPU temperature and clock in Task Manager, the "RK3576 GPU" counters |
+| [HDMI-HPD.md](HDMI-HPD.md) | HDMI hot-plug, the driver's mode set, HDMI audio, trace values |
+| [DISPLAY-MODES.md](DISPLAY-MODES.md) | Resolutions and refresh rates |
+| [DUAL-DISPLAY.md](DUAL-DISPLAY.md) | Panel and HDMI at once (`HdmiExtend`); board test in [Chinese](DUAL-DISPLAY-TEST.zh.md) |
+| [EDGE-CREATEDEVICE.md](EDGE-CREATEDEVICE.md) | Edge and Chrome creating a D3D11 device on the Mali |
+| [EDGE-PRESENT.md](EDGE-PRESENT.md) | Edge and Chrome presenting; the UMD log |
+| [VIDEO-DECODE.md](VIDEO-DECODE.md) | D3D11 video decode on the VDPU383 |
+| [CHROMIUM-VIDEO.md](CHROMIUM-VIDEO.md) | What Chrome and Edge need for hardware decode |
+| [FEASIBILITY-D3D11-WDDM2.md](FEASIBILITY-D3D11-WDDM2.md) | Superseded study, conclusions only |
+| [history.md](history.md) | How it got here, a few lines per topic |
+| [results/](results/README.md) | Board results, one folder per milestone |
