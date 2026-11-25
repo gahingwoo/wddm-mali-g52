@@ -109,7 +109,7 @@ index ac8be25..12c6f56 100644
     *pInstance = panvk_instance_to_handle(instance);
  
 diff --git a/src/panfrost/vulkan/panvk_physical_device.c b/src/panfrost/vulkan/panvk_physical_device.c
-index 8021aa9..e174c82 100644
+index 8021aa9..d87e518 100644
 --- a/src/panfrost/vulkan/panvk_physical_device.c
 +++ b/src/panfrost/vulkan/panvk_physical_device.c
 @@ -12,6 +12,11 @@
@@ -158,7 +158,24 @@ index 8021aa9..e174c82 100644
     struct stat st;
  
     if (stat(drm_device->nodes[DRM_NODE_RENDER], &st)) {
-@@ -487,6 +511,15 @@ panvk_physical_device_init(struct panvk_physical_device *device,
+@@ -234,9 +258,15 @@ get_device_heaps(struct panvk_physical_device *device,
+    int host_coherent_not_cached_idx = -1;
+    int host_cached_not_coherent_idx = -1;
+ 
+-   const uint64_t heap_size =
++   uint64_t heap_size =
+       os_get_gpu_heap_size(instance->drirc.misc.heap_memory_percent,
+                            &instance->drirc.misc.heap_memory_percent);
++#ifdef _WIN32
++   /* maliwddm has one aperture segment of 1 GB for every process on the
++    * machine (MW_SEGMENT_SIZE), DWM's buffers included: a heap sized from
++    * system memory would promise what VidMm cannot make resident. */
++   heap_size = MIN2(heap_size, 1ull << 30);
++#endif
+ 
+    device->memory.heap_count = 1;
+    device->memory.heaps[0] = (VkMemoryHeap){
+@@ -487,6 +517,15 @@ panvk_physical_device_init(struct panvk_physical_device *device,
  
     device->vk.supported_sync_types = device->sync_types;
  
