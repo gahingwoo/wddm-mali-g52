@@ -42,6 +42,8 @@ PnpLockdown = 1
 DefaultDestDir = 13
 MW_UmdFiles    = 11 ; System32
 MW_UmdWowFiles = 10,SysWOW64
+MW_ClFiles     = 13 ; [opencl]
+MW_ClLoader    = 11 ; [opencl] System32
 
 [SourceDisksNames]
 1 = %DiskName%,,,""
@@ -57,6 +59,11 @@ maligl_fwd.dll    = 1
 maligl_arm64.dll  = 1
 maligl_x64.dll    = 1
 maligl_x86.dll    = 1
+malicl_arm64.dll   = 1 ; [opencl]
+vcruntime140.dll   = 1 ; [opencl]
+vcruntime140_1.dll = 1 ; [opencl]
+msvcp140.dll       = 1 ; [opencl]
+OpenCL.dll         = 1 ; [opencl]
 
 [Manufacturer]
 %ProviderName% = Standard,NTARM64.10.0...16299
@@ -67,6 +74,7 @@ maligl_x86.dll    = 1
 [MW_Inst]
 FeatureScore = F9
 CopyFiles = MW_CopyFiles, MW_UmdFiles, MW_UmdWowFiles
+CopyFiles = MW_ClFiles, MW_ClLoader ; [opencl]
 AddReg = MW_Settings
 
 [MW_CopyFiles]
@@ -107,6 +115,28 @@ maligl_x86.dll,,,0x00004000
 [MW_UmdWowFiles.security]
 "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;BU)(A;;GRGX;;;AC)(A;;GRGX;;;S-1-15-2-2)"
 
+; OpenCL (docs/OPENCL.md): Mesa's rusticl on Panfrost, an OpenCL ICD for the
+; Khronos loader, ARM64 processes only. It stays in the driver store with the
+; VC runtime it was linked against (/MD, as the LLVM release it carries is):
+; the loader opens it by full path with LOAD_WITH_ALTERED_SEARCH_PATH, so the
+; runtime beside it is the one found. Lines marked [opencl] are taken out by
+; the package job when a build has no OpenCL ICD.
+[MW_ClFiles] ; [opencl]
+malicl_arm64.dll ; [opencl]
+vcruntime140.dll ; [opencl]
+vcruntime140_1.dll ; [opencl]
+msvcp140.dll ; [opencl]
+
+; The Khronos ICD loader as System32\OpenCL.dll, which programs link to;
+; Windows has none of its own. 0x00000010 is COPYFLG_NO_OVERWRITE: an
+; OpenCL.dll already there (another GPU's driver, an SDK) is left alone, and
+; that loader finds this ICD the same way.
+[MW_ClLoader] ; [opencl]
+OpenCL.dll,,,0x00000010 ; [opencl]
+
+[MW_ClLoader.security] ; [opencl]
+"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;BU)(A;;GRGX;;;AC)(A;;GRGX;;;S-1-15-2-2)" ; [opencl]
+
 [MW_Settings]
 HKR,,UserModeDriverName,%REG_MULTI_SZ%,maliumd.dll,maliumd.dll,maliumd.dll,maliumd.dll
 HKR,,UserModeDriverNameWow,%REG_MULTI_SZ%,maliumd_x86.dll,maliumd_x86.dll,maliumd_x86.dll,maliumd_x86.dll
@@ -123,6 +153,12 @@ HKR,,OpenGLFlags,%REG_DWORD%,1
 HKR,,OpenGLDriverNameWow,%REG_SZ%,maligl_x86.dll
 HKR,,OpenGLVersionWow,%REG_DWORD%,1
 HKR,,OpenGLFlagsWow,%REG_DWORD%,1
+; The Khronos loader reads this from the adapter's key (D3DKMTQueryAdapterInfo
+; with KMTQAITYPE_QUERYREGISTRY, and through the device's software key with
+; CM_Open_DevNode_Key) and loads the ICD it names. x64 and x86 processes are
+; given no OpenCL ICD (none is built for them): an x64 process reads the same
+; value, fails to load an ARM64 DLL, and the loader goes on without it.
+HKR,,OpenCLDriverName,%REG_SZ%,%13%\malicl_arm64.dll ; [opencl]
 ; Base names of the UMDs this package installs ("Installed display drivers
 ; directive", Microsoft's display driver INF documentation).
 HKR,,InstalledDisplayDrivers,%REG_MULTI_SZ%,maliumd
