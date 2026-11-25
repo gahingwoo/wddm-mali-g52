@@ -128,9 +128,11 @@ jobs:
         with:
           arch: arm64
 
+      # Restore and save are separate steps so that a later failure still
+      # leaves the caches saved.
       - name: Cache LLVM
         id: llvm-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: C:\llvm
           key: llvm-${{ env.LLVM_VER }}-aarch64-windows-msvc-pruned-${{ env.DEPS_REV }}
@@ -163,6 +165,12 @@ jobs:
           Remove-Item -Recurse -Force C:\llvm-x
           "{0:N0} MB left" -f ((Get-ChildItem C:\llvm -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)
 
+      - uses: actions/cache/save@v4
+        if: steps.llvm-cache.outputs.cache-hit != 'true'
+        with:
+          path: C:\llvm
+          key: ${{ steps.llvm-cache.outputs.cache-primary-key }}
+
       - name: LLVM check
         shell: pwsh
         run: |
@@ -177,7 +185,7 @@ jobs:
 
       - name: Cache the other dependencies
         id: deps-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: C:\cldeps
           key: cldeps-${{ env.LLVM_VER }}-${{ env.SPIRV_LLVM_TAG }}-${{ env.SPIRV_TAG }}-${{ env.PKGCONF_TAG }}-${{ env.BINDGEN_VER }}-${{ env.DEPS_REV }}
@@ -196,7 +204,9 @@ jobs:
           # Not named CMake: PowerShell would call the function from itself.
           function Build-CMake($src, $bld) {
             Write-Host "== $src $(Get-Date -Format HH:mm:ss)"
-            cmake -S $src -B $bld -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            # cl.exe by name: C:\llvm\bin has a clang.exe that CMake
+            # would otherwise take for C.
+            cmake -S $src -B $bld -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl `
               -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DCMAKE_POLICY_DEFAULT_CMP0091=NEW `
               "-DCMAKE_INSTALL_PREFIX=$p" "-DCMAKE_PREFIX_PATH=$p;C:/llvm" @args
             if ($LASTEXITCODE) { throw "cmake failed: $src" }
@@ -227,6 +237,12 @@ jobs:
           cargo install bindgen-cli --version $env:BINDGEN_VER --locked --root $p
           if ($LASTEXITCODE) { throw 'cargo install bindgen-cli failed' }
           Remove-Item -Recurse -Force deps
+
+      - uses: actions/cache/save@v4
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        with:
+          path: C:\cldeps
+          key: ${{ steps.deps-cache.outputs.cache-primary-key }}
 
       - name: Dependencies check
         shell: pwsh
