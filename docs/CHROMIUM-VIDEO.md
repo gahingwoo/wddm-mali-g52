@@ -157,6 +157,31 @@ ANGLE main, `src/libANGLE/renderer/d3d/d3d11/`:
 | plane views R8 / R8G8 of the decoder texture | V4 (0079), same device | CI; of a copy opened from its handle: no (C3) |
 | presenting at WDDM 2.0 | none | blocked, independently of C1 (below) |
 
+### What CI showed (mesa.yml runs 45535163559 to 45538667838)
+
+- The D3D11 runtime refused the adapter (0x887A0020, no CreateDevice
+  call, even for a caller asking for 10_1 only) whenever 11_0 was in the
+  pipeline levels and `D3D11DDICAPS_SHADER` was 0. It accepts it with
+  `D3D11DDICAPS_SHADER_COMPUTE_PLUS_RAW_AND_STRUCTURED_BUFFERS_IN_SHADER_4_X`
+  set; doubles alone are refused too, free threading does not matter, and
+  neither does the KMD's WDDM version. So the GPU process gets that bit,
+  which describes 10_x devices only, and no doubles. Experiments on the
+  software path: `D3D10UMD_FL11_EXP` (0080).
+- FXC at vs_5_0/ps_5_0 emitted, for fl11test's shaders: `bfi` (from
+  `(id << 1) & 2` already), `deriv_rt{x,y}_{coarse,fine}`,
+  `sample_indexable`, `firstbit_hi`, `ubfe`, `countbits`, `firstbit_lo`,
+  `bfrev`, `ibfe`; `1.0 / x` stayed a `div`. On softpipe every value
+  matched (12 of 12), CreateComputeShader returned E_OUTOFMEMORY and the
+  device lived.
+- The same shaders went through tgsi_to_nir and the Bifrost compiler on
+  the emulated G52 (MALIKM_FAKE: the pixels are not run, so not checked).
+- `vdectest --chromium --fl11` as chrome.exe with `--type=gpu-process`:
+  feature level 11_0, the H.264 profile, `ID3D11VideoDevice1` and
+  `ID3D11VideoContext1` there; blocked only by the shared NV12 texture,
+  which needs a KMD (as before at 10_1).
+- Off, 0, another process name, msedge.exe without `--type` or with
+  `--type=renderer`: 10_1, as before.
+
 ### The switch
 
 maliwddm Device Parameters `UmdReportFL11` (DWORD, default 0, read at
@@ -166,7 +191,8 @@ msedge.exe, chrome.exe or msedgewebview2.exe whose command line has
 `--type=gpu-process`:
 
 - the adapter offers the D3D11.1 interface (D3D11.cpp, as `UmdVideo`
-  does) and reports pipeline levels 10_0, 10_1 and 11_0;
+  does) and reports pipeline levels 10_0, 10_1 and 11_0, and the shader
+  4.x compute bit in its shader caps (above);
 - `UmdVideo` 1 or 2 applies to that process too (it is not on the list of
   players otherwise);
 - everything else is the same D3D10.x implementation behind the D3D11.1
@@ -285,12 +311,14 @@ and `C:\mali\edgeprof-c1\chrome_debug.log`. Then delete `UmdReportFL11`.
 
 ### Odds (honest)
 
-- The runtime accepting 11_0 from this DDI and ANGLE drawing correctly
-  with shader model 5 on the Mali (steps 2 and 3): about even. CI
-  shows the runtime's side on softpipe and that Panfrost compiles the
-  instructions; whether the D3D11 runtime asks more of a real adapter at
-  11_0 (format support, for one) and whether FXC emits instructions for
-  Chromium's shaders that `fl11test` does not cover are open.
+- fl11test PASS on the Mali (step 2): likely, about two in three. The
+  runtime's side and the translation are proven on softpipe and Panfrost
+  compiles the same TGSI; open are the hardware runtime (a real KMD)
+  asking more at 11_0, and Bifrost's results for the new instructions.
+- Edge drawing correctly at 11_0 (step 3): about even. Chromium's shaders
+  may make FXC emit instructions fl11test does not cover (the UMD log
+  names any it skips), and DirectComposition or Graphite may change path
+  because of the new answers.
 - Hardware H.264 in Edge in this round (step 5): roughly one in five. It
   also needs the sandboxed decoder access, the shared NV12 texture (C3,
   never tried on the board), and the decoded planes sampled correctly by
