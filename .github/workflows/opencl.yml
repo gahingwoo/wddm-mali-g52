@@ -208,7 +208,7 @@ jobs:
             # would otherwise take for C.
             cmake -S $src -B $bld -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl `
               -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DCMAKE_POLICY_DEFAULT_CMP0091=NEW `
-              "-DCMAKE_INSTALL_PREFIX=$p" "-DCMAKE_PREFIX_PATH=$p;C:/llvm" @args
+              -DCMAKE_INSTALL_PREFIX=C:/cldeps "-DCMAKE_PREFIX_PATH=C:/cldeps;C:/llvm" @args
             if ($LASTEXITCODE) { throw "cmake failed: $src" }
             ninja -C $bld install
             if ($LASTEXITCODE) { throw "build failed: $src" }
@@ -223,14 +223,16 @@ jobs:
           if ($LASTEXITCODE) { throw 'pkgconf build failed' }
 
           Clone https://github.com/KhronosGroup/SPIRV-Headers.git $env:SPIRV_TAG deps\SPIRV-Headers
+          # Forward slashes: SPIRV-Tools puts this path into CMake strings.
+          $hdr = "$pwd/deps/SPIRV-Headers" -replace '\\', '/'
           Build-CMake deps\SPIRV-Headers deps\SPIRV-Headers-b
           Clone https://github.com/KhronosGroup/SPIRV-Tools.git $env:SPIRV_TAG deps\SPIRV-Tools
-          Build-CMake deps\SPIRV-Tools deps\SPIRV-Tools-b "-DSPIRV-Headers_SOURCE_DIR=$pwd\deps\SPIRV-Headers" `
+          Build-CMake deps\SPIRV-Tools deps\SPIRV-Tools-b "-DSPIRV-Headers_SOURCE_DIR=$hdr" `
             -DSPIRV_SKIP_TESTS=ON -DSPIRV_SKIP_EXECUTABLES=ON -DSPIRV_WERROR=OFF -DSPIRV_TOOLS_BUILD_STATIC=ON
 
           Clone https://github.com/KhronosGroup/SPIRV-LLVM-Translator.git $env:SPIRV_LLVM_TAG deps\SPIRV-LLVM-Translator
           Build-CMake deps\SPIRV-LLVM-Translator deps\SPIRV-LLVM-Translator-b -DLLVM_DIR=C:/llvm/lib/cmake/llvm `
-            "-DLLVM_EXTERNAL_SPIRV_HEADERS_SOURCE_DIR=$pwd\deps\SPIRV-Headers" -DLLVM_SPIRV_INCLUDE_TESTS=OFF `
+            "-DLLVM_EXTERNAL_SPIRV_HEADERS_SOURCE_DIR=$hdr" -DLLVM_SPIRV_INCLUDE_TESTS=OFF `
             -DLLVM_SPIRV_BUILD_EXTERNAL=YES -DBUILD_SHARED_LIBS=OFF
 
           Write-Host "== bindgen $(Get-Date -Format HH:mm:ss)"
