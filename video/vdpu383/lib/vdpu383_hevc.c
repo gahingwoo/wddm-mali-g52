@@ -1339,8 +1339,8 @@ int v383_hevc_build(const V383_HevcInput *in, V383_RegFile *rf)
         reg_set(rf, 217 + i, in->surfaces[s].colmv_dma);
     }
 
-    mask_range(rf, 8, 30);
-    mask_range(rf, 64, 106);
-    mask_range(rf, 128, 232);
+    mask_range(rf, 8, 31);             /* the link mode's blocks, as vdpu383_h264.c */
+    mask_range(rf, 64, 107);
+    mask_range(rf, 128, 235);
     return V383_OK;
 }

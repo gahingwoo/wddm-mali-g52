@@ -1,8 +1,8 @@
 # The register log (video/vdec.c reglog, D3D10UMD_VDEC_REGLOG) of each test
 # stream, as vdpu383test --dxva-only writes it with vdpu383test-reglog.patch
-# (woa-rk3576 a16bd9a, --null; README.md). stream, frames out, md5, options.
-testsrc-176x144-high.264 12 7447bb5352eb3f23ac7dc635ce17589d
-testsrc-176x144-main.hevc 12 c87afeb4c1648689583d192cb109f388
-testsrc-176x144-p0.ivf 12 dc2c92c50a28caade812dceabcaa6444
-testsrc-352x288-2tiles.av1.ivf 12 09c54cbc3729d9d8b61d8a41269dbc58
-testsrc-352x288-2tiles.av1.ivf 12 72d39b90df82570c5f8fffa9155c9439 --av1-synth 1
+# (woa-rk3576 ca0148a, --null; README.md). stream, frames out, md5, options.
+testsrc-176x144-high.264 12 ce14a60aca19422173087bbbe50b92e0
+testsrc-176x144-main.hevc 12 6b1654c1bfb5dcee8c1525b2b9c17804
+testsrc-176x144-p0.ivf 12 7ecc28077f1e180e62ef5ffb631384f0
+testsrc-352x288-2tiles.av1.ivf 12 814912db8794a19622bd49f807082b99
+testsrc-352x288-2tiles.av1.ivf 12 b7e153164d33a7565b903936a06fe2d7 --av1-synth 1
