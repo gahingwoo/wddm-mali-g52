@@ -385,9 +385,9 @@ jobs:
           Copy-Item gl\maligl.dll "$drv\maligl_fwd.dll"
           Copy-Item gl\maligl_arm64.dll, gl\maligl_x64.dll $drv
           Copy-Item glx86\libgallium_wgl.dll "$drv\maligl_x86.dll"
-          # OpenCL: the ICD, the VC runtime beside it, the Khronos loader.
+          # OpenCL: the ICD and the Khronos loader.
           # Without them the INF's [opencl] lines go.
-          $clFiles = @('malicl_arm64.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'OpenCL.dll')
+          $clFiles = @('malicl_arm64.dll', 'OpenCL.dll')
           if (Test-Path cl\malicl_arm64.dll) {
             foreach ($f in $clFiles) { Copy-Item "cl\$f" $drv }
             $signCl = @("$drv\malicl_arm64.dll", "$drv\OpenCL.dll")
@@ -443,7 +443,7 @@ jobs:
           # 1. Each file's hash is in the catalog, and the catalog's
           #    signature verifies.
           $members = @('maliwddm.inf', 'maliwddm.sys', 'maliwddm.man', 'maliumd_arm64.dll', 'maliumd_fwd.dll', 'maliumd_x64.dll', 'maliumd_x86.dll', 'maligl_fwd.dll', 'maligl_arm64.dll', 'maligl_x64.dll', 'maligl_x86.dll')
-          if ($env:HAS_OPENCL -eq '1') { $members += 'malicl_arm64.dll', 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'OpenCL.dll' }
+          if ($env:HAS_OPENCL -eq '1') { $members += 'malicl_arm64.dll', 'OpenCL.dll' }
           foreach ($f in $members) {
             & $st verify /pa /q /c $cat "$drv\$f"
             if ($LASTEXITCODE) { throw "$f is not in $cat, or the catalog does not verify" }

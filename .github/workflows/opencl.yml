@@ -9,10 +9,10 @@ name: OpenCL
 # rusticl compiles OpenCL C when the application asks (clBuildProgram), so the
 # DLL carries clang, LLVM and the SPIR-V translator, linked statically. LLVM
 # is the LLVM project's own Windows ARM64 release (clang+llvm-*-aarch64-pc-
-# windows-msvc, static libraries and CMake files included), cached; it uses
-# the DLL C runtime (/MD), so the whole of this build does, Rust's standard
-# library included, and the package carries the VC runtime DLLs beside the
-# ICD.
+# windows-msvc, static libraries and CMake files included), cached. Its
+# libraries use the static C runtime (/MT, /DEFAULTLIB:libcmt.lib), as the
+# D3D UMD and the GL ICD do, so the whole of this build does, Rust's
+# standard library included (+crt-static): the ICD needs no runtime DLL.
 
 on:
   push:
@@ -35,14 +35,13 @@ env:
   LLVM_VER: '20.1.8'
   SPIRV_LLVM_TAG: v20.1.9
   SPIRV_TAG: vulkan-sdk-1.4.321.0
-  LIBXML2_TAG: v2.9.12
   CL_HEADERS_TAG: v2026.05.29
   CL_LOADER_TAG: v2026.05.29
   CLINFO_TAG: 3.0.25.02.14
   PKGCONF_TAG: pkgconf-2.3.0
   BINDGEN_VER: 0.71.1
   # Bumped by hand to throw a cache away.
-  DEPS_REV: '1'
+  DEPS_REV: '2'
 
 jobs:
   linux:
@@ -181,10 +180,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\cldeps
-          key: cldeps-${{ env.LLVM_VER }}-${{ env.SPIRV_LLVM_TAG }}-${{ env.SPIRV_TAG }}-${{ env.LIBXML2_TAG }}-${{ env.PKGCONF_TAG }}-${{ env.BINDGEN_VER }}-${{ env.DEPS_REV }}
+          key: cldeps-${{ env.LLVM_VER }}-${{ env.SPIRV_LLVM_TAG }}-${{ env.SPIRV_TAG }}-${{ env.PKGCONF_TAG }}-${{ env.BINDGEN_VER }}-${{ env.DEPS_REV }}
 
-      - name: pkgconf, libxml2, SPIRV-Tools, SPIRV-LLVM-Translator, bindgen
+      - name: pkgconf, SPIRV-Tools, SPIRV-LLVM-Translator, bindgen
         if: steps.deps-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 120
         shell: pwsh
         run: |
           $p = 'C:\cldeps'
@@ -193,9 +193,11 @@ jobs:
             git clone -q --depth 1 --branch $tag $url $dir
             if ($LASTEXITCODE) { throw "clone failed: $url $tag" }
           }
-          function CMake($src, $bld) {
+          # Not named CMake: PowerShell would call the function from itself.
+          function Build-CMake($src, $bld) {
+            Write-Host "== $src $(Get-Date -Format HH:mm:ss)"
             cmake -S $src -B $bld -G Ninja -DCMAKE_BUILD_TYPE=Release `
-              -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL -DCMAKE_POLICY_DEFAULT_CMP0091=NEW `
+              -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DCMAKE_POLICY_DEFAULT_CMP0091=NEW `
               "-DCMAKE_INSTALL_PREFIX=$p" "-DCMAKE_PREFIX_PATH=$p;C:/llvm" @args
             if ($LASTEXITCODE) { throw "cmake failed: $src" }
             ninja -C $bld install
@@ -210,23 +212,18 @@ jobs:
           meson install -C deps\pkgconf-b
           if ($LASTEXITCODE) { throw 'pkgconf build failed' }
 
-          # libxml2 as the LLVM release builds it (build_llvm_release.bat):
-          # its LLVMWindowsManifest refers to it.
-          Clone https://github.com/GNOME/libxml2.git $env:LIBXML2_TAG deps\libxml2
-          CMake deps\libxml2 deps\libxml2-b -DBUILD_SHARED_LIBS=OFF -DLIBXML2_WITH_ICONV=OFF -DLIBXML2_WITH_ICU=OFF `
-            -DLIBXML2_WITH_LZMA=OFF -DLIBXML2_WITH_PYTHON=OFF -DLIBXML2_WITH_ZLIB=OFF -DLIBXML2_WITH_TESTS=OFF -DLIBXML2_WITH_PROGRAMS=OFF
-
           Clone https://github.com/KhronosGroup/SPIRV-Headers.git $env:SPIRV_TAG deps\SPIRV-Headers
-          CMake deps\SPIRV-Headers deps\SPIRV-Headers-b
+          Build-CMake deps\SPIRV-Headers deps\SPIRV-Headers-b
           Clone https://github.com/KhronosGroup/SPIRV-Tools.git $env:SPIRV_TAG deps\SPIRV-Tools
-          CMake deps\SPIRV-Tools deps\SPIRV-Tools-b "-DSPIRV-Headers_SOURCE_DIR=$pwd\deps\SPIRV-Headers" `
+          Build-CMake deps\SPIRV-Tools deps\SPIRV-Tools-b "-DSPIRV-Headers_SOURCE_DIR=$pwd\deps\SPIRV-Headers" `
             -DSPIRV_SKIP_TESTS=ON -DSPIRV_SKIP_EXECUTABLES=ON -DSPIRV_WERROR=OFF -DSPIRV_TOOLS_BUILD_STATIC=ON
 
           Clone https://github.com/KhronosGroup/SPIRV-LLVM-Translator.git $env:SPIRV_LLVM_TAG deps\SPIRV-LLVM-Translator
-          CMake deps\SPIRV-LLVM-Translator deps\SPIRV-LLVM-Translator-b -DLLVM_DIR=C:/llvm/lib/cmake/llvm `
+          Build-CMake deps\SPIRV-LLVM-Translator deps\SPIRV-LLVM-Translator-b -DLLVM_DIR=C:/llvm/lib/cmake/llvm `
             "-DLLVM_EXTERNAL_SPIRV_HEADERS_SOURCE_DIR=$pwd\deps\SPIRV-Headers" -DLLVM_SPIRV_INCLUDE_TESTS=OFF `
             -DLLVM_SPIRV_BUILD_EXTERNAL=YES -DBUILD_SHARED_LIBS=OFF
 
+          Write-Host "== bindgen $(Get-Date -Format HH:mm:ss)"
           cargo install bindgen-cli --version $env:BINDGEN_VER --locked --root $p
           if ($LASTEXITCODE) { throw 'cargo install bindgen-cli failed' }
           Remove-Item -Recurse -Force deps
@@ -268,8 +265,9 @@ jobs:
       - name: Configure
         shell: pwsh
         run: |
-          # clang-cl as for the other Panfrost builds; the DLL C runtime
-          # (b_vscrt=md) because the LLVM release's libraries use it.
+          # clang-cl as for the other Panfrost builds; the static C runtime
+          # (b_vscrt=mt), which the LLVM release's libraries use, and Rust's
+          # standard library linked the same way (+crt-static).
           $cc = (Join-Path $env:VCINSTALLDIR 'Tools\Llvm\ARM64\bin\clang-cl.exe') -replace '\\', '/'
           Set-Content -Encoding ascii native.ini ("[binaries]`nc = '$cc'`ncpp = '$cc'`n" +
             "llvm-config = 'C:/llvm/bin/llvm-config.exe'`nbindgen = 'C:/cldeps/bin/bindgen.exe'`n" +
@@ -277,7 +275,7 @@ jobs:
             "[built-in options]`npkg_config_path = ['C:/cldeps/lib/pkgconfig', 'C:/cldeps/share/pkgconfig', 'C:/libclc/pkgconfig']`n")
           Get-Content native.ini
           meson setup build mesa --backend=ninja --native-file native.ini `
-            -Dbuildtype=debugoptimized -Db_vscrt=md `
+            -Dbuildtype=debugoptimized -Db_vscrt=mt '-Drust_args=-Ctarget-feature=+crt-static' `
             -Dplatforms=windows `
             '-Dgallium-drivers=softpipe,panfrost' `
             -Dgallium-rusticl=true `
@@ -295,6 +293,7 @@ jobs:
           if ($LASTEXITCODE) { if (Test-Path build\meson-logs\meson-log.txt) { Get-Content build\meson-logs\meson-log.txt -Tail 150 }; throw 'meson setup failed' }
 
       - name: Build
+        timeout-minutes: 150
         shell: pwsh
         run: |
           ninja -C build -k 0 2>&1 | Tee-Object build.log | Select-String -Pattern '^\[\d+/\d+\]' -NotMatch | Select-Object -Last 400
@@ -320,23 +319,11 @@ jobs:
           }
           $imp = @(dumpbin /nologo /dependents out\malicl_arm64.dll | Select-String '^\s+\S+\.dll\s*$' | ForEach-Object { $_.Line.Trim() })
           Write-Host "imports: $($imp -join ', ')"
-          # Windows' own DLLs, and the VC runtime the package carries.
-          $ok = '^(kernel32|user32|gdi32|advapi32|ws2_32|ole32|oleaut32|shell32|bcrypt|bcryptprimitives|ntdll|userenv|synchronization|dbghelp|version|psapi|crypt32|secur32|ucrtbase|vcruntime140|vcruntime140_1|msvcp140|msvcp140_1|msvcp140_2|msvcp140_atomic_wait|api-ms-win-[a-z0-9-]+)\.dll$'
+          # Windows' own DLLs only: an ICD is loaded into any ARM64 program
+          # and must not need a runtime DLL beside it.
+          $ok = '^(kernel32|user32|gdi32|advapi32|ws2_32|ole32|oleaut32|shell32|bcrypt|bcryptprimitives|ntdll|userenv|synchronization|dbghelp|version|psapi|crypt32|secur32|api-ms-win-[a-z0-9-]+)\.dll$'
           $odd = @($imp | Where-Object { $_ -notmatch $ok })
           if ($odd.Count) { throw "malicl_arm64.dll imports $($odd -join ', ')" }
-          # The VC runtime the INF installs beside it (maliwddm.inf,
-          # [MW_ClFiles]), from this toolset's redist, whether or not each one
-          # is imported.
-          $crt = Get-ChildItem (Join-Path $env:VCToolsRedistDir 'arm64') -Directory -Filter 'Microsoft.VC*.CRT' | Select-Object -First 1
-          if (-not $crt) { throw "no ARM64 CRT redist under $env:VCToolsRedistDir" }
-          foreach ($d in 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll') {
-            $src = Join-Path $crt.FullName $d
-            if (-not (Test-Path $src)) { throw "$d is not in $($crt.FullName)" }
-            Copy-Item $src out\
-            Write-Host "runtime: $d ($($crt.Name), $((Get-Item $src).VersionInfo.FileVersion))"
-          }
-          $extra = @($imp | Where-Object { $_ -match '^(msvcp140_|vcruntime140_[2-9])' })
-          if ($extra.Count) { throw "malicl_arm64.dll imports $($extra -join ', '), which the INF does not install" }
 
       - name: Khronos ICD loader, clinfo, cltest
         shell: pwsh

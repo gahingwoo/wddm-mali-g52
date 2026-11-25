@@ -60,9 +60,6 @@ maligl_arm64.dll  = 1
 maligl_x64.dll    = 1
 maligl_x86.dll    = 1
 malicl_arm64.dll   = 1 ; [opencl]
-vcruntime140.dll   = 1 ; [opencl]
-vcruntime140_1.dll = 1 ; [opencl]
-msvcp140.dll       = 1 ; [opencl]
 OpenCL.dll         = 1 ; [opencl]
 
 [Manufacturer]
@@ -116,16 +113,12 @@ maligl_x86.dll,,,0x00004000
 "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;BU)(A;;GRGX;;;AC)(A;;GRGX;;;S-1-15-2-2)"
 
 ; OpenCL (docs/OPENCL.md): Mesa's rusticl on Panfrost, an OpenCL ICD for the
-; Khronos loader, ARM64 processes only. It stays in the driver store with the
-; VC runtime it was linked against (/MD, as the LLVM release it carries is):
-; the loader opens it by full path with LOAD_WITH_ALTERED_SEARCH_PATH, so the
-; runtime beside it is the one found. Lines marked [opencl] are taken out by
-; the package job when a build has no OpenCL ICD.
+; Khronos loader, ARM64 processes only. It stays in the driver store (the
+; loader opens it by the full path below); like the UMDs it links the C
+; runtime in, so nothing goes beside it. Lines marked [opencl] are taken out
+; by the package job when a build has no OpenCL ICD.
 [MW_ClFiles] ; [opencl]
 malicl_arm64.dll ; [opencl]
-vcruntime140.dll ; [opencl]
-vcruntime140_1.dll ; [opencl]
-msvcp140.dll ; [opencl]
 
 ; The Khronos ICD loader as System32\OpenCL.dll, which programs link to;
 ; Windows has none of its own. 0x00000010 is COPYFLG_NO_OVERWRITE: an
