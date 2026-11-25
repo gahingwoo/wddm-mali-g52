@@ -44,6 +44,20 @@ index 5e54c68..803cc6b 100644
  
  
     result = panvk_precomp_init(device);
+diff --git a/src/panfrost/vulkan/panvk_vX_physical_device.c b/src/panfrost/vulkan/panvk_vX_physical_device.c
+index dd8b768..8b0a7c8 100644
+--- a/src/panfrost/vulkan/panvk_vX_physical_device.c
++++ b/src/panfrost/vulkan/panvk_vX_physical_device.c
+@@ -117,6 +117,9 @@ panvk_per_arch(get_physical_device_extensions)(
+       .KHR_shader_untyped_pointers = PAN_ARCH >= 9,
+       .KHR_spirv_1_4 = PAN_ARCH >= 10,
+       .KHR_storage_buffer_storage_class = true,
++#ifdef VK_USE_PLATFORM_WIN32_KHR
++      .KHR_swapchain = true,
++#endif
+ #ifdef PANVK_USE_WSI_PLATFORM
+       .KHR_present_id = true,
+       .KHR_present_id2 = true,
 diff --git a/src/panfrost/vulkan/panvk_wsi.c b/src/panfrost/vulkan/panvk_wsi.c
 index 1b4acc0..43ea034 100644
 --- a/src/panfrost/vulkan/panvk_wsi.c
