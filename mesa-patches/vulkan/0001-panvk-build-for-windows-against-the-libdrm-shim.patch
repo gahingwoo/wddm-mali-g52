@@ -1,0 +1,131 @@
+diff --git a/src/panfrost/vulkan/meson.build b/src/panfrost/vulkan/meson.build
+index 9885d52..b414794 100644
+--- a/src/panfrost/vulkan/meson.build
++++ b/src/panfrost/vulkan/meson.build
+@@ -202,6 +202,25 @@ if with_platform_android
+   libpanvk_files += files('panvk_android.c')
+ endif
+ 
++# Windows (wddm-mali-g52): libdrm is the shim in libpankmod, which drives the
++# Mali through maliwddm. Mesa builds the DRM syncobj support of the Vulkan
++# runtime only with a real libdrm, so the two files are built here, with
++# HAVE_LIBDRM, against the shim's xf86drm.h. panvk_win32.c has the log the
++# shim writes to. The exports come from vulkan_api.def, as for lavapipe.
++panvk_link_whole = []
++if host_machine.system() == 'windows'
++  libpanvk_win32_sync = static_library(
++    'panvk_win32_sync',
++    files('../../vulkan/runtime/vk_drm_syncobj.c', '../../util/u_sync_provider.c'),
++    include_directories : [inc_include, inc_src],
++    dependencies : [idep_vulkan_runtime_headers, idep_mesautil],
++    c_args : [no_override_init_args, '-DHAVE_LIBDRM'],
++    gnu_symbol_visibility : 'hidden',
++  )
++  panvk_link_whole += libpanvk_win32_sync
++  libpanvk_files += files('panvk_win32.c')
++endif
++
+ libvulkan_panfrost = shared_library(
+   'vulkan_panfrost',
+   [libpanvk_files, panvk_entrypoints, panvk_tracepoints, panvk_drirc],
+@@ -210,7 +229,8 @@ libvulkan_panfrost = shared_library(
+     inc_src,
+     inc_panfrost,
+   ],
+-  link_whole : [panvk_per_arch_libs],
++  link_whole : [panvk_per_arch_libs, panvk_link_whole],
++  vs_module_defs : vulkan_api_def,
+   link_with : [
+     libpanfrost_shared,
+     libpanfrost_decode,
+diff --git a/src/panfrost/vulkan/panvk_win32.c b/src/panfrost/vulkan/panvk_win32.c
+new file mode 100644
+index 0000000..737d140
+--- /dev/null
++++ b/src/panfrost/vulkan/panvk_win32.c
+@@ -0,0 +1,85 @@
++/*
++ * Copyright 2026 wddm-mali-g52
++ * SPDX-License-Identifier: MIT
++ *
++ * What the libdrm shim (win32-compat/malikm_drm.c in wddm-mali-g52) calls
++ * that the Direct3D UMD and the OpenGL ICD define in their own frontends:
++ * the log, and the slow-operation log, which is off here.
++ *
++ * The log goes to OutputDebugString and, when the directory C:\mali\log
++ * exists, to C:\mali\log\<program>-<pid>-vk.txt, as the other two drivers do.
++ */
++
++#include <windows.h>
++#include <stdarg.h>
++#include <stdint.h>
++#include <stdio.h>
++
++static void
++panvk_win32_log_append(const char *buf, int len)
++{
++   static HANDLE log = NULL;
++   DWORD done;
++
++   if (log == NULL) {
++      HANDLE f = INVALID_HANDLE_VALUE;
++      if (GetFileAttributesA("C:\\mali\\log") != INVALID_FILE_ATTRIBUTES) {
++         char exe[MAX_PATH], path[MAX_PATH];
++         const char *base = exe;
++         DWORD n = GetModuleFileNameA(NULL, exe, sizeof exe);
++         exe[n < sizeof exe ? n : sizeof exe - 1] = 0;
++         for (const char *c = exe; *c; c++)
++            if (*c == '\\' || *c == '/')
++               base = c + 1;
++         snprintf(path, sizeof path, "C:\\mali\\log\\%s-%lu-vk.txt", base,
++                  (unsigned long)GetCurrentProcessId());
++         f = CreateFileA(path, FILE_APPEND_DATA,
++                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
++                         NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
++      }
++      if (InterlockedCompareExchangePointer((PVOID volatile *)&log, f, NULL) != NULL &&
++          f != INVALID_HANDLE_VALUE)
++         CloseHandle(f);
++   }
++   if (log != INVALID_HANDLE_VALUE)
++      WriteFile(log, buf, (DWORD)len, &done, NULL);
++}
++
++void
++DebugPrintf(const char *format, ...)
++{
++   char buf[2048];
++   int off, len;
++   va_list ap;
++
++   off = snprintf(buf, sizeof buf, "%10lu %5lu ", (unsigned long)GetTickCount(),
++                  (unsigned long)GetCurrentThreadId());
++   va_start(ap, format);
++   len = vsnprintf(buf + off, sizeof buf - off, format, ap);
++   va_end(ap);
++   if (len < 0)
++      return;
++   if (len > (int)(sizeof buf - off - 1))
++      len = (int)(sizeof buf - off - 1);
++   OutputDebugStringA(buf + off);
++   panvk_win32_log_append(buf, off + len);
++}
++
++uint64_t
++mali_slow_now(void)
++{
++   return 0;
++}
++
++uint64_t
++mali_slow_over(uint64_t t0)
++{
++   (void)t0;
++   return 0;
++}
++
++void
++mali_slow_log(uint64_t ticks, const char *op, const char *fmt, ...)
++{
++   (void)ticks; (void)op; (void)fmt;
++}

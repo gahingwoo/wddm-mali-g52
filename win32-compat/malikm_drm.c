@@ -305,6 +305,22 @@ drmIoctl(int fd, unsigned long request, void *arg)
    unsigned size = (request >> 16) & 0x1fff;
    size_t extra = 0;
 
+   /* A syncobj to a sync file and back, asked as the ioctls (panvk's
+    * panvk_queue_transfer_sync) rather than through libdrm's helpers:
+    * the same sequence numbers as drmSyncobjExportSyncFile below. An
+    * opaque syncobj fd is not supported. */
+   if (nr == (DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD & 0xff) || nr == (DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE & 0xff)) {
+      struct drm_syncobj_handle *a = arg;
+      if (nr == (DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD & 0xff) &&
+          (a->flags & DRM_SYNCOBJ_HANDLE_TO_FD_FLAGS_EXPORT_SYNC_FILE))
+         return drmSyncobjExportSyncFile(fd, a->handle, &a->fd);
+      if (nr == (DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE & 0xff) &&
+          (a->flags & DRM_SYNCOBJ_FD_TO_HANDLE_FLAGS_IMPORT_SYNC_FILE))
+         return drmSyncobjImportSyncFile(fd, a->handle, a->fd);
+      errno = ENOSYS;
+      return -1;
+   }
+
    switch (nr) {
    case MALIKM_NR_PANFROST_SUBMIT: {
       const struct drm_panfrost_submit *s = arg;
@@ -564,6 +580,99 @@ drmSyncobjTransfer(int fd, uint32_t dst_handle, uint64_t dst_point,
    return -1;
 }
 
+int
+drmSyncobjTimelineSignal(int fd, const uint32_t *handles, uint64_t *points, uint32_t handle_count)
+{
+   (void)fd; (void)handles; (void)points; (void)handle_count;
+   errno = ENOSYS;
+   return -1;
+}
+
+int
+drmSyncobjQuery2(int fd, uint32_t *handles, uint64_t *points, uint32_t handle_count,
+                 uint32_t flags)
+{
+   (void)fd; (void)handles; (void)points; (void)handle_count; (void)flags;
+   errno = ENOSYS;
+   return -1;
+}
+
+/* What the Vulkan runtime asks (vk_drm_syncobj, u_sync_provider): syncobjs
+ * yes, timelines no, so it emulates timeline semaphores on binary ones as
+ * it does on Linux panfrost. */
+int
+drmGetCap(int fd, uint64_t capability, uint64_t *value)
+{
+   (void)fd;
+   switch (capability) {
+   case DRM_CAP_SYNCOBJ:
+      *value = 1;
+      return 0;
+   case DRM_CAP_SYNCOBJ_TIMELINE:
+      *value = 0;
+      return 0;
+   default:
+      errno = EINVAL;
+      return -1;
+   }
+}
+
+/* ---- the device, as libdrm describes one ----
+ * One platform device with a render node, the Mali. The node's name is only
+ * a label: nothing opens it (panvk opens the Mali with malikm_open). */
+
+static char drm_node_name[] = "maliwddm";
+
+static drmDevicePtr
+drm_device_new(void)
+{
+   drmDevicePtr d = calloc(1, sizeof(*d) + DRM_NODE_MAX * sizeof(char *) +
+                              sizeof(drmPlatformBusInfo));
+   if (!d)
+      return NULL;
+   d->nodes = (char **)(d + 1);
+   d->nodes[DRM_NODE_RENDER] = drm_node_name;
+   d->available_nodes = 1 << DRM_NODE_RENDER;
+   d->bustype = DRM_BUS_PLATFORM;
+   d->businfo.platform = (drmPlatformBusInfoPtr)(d->nodes + DRM_NODE_MAX);
+   strcpy(d->businfo.platform->fullname, "/rk3576/gpu@27800000");
+   return d;
+}
+
+int
+drmGetDevice2(int fd, uint32_t flags, drmDevicePtr *device)
+{
+   (void)fd; (void)flags;
+   *device = drm_device_new();
+   return *device ? 0 : -ENOMEM;
+}
+
+int
+drmGetDevices2(uint32_t flags, drmDevicePtr devices[], int max_devices)
+{
+   (void)flags;
+   if (!devices || max_devices < 1)
+      return 1;
+   devices[0] = drm_device_new();
+   return devices[0] ? 1 : -ENOMEM;
+}
+
+void
+drmFreeDevice(drmDevicePtr *device)
+{
+   if (device) {
+      free(*device);
+      *device = NULL;
+   }
+}
+
+void
+drmFreeDevices(drmDevicePtr devices[], int count)
+{
+   for (int i = 0; devices && i < count; i++)
+      drmFreeDevice(&devices[i]);
+}
+
 /* ---- sync files ----
  * Panfrost snapshots a syncobj's fence by exporting it to a sync file and
  * importing that into a new syncobj. Here the snapshot is the fence's
@@ -774,6 +883,7 @@ static UINT walloc_size;
 static D3DDDI_PATCHLOCATIONLIST *wpatch;
 static UINT wpatch_size;
 static MW_ESCAPE_GPU_INFO_DATA wgpu;
+static LUID wluid;              /* the adapter's, for Vulkan's deviceLUID */
 static uint64_t wseq;
 static int wddm = -1;
 static SRWLOCK wddm_lock = SRWLOCK_INIT;
@@ -1150,8 +1260,10 @@ wddm_init(void)
       MW_ESCAPE_GPU_INFO_DATA g = {0};
       g.Code = MW_ESCAPE_GPU_INFO;
       wadapter = info[i].hAdapter;
-      if (kmt_escape(0, &g, sizeof(g)) >= 0 && g.Count != 0 && g.Valid != 0)
+      if (kmt_escape(0, &g, sizeof(g)) >= 0 && g.Count != 0 && g.Valid != 0) {
          wgpu = g;
+         wluid = info[i].AdapterLuid;
+      }
       else
          wadapter = 0;
    }
@@ -3006,6 +3118,11 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
    }
 }
 
+/* Syncobjs that keep their state, when the Vulkan driver asks for them
+ * (malikm_syncobj_state); at the end of this file. */
+static int sstate;
+static int sync_layer(int w, uint32_t nr, uint8_t *b, uint32_t size);
+
 static void
 wddm_ioctl(int fd, DWORD code, void *buf, DWORD len)
 {
@@ -3057,7 +3174,8 @@ wddm_ioctl(int fd, DWORD code, void *buf, DWORD len)
       h->Result = 0;   /* the Lock stays until GEM_CLOSE */
       break;
    case IOCTL_MALIKM_DRM:
-      h->Result = wddm_drm(h->Nr, (uint8_t *)(h + 1), h->Size);
+      h->Result = sstate ? sync_layer(1, h->Nr, (uint8_t *)(h + 1), h->Size)
+                         : wddm_drm(h->Nr, (uint8_t *)(h + 1), h->Size);
       break;
    default:
       h->Result = -MK_ENOSYS;
@@ -3267,7 +3385,8 @@ fake_ioctl(DWORD code, void *buf, DWORD len)
       h->Result = 0;
       break;
    case IOCTL_MALIKM_DRM:
-      h->Result = fake_drm(h->Nr, (uint8_t *)(h + 1), h->Size);
+      h->Result = sstate ? sync_layer(0, h->Nr, (uint8_t *)(h + 1), h->Size)
+                         : fake_drm(h->Nr, (uint8_t *)(h + 1), h->Size);
       break;
    default:
       h->Result = -MK_ENOSYS;
@@ -3276,4 +3395,288 @@ fake_ioctl(DWORD code, void *buf, DWORD len)
    if (fake_trace() && code != IOCTL_MALIKM_VERSION)
       fprintf(stderr, "malikm-fake:   -> %d\n", h->Result);
    ReleaseSRWLockExclusive(&fake_lock);
+}
+
+/* ---- syncobjs that keep their state ----
+ *
+ * Without this, a syncobj of the maliwddm and emulated paths is a number:
+ * signal and reset do nothing and a wait waits for the device's queue to
+ * go idle. That is all Gallium Panfrost needs, since it waits only on
+ * fences it has submitted, and the KMD runs one in-order queue, so a job's
+ * in_syncs (earlier work) always hold. Vulkan asks more: a fence nobody
+ * submitted is not signalled, an event the host set is, vkGetFenceStatus
+ * never blocks. So for the Vulkan driver (and only there: the Direct3D and
+ * OpenGL drivers never turn it on) each syncobj has a state:
+ *
+ *   SO_UNSIG  no fence; SO_SIG  signalled; SO_PEND  waiting for submission
+ *   seq of device dev (the shim's wseq, or the emulated driver's fseq).
+ *
+ * A submission is known complete once a wait for idle returned after it,
+ * or when the KMD's statistics say nothing is queued or running (the
+ * emulated driver finishes every job as it is submitted). A zero timeout
+ * never blocks. A nonzero one on a pending syncobj waits for the queue to go
+ * idle, as before. One with no fence behind it is polled, with the lock
+ * dropped, until something submits or signals it or the time is up
+ * (DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT; without that flag it is EINVAL,
+ * as on Linux). Under wddm_lock (w) or fake_lock (!w), as the callers are.
+ */
+#define SO_UNSIG 1
+#define SO_SIG   2
+#define SO_PEND  3
+struct sobj {
+   uint8_t st;
+   uint8_t dev;
+   uint64_t seq;
+};
+static struct sobj *sobjs;
+static uint32_t sobj_cap;
+static uint64_t sdone[WDEV_MAX];
+
+void
+malikm_syncobj_state(int on)
+{
+   sstate = on != 0;
+}
+
+int
+malikm_adapter_luid(void *luid)
+{
+   if (!wddm_on() || fake_on())
+      return 0;
+   memcpy(luid, &wluid, sizeof(wluid));
+   return 1;
+}
+
+static struct sobj *
+sobj_get(uint32_t h)
+{
+   return h && h <= sobj_cap && sobjs[h - 1].st ? &sobjs[h - 1] : NULL;
+}
+
+static unsigned
+s_dev(int w)
+{
+   return w ? (unsigned)(wactive - wdevs) : 0;
+}
+
+static uint64_t
+s_seq(int w)
+{
+   return w ? wseq : fseq;
+}
+
+static int
+sobj_new(int w, int signaled, uint32_t *handle)
+{
+   uint32_t i;
+   for (i = 0; i < sobj_cap && sobjs[i].st; i++)
+      ;
+   if (i == sobj_cap) {
+      uint32_t cap = sobj_cap ? sobj_cap * 2 : 64;
+      struct sobj *n = realloc(sobjs, cap * sizeof(*n));
+      if (!n)
+         return -MK_ENOMEM;
+      memset(n + sobj_cap, 0, (cap - sobj_cap) * sizeof(*n));
+      sobjs = n;
+      sobj_cap = cap;
+   }
+   sobjs[i].st = signaled ? SO_SIG : SO_UNSIG;
+   sobjs[i].dev = (uint8_t)s_dev(w);
+   sobjs[i].seq = 0;
+   *handle = i + 1;
+   return 0;
+}
+
+/* Is submission seq of the current device done? No waiting. */
+static int
+s_done(int w, uint64_t seq)
+{
+   if (!w)
+      return 1;
+   unsigned d = s_dev(w);
+   if (seq <= sdone[d])
+      return 1;
+   if (ddi.on) {
+      wring_poll();
+      if (wring.done > sdone[d])
+         sdone[d] = wring.done;
+   } else {
+      MW_ESCAPE_STATS_DATA st = {0};
+      st.Code = MW_ESCAPE_STATS;
+      if (w_escape(&st, sizeof(st)) >= 0 && st.LastCompletedFence == st.LastSubmittedFence &&
+          !st.Queued && !st.Running)
+         sdone[d] = wseq;
+   }
+   return seq <= sdone[d];
+}
+
+static int
+s_ready(int w, const struct sobj *o)
+{
+   if (o->st == SO_SIG)
+      return 1;
+   if (o->st != SO_PEND)
+      return 0;
+   if (w && o->dev != s_dev(w)) {
+      struct wdev *was = wactive;
+      wselect(&wdevs[o->dev]);
+      int r = s_done(w, o->seq);
+      wselect(was);
+      return r;
+   }
+   return s_done(w, o->seq);
+}
+
+/* Wait until everything device dev submitted is done. */
+static int
+s_idle(int w, unsigned dev)
+{
+   if (!w)
+      return 0;
+   struct wdev *was = wactive;
+   wselect(&wdevs[dev]);
+   int r = wddm_idle("syncobj-wait");
+   if (r == 0)
+      sdone[dev] = wseq;
+   wselect(was);
+   return r;
+}
+
+/* Let another thread in for a millisecond. */
+static void
+s_pause(int w)
+{
+   if (w) {
+      struct wdev *was = wactive;
+      wunlock();
+      Sleep(1);
+      wlock("syncobj-wait");
+      wselect(was);
+   } else {
+      ReleaseSRWLockExclusive(&fake_lock);
+      Sleep(1);
+      AcquireSRWLockExclusive(&fake_lock);
+   }
+}
+
+static int
+s_wait(int w, struct drm_syncobj_wait *a, const uint32_t *hs)
+{
+   const int all = (a->flags & DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL) != 0;
+   const int infinite = a->timeout_nsec == MALIKM_TIMEOUT_INFINITE;
+   const ULONGLONG end = GetTickCount64() +
+      (infinite ? 0 : (ULONGLONG)((a->timeout_nsec + 999999) / 1000000));
+
+   if (a->count_handles == 0)
+      return -MK_EINVAL;
+   for (;;) {
+      uint32_t ready = 0, first = UINT32_MAX, unsub = 0;
+      for (uint32_t i = 0; i < a->count_handles; i++) {
+         const struct sobj *o = sobj_get(hs[i]);
+         if (!o)
+            return -MK_EINVAL;
+         if (s_ready(w, o)) {
+            ready++;
+            if (first == UINT32_MAX)
+               first = i;
+         } else if (o->st != SO_PEND) {
+            unsub++;
+         }
+      }
+      if (all ? ready == a->count_handles : ready > 0) {
+         a->first_signaled = first;
+         return 0;
+      }
+      if (unsub && !(a->flags & DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT))
+         return -MK_EINVAL;
+      if (a->timeout_nsec == 0)
+         return -MK_ETIME;
+      /* Pending ones: wait for their devices to go idle, then look again. */
+      int waited = 0;
+      for (uint32_t i = 0; i < a->count_handles; i++) {
+         const struct sobj *o = sobj_get(hs[i]);
+         if (o && o->st == SO_PEND && !s_ready(w, o)) {
+            int r = s_idle(w, o->dev);
+            if (r < 0)
+               return r;
+            waited = 1;
+         }
+      }
+      if (waited)
+         continue;
+      /* Only syncobjs nothing has submitted yet are left. */
+      if (!infinite && GetTickCount64() >= end)
+         return -MK_ETIME;
+      s_pause(w);
+   }
+}
+
+static int
+sync_layer(int w, uint32_t nr, uint8_t *b, uint32_t size)
+{
+   switch (nr) {
+   case MALIKM_NR_SYNCOBJ_CREATE: {
+      struct drm_syncobj_create *a = (void *)b;
+      return sobj_new(w, (a->flags & DRM_SYNCOBJ_CREATE_SIGNALED) != 0, &a->handle);
+   }
+   case MALIKM_NR_SYNCOBJ_DESTROY: {
+      struct sobj *o = sobj_get(((struct drm_syncobj_destroy *)b)->handle);
+      if (!o)
+         return -MK_EINVAL;
+      memset(o, 0, sizeof(*o));
+      return 0;
+   }
+   case MALIKM_NR_SYNCOBJ_RESET:
+   case MALIKM_NR_SYNCOBJ_SIGNAL: {
+      struct drm_syncobj_array *a = (void *)b;
+      const uint32_t *hs = (const uint32_t *)(b + a->handles);
+      for (uint32_t i = 0; i < a->count_handles; i++)
+         if (!sobj_get(hs[i]))
+            return -MK_EINVAL;
+      for (uint32_t i = 0; i < a->count_handles; i++)
+         sobj_get(hs[i])->st = nr == MALIKM_NR_SYNCOBJ_SIGNAL ? SO_SIG : SO_UNSIG;
+      return 0;
+   }
+   case MALIKM_NR_SYNCOBJ_WAIT: {
+      struct drm_syncobj_wait *a = (void *)b;
+      return s_wait(w, a, (const uint32_t *)(b + a->handles));
+   }
+   case MALIKM_NR_SYNCOBJ_EXPORT_SEQ: {
+      MALIKM_SYNCOBJ_SEQ *q = (void *)b;
+      const struct sobj *o = sobj_get(q->Handle);
+      if (!o || o->st == SO_UNSIG)
+         return -MK_EINVAL;   /* no fence to export, as on Linux */
+      q->Seq = o->st == SO_PEND ? o->seq : 0;
+      return 0;
+   }
+   case MALIKM_NR_SYNCOBJ_IMPORT_SEQ: {
+      MALIKM_SYNCOBJ_SEQ *q = (void *)b;
+      struct sobj *o = sobj_get(q->Handle);
+      if (!o)
+         return -MK_EINVAL;
+      o->dev = (uint8_t)s_dev(w);
+      o->seq = q->Seq == MALIKM_SEQ_LATEST ? s_seq(w) : q->Seq;
+      o->st = o->seq ? SO_PEND : SO_SIG;
+      return 0;
+   }
+   case MALIKM_NR_PANFROST_SUBMIT: {
+      struct drm_panfrost_submit *a = (void *)b;
+      uint32_t out = a->out_sync;
+      if (out && !sobj_get(out))
+         return -MK_EINVAL;
+      /* The in_syncs are met by the queue's order. The backend ignores
+       * both fields, except that an out_sync keeps a chain from being held
+       * back for merging (wmerge), which a syncobj pending on it needs. */
+      int r = w ? wddm_drm(nr, b, size) : fake_drm(nr, b, size);
+      if (r == 0 && out) {
+         struct sobj *o = sobj_get(out);
+         o->st = SO_PEND;
+         o->dev = (uint8_t)s_dev(w);
+         o->seq = s_seq(w);
+      }
+      return r;
+   }
+   default:
+      return w ? wddm_drm(nr, b, size) : fake_drm(nr, b, size);
+   }
 }
