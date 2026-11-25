@@ -180,6 +180,17 @@ jobs:
           Get-ChildItem C:\llvm\lib -Filter 'clang*.lib' | Measure-Object | ForEach-Object { "clang libraries: $($_.Count)" }
           Get-ChildItem C:\llvm\lib -Filter 'LLVM*.lib' | Measure-Object | ForEach-Object { "LLVM libraries: $($_.Count)" }
           if (-not (Test-Path C:\llvm\lib\cmake\llvm\LLVMConfig.cmake)) { throw 'no LLVMConfig.cmake in the release' }
+          # LLVM's CMake exports check that every tool they name exists, and
+          # the cache keeps only a few: empty stand-ins for the others (the
+          # translator's build runs none of them).
+          $n = 0
+          Get-ChildItem C:\llvm\lib\cmake -Recurse -Filter '*Exports-*.cmake' | ForEach-Object {
+            Select-String -Path $_.FullName -Pattern '\$\{_IMPORT_PREFIX\}/(bin/[^" ]+\.exe)' -AllMatches | ForEach-Object { $_.Matches } | ForEach-Object {
+              $f = Join-Path C:\llvm $_.Groups[1].Value
+              if (-not (Test-Path $f)) { New-Item -ItemType File -Force $f | Out-Null; $n++ }
+            }
+          }
+          "empty stand-ins for $n pruned tools"
           if (-not (Get-ChildItem C:\llvm\lib\clang -Recurse -Filter opencl-c.h)) { throw 'no opencl-c.h in the release' }
           dumpbin /nologo /directives C:\llvm\lib\LLVMSupport.lib | Select-String 'DEFAULTLIB' | Select-Object -Unique -First 6 | ForEach-Object { $_.Line.Trim() }
 
