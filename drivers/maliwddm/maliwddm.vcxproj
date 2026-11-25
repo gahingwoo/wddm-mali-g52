@@ -81,6 +81,7 @@
     <ClCompile Include="probe.c" />
     <ClCompile Include="wddm2x.c" />
     <ClCompile Include="pcw.c" />
+    <ClCompile Include="vdecexport.c" />
     <ClCompile Include="..\common\maligpu.c" />
   </ItemGroup>
 

@@ -22,8 +22,12 @@
 
 /* 2: buffers are mapped through the decoder's IOMMU (dma is an IO address),
  * VDPU383_RUN_MMU_FAULT, the IOMMU fields at the end of VDPU383_INFO. The
- * structures are otherwise those of 1, and a version 1 program works. */
-#define VDPU383_INTERFACE_VERSION   2
+ * structures are otherwise those of 1, and a version 1 program works.
+ * 3: IOCTL_VDPU383_IMPORT (another driver's pages, a display driver's
+ * texture, at IO addresses of the decoder), VDPU383_RUN_REVOKED, the import
+ * counters of VDPU383_INFO (in what were reserved words). A version 2
+ * program works unchanged. */
+#define VDPU383_INTERFACE_VERSION   3
 
 #ifndef CTL_CODE
 #define CTL_CODE(t, f, m, a) (((t) << 16) | ((a) << 14) | ((f) << 2) | (m))
@@ -43,6 +47,7 @@
 #define IOCTL_VDPU383_FREE       CTL_CODE(VDPU383_DEVICE_TYPE, 0x805, METHOD_BUFFERED, FILE_READ_ACCESS | FILE_WRITE_ACCESS)
 #define IOCTL_VDPU383_RUN        CTL_CODE(VDPU383_DEVICE_TYPE, 0x806, METHOD_BUFFERED, FILE_READ_ACCESS | FILE_WRITE_ACCESS)
 #define IOCTL_VDPU383_RESET      CTL_CODE(VDPU383_DEVICE_TYPE, 0x807, METHOD_BUFFERED, FILE_READ_ACCESS | FILE_WRITE_ACCESS)
+#define IOCTL_VDPU383_IMPORT     CTL_CODE(VDPU383_DEVICE_TYPE, 0x808, METHOD_BUFFERED, FILE_READ_ACCESS | FILE_WRITE_ACCESS)
 
 #pragma pack(push, 8)
 
@@ -81,7 +86,11 @@ typedef struct VDPU383_INFO {
     unsigned int mmu_faults;            /* page fault / bus error interrupts */
     unsigned int mmu_enables;           /* times paging was (re)programmed */
     unsigned int alloc_failures;
-    unsigned int reserved2[5];
+    /* version 3 */
+    unsigned int imports;               /* imports made or refreshed */
+    unsigned int revokes;               /* imports the exporter took back */
+    unsigned int import_failures;
+    unsigned int reserved2[2];
 } VDPU383_INFO;
 
 /* Register access: offsets are bytes into the 4 KiB block, 4-aligned. */
@@ -121,10 +130,39 @@ typedef struct VDPU383_ALLOC_OUT {
 } VDPU383_ALLOC_OUT;
 
 #define VDPU383_ALLOC_IOVA      0x01    /* dma is an IO address */
+#define VDPU383_ALLOC_IMPORTED  0x02    /* another driver's pages (IOCTL_VDPU383_IMPORT) */
 
 typedef struct VDPU383_FREE_IN {
     unsigned int handle;
 } VDPU383_FREE_IN;
+
+/*
+ * Zero copy (version 3): the pages of a display driver allocation, named by
+ * the token its escape gave this process (wddm-mali-g52 maliwddm,
+ * MW_ESCAPE_VDEC_EXPORT; vdpu383_import.h says how the drivers talk), at
+ * a free run of the decoder's IO addresses. Only with the IOMMU on
+ * (VDPU383_INFO.iommu 1); not mapped into the caller (it has the
+ * allocation already). Freed with IOCTL_VDPU383_FREE like a buffer.
+ *
+ * When the exporter takes the pages back (the allocation is evicted or
+ * destroyed), the mapping is cleared and a decode naming its addresses
+ * returns VDPU383_RUN_REVOKED. handle != 0 refreshes that import from a
+ * new token of the same allocation: the same IO addresses, the new pages
+ * (an import that is not dead keeps its pages; the call then succeeds if
+ * the token is the one it has).
+ */
+typedef struct VDPU383_IMPORT_IN {
+    unsigned long long token;
+    unsigned int pages;         /* the allocation's size in 4 KiB pages, as the exporter said */
+    unsigned int handle;        /* 0: a new import */
+} VDPU383_IMPORT_IN;
+
+typedef struct VDPU383_IMPORT_OUT {
+    unsigned int handle;
+    unsigned int dma;           /* IO address of the allocation's first byte */
+    unsigned int size;
+    unsigned int flags;         /* VDPU383_ALLOC_IOVA | VDPU383_ALLOC_IMPORTED */
+} VDPU383_IMPORT_OUT;
 
 /* One decode. */
 #define VDPU383_RUN_NO_ADDR_CHECK   0x01    /* allow addresses outside this handle's buffers */
@@ -148,6 +186,8 @@ typedef struct VDPU383_RUN_IN {
 #define VDPU383_RUN_MMU_FAULT   5           /* IOMMU page fault or bus error; the core was
                                              * stopped (IP reset); bad_reg is the faulting
                                              * IO address, mmu_status the IOMMU status */
+#define VDPU383_RUN_REVOKED     6           /* rejected before start: register bad_reg names an
+                                             * import its exporter took back (refresh it) */
 
 typedef struct VDPU383_RUN_OUT {
     unsigned int result;

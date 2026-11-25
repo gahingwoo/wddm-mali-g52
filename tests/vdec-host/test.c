@@ -9,7 +9,14 @@
  * the ones vdpu383test --dxva-only builds for the same stream
  * (vdpu383test-reglog.patch, README.md). `make run`.
  *
- *   vdec-host STREAM [--frames N] [--reglog-md5 MD5] [--av1-synth 0|1] [--log FILE]
+ *   vdec-host STREAM [--frames N] [--reglog-md5 MD5] [--av1-synth 0|1] [--log FILE] [--zero-copy]
+ *
+ * --zero-copy: every picture but every fourth is given a target, a slice of
+ * one "texture array" of this test's (zero copy, vdec_set_target), laid out
+ * with 64 more rows than the decoder's own surfaces; the pattern must be in
+ * the slice, the others (decoded into surfaces of the decoder's own and
+ * copied by the caller) where vdec_picture says, and every address the
+ * decoder is given in a buffer of the backend or the texture.
  *
  * The codec is told from the stream as vdpu383test does (IVF fourcc, then
  * the first NAL unit).
@@ -39,7 +46,47 @@ static unsigned status_of[MAX_SLOTS];
 static vdec_picture last_pic[MAX_SLOTS];
 static unsigned pictures, outputs, failures;
 
+/* --zero-copy: the texture array, one slice per DXVA index */
+#define TEX_SLICES 32
+static int zero_copy;
+static uint8_t *tex;
+static unsigned tex_stride, tex_rows, tex_pages, zc_given, zc_in;
+static size_t tex_layer;
+
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
+
+static unsigned align_to(unsigned v, unsigned a)
+{
+    return (v + a - 1) / a * a;
+}
+
+/* The texture for picture decode_index, in slice slot; none for every
+ * fourth picture. The array is laid out for the stream's largest picture. */
+static void give_target(unsigned slot, unsigned decode_index, unsigned w, unsigned h)
+{
+    vdec_target t;
+
+    if (!zero_copy)
+        return;
+    if (!tex) {
+        tex_stride = align_to(w, 64);
+        tex_rows = align_to(h, 64) + 64;
+        tex_layer = align_to(tex_stride * tex_rows * 3 / 2, 4096);
+        tex_pages = (unsigned)(tex_layer * TEX_SLICES / 4096);
+        tex = calloc(TEX_SLICES, tex_layer);
+    }
+    if (decode_index % 4 == 3 || slot >= TEX_SLICES)
+        return;
+    memset(&t, 0, sizeof(t));
+    t.token = 0x5a5a0001ull;
+    t.pages = tex_pages;
+    t.offset = slot * tex_layer;
+    t.stride = tex_stride;
+    t.luma_rows = tex_rows;
+    t.fake_map = tex;
+    vdec_set_target(dec, &t);
+    zc_given++;
+}
 
 static int make_decoder(vdec_codec c, unsigned w, unsigned h)
 {
@@ -69,6 +116,11 @@ static int decoded(unsigned slot, unsigned status, int rc, const vdec_picture *o
     CHECK(out->luma_rows >= out->height);
     status_of[slot] = status;
     last_pic[slot] = *out;
+    if (out->in_target) {
+        CHECK(zero_copy && out->data == NULL && out->stride == tex_stride && out->luma_rows == tex_rows);
+        last_pic[slot].data = tex + slot * tex_layer;
+        zc_in++;
+    }
     pictures++;
     return 0;
 }
@@ -108,6 +160,7 @@ static int h264_cb(void *ctx, const H264Picture *pic)
     if (make_decoder(VDEC_CODEC_H264, pic->width, pic->height))
         return -1;
     pp.StatusReportFeedbackNumber = pic->decode_index + 1;
+    give_target(V383_PIC_INDEX(pp.CurrPic), pic->decode_index, pic->width, pic->height);
     rc = vdec_h264_decode(dec, &pp, &pic->qm, pic->stream, (unsigned)pic->stream_len, &out, err, sizeof err);
     if (!rc)
         CHECK(out.width == pic->width && out.height == pic->height);
@@ -133,6 +186,7 @@ static int hevc_cb(void *ctx, const HevcPicture *pic)
     if (make_decoder(VDEC_CODEC_HEVC, pic->width, pic->height))
         return -1;
     pp.StatusReportFeedbackNumber = pic->decode_index + 1;
+    give_target(V383_PIC_INDEX(pp.CurrPic), pic->decode_index, pic->width, pic->height);
     /* The matrix as FFmpeg hands it over: only with scaling lists on. */
     rc = vdec_hevc_decode(dec, &pp, V383_HEVC_SCALING_LIST_ENABLED(&pp) ? &pic->qm : NULL, pic->stream,
                           (unsigned)pic->stream_len, &out, err, sizeof err);
@@ -154,6 +208,7 @@ static int vp9_cb(void *ctx, const Vp9Picture *pic)
     if (make_decoder(VDEC_CODEC_VP9, max_w, max_h))
         return -1;
     pp.StatusReportFeedbackNumber = pic->decode_index + 1;
+    give_target(V383_PIC_INDEX(pp.CurrPic), pic->decode_index, max_w, max_h);
     rc = vdec_vp9_decode(dec, &pp, pic->data, (unsigned)pic->len, &out, err, sizeof err);
     if (!rc)
         CHECK(out.width == pp.width && out.height == pp.height);
@@ -183,6 +238,7 @@ static int av1_cb(void *ctx, const Av1Picture *pic)
         if (pic->tiles[i].DataOffset + pic->tiles[i].DataSize > end)
             end = pic->tiles[i].DataOffset + pic->tiles[i].DataSize;
     pp.StatusReportFeedbackNumber = pic->decode_index + 1;
+    give_target(pp.CurrPicTextureIndex, pic->decode_index, max_w, max_h);
     rc = vdec_av1_decode(dec, &pp, pic->tiles, pic->num_tiles, pic->tile_data, end, &out, err, sizeof err);
     if (!rc)
         CHECK(out.width == pp.width && out.height == pp.height);
@@ -262,6 +318,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--reglog-md5") && i + 1 < argc) want_md5 = argv[++i];
         else if (!strcmp(argv[i], "--av1-synth") && i + 1 < argc) opts.av1_synth = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--log") && i + 1 < argc) log = argv[++i];
+        else if (!strcmp(argv[i], "--zero-copy")) zero_copy = 1;
         else if (!path) path = argv[i];
         else {
             printf("unknown argument %s\n", argv[i]);
@@ -330,6 +387,12 @@ int main(int argc, char **argv)
     vdec_get_stats(&st);
     CHECK(st.fake == 1);
     CHECK(st.pictures == pictures && st.errors == 0);
+    if (zero_copy) {
+        /* every target taken, the rest copied; one import for the array */
+        printf("zero copy: %u of %u pictures given a texture, %u decoded into it, %u imports\n", zc_given,
+               pictures, zc_in, st.imports);
+        CHECK(zc_given > 0 && zc_in == zc_given && st.zero_copy == zc_in && st.imports == 1);
+    }
     CHECK(pictures > 0 && outputs > 0);
     if (want_frames)
         CHECK(outputs == want_frames);
@@ -354,11 +417,37 @@ int main(int argc, char **argv)
         CHECK(vdec_hevc_decode(dec, &hp, NULL, data, 16, &out, err, sizeof err) == -1);
     }
     vdec_destroy(dec);
+    vdec_forget(0x5a5a0001ull);
+    free(tex);
     free(data);
 
     /* The register files, against vdpu383test's. */
     logdata = read_file(log, &loglen);
     CHECK(logdata != NULL);
+    if (logdata && zero_copy) {
+        /* vdpu383.sys's address registers, each 0 or in a buffer: with zero
+         * copy also the texture ("tex") and the decoder's own pictures
+         * ("fb"); a raw value would be an address outside them all */
+        char *line = (char *)logdata, *end = (char *)logdata + loglen;
+        unsigned raw = 0, texs = 0;
+        while (line < end) {
+            char *nl = memchr(line, '\n', (size_t)(end - line));
+            unsigned r, v;
+            if (!nl)
+                break;
+            *nl = 0;
+            if (sscanf(line, "r%u 0x%x", &r, &v) == 2 && v &&
+                ((r >= 128 && r <= 134) || (r >= 140 && r <= 160 && !(r & 1)) || (r >= 168 && r <= 185) ||
+                 r == 192 || (r >= 194 && r <= 210) || (r >= 216 && r <= 232))) {
+                printf("address register outside the buffers: %s\n", line);
+                raw++;
+            }
+            texs += strstr(line, " tex+") != NULL;
+            *nl = '\n';
+            line = nl + 1;
+        }
+        CHECK(raw == 0 && texs > 0);
+    }
     if (logdata) {
         Md5 m;
         md5_init(&m);

@@ -725,6 +725,9 @@ struct wbo {
     * primary has no business holding a reference on one the display is
     * flipping to or from. */
    int primary;
+   /* The BO of a decoder output texture (malikm_vdec_mark): exportable, so
+    * that Panfrost keeps this BO for the texture and does not cache it. */
+   int vdec;
 };
 static struct wbo *wbo;
 static uint32_t wbo_cap;
@@ -2334,7 +2337,65 @@ wddm_bo_is_resource(int fd, uint32_t handle)
    wlock(__func__);
    wselect_fd(fd);
    struct wbo *bo = wddm_bo(handle);
-   ret = bo && bo->rt_resource && !bo->released;
+   ret = bo && ((bo->rt_resource && !bo->released) || bo->vdec);
+   wunlock();
+   return ret;
+}
+
+/*
+ * Zero-copy decode (Mesa patch 0082, Video.cpp; docs/VIDEO-DECODE.md, V3b):
+ * the VDPU383 writes the picture into the pages of the application's NV12
+ * texture, which vdpu383.sys gets from maliwddm (MW_ESCAPE_VDEC_EXPORT,
+ * video/vdpu383/vdpu383_import.h).
+ *
+ * malikm_vdec_mark: the BO of such a texture. Exporting it succeeds from
+ * now on (drmPrimeHandleToFD above), so Panfrost marks it shared: it is
+ * never swapped for a fresh BO when mapped for writing, which would leave
+ * the decoder writing the old pages, and it does not go back to the BO
+ * cache when freed, so its allocation is destroyed at once and the KMD
+ * makes the decoder let go of the pages. 0 on success.
+ *
+ * malikm_vdec_export: the export token and the size in pages of the BO's
+ * allocation; the same token while the export lasts. 0 on success; -1 if
+ * the KMD refuses (zero copy off, not resident) or the BO is not marked.
+ */
+int
+malikm_vdec_mark(void *hRTDevice, unsigned gem)
+{
+   int ret = -1;
+
+   wlock(__func__);
+   if (wddm_on() && wselect_rt(hRTDevice)) {
+      struct wbo *bo = wddm_bo(gem);
+      if (bo && !bo->released) {
+         bo->vdec = 1;
+         ret = 0;
+      }
+   }
+   wunlock();
+   return ret;
+}
+
+int
+malikm_vdec_export(void *hRTDevice, unsigned gem, unsigned long long *token, unsigned *pages)
+{
+   MW_ESCAPE_VDEC_EXPORT_DATA x;
+   int ret = -1;
+
+   memset(&x, 0, sizeof(x));
+   wlock(__func__);
+   if (wddm_on() && wselect_rt(hRTDevice)) {
+      struct wbo *bo = wddm_bo(gem);
+      if (bo && bo->vdec && !bo->released) {
+         x.Code = MW_ESCAPE_VDEC_EXPORT;
+         x.hAllocation = bo->h;
+         if (w_escape(&x, sizeof(x)) >= 0 && x.Token && x.Pages) {
+            *token = x.Token;
+            *pages = x.Pages;
+            ret = 0;
+         }
+      }
+   }
    wunlock();
    return ret;
 }

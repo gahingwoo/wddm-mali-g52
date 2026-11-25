@@ -54,6 +54,19 @@ typedef struct vdec_buf {
     uint8_t *cpu;
 } vdec_buf;
 
+/* A texture allocation imported into the decoder (zero copy), for the
+ * process: one per export token, whichever decoder uses it. handle 0: the
+ * import failed, not tried again for this token. */
+typedef struct vdec_import {
+    struct vdec_import *next;
+    uint64_t token;
+    unsigned handle;
+    uint32_t dma, size;
+    uint8_t *fake;
+    vdec_refresh_fn refresh;
+    void *refresh_ctx;
+} vdec_import;
+
 struct vdec {
     vdec_codec codec;
     vdec_options opt;
@@ -63,6 +76,20 @@ struct vdec {
     unsigned colmv_off, cdf_off, surf_size;
     vdec_buf surf[VDEC_MAX_SURFACES];
     V383_Surface vs[VDEC_MAX_SURFACES];
+    /*
+     * Zero copy. zc 0: not decided yet, -1: copy (V3a: each surf[] holds a
+     * picture and its motion vectors), 1: hor and ver are the textures'
+     * layout, surf[] holds only the co-located motion vectors (and AV1's
+     * CDFs), and vs[i].dma is wherever the picture of index i was put: the
+     * texture, or fb[i] when the frame's texture could not be used. tgt is
+     * the next decode's target (have_tgt), in_tgt whether the picture
+     * being decoded goes there.
+     */
+    int zc;
+    vdec_buf fb[VDEC_MAX_SURFACES];
+    vdec_target tgt;
+    int have_tgt, in_tgt;
+    vdec_import *cur_imp;
     V383_Av1Surface as[V383_AV1_MAX_SURFACES];
     vdec_buf aux, rcb, strm, colmv[2];
     unsigned aux_len;                   /* bytes of aux the builder writes (reglog) */
@@ -77,6 +104,9 @@ struct vdec {
 
 static int g_state;                     /* 0 not tried, 1 available, -1 not */
 static int g_fake;
+static int g_can_import;                /* the driver imports (interface 3, IOMMU on), or the fake */
+static int g_zc_env = -1;               /* D3D10UMD_VDEC_ZEROCOPY: -1 unset, 0 off, 1 on */
+static vdec_import *g_imports;
 static uint32_t g_fake_dma = 0x10000000u;
 static vdec_stats g_stats;
 static FILE *g_reglog;
@@ -116,13 +146,27 @@ int vdec_available(void)
             g_reglog = fopen(log, "ab");
         g_fake = env_fake();
         g_stats.fake = (unsigned)g_fake;
+        {
+            const char *zc = getenv("D3D10UMD_VDEC_ZEROCOPY");
+            if (zc && (zc[0] == '0' || zc[0] == '1'))
+                g_zc_env = zc[0] - '0';
+        }
         if (g_fake) {
             g_state = 1;
+            g_can_import = 1;
         } else {
 #ifdef _WIN32
             g_dev = CreateFileW(VDPU383_USER_PATH, GENERIC_READ | GENERIC_WRITE, 0, NULL,
                                 OPEN_EXISTING, 0, NULL);
             g_state = g_dev != INVALID_HANDLE_VALUE ? 1 : -1;
+            if (g_state == 1) {
+                VDPU383_INFO info;
+                DWORD got = 0;
+                memset(&info, 0, sizeof(info));
+                if (DeviceIoControl(g_dev, IOCTL_VDPU383_GET_INFO, NULL, 0, &info, sizeof(info), &got, NULL) &&
+                    got >= offsetof(VDPU383_INFO, iommu) + sizeof(info.iommu))
+                    g_can_import = info.interface_version >= 3 && info.iommu;
+            }
 #else
             g_state = -1;
 #endif
@@ -205,6 +249,7 @@ static void free_surfaces(vdec *d)
 
     for (i = 0; i < VDEC_MAX_SURFACES; i++) {
         buf_free(&d->surf[i]);
+        buf_free(&d->fb[i]);
         d->vs[i].dma = 0;
         d->vs[i].colmv_dma = 0;
         if (i < V383_AV1_MAX_SURFACES)
@@ -214,8 +259,11 @@ static void free_surfaces(vdec *d)
     d->width = d->height = 0;
 }
 
-/* The bitstream buffer, at least need bytes, the first need zeroed. */
-static int stream_room(vdec *d, unsigned need, char *err, size_t errlen)
+/* The bitstream buffer, at least need bytes, of which [keep, need) are
+ * zeroed: the caller copies keep bytes of its own over the start. (The
+ * buffer is write-combined: the bytes about to be written are not written
+ * twice.) */
+static int stream_room(vdec *d, unsigned need, unsigned keep, char *err, size_t errlen)
 {
     if (need > d->strm.size) {
         buf_free(&d->strm);
@@ -224,9 +272,13 @@ static int stream_room(vdec *d, unsigned need, char *err, size_t errlen)
             return -1;
         }
     }
-    memset(d->strm.cpu, 0, need);
+    if (keep > need)
+        keep = need;
+    memset(d->strm.cpu + keep, 0, need - keep);
     return 0;
 }
+
+static int target_fits(const vdec *d, unsigned hor, unsigned ver, unsigned rows_align);
 
 /* H.264 and HEVC: the geometry of this picture; a change drops every
  * surface. Surfaces as vdpu383test's: luma stride 64-aligned, chroma right
@@ -246,8 +298,18 @@ static int setup_geometry(vdec *d, unsigned w, unsigned h, unsigned key, unsigne
     d->frame_mbs_only = key;
     d->hor = align_up(w, 64);
     d->ver = align_up(h, 16);
-    d->colmv_off = align_up(d->hor * d->ver * 2, 4096);
-    d->surf_size = d->colmv_off + align_up(colmv, 4096);
+    /* Zero copy decided for each stream geometry, from the texture of its
+     * first picture: the surfaces' layout becomes the texture's. */
+    d->zc = target_fits(d, d->hor, d->ver, 16) ? 1 : -1;
+    if (d->zc == 1) {
+        d->hor = d->tgt.stride;
+        d->ver = d->tgt.luma_rows;
+        d->colmv_off = 0;
+        d->surf_size = align_up(colmv, 4096);
+    } else {
+        d->colmv_off = align_up(d->hor * d->ver * 2, 4096);
+        d->surf_size = d->colmv_off + align_up(colmv, 4096);
+    }
     if (buf_alloc_zero(rcb + 4096, &d->rcb)) {
         set_err(err, errlen, "row buffer (%u bytes) not allocated", rcb, 0);
         return -1;
@@ -255,11 +317,51 @@ static int setup_geometry(vdec *d, unsigned w, unsigned h, unsigned key, unsigne
     return 0;
 }
 
-static int ensure_surface(vdec *d, unsigned i, char *err, size_t errlen)
+static void set_picture(vdec *d, unsigned i, uint32_t dma)
+{
+    d->vs[i].dma = dma;
+    if (i < V383_AV1_MAX_SURFACES)
+        d->as[i].dma = dma;
+}
+
+/* Zero copy: the memory of surface i that is not the picture. */
+static void set_meta(vdec *d, unsigned i)
+{
+    uint32_t m = d->surf[i].dma;
+
+    d->vs[i].colmv_dma = d->codec == VDEC_CODEC_VP9 || !m ? 0 : m + d->colmv_off;
+    if (i < V383_AV1_MAX_SURFACES) {
+        d->as[i].colmv_dma = m ? m + d->colmv_off : 0;
+        d->as[i].cdf_dma = m ? m + d->cdf_off : 0;
+    }
+}
+
+/* Surface i, there to be decoded into or read as a reference. With zero
+ * copy, picture says whether it needs a picture now (a reference that was
+ * never decoded: a zeroed one of its own, so every address is a buffer of
+ * ours); the current picture's place is chosen by place_current. */
+static int ensure_surface_pic(vdec *d, unsigned i, int picture, char *err, size_t errlen)
 {
     if (i >= VDEC_MAX_SURFACES) {
         set_err(err, errlen, "surface index %u out of range", i, 0);
         return -1;
+    }
+    if (d->zc == 1) {
+        if (d->surf_size && !d->surf[i].handle) {
+            if (buf_alloc_zero(d->surf_size, &d->surf[i])) {
+                set_err(err, errlen, "surface %u (%u bytes) not allocated", i, d->surf_size);
+                return -1;
+            }
+            set_meta(d, i);
+        }
+        if (picture && !d->vs[i].dma) {
+            if (buf_alloc_zero(d->hor * d->ver * 3 / 2, &d->fb[i])) {
+                set_err(err, errlen, "surface %u picture (%u bytes) not allocated", i, d->hor * d->ver * 3 / 2);
+                return -1;
+            }
+            set_picture(d, i, d->fb[i].dma);
+        }
+        return 0;
     }
     if (d->surf[i].handle)
         return 0;
@@ -274,6 +376,210 @@ static int ensure_surface(vdec *d, unsigned i, char *err, size_t errlen)
         d->as[i].colmv_dma = d->surf[i].dma + d->colmv_off;
         d->as[i].cdf_dma = d->surf[i].dma + d->cdf_off;
     }
+    return 0;
+}
+
+static int ensure_surface(vdec *d, unsigned i, char *err, size_t errlen)
+{
+    return ensure_surface_pic(d, i, 1, err, errlen);
+}
+
+/* ------------------------------------------------------ zero copy */
+
+/* Can the next target hold a picture laid out hor x ver (at least), rows
+ * aligned to rows_align? Then it becomes every surface's layout. */
+static int target_fits(const vdec *d, unsigned hor, unsigned ver, unsigned rows_align)
+{
+    const vdec_target *t = &d->tgt;
+
+    if (!d->have_tgt || !t->token || !g_can_import || d->opt.no_zero_copy || g_zc_env == 0)
+        return 0;
+    return t->stride % 64 == 0 && t->stride >= hor && t->stride <= 16384 && t->luma_rows >= ver &&
+           t->luma_rows % rows_align == 0 && t->luma_rows <= 16384 && t->offset % 256 == 0 &&
+           t->offset + (uint64_t)t->stride * t->luma_rows * 3 / 2 <= (uint64_t)t->pages * 4096;
+}
+
+/* The import of the target's allocation, made on first use. NULL when the
+ * driver refuses it (then not asked again for this token). */
+static vdec_import *import_get(const vdec_target *t)
+{
+    vdec_import *im;
+
+#ifdef _WIN32
+    AcquireSRWLockExclusive(&g_lock);
+#endif
+    for (im = g_imports; im; im = im->next)
+        if (im->token == t->token)
+            break;
+    if (!im) {
+        im = (vdec_import *)calloc(1, sizeof(*im));
+        if (im) {
+            im->token = t->token;
+            if (g_fake) {
+                im->handle = 1;
+                im->dma = g_fake_dma;
+                im->size = t->pages * 4096u;
+                g_fake_dma += im->size + 4096;
+            } else {
+#ifdef _WIN32
+                VDPU383_IMPORT_IN in;
+                VDPU383_IMPORT_OUT out;
+                DWORD got = 0;
+                memset(&in, 0, sizeof(in));
+                memset(&out, 0, sizeof(out));
+                in.token = t->token;
+                in.pages = t->pages;
+                if (DeviceIoControl(g_dev, IOCTL_VDPU383_IMPORT, &in, sizeof(in), &out, sizeof(out), &got, NULL) &&
+                    got >= sizeof(out) && out.handle) {
+                    im->handle = out.handle;
+                    im->dma = out.dma;
+                    im->size = out.size;
+                }
+#endif
+            }
+            if (im->handle)
+                g_stats.imports++;
+            else
+                g_stats.import_failures++;
+            im->next = g_imports;
+            g_imports = im;
+        }
+    }
+    if (im) {
+        im->fake = t->fake_map;
+        im->refresh = t->refresh;
+        im->refresh_ctx = t->refresh_ctx;
+    }
+#ifdef _WIN32
+    ReleaseSRWLockExclusive(&g_lock);
+#endif
+    return im && im->handle ? im : NULL;
+}
+
+/* After VDPU383_RUN_REVOKED: every import whose pages the display driver
+ * took back gets the allocation's new pages at the same IO addresses. */
+static void imports_refresh(void)
+{
+#ifdef _WIN32
+    vdec_import *im;
+
+    AcquireSRWLockExclusive(&g_lock);
+    for (im = g_imports; im; im = im->next) {
+        VDPU383_IMPORT_IN in;
+        VDPU383_IMPORT_OUT out;
+        DWORD got = 0;
+        unsigned pages = 0;
+        uint64_t token;
+
+        if (!im->handle || !im->refresh)
+            continue;
+        token = im->refresh(im->refresh_ctx, &pages);
+        if (!token || (uint64_t)pages * 4096 != im->size)
+            continue;
+        memset(&in, 0, sizeof(in));
+        in.token = token;
+        in.pages = pages;
+        in.handle = im->handle;
+        if (DeviceIoControl(g_dev, IOCTL_VDPU383_IMPORT, &in, sizeof(in), &out, sizeof(out), &got, NULL)) {
+            if (token != im->token)
+                g_stats.refreshes++;
+            im->token = token;
+        }
+    }
+    ReleaseSRWLockExclusive(&g_lock);
+#endif
+}
+
+void vdec_forget(uint64_t token)
+{
+    vdec_import **pp, *im = NULL;
+
+    if (!token)
+        return;
+#ifdef _WIN32
+    AcquireSRWLockExclusive(&g_lock);
+#endif
+    for (pp = &g_imports; *pp; pp = &(*pp)->next)
+        if ((*pp)->token == token) {
+            im = *pp;
+            *pp = im->next;
+            break;
+        }
+#ifdef _WIN32
+    ReleaseSRWLockExclusive(&g_lock);
+    if (im && im->handle && !g_fake) {
+        VDPU383_FREE_IN in;
+        DWORD got = 0;
+        in.handle = im->handle;
+        DeviceIoControl(g_dev, IOCTL_VDPU383_FREE, &in, sizeof(in), NULL, 0, &got, NULL);
+    }
+#endif
+    free(im);
+}
+
+int vdec_zero_copy_possible(void)
+{
+    return vdec_available() && g_can_import && g_zc_env != 0;
+}
+
+void vdec_set_target(vdec *d, const vdec_target *t)
+{
+    if (!d)
+        return;
+    d->have_tgt = t != NULL;
+    if (t)
+        d->tgt = *t;
+}
+
+/* VP9 and AV1, whose surfaces are laid out once for the decoder: zero copy
+ * decided at the first picture, from its texture. */
+static void decide_fixed(vdec *d)
+{
+    if (d->zc)
+        return;
+    if (!target_fits(d, d->hor, d->ver, 64)) {
+        d->zc = -1;
+        return;
+    }
+    d->zc = 1;
+    d->hor = d->tgt.stride;
+    d->ver = d->tgt.luma_rows;
+    if (d->codec == VDEC_CODEC_VP9) {
+        d->surf_size = 0;               /* the co-located MVs are the decoder's two buffers */
+    } else {
+        unsigned colmv = v383_av1_colmv_size(d->max_w, d->max_h);
+        d->colmv_off = 0;
+        d->cdf_off = colmv;
+        d->surf_size = colmv + v383_av1_cdf_size(d->max_w, d->max_h);
+    }
+}
+
+/* Where the current picture of surface idx goes: the target, when the
+ * surfaces have its layout and it is imported; else, with zero copy, a
+ * picture of the decoder's own, copied by the caller as in V3a. Copy mode:
+ * surf[idx] as always. */
+static int place_current(vdec *d, unsigned idx, char *err, size_t errlen)
+{
+    const vdec_target *t = &d->tgt;
+
+    d->in_tgt = 0;
+    d->cur_imp = NULL;
+    if (d->zc != 1)
+        return 0;
+    if (d->have_tgt && t->stride == d->hor && t->luma_rows == d->ver && target_fits(d, d->hor, d->ver, 1)) {
+        vdec_import *im = import_get(t);
+        if (im && t->offset + (uint64_t)d->hor * d->ver * 3 / 2 <= im->size && (!g_fake || im->fake)) {
+            set_picture(d, idx, im->dma + (uint32_t)t->offset);
+            d->in_tgt = 1;
+            d->cur_imp = im;
+            return 0;
+        }
+    }
+    if (!d->fb[idx].handle && buf_alloc_zero(d->hor * d->ver * 3 / 2, &d->fb[idx])) {
+        set_err(err, errlen, "surface %u picture (%u bytes) not allocated", idx, d->hor * d->ver * 3 / 2);
+        return -1;
+    }
+    set_picture(d, idx, d->fb[idx].dma);
     return 0;
 }
 
@@ -296,7 +602,21 @@ static const char *buf_role(const vdec *d, uint32_t a, uint32_t *off, unsigned *
             *index = i;
             return "s";
         }
+    /* zero copy: a picture of the decoder's own, a texture */
+    for (i = 0; i < VDEC_MAX_SURFACES; i++)
+        if (VDEC_IN_BUF(d->fb[i])) {
+            *off = a - d->fb[i].dma;
+            return "fb";
+        }
 #undef VDEC_IN_BUF
+    {
+        const vdec_import *im;
+        for (im = g_imports; im; im = im->next)
+            if (im->handle && a >= im->dma && a < im->dma + im->size) {
+                *off = a - im->dma;
+                return "tex";
+            }
+    }
     return NULL;
 }
 
@@ -516,6 +836,10 @@ static int run(vdec *d, const V383_RegFile *rf, char *err, size_t errlen)
     }
 #endif
     g_stats.hw_us_total += out->elapsed_us;
+    if (out->result == VDPU383_RUN_REVOKED) {
+        set_err(err, errlen, "register %u names a texture the display driver took back", out->bad_reg, 0);
+        return -2;
+    }
     if (out->result != VDPU383_RUN_OK) {
         if (out->result == VDPU383_RUN_BAD_ADDRESS)
             set_err(err, errlen, "decoder refused register %u (address outside the buffers), status 0x%x",
@@ -535,18 +859,32 @@ static int run(vdec *d, const V383_RegFile *rf, char *err, size_t errlen)
 static int finish(vdec *d, const V383_RegFile *rf, unsigned idx, unsigned status_report, unsigned w,
                   unsigned h, vdec_picture *out, char *err, size_t errlen)
 {
+    const uint8_t *pic = d->zc == 1 ? d->fb[idx].cpu : d->surf[idx].cpu;
+
     reglog(d, rf);
     d->pictures++;
     if (g_fake) {
-        uint8_t *s = d->surf[idx].cpu;
+        uint8_t *s = d->in_tgt ? d->cur_imp->fake + d->tgt.offset : (uint8_t *)pic;
         size_t luma = (size_t)d->hor * d->ver;
         memset(s, vdec_fake_luma(status_report), luma);
         memset(s + luma, vdec_fake_chroma(idx), luma / 2);
-    } else if (run(d, rf, err, errlen)) {
-        return -1;
+    } else {
+        int rc = run(d, rf, err, errlen);
+        /* A texture's pages were taken back (evicted) since it was
+         * imported: the new pages at the same addresses, the same
+         * registers again. Nothing was started. */
+        if (rc == -2) {
+            imports_refresh();
+            rc = run(d, rf, err, errlen);
+        }
+        if (rc)
+            return -1;
     }
     g_stats.pictures++;
-    out->data = d->surf[idx].cpu;
+    if (d->in_tgt)
+        g_stats.zero_copy++;
+    out->in_target = (unsigned)d->in_tgt;
+    out->data = d->in_tgt ? NULL : pic;
     out->stride = d->hor;
     out->luma_rows = d->ver;
     out->width = w;
@@ -592,7 +930,7 @@ int vdec_h264_decode(vdec *d, const V383_DXVA_PicParams_H264 *pp,
         goto fail;
 
     idx = V383_PIC_INDEX(pp->CurrPic);
-    if (ensure_surface(d, idx, err, errlen))
+    if (ensure_surface_pic(d, idx, 0, err, errlen) || place_current(d, idx, err, errlen))
         goto fail;
     /* A reference this process never decoded (a stream that starts on a
      * P picture): a zeroed surface, so every address is a buffer of ours. */
@@ -602,7 +940,7 @@ int vdec_h264_decode(vdec *d, const V383_DXVA_PicParams_H264 *pp,
             goto fail;
 
     need = align_up(bitstream_len, 16) + 128;
-    if (stream_room(d, need, err, errlen))
+    if (stream_room(d, need, bitstream_len, err, errlen))
         goto fail;
     memcpy(d->strm.cpu, bitstream, bitstream_len);
 
@@ -630,9 +968,12 @@ int vdec_h264_decode(vdec *d, const V383_DXVA_PicParams_H264 *pp,
     }
     if (finish(d, &rf, idx, pp->StatusReportFeedbackNumber, d->width, d->height, out, err, errlen))
         goto fail;
+    d->have_tgt = 0;
     return 0;
 
 fail:
+    if (d)
+        d->have_tgt = 0;
     g_stats.errors++;
     return -1;
 }
@@ -670,7 +1011,7 @@ int vdec_hevc_decode(vdec *d, const V383_DXVA_PicParams_HEVC *pp, const V383_DXV
         goto fail;
 
     idx = V383_PIC_INDEX(pp->CurrPic);
-    if (ensure_surface(d, idx, err, errlen))
+    if (ensure_surface_pic(d, idx, 0, err, errlen) || place_current(d, idx, err, errlen))
         goto fail;
     for (i = 0; i < 15; i++)
         if (pp->RefPicList[i].bPicEntry != 0xFF &&
@@ -678,7 +1019,7 @@ int vdec_hevc_decode(vdec *d, const V383_DXVA_PicParams_HEVC *pp, const V383_DXV
             goto fail;
 
     need = v383_hevc_stream_read_len(bitstream_len);
-    if (stream_room(d, need, err, errlen))
+    if (stream_room(d, need, bitstream_len, err, errlen))
         goto fail;
     memcpy(d->strm.cpu, bitstream, bitstream_len);
 
@@ -707,9 +1048,12 @@ int vdec_hevc_decode(vdec *d, const V383_DXVA_PicParams_HEVC *pp, const V383_DXV
     }
     if (finish(d, &rf, idx, pp->StatusReportFeedbackNumber, w, h, out, err, errlen))
         goto fail;
+    d->have_tgt = 0;
     return 0;
 
 fail:
+    if (d)
+        d->have_tgt = 0;
     g_stats.errors++;
     return -1;
 }
@@ -738,8 +1082,9 @@ int vdec_vp9_decode(vdec *d, const V383_DXVA_PicParams_VP9 *pp, const uint8_t *f
         set_err(err, errlen, "frame %ux%u does not fit the decoder", pp->width, pp->height);
         goto fail;
     }
+    decide_fixed(d);
     idx = V383_PIC_INDEX(pp->CurrPic);
-    if (ensure_surface(d, idx, err, errlen))
+    if (ensure_surface_pic(d, idx, 0, err, errlen) || place_current(d, idx, err, errlen))
         goto fail;
     for (i = 0; i < 3; i++)
         if (!V383_VP9_NO_SURFACE(pp->frame_refs[i]) &&
@@ -751,7 +1096,7 @@ int vdec_vp9_decode(vdec *d, const V383_DXVA_PicParams_VP9 *pp, const uint8_t *f
             goto fail;
 
     need = (pp->uncompressed_header_size_byte_aligned & ~15u) + v383_vp9_stream_read_len(frame_len) + 16;
-    if (stream_room(d, need, err, errlen))
+    if (stream_room(d, need, frame_len, err, errlen))
         goto fail;
     memcpy(d->strm.cpu, frame, frame_len);
 
@@ -778,9 +1123,12 @@ int vdec_vp9_decode(vdec *d, const V383_DXVA_PicParams_VP9 *pp, const uint8_t *f
     }
     if (finish(d, &rf, idx, pp->StatusReportFeedbackNumber, pp->width, pp->height, out, err, errlen))
         goto fail;
+    d->have_tgt = 0;
     return 0;
 
 fail:
+    if (d)
+        d->have_tgt = 0;
     g_stats.errors++;
     return -1;
 }
@@ -821,7 +1169,8 @@ int vdec_av1_decode(vdec *d, const V383_DXVA_PicParams_AV1 *pp, const V383_DXVA_
                 V383_AV1_MAX_SURFACES);
         goto fail;
     }
-    if (ensure_surface(d, idx, err, errlen))
+    decide_fixed(d);
+    if (ensure_surface_pic(d, idx, 0, err, errlen) || place_current(d, idx, err, errlen))
         goto fail;
     for (i = 0; i < 8; i++)
         if (pp->RefFrameMapTextureIndex[i] < V383_AV1_MAX_SURFACES &&
@@ -831,7 +1180,7 @@ int vdec_av1_decode(vdec *d, const V383_DXVA_PicParams_AV1 *pp, const V383_DXVA_
      * surfaces are all there now. */
 
     need = v383_av1_stream_read_len(sum + 16 + hdr) + 64;
-    if (stream_room(d, need, err, errlen))
+    if (stream_room(d, need, 0, err, errlen))
         goto fail;
     len = v383_av1_synth_stream(pp, tiles, num_tiles, data, d->opt.av1_synth, hdr, d->strm.cpu, d->strm.size);
     if (!len) {
@@ -870,9 +1219,12 @@ int vdec_av1_decode(vdec *d, const V383_DXVA_PicParams_AV1 *pp, const V383_DXVA_
     }
     if (finish(d, &rf, idx, pp->StatusReportFeedbackNumber, pp->width, pp->height, out, err, errlen))
         goto fail;
+    d->have_tgt = 0;
     return 0;
 
 fail:
+    if (d)
+        d->have_tgt = 0;
     g_stats.errors++;
     return -1;
 }
@@ -880,6 +1232,7 @@ fail:
 void vdec_get_stats(vdec_stats *s)
 {
     *s = g_stats;
+    s->can_import = (unsigned)g_can_import;
     s->driver_runs = 0;
 #ifdef _WIN32
     if (g_state == 1 && !g_fake) {

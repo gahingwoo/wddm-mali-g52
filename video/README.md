@@ -10,11 +10,13 @@ board test are in [docs/VIDEO-DECODE.md](../docs/VIDEO-DECODE.md).
   (`D3D10UMD_VDEC_FAKE=1`); a register log (`D3D10UMD_VDEC_REGLOG=<file>`)
   that tests/vdec-host and mesa.yml compare with vdpu383test's.
 - `vdpu383/`: copied unchanged from
-  [woa-rk3576](https://github.com/gahingwoo/woa-rk3576) at c373611 (AV1
-  frame_refs[i].Index read as a slot)
-  (`drivers/video/vdpu383/lib` and `vdpu383_ioctl.h`, interface version 2:
-  the driver maps buffers through the decoder's IOMMU by default, which
-  changes nothing for this code). H.264 and HEVC are the builders that
+  [woa-rk3576](https://github.com/gahingwoo/woa-rk3576) at c89b79d (AV1
+  frame_refs[i].Index read as a slot; interface version 3, imports)
+  (`drivers/video/vdpu383/lib`, `vdpu383_ioctl.h` and `vdpu383_import.h`:
+  the driver maps buffers through the decoder's IOMMU by default, and with
+  version 3 imports the pages of a maliwddm allocation for zero copy;
+  `vdpu383_import.h` is the kernel interface maliwddm's vdecexport.c
+  implements). H.264 and HEVC are the builders that
   decoded conformance streams bit-exact on the TaishanPi 3M (2026-11-24,
   2026-11-25); VP9 and AV1 have not run on the board. Keep the files
   identical to that tree; sha256 at the copy:
@@ -36,7 +38,8 @@ e0e62f53651b80e9009b41df1e83958067f84cd3b0ded9ef6afaf00d3d698568  lib/vdpu383_vp
 10eca42edffed73a2869bbbf57f1732d353742ba9a341829d8313d0f1eebc007  lib/vdpu383_av1.c
 81d91d1a583f3a8f336f9d81051fc49c27141b4e8e26f3f590a7e99e5d633681  lib/vdpu383_av1.h
 a4294a22a13b5fa5eadbd1ab5ec8452a7a89e6937bf318a72d7f1abb0a9976d2  lib/vdpu383_av1_cdf.c
-0dedb55852d9ef6bbc110d126a2dd874a4255133fbc18331bf29dc466abbf7df  vdpu383_ioctl.h
+1b6d5bdd18cd56415a6852e20eebf7012d5a010cb980eb724c1472455e86f38f  vdpu383_ioctl.h
+fa934aab5719c7271eab227328871a62f1f8f735fb50560fc46d5cdb4c362760  vdpu383_import.h
 ```
 
 ## Licences of the copied files

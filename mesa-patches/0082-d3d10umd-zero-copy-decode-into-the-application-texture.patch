@@ -1,0 +1,453 @@
+diff --git a/src/gallium/frontends/d3d10umd/Resource.cpp b/src/gallium/frontends/d3d10umd/Resource.cpp
+index 600c3ca..d92ea1e 100644
+--- a/src/gallium/frontends/d3d10umd/Resource.cpp
++++ b/src/gallium/frontends/d3d10umd/Resource.cpp
+@@ -47,6 +47,7 @@
+ #include "util/mali_count.h"
+ #include "util/format/u_format.h"
+ #include "frontend/winsys_handle.h"
++#include "util/box.h"
+ 
+ #include <io.h>
+ 
+@@ -149,6 +150,63 @@ SwitchFileAbsent(const char *path, const char *what_absent, const char *what_pre
+ }
+ 
+ 
++/*
++ * A decoder output for zero copy (Video.cpp): the BO's handle, its rows and
++ * slices, and the BO kept for the texture. Panfrost replaces the BO of a
++ * texture that is mapped for writing while the GPU uses it, and keeps freed
++ * BOs for reuse; the decoder writes into the allocation's pages, so the
++ * shim marks the BO (d3d10_vdec_mark) and exporting it then marks it shared
++ * in Panfrost, which does neither for a shared BO. Anything missing (not
++ * the hardware runtime, not linear) leaves nv12_zc false: the decoder's
++ * pictures are copied in, as before.
++ */
++static void
++Nv12ZeroCopySetup(Device *pDevice, struct pipe_context *pipe, Resource *pResource)
++{
++   struct pipe_screen *screen = pipe->screen;
++   struct winsys_handle whandle;
++   struct pipe_transfer *transfer = NULL;
++   struct pipe_box box;
++   unsigned gem;
++
++   pResource->nv12_zc = false;
++   memset(&whandle, 0, sizeof whandle);
++   whandle.type = WINSYS_HANDLE_TYPE_KMS;
++   if (!screen->resource_get_handle ||
++       !screen->resource_get_handle(screen, pipe, pResource->resource, &whandle, 0) ||
++       whandle.modifier != 0 /* DRM_FORMAT_MOD_LINEAR */) {
++      DebugPrintf("video: NV12 %ux%u x%u: no linear buffer handle (modifier 0x%llx), pictures are copied\n",
++                  pResource->resource->width0, pResource->nv12_luma_height,
++                  pResource->resource->array_size, (unsigned long long)whandle.modifier);
++      return;
++   }
++   gem = (unsigned)(uintptr_t)whandle.handle;
++   /* The slices: a linear map hands out the layer stride without waiting. */
++   u_box_3d(0, 0, 0, 1, 1, 1, &box);
++   if (!pipe->texture_map(pipe, pResource->resource, 0, PIPE_MAP_READ | PIPE_MAP_UNSYNCHRONIZED, &box,
++                          &transfer) || !transfer)
++      return;
++   pResource->nv12_stride = transfer->stride;
++   pResource->nv12_layer_stride = transfer->layer_stride;
++   pipe->texture_unmap(pipe, transfer);
++   pResource->nv12_offset = whandle.offset;
++   if (pResource->nv12_stride != whandle.stride ||
++       (pResource->resource->array_size > 1 && pResource->nv12_layer_stride == 0) ||
++       d3d10_vdec_mark(pDevice->hDevice, gem) != 0 || !MarkResourceShared(pipe, pResource->resource)) {
++      DebugPrintf("video: NV12 %ux%u x%u: buffer %u not kept for the decoder, pictures are copied\n",
++                  pResource->resource->width0, pResource->nv12_luma_height,
++                  pResource->resource->array_size, gem);
++      return;
++   }
++   pResource->nv12_gem = gem;
++   pResource->nv12_rt_device = pDevice->hDevice;
++   pResource->nv12_zc = true;
++   DebugPrintf("video: NV12 %ux%u x%u for the decoder to write: buffer %u, pitch %u, slices %llu bytes apart\n",
++               pResource->resource->width0, pResource->nv12_luma_height, pResource->resource->array_size,
++               gem, pResource->nv12_stride, (unsigned long long)pResource->nv12_layer_stride);
++}
++
++
+ bool
+ PrimaryRenderedInto(void)
+ {
+@@ -436,6 +494,7 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+     * writes both planes with two uploads.
+     */
+    bool nv12 = pCreateResource->Format == DXGI_FORMAT_NV12;
++   bool nv12_zc = false;
+    if (nv12) {
+       Device *pDevice = CastDevice(hDevice);
+       UINT h = pCreateResource->pMipInfoList[0].TexelHeight;
+@@ -449,6 +508,8 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+          return;
+       }
+       templat.format = PIPE_FORMAT_R8_UNORM;
++      nv12_zc = VideoNv12ZeroCopyWanted(pDevice, pCreateResource->BindFlags, pCreateResource->Usage,
++                                        pCreateResource->MiscFlags, pCreateResource->MapFlags);
+    } else if (pCreateResource->Format == DXGI_FORMAT_UNKNOWN) {
+       assert(pCreateResource->ResourceDimension == D3D10DDIRESOURCE_BUFFER);
+       templat.format = PIPE_FORMAT_R8_UINT;
+@@ -490,6 +551,11 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+       }
+    }
+ 
++   /* Zero copy: the decoder writes rows, so the texture is linear (and
++    * stays so: the export below fixes the modifier). */
++   if (nv12_zc)
++      templat.bind |= PIPE_BIND_LINEAR;
++
+    /*
+     * A shared resource is rendered here and sampled in another process, so
+     * the driver's buffer has to be the allocation the runtime shares: made
+@@ -618,6 +684,9 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+       return;
+    }
+ 
++   if (nv12_zc)
++      Nv12ZeroCopySetup(CastDevice(hDevice), pipe, pResource);
++
+    if (nv12 && (pCreateResource->BindFlags & D3D10_DDI_BIND_SHADER_RESOURCE) &&
+        !VideoNv12CreatePlanes(screen, pResource, &templat)) {
+       DebugPrintf("%s: NV12 plane textures: out of memory\n", __func__);
+@@ -904,6 +973,7 @@ DestroyResource(D3D10DDI_HDEVICE hDevice,       // IN
+    }
+    free(pResource->transfers);
+    VideoNv12DestroyPlanes(pResource);
++   VideoNv12ZeroCopyForget(pResource);
+ 
+    if (pResource->direct_primary) {
+       /* The buffer is the runtime's allocation, as a shared resource's is:
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index b290426..58b66f9 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -278,6 +278,10 @@ void d3d10_shared_begin_create(void *hRTDevice, void *hRTResource, unsigned w, u
+                                const void *desc, unsigned desc_size);
+ void d3d10_shared_begin_open(void *hRTDevice, void *hRTResource, unsigned hAllocation);
+ unsigned d3d10_shared_end(void);
++/* Zero-copy decode, on the hardware runtime (malikm_drm.c): keep this BO
++ * for the texture (0 on success); maliwddm's export of its allocation. */
++int d3d10_vdec_mark(void *hRTDevice, unsigned gem);
++int d3d10_vdec_export(void *hRTDevice, unsigned gem, unsigned long long *token, unsigned *pages);
+ void d3d10_shared_destroy(void *hRTDevice, void *hRTResource);
+ /* Present an allocation of the runtime's as it is; the HRESULT of the
+  * runtime's present callback. */
+@@ -348,6 +352,20 @@ struct Resource
+     * them, R8 width x height and R8G8 width/2 x height/2, kept in step
+     * with the texture (VideoProcessor.cpp). NULL otherwise. */
+    struct pipe_resource *nv12_plane[2];
++   /* Zero copy (Video.cpp, docs/VIDEO-DECODE.md V3b): a decoder output the
++    * VDPU383 writes into itself. Linear, its BO kept for the texture
++    * (malikm_vdec_mark); nv12_gem the BO, nv12_stride and
++    * nv12_layer_stride its rows and array slices, nv12_offset where slice 0
++    * starts, nv12_rt_device the runtime device it was made on. vdec_token:
++    * maliwddm's export of its allocation, made at the first decode into it
++    * (0 until then), vdec_pages its size; vdec_export_tries counts the
++    * attempts, which the KMD refuses while the allocation is not resident. */
++   bool nv12_zc;
++   unsigned nv12_gem, nv12_stride;
++   uint64_t nv12_layer_stride, nv12_offset;
++   void *nv12_rt_device;
++   uint64_t vdec_token;
++   unsigned vdec_pages, vdec_export_tries;
+ };
+ 
+ /* Run-time switches, each a file under C:\mali whose existence brings the
+diff --git a/src/gallium/frontends/d3d10umd/Video.cpp b/src/gallium/frontends/d3d10umd/Video.cpp
+index d34f535..c235454 100644
+--- a/src/gallium/frontends/d3d10umd/Video.cpp
++++ b/src/gallium/frontends/d3d10umd/Video.cpp
+@@ -15,13 +15,17 @@
+  *    SubmitDecoderBuffers                           VideoVideoDecoderSubmitBuffers (copied)
+  *    DecoderEndFrame                                VideoVideoDecoderEndFrame: decode, copy
+  *
+- * The picture is decoded by the VDPU383 into a surface of the decoder's own
+- * (video/vdec.c; one per DXVA surface index, references are read from
+- * there) and copied into the application's texture at the end of the
+- * frame. That copy is the price of milestone V3a: the decoder writes
+- * buffers of vdpu383.sys, the texture is an allocation of
+- * maliwddm's, and only the KMD could map one into the other (V3b in
+- * docs/VIDEO-DECODE.md).
++ * Zero copy (V3b, docs/VIDEO-DECODE.md, the default with UmdVideoZeroCopy
++ * absent or 1): a decoder output texture is made linear (Resource.cpp), and
++ * at the first decode into it the UMD has maliwddm export its allocation
++ * (MW_ESCAPE_VDEC_EXPORT) and vdpu383.sys imports the pages into the
++ * decoder's IOMMU (video/vdec.c). The VDPU383 then writes the picture into
++ * the texture and nothing is copied; before it does, the GPU's work on the
++ * texture is waited for. Where that cannot be had (another driver, a
++ * texture with shader resource views or CPU access, an older vdpu383.sys,
++ * UmdVideoZeroCopy 0), V3a: the picture is decoded into a surface of the
++ * decoder's own (one per DXVA surface index, references read from there)
++ * and copied into the application's texture at the end of the frame.
+  *
+  * Off unless maliwddm's UmdVideo is set, and then only in the processes
+  * VideoEffective names: the D3D11.1 interface this needs is offered
+@@ -87,10 +91,14 @@ ProcessIs(const char *const *names, unsigned count)
+  *               bytes (vdec.h; the board decides which the VDPU383 takes).
+  *   bits 18-19  UmdVp9Mpp: VP9 frame context handling, V383_VP9_OPT_*
+  *               (0 the specification's, 3 MPP's).
++ *   bit 20      UmdVideoZeroCopy 0: every picture copied (V3a), as
++ *               before zero copy.
+  * A UMD from before these bits sees a value above 3 and offers nothing.
+  */
+ #define VIDEO_CODECS_ALL 0xFu
++#define VIDEO_NO_ZERO_COPY (1u << 20)   /* maliwddm_abi.h MW_UMD_VIDEO_NO_ZERO_COPY */
+ static unsigned g_video_codecs, g_video_av1_synth, g_video_vp9_mpp;
++static bool g_video_zero_copy = true;
+ 
+ unsigned
+ VideoEffective(unsigned setting)
+@@ -109,6 +117,7 @@ VideoEffective(unsigned setting)
+    g_video_codecs = (setting >> 8) & VIDEO_CODECS_ALL;
+    g_video_av1_synth = (setting >> 16) & 1;
+    g_video_vp9_mpp = (setting >> 18) & 3;
++   g_video_zero_copy = !(setting & VIDEO_NO_ZERO_COPY);
+    if (ProcessIs(never, ARRAYSIZE(never)))
+       return 0;
+    if (level == 3)
+@@ -240,7 +249,7 @@ struct VideoDecoder {
+    unsigned num_tiles, tiles_cap;
+    uint8_t *slice_tmp;                  /* SLICE_CONTROL_MAX, the slice control as read */
+    unsigned slices;
+-   unsigned frames, errors, logged;
++   unsigned frames, errors, logged, zero_copy;
+ };
+ 
+ static inline VideoDecoder *
+@@ -416,13 +425,16 @@ VideoCreateVideoDecoder(D3D10DDI_HDEVICE hDevice, const D3D11_1DDIARG_CREATEVIDE
+    memset(&opt, 0, sizeof opt);
+    opt.av1_synth = g_video_av1_synth;
+    opt.vp9_options = g_video_vp9_mpp;
++   opt.no_zero_copy = g_video_zero_copy ? 0 : 1;
+    d->dec = vdec_create(p->codec, d->width, d->height, &opt, err, sizeof err);
+    if (!d->dec) {
+       DebugPrintf("video: CreateVideoDecoder %s %ux%u: %s\n", p->name, d->width, d->height, err);
+       return E_OUTOFMEMORY;
+    }
+-   DebugPrintf("video: %s decoder %ux%u created (AV1 stream form %u, VP9 options 0x%x)\n", p->name,
+-               d->width, d->height, opt.av1_synth, opt.vp9_options);
++   DebugPrintf("video: %s decoder %ux%u created (AV1 stream form %u, VP9 options 0x%x, zero copy %s)\n",
++               p->name, d->width, d->height, opt.av1_synth, opt.vp9_options,
++               !g_video_zero_copy ? "off (UmdVideoZeroCopy 0)" :
++               vdec_zero_copy_possible() ? "possible" : "not with this vdpu383.sys");
+    return S_OK;
+ }
+ 
+@@ -433,11 +445,12 @@ VideoDestroyVideoDecoder(D3D10DDI_HDEVICE, D3D11_1DDI_HDECODE hDecode)
+    vdec_stats st;
+ 
+    vdec_get_stats(&st);
+-   DebugPrintf("video: %s decoder %ux%u destroyed after %u frames, %u errors; process total %u "
+-               "pictures, %u errors, %u us in the decoder, driver runs %u%s%s\n",
+-               d->profile ? d->profile->name : "?", d->width, d->height, d->frames, d->errors,
++   DebugPrintf("video: %s decoder %ux%u destroyed after %u frames, %u errors, %u into the texture; "
++               "process total %u pictures, %u errors, %u us in the decoder, driver runs %u%s%s; "
++               "zero copy %u pictures, %u textures imported, %u refused, %u refreshed\n",
++               d->profile ? d->profile->name : "?", d->width, d->height, d->frames, d->errors, d->zero_copy,
+                st.pictures, st.errors, st.hw_us_total, st.driver_runs, st.fake ? " (fake)" : "",
+-               st.iommu ? " (IOMMU)" : "");
++               st.iommu ? " (IOMMU)" : "", st.zero_copy, st.imports, st.import_failures, st.refreshes);
+    vdec_destroy(d->dec);
+    free(d->bitstream);
+    free(d->tiles);
+@@ -644,6 +657,95 @@ CopyToTarget(Device *pDevice, VideoOutputView *v, const vdec_picture *pic)
+    return true;
+ }
+ 
++/* ---------------------------------------------------------- zero copy */
++
++bool
++VideoNv12ZeroCopyWanted(Device *pDevice, UINT BindFlags, UINT Usage, UINT MiscFlags, UINT MapFlags)
++{
++   /* A decoder output nothing but the GPU and the decoder touch: no shader
++    * resource views (their plane textures are copies, VideoProcessor.cpp),
++    * no CPU access, not shared with another process. */
++   return pDevice->video >= 2 && g_video_zero_copy && vdec_zero_copy_possible() &&
++          !(BindFlags & D3D10_DDI_BIND_SHADER_RESOURCE) && Usage == D3D10_DDI_USAGE_DEFAULT &&
++          !(MiscFlags & D3D10_DDI_RESOURCE_MISC_SHARED) && MapFlags == 0;
++}
++
++void
++VideoNv12ZeroCopyForget(Resource *r)
++{
++   if (r->vdec_token)
++      vdec_forget(r->vdec_token);
++   r->vdec_token = 0;
++   r->nv12_zc = false;
++}
++
++/* After maliwddm took the pages back (eviction): the allocation's export
++ * again, for vdec to refresh its import (vdec_refresh_fn). */
++static uint64_t
++ZeroCopyRefresh(void *ctx, unsigned *pages)
++{
++   Resource *r = (Resource *)ctx;
++   unsigned long long token = 0;
++   unsigned n = 0;
++
++   if (!r->nv12_zc || d3d10_vdec_export(r->nv12_rt_device, r->nv12_gem, &token, &n) != 0 || !token)
++      return 0;
++   r->vdec_token = token;
++   r->vdec_pages = n;
++   *pages = n;
++   return token;
++}
++
++/* The output view as the decoder's target, when its texture was made for
++ * it; the export is asked for at the first decode into the texture, and
++ * again every 64 frames while maliwddm refuses it (not resident yet). */
++static bool
++ZeroCopyTarget(VideoOutputView *v, vdec_target *t)
++{
++   Resource *r = v->resource;
++
++   if (!r || !r->nv12_zc)
++      return false;
++   if (!r->vdec_token) {
++      unsigned long long token = 0;
++      unsigned pages = 0;
++
++      if (r->vdec_export_tries++ % 64)
++         return false;
++      if (d3d10_vdec_export(r->nv12_rt_device, r->nv12_gem, &token, &pages) != 0 || !token) {
++         if (r->vdec_export_tries <= 1)
++            DebugPrintf("video: maliwddm did not export buffer %u (UmdVideoZeroCopy 0, an older "
++                        "maliwddm, or not resident): pictures are copied into it\n", r->nv12_gem);
++         return false;
++      }
++      r->vdec_token = token;
++      r->vdec_pages = pages;
++   }
++   memset(t, 0, sizeof *t);
++   t->token = r->vdec_token;
++   t->pages = r->vdec_pages;
++   t->offset = r->nv12_offset + (uint64_t)v->slice * r->nv12_layer_stride;
++   t->stride = r->nv12_stride;
++   t->luma_rows = r->nv12_luma_height;
++   t->refresh = ZeroCopyRefresh;
++   t->refresh_ctx = r;
++   return true;
++}
++
++/* The GPU is done with the texture before the decoder writes it: a map for
++ * writing waits for every batch that reads or writes it (a linear texture
++ * maps in place, and its buffer, shared, is never swapped for another). */
++static void
++ZeroCopyWaitGpu(struct pipe_context *pipe, VideoOutputView *v)
++{
++   struct pipe_transfer *transfer = NULL;
++   struct pipe_box box;
++
++   u_box_3d(0, 0, v->slice, 1, 1, 1, &box);
++   if (pipe->texture_map(pipe, v->resource->resource, 0, PIPE_MAP_WRITE, &box, &transfer) && transfer)
++      pipe->texture_unmap(pipe, transfer);
++}
++
+ /* The frame's bytes: up to where the slice control says the data ends
+  * (the rest is the application's padding), else all of them. */
+ static unsigned
+@@ -668,7 +770,7 @@ VideoVideoDecoderEndFrame(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HDECODE hDecode)
+ {
+    Device *pDevice = CastDevice(hDevice);
+    VideoDecoder *d = CastDecoder(hDecode);
+-   vdec_picture pic;
++   vdec_picture pic = {};
+    char err[160] = "";
+    bool ok = false;
+    int rc = -1;
+@@ -677,6 +779,12 @@ VideoVideoDecoderEndFrame(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HDECODE hDecode)
+       snprintf(err, sizeof err, "incomplete frame (view %d, parameters %d, %u bitstream bytes)",
+                d->target != NULL, d->have_pp, d->bitstream_len);
+    } else {
++      vdec_target tgt;
++
++      if (ZeroCopyTarget(d->target, &tgt)) {
++         ZeroCopyWaitGpu(pDevice->pipe, d->target);
++         vdec_set_target(d->dec, &tgt);
++      }
+       switch (d->profile->codec) {
+       case VDEC_CODEC_HEVC:
+          rc = vdec_hevc_decode(d->dec, &d->pp.hevc, d->have_qm ? &d->qm.hevc : NULL, d->bitstream,
+@@ -694,7 +802,10 @@ VideoVideoDecoderEndFrame(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HDECODE hDecode)
+                                d->bitstream_len, &pic, err, sizeof err);
+          break;
+       }
+-      if (rc == 0) {
++      if (rc == 0 && pic.in_target) {
++         ok = true;                     /* the decoder wrote the texture */
++         d->zero_copy++;
++      } else if (rc == 0) {
+          ok = CopyToTarget(pDevice, d->target, &pic);
+          if (!ok)
+             snprintf(err, sizeof err, "the output view is not an NV12 texture");
+@@ -710,9 +821,9 @@ VideoVideoDecoderEndFrame(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HDECODE hDecode)
+          DebugPrintf("video: %s frame %u (surface %u, %u slices): %s\n", d->profile->name, d->frames,
+                      SurfaceIndex(d), d->slices, err);
+    } else if (d->frames <= 3 || (d->frames % 300) == 0) {
+-      DebugPrintf("video: %s frame %u decoded into slice %u (surface %u, %ux%u, %u slices, %u bytes)\n",
++      DebugPrintf("video: %s frame %u decoded into slice %u (surface %u, %ux%u, %u slices, %u bytes), %s\n",
+                   d->profile->name, d->frames, d->target->slice, SurfaceIndex(d), pic.width, pic.height,
+-                  d->slices, d->bitstream_len);
++                  d->slices, d->bitstream_len, pic.in_target ? "by the decoder itself" : "copied");
+    }
+    d->target = NULL;
+ }
+diff --git a/src/gallium/frontends/d3d10umd/Video.h b/src/gallium/frontends/d3d10umd/Video.h
+index 4d14bb7..dab8168 100644
+--- a/src/gallium/frontends/d3d10umd/Video.h
++++ b/src/gallium/frontends/d3d10umd/Video.h
+@@ -22,4 +22,11 @@ HRESULT APIENTRY VideoRetrieveSubObject(D3D10DDI_HDEVICE hDevice, UINT32 SubDevi
+ /* CheckFormatSupport's answer for DXGI_FORMAT_NV12 on this device. */
+ UINT VideoNv12FormatSupport(struct Device *pDevice);
+ 
++/* Zero copy (docs/VIDEO-DECODE.md V3b): whether an NV12 texture made with
++ * these flags is made for the decoder to write into (linear, Resource.cpp),
++ * and what goes when such a texture is destroyed. */
++bool VideoNv12ZeroCopyWanted(struct Device *pDevice, UINT BindFlags, UINT Usage, UINT MiscFlags,
++                             UINT MapFlags);
++void VideoNv12ZeroCopyForget(struct Resource *pResource);
++
+ #endif /* VIDEO_H */
+diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+index 78b3aa4..1c1da05 100644
+--- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
++++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+@@ -244,8 +244,34 @@ void malikm_primary_begin_create(void *hRTDevice, void *hRTResource, unsigned w,
+ void malikm_primary_rebind(void *hRTDevice, unsigned allocation, void *hRTResource);
+ int malikm_wait_idle(void *hRTDevice);
+ void malikm_note_removed(void *hRTDevice);
++int malikm_vdec_mark(void *hRTDevice, unsigned gem);
++int malikm_vdec_export(void *hRTDevice, unsigned gem, unsigned long long *token, unsigned *pages);
+ #endif
+ 
++/* Zero-copy decode (d3d10umd Video.cpp): see malikm_drm.c. Without Panfrost
++ * there is no allocation to export, and the decoder's pictures are copied. */
++int
++d3d10_vdec_mark(void *hRTDevice, unsigned gem)
++{
++#ifdef GALLIUM_PANFROST
++   return malikm_vdec_mark(hRTDevice, gem);
++#else
++   (void)hRTDevice; (void)gem;
++   return -1;
++#endif
++}
++
++int
++d3d10_vdec_export(void *hRTDevice, unsigned gem, unsigned long long *token, unsigned *pages)
++{
++#ifdef GALLIUM_PANFROST
++   return malikm_vdec_export(hRTDevice, gem, token, pages);
++#else
++   (void)hRTDevice; (void)gem; (void)token; (void)pages;
++   return -1;
++#endif
++}
++
+ /* A primary the driver renders into: the buffer it creates between this and
+  * d3d10_shared_end is the runtime's primary allocation. See malikm_drm.c. */
+ void
