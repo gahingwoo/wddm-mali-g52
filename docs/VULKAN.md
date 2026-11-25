@@ -32,7 +32,10 @@ What it will be, and what it will not:
 - **Not enough for DXVK, VKD3D-Proton or modern Vulkan games** (section 7).
   Minecraft's Vulkan renderer and the like want 1.2 or newer.
 
-Estimated size of the minimal path: Mesa patches of about 300 to 500 lines
+What it took, once built (section 8): about 280 added lines of Mesa
+patches, about 400 in the shim, a CI job, an INF entry and an 850-line test
+tool; four CI rounds from the first build to green. The estimate before
+starting was: Mesa patches of about 300 to 500 lines
 (Windows enumeration, build-id, a few POSIX calls, the build files), about
 250 lines in the shim (the libdrm calls panvk adds, and syncobjs that keep
 their own state), a CI job, an INF change and a test tool. The unknown is
@@ -159,8 +162,10 @@ panfrost uAPI 1.6, and the shim says 1.1. So panvk exposes exactly:
 | 0 | DEVICE_LOCAL | an allocation never mapped (imported buffers are meant to land here) |
 | 1 | DEVICE_LOCAL, HOST_VISIBLE, HOST_COHERENT | an allocation, write-combined CPU mapping |
 
-One heap, `DEVICE_LOCAL`, sized by `os_get_gpu_heap_size` from system
-memory. That is honest for this KMD: no HOST_CACHED type, so CPU reads of
+One heap, `DEVICE_LOCAL`. On Linux it is sized by `os_get_gpu_heap_size`
+from system memory (12280 MiB on the CI runner); the Windows patch caps it
+at 1 GB, the size of maliwddm's one aperture segment, which DWM shares.
+The memory types are honest for this KMD: no HOST_CACHED type, so CPU reads of
 GPU results (the WSI's readback included) are uncached reads. A cached type
 would need cached CPU mappings plus cache maintenance the KMD does not
 offer.
@@ -251,8 +256,11 @@ or to D3D12 games.
     returns (maliwddm through D3DKMT; `MALIKM_FAKE` in CI), no
     `drmGetDevices2`, the adapter's LUID reported;
   - a build ID from the Mesa version where there is no ELF note;
-  - a 32 MB tiler heap on Windows;
-  - the WSI's CPU swap chain without DXGI.
+  - a 32 MB tiler heap and a heap of at most 1 GB on Windows;
+  - the device's libdrm sync provider (`vk_device_set_drm_fd` is an inline
+    that finds no libdrm in files built without `HAVE_LIBDRM`);
+  - `VK_KHR_surface`, `VK_KHR_win32_surface` and `VK_KHR_swapchain`, and the
+    WSI's CPU swap chain as a "sw" device.
 - `win32-compat/`: `drmGetCap`, `drmGetDevice2`, `drmFreeDevice`,
   `drmSyncobjQuery2`, `drmSyncobjTimelineSignal`, a minimal `drmDevice`,
   `sched.h`; per-syncobj state behind `malikm_syncobj_state()`; the
@@ -267,6 +275,36 @@ or to D3D12 games.
   that presents a few cleared frames.
 - `drivers/maliwddm/maliwddm.inf`: `VulkanDriverName` pointing at
   `%13%\malivk.json` next to `malivk_arm64.dll`. Only on this branch.
+
+### What CI shows (emulated kernel driver, 2026-11-25)
+
+`mesa.yml`, job "Vulkan ICD, panvk (ARM64)", run 45549976958 on `8a4c5fa`,
+green. `malivk_arm64.dll` is an ARM64 DLL that imports only KERNEL32,
+USER32, GDI32 and an api-ms-win-core set, and exports the three
+`vk_icd*` entry points. vkprobe against it:
+
+- No Mali and no emulation: the instance is created and reports 0 physical
+  devices (exit 2), with the shim's "cannot open \\.\MaliG52, and no
+  maliwddm adapter".
+- With `MALIKM_FAKE=1`: one device, "Mali-G52 r1 MC3", apiVersion 1.0.354,
+  driver "panvk, Mesa 26.2.0", conformance 0.0.0.0; 130 device extensions;
+  `geometryShader` 0, `tessellationShader` 0, BC/ETC2/ASTC 0 (the emulated
+  GPU reports none; the board's answer may differ); two memory types as
+  in section 5; one queue family (graphics, compute, transfer), no
+  timestamps.
+- Every fence and event answer right: a new fence is not ready and a wait
+  of 0 or 20 ms times out, a signalled one is ready and not after a reset,
+  an event reads reset, set, reset; a submitted fence signals.
+- 61 job chains submitted through the shim for the fill, copy, clear and
+  the presents. Their results are not judged: nothing executes them.
+- The window: a Win32 surface (3 formats), a 640x480 swap chain of two
+  B8G8R8A8 images, 8791 frames presented in 3 s through the CPU path.
+  That rate means nothing for the board (no GPU work, no wait); it shows
+  the acquire, submit, fence and blit loop does not stall or leak.
+
+What CI cannot show: that the jobs panvk builds run correctly on the G52,
+that the shim's waits on maliwddm (D3DKMTWaitForIdle, the statistics
+escape) answer as the emulated ones do, and the speed of the readback.
 
 ## 9. Board test plan
 
