@@ -1,8 +1,18 @@
 diff --git a/src/panfrost/vulkan/panvk_vX_device.c b/src/panfrost/vulkan/panvk_vX_device.c
-index 5e54c68..2b39f2e 100644
+index 5e54c68..803cc6b 100644
 --- a/src/panfrost/vulkan/panvk_vX_device.c
 +++ b/src/panfrost/vulkan/panvk_vX_device.c
-@@ -491,8 +491,16 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
+@@ -10,6 +10,9 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#ifdef _WIN32
++struct util_sync_provider *panvk_win32_sync_provider(int drm_fd);
++#endif
+ #include "drm-uapi/panthor_drm.h"
+ 
+ #include "vk_cmd_enqueue_entrypoints.h"
+@@ -491,8 +494,16 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
  #endif
  
  #if PAN_ARCH <= 9
@@ -20,6 +30,20 @@ index 5e54c68..2b39f2e 100644
        PAN_KMOD_BO_FLAG_NO_MMAP | PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT,
        VK_SYSTEM_ALLOCATION_SCOPE_DEVICE, &device->tiler_heap);
     if (result != VK_SUCCESS)
+@@ -535,6 +546,13 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
+ 
+    device->drm_fd = device->kmod.dev->fd;
+    vk_device_set_drm_fd(&device->vk, device->kmod.dev->fd);
++#ifdef _WIN32
++   /* This file is built without HAVE_LIBDRM, so the inline above found no
++    * libdrm and left the device without a sync provider. The shim is
++    * libdrm here (see panvk_win32_sync.c). */
++   if (!device->vk.sync)
++      device->vk.sync = panvk_win32_sync_provider(device->kmod.dev->fd);
++#endif
+ 
+ 
+    result = panvk_precomp_init(device);
 diff --git a/src/panfrost/vulkan/panvk_wsi.c b/src/panfrost/vulkan/panvk_wsi.c
 index 1b4acc0..43ea034 100644
 --- a/src/panfrost/vulkan/panvk_wsi.c

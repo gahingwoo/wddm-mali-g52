@@ -1,8 +1,8 @@
 diff --git a/src/panfrost/vulkan/meson.build b/src/panfrost/vulkan/meson.build
-index 9885d52..7d0feba 100644
+index 9885d52..8db47cb 100644
 --- a/src/panfrost/vulkan/meson.build
 +++ b/src/panfrost/vulkan/meson.build
-@@ -202,6 +202,25 @@ if with_platform_android
+@@ -202,6 +202,26 @@ if with_platform_android
    libpanvk_files += files('panvk_android.c')
  endif
  
@@ -15,7 +15,8 @@ index 9885d52..7d0feba 100644
 +if host_machine.system() == 'windows'
 +  libpanvk_win32_sync = static_library(
 +    'panvk_win32_sync',
-+    files('../../vulkan/runtime/vk_drm_syncobj.c', '../../util/u_sync_provider.c'),
++    files('../../vulkan/runtime/vk_drm_syncobj.c', '../../util/u_sync_provider.c',
++          'panvk_win32_sync.c'),
 +    include_directories : [inc_include, inc_src],
 +    dependencies : [idep_vulkan_util_headers, idep_vulkan_runtime_headers, idep_mesautil],
 +    c_args : [no_override_init_args, '-DHAVE_LIBDRM'],
@@ -28,7 +29,7 @@ index 9885d52..7d0feba 100644
  libvulkan_panfrost = shared_library(
    'vulkan_panfrost',
    [libpanvk_files, panvk_entrypoints, panvk_tracepoints, panvk_drirc],
-@@ -210,7 +229,8 @@ libvulkan_panfrost = shared_library(
+@@ -210,7 +230,8 @@ libvulkan_panfrost = shared_library(
      inc_src,
      inc_panfrost,
    ],
@@ -142,6 +143,31 @@ index 0000000..737d140
 +mali_slow_log(uint64_t ticks, const char *op, const char *fmt, ...)
 +{
 +   (void)ticks; (void)op; (void)fmt;
++}
+diff --git a/src/panfrost/vulkan/panvk_win32_sync.c b/src/panfrost/vulkan/panvk_win32_sync.c
+new file mode 100644
+index 0000000..2664692
+--- /dev/null
++++ b/src/panfrost/vulkan/panvk_win32_sync.c
+@@ -0,0 +1,19 @@
++/*
++ * Copyright 2026 wddm-mali-g52
++ * SPDX-License-Identifier: MIT
++ *
++ * Built with HAVE_LIBDRM, with the DRM syncobj code of the Vulkan runtime
++ * (src/panfrost/vulkan/meson.build): the libdrm sync provider, over the
++ * libdrm shim, for panvk files built without HAVE_LIBDRM, where
++ * util_sync_provider_drm() is an inline that returns NULL.
++ */
++
++#include "util/u_sync_provider.h"
++
++struct util_sync_provider *panvk_win32_sync_provider(int drm_fd);
++
++struct util_sync_provider *
++panvk_win32_sync_provider(int drm_fd)
++{
++   return util_sync_provider_drm(drm_fd);
 +}
 diff --git a/src/vulkan/runtime/vk_image.c b/src/vulkan/runtime/vk_image.c
 index bda7fc7..8fbd0a0 100644
