@@ -165,6 +165,32 @@ index 8fc15d7..2775009 100644
        }
        break;
     case D3D11_1DDICAPS_ARCHITECTURE_INFO:
+diff --git a/src/gallium/frontends/d3d10umd/D3DKMT.cpp b/src/gallium/frontends/d3d10umd/D3DKMT.cpp
+index 1769999..50b20a9 100644
+--- a/src/gallium/frontends/d3d10umd/D3DKMT.cpp
++++ b/src/gallium/frontends/d3d10umd/D3DKMT.cpp
+@@ -33,6 +33,7 @@
+ 
+ 
+ #include "DriverIncludes.h"
++#include "util/u_debug.h"
+ 
+ #ifndef STATUS_NOT_IMPLEMENTED
+ #define STATUS_NOT_IMPLEMENTED 0xC0000002
+@@ -311,7 +312,12 @@ D3DKMTQueryAdapterInfo(CONST D3DKMT_QUERYADAPTERINFO *pData)
+    case KMTQAITYPE_DRIVERVERSION:
+       {
+          D3DKMT_DRIVERVERSION *pResult = (D3DKMT_DRIVERVERSION *)pData->pPrivateDriverData;
+-         *pResult = KMT_DRIVERVERSION_WDDM_1_0;
++         /* The software driver path only (a CI runner): D3D10UMD_KMT_WDDM,
++          * a D3DKMT_DRIVERVERSION such as 1105 for WDDM 1.1, stands in for
++          * the KMD the runtime asks before it offers feature level 11_0
++          * (mesa-patches/0080). Unset: WDDM 1.0, as always. */
++         *pResult = (D3DKMT_DRIVERVERSION)debug_get_num_option("D3D10UMD_KMT_WDDM",
++                                                               KMT_DRIVERVERSION_WDDM_1_0);
+          return STATUS_SUCCESS;
+       }
+    case KMTQAITYPE_XBOX:
 diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
 index c30c4eb..d3a9c8e 100644
 --- a/src/gallium/frontends/d3d10umd/Device.cpp

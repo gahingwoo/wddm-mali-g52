@@ -508,6 +508,11 @@ jobs:
           New-Item -ItemType Directory -Force C:\mali\log | Out-Null
           $env:GALLIUM_DRIVER = 'softpipe'
           $env:D3D10UMD_UMDDDI = '101'
+          # The runtime asks the KMD's WDDM version before it offers 11_0;
+          # the software path answered WDDM 1.0, and the runtime then closed
+          # the adapter (0x887A0020, run 45535163559). The board's KMD is
+          # 1.3 or 2.0: D3D10UMD_KMT_WDDM stands in for it here.
+          $env:D3D10UMD_KMT_WDDM = '1300'
           $r = @{}
           # Off: the GPU process keeps 10_1.
           Remove-Item Env:D3D10UMD_UMDFL11 -ErrorAction SilentlyContinue
@@ -521,6 +526,12 @@ jobs:
           $r['renderer'] = Run-Fl 'renderer' 'msedge.exe' "`"$dll`" --type=renderer"
           # On, the GPU process: shader model 5 on softpipe, pixels checked.
           $r['gpu'] = Run-Fl 'gpu' 'msedge.exe' "`"$dll`" --type=gpu-process"
+          # For the record only: the same with the WDDM 1.1 and 1.0 answers.
+          $env:D3D10UMD_KMT_WDDM = '1105'
+          $r['wddm11'] = Run-Fl 'wddm11' 'msedge.exe' "`"$dll`" --type=gpu-process"
+          $env:D3D10UMD_KMT_WDDM = '1000'
+          $r['wddm10'] = Run-Fl 'wddm10' 'msedge.exe' "`"$dll`" --type=gpu-process"
+          $env:D3D10UMD_KMT_WDDM = '1300'
           # What Chromium's D3D11VideoDecoder sees at 11_0 (UmdVideo 2, fake
           # decoder): every step but the shared NV12 texture, which needs a KMD.
           $env:D3D10UMD_UMDVIDEO = '2'
@@ -534,7 +545,7 @@ jobs:
           $env:GALLIUM_DRIVER = 'panfrost'
           $env:MALIKM_FAKE = '2'
           $r['panfrost'] = Run-Fl 'panfrost' 'msedge.exe' "`"$dll`" --type=gpu-process"
-          Remove-Item Env:MALIKM_FAKE, Env:D3D10UMD_UMDFL11, Env:D3D10UMD_UMDDDI, Env:GALLIUM_DRIVER
+          Remove-Item Env:MALIKM_FAKE, Env:D3D10UMD_UMDFL11, Env:D3D10UMD_UMDDDI, Env:GALLIUM_DRIVER, Env:D3D10UMD_KMT_WDDM
 
           Get-ChildItem C:\mali\log | ForEach-Object {
             Copy-Item $_.FullName "fl-umdlog-$($_.Name)"
