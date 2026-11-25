@@ -1,8 +1,8 @@
 diff --git a/src/gallium/frontends/d3d10umd/Adapter.cpp b/src/gallium/frontends/d3d10umd/Adapter.cpp
-index 8fc15d7..2775009 100644
+index 8fc15d7..6af15bf 100644
 --- a/src/gallium/frontends/d3d10umd/Adapter.cpp
 +++ b/src/gallium/frontends/d3d10umd/Adapter.cpp
-@@ -79,16 +79,18 @@ struct MaliUmdInfo {
+@@ -79,16 +79,19 @@ struct MaliUmdInfo {
     UINT Magic, Size, Ddi, FeatureLevel, Dxgi12, Video, DecodeNode, VirtualMode, KmdBuild;
     UINT Msaa;                    /* UmdMsaa; 0 from a KMD that had a reserved word here */
     UINT Redirect;                /* UmdRedirect; 0 from a KMD that had a reserved word here */
@@ -20,11 +20,12 @@ index 8fc15d7..2775009 100644
  static unsigned
  QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL,
 -            unsigned *pRedirect = NULL, unsigned *pVideo = NULL)
-+            unsigned *pRedirect = NULL, unsigned *pVideo = NULL, bool *pFl11 = NULL)
++            unsigned *pRedirect = NULL, unsigned *pVideo = NULL, bool *pFl11 = NULL,
++            bool *pKmd = NULL)
  {
     MaliUmdInfo info = {};
     D3DDDICB_QUERYADAPTERINFO q = {};
-@@ -101,6 +103,8 @@ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL,
+@@ -101,6 +104,8 @@ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL,
        *pRedirect = 0;
     if (pVideo)
        *pVideo = 0;
@@ -33,7 +34,7 @@ index 8fc15d7..2775009 100644
  
     if (pOpenData->pAdapterCallbacks && pOpenData->pAdapterCallbacks->pfnQueryAdapterInfoCb) {
        q.pPrivateDriverData = &info;
-@@ -121,8 +125,19 @@ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL,
+@@ -121,8 +126,19 @@ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL,
        if (pVideo && SUCCEEDED(hr) && info.Magic == MALI_UMD_INFO_MAGIC &&
            info.Size >= offsetof(MaliUmdInfo, Video) + sizeof(UINT))
           *pVideo = VideoEffective(info.Video);
@@ -53,7 +54,7 @@ index 8fc15d7..2775009 100644
        DebugPrintf("OpenAdapter: KMD adapter info 0x%08lx, magic 0x%08x, UmdDdi %u, UmdMsaa %u"
                    " (here %u), UmdRedirect %u: offering D3D10.%u\n", (unsigned long)hr, info.Magic,
                    info.Ddi, info.Msaa, pMsaa ? *pMsaa : 0, info.Redirect, ddi == 101 ? 1 : 0);
-@@ -142,6 +157,13 @@ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL,
+@@ -142,7 +158,16 @@ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL,
           *pMsaa = EffectiveMsaa((unsigned)debug_get_num_option("D3D10UMD_UMDMSAA", 0));
        if (pVideo)
           *pVideo = VideoEffective((unsigned)debug_get_num_option("D3D10UMD_UMDVIDEO", 0));
@@ -65,9 +66,12 @@ index 8fc15d7..2775009 100644
 +            *pVideo = v;
 +      }
     }
++   if (pKmd)
++      *pKmd = kmd;
     return ddi;
  }
-@@ -186,6 +208,53 @@ EffectiveMsaa(unsigned setting)
+ 
+@@ -186,6 +211,53 @@ EffectiveMsaa(unsigned setting)
     return samples;
  }
  
@@ -121,16 +125,16 @@ index 8fc15d7..2775009 100644
  static bool
  IsD3D10_1Interface(UINT Interface)
  {
-@@ -211,7 +280,7 @@ OpenAdapterCommon(__inout D3D10DDIARG_OPENADAPTER *pOpenData)   // IN
+@@ -211,7 +283,7 @@ OpenAdapterCommon(__inout D3D10DDIARG_OPENADAPTER *pOpenData)   // IN
  
     pAdaptor->hRTAdapter = pOpenData->hRTAdapter.handle;
     pAdaptor->ddi = QueryUmdDdi(pOpenData, &pAdaptor->msaa, &pAdaptor->redirect,
 -                               &pAdaptor->video);
-+                               &pAdaptor->video, &pAdaptor->fl11);
++                               &pAdaptor->video, &pAdaptor->fl11, &pAdaptor->kmd);
     pOpenData->hAdapter.pDrvPrivate = pAdaptor;
  
     pOpenData->pAdapterFuncs->pfnCalcPrivateDeviceSize = CalcPrivateDeviceSize;
-@@ -318,7 +387,7 @@ GetSupportedVersions(D3D10DDI_HADAPTER hAdapter,
+@@ -318,7 +390,7 @@ GetSupportedVersions(D3D10DDI_HADAPTER hAdapter,
     if (pAdapter->ddi < 101)
        n = 3;
     memcpy(list, SupportedDDIInterfaceVersions, n * sizeof list[0]);
@@ -139,7 +143,17 @@ index 8fc15d7..2775009 100644
        list[n++] = D3D11_1_DDI_SUPPORTED;
  
     if (pSupportedDDIInterfaceVersions && *puEntries < n) {
-@@ -354,16 +423,21 @@ GetCaps(D3D10DDI_HADAPTER hAdapter,
+@@ -329,6 +401,9 @@ GetSupportedVersions(D3D10DDI_HADAPTER hAdapter,
+ 
+    if (pSupportedDDIInterfaceVersions) {
+       memcpy(pSupportedDDIInterfaceVersions, list, n * sizeof list[0]);
++      if (pAdapter->fl11)
++         for (UINT i = 0; i < n; i++)
++            DebugPrintf("GetSupportedVersions: 0x%016llx\n", (unsigned long long)list[i]);
+    }
+ 
+    return S_OK;
+@@ -354,16 +429,39 @@ GetCaps(D3D10DDI_HADAPTER hAdapter,
  
     memset(pData->pData, 0, pData->DataSize);
     /* Every answer zero, as always, unless this adapter offers the D3D11.1
@@ -162,11 +176,29 @@ index 8fc15d7..2775009 100644
 +         if (pAdapter->fl11)
 +            caps->Caps |= D3D11DDI_ENCODE_3DPIPELINESUPPORT_CAP(D3D11DDI_3DPIPELINELEVEL_11_0);
 +         DebugPrintf("GetCaps: 3D pipeline levels 0x%x\n", caps->Caps);
++      }
++      break;
++   case D3D11DDICAPS_THREADING:
++   case D3D11DDICAPS_SHADER:
++      /* Zero (no free threading, no doubles), as for UmdVideo. On the
++       * software driver path only (no KMD: a CI runner),
++       * D3D10UMD_FL11_EXP bit 0 answers free threading and bit 1 doubles
++       * and shader 4.x compute, to see which answer the runtime wants
++       * before it offers 11_0. */
++      if (pAdapter->fl11 && !pAdapter->kmd && pData->DataSize >= sizeof(UINT)) {
++         unsigned exp = (unsigned)debug_get_num_option("D3D10UMD_FL11_EXP", 0);
++         if (pData->Type == D3D11DDICAPS_THREADING && (exp & 1))
++            *(UINT *)pData->pData = D3D11DDICAPS_FREETHREADED;
++         if (pData->Type == D3D11DDICAPS_SHADER && (exp & 2))
++            *(UINT *)pData->pData = D3D11DDICAPS_SHADER_DOUBLES |
++                                    D3D11DDICAPS_SHADER_COMPUTE_PLUS_RAW_AND_STRUCTURED_BUFFERS_IN_SHADER_4_X;
++         DebugPrintf("GetCaps: type %u answered 0x%x (D3D10UMD_FL11_EXP %u)\n",
++                     (unsigned)pData->Type, *(UINT *)pData->pData, exp);
        }
        break;
     case D3D11_1DDICAPS_ARCHITECTURE_INFO:
 diff --git a/src/gallium/frontends/d3d10umd/D3DKMT.cpp b/src/gallium/frontends/d3d10umd/D3DKMT.cpp
-index 1769999..50b20a9 100644
+index 1769999..48a488a 100644
 --- a/src/gallium/frontends/d3d10umd/D3DKMT.cpp
 +++ b/src/gallium/frontends/d3d10umd/D3DKMT.cpp
 @@ -33,6 +33,7 @@
@@ -177,7 +209,16 @@ index 1769999..50b20a9 100644
  
  #ifndef STATUS_NOT_IMPLEMENTED
  #define STATUS_NOT_IMPLEMENTED 0xC0000002
-@@ -311,7 +312,12 @@ D3DKMTQueryAdapterInfo(CONST D3DKMT_QUERYADAPTERINFO *pData)
+@@ -268,6 +269,8 @@ EXTERN_C NTSTATUS APIENTRY
+ D3DKMTQueryAdapterInfo(CONST D3DKMT_QUERYADAPTERINFO *pData)
+ {
+    LOG_ENTRYPOINT();
++   DebugPrintf("D3DKMTQueryAdapterInfo: type %u, %u bytes\n", (unsigned)pData->Type,
++               pData->PrivateDriverDataSize);
+ 
+    switch (pData->Type) {
+    case KMTQAITYPE_UMDRIVERNAME:
+@@ -311,7 +314,12 @@ D3DKMTQueryAdapterInfo(CONST D3DKMT_QUERYADAPTERINFO *pData)
     case KMTQAITYPE_DRIVERVERSION:
        {
           D3DKMT_DRIVERVERSION *pResult = (D3DKMT_DRIVERVERSION *)pData->pPrivateDriverData;
@@ -192,10 +233,19 @@ index 1769999..50b20a9 100644
        }
     case KMTQAITYPE_XBOX:
 diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
-index c30c4eb..d3a9c8e 100644
+index c30c4eb..f3b3232 100644
 --- a/src/gallium/frontends/d3d10umd/Device.cpp
 +++ b/src/gallium/frontends/d3d10umd/Device.cpp
-@@ -179,8 +179,10 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+@@ -96,6 +96,8 @@ SIZE_T APIENTRY
+ CalcPrivateDeviceSize(D3D10DDI_HADAPTER hAdapter,                          // IN
+                       __in const D3D10DDIARG_CALCPRIVATEDEVICESIZE *pData) // IN
+ {
++   DebugPrintf("CalcPrivateDeviceSize: interface 0x%08x, version 0x%x, flags 0x%x\n",
++               pData->Interface, pData->Version, pData->Flags);
+    return sizeof(Device);
+ }
+ 
+@@ -179,8 +181,10 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
        DebugPrintf("%s: the D3D10.1 interface is not offered on this adapter\n", __func__);
        return E_FAIL;
     }
@@ -208,7 +258,7 @@ index c30c4eb..d3a9c8e 100644
        return E_FAIL;
     }
  
-@@ -204,6 +206,7 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+@@ -204,6 +208,7 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
     pDevice->msaa = pAdapter->msaa;
     pDevice->video = pAdapter->video;
     pDevice->ddi11_1 = pCreateData->Interface == D3D11_1_DDI_INTERFACE_VERSION;
@@ -216,7 +266,7 @@ index c30c4eb..d3a9c8e 100644
     pDevice->caps_logged = 0;
     pDevice->cso = cso_create_context(pipe, CSO_NO_VBUF);
     /* The first draw binds the vertex elements, even if IaSetInputLayout
-@@ -259,8 +262,9 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+@@ -259,8 +264,9 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
        if (pCreateData->ppfnRetrieveSubObject)
           *pCreateData->ppfnRetrieveSubObject = VideoRetrieveSubObject;
        D3D11FillDxgi12Funcs(pCreateData->DXGIBaseDDI.pDXGIDDIBaseFunctions3);
@@ -518,10 +568,10 @@ index e9748ed..1dfe114 100644
              uint i;
              struct ureg_dst dst[SHADER_MAX_DST_OPERANDS];
 diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
-index bd0570d..311688e 100644
+index bd0570d..b290426 100644
 --- a/src/gallium/frontends/d3d10umd/State.h
 +++ b/src/gallium/frontends/d3d10umd/State.h
-@@ -68,6 +68,10 @@ struct Adapter
+@@ -68,6 +68,12 @@ struct Adapter
      * DDI with no decoder profiles; 2 with the VDPU383's profiles. Nonzero
      * makes this adapter offer the D3D11.1 interface (Adapter.cpp). */
     unsigned video;
@@ -529,10 +579,12 @@ index bd0570d..311688e 100644
 +    * EffectiveFl11): Chromium's GPU process gets the D3D11.1 interface at
 +    * feature level 11_0. */
 +   bool fl11;
++   /* maliwddm answered the adapter query (false: the software driver path). */
++   bool kmd;
  };
  
  
-@@ -96,6 +100,7 @@ struct Device
+@@ -96,6 +102,7 @@ struct Device
     unsigned msaa;               /* the adapter's (Adapter::msaa) */
     unsigned video;              /* the adapter's (Adapter::video) */
     bool ddi11_1;                /* created on the D3D11.1 interface */

@@ -532,6 +532,21 @@ jobs:
           $env:D3D10UMD_KMT_WDDM = '1000'
           $r['wddm10'] = Run-Fl 'wddm10' 'msedge.exe' "`"$dll`" --type=gpu-process"
           $env:D3D10UMD_KMT_WDDM = '1300'
+          # Also for the record: which GetCaps answer the runtime wants for
+          # 11_0 (0080's D3D10UMD_FL11_EXP, software path only), the GPU
+          # process asking for 10_1 only, and UmdVideo's D3D11.1 at 10_1.
+          foreach ($e in 1, 2, 3) {
+            $env:D3D10UMD_FL11_EXP = "$e"
+            $r["exp$e"] = Run-Fl "exp$e" 'msedge.exe' "`"$dll`" --type=gpu-process"
+          }
+          Remove-Item Env:D3D10UMD_FL11_EXP
+          $env:D3D10UMD_UMDVIDEO = '2'
+          $r['ask101'] = Run-Fl 'ask101' 'chrome.exe' "`"$dll`" --probe --type=gpu-process"
+          Remove-Item Env:D3D10UMD_UMDFL11
+          $env:D3D10UMD_UMDVIDEO = '3'
+          $r['video3'] = Run-Fl 'video3' 'chrome.exe' "`"$dll`" --probe"
+          Remove-Item Env:D3D10UMD_UMDVIDEO
+          $env:D3D10UMD_UMDFL11 = '1'
           # What Chromium's D3D11VideoDecoder sees at 11_0 (UmdVideo 2, fake
           # decoder): every step but the shared NV12 texture, which needs a KMD.
           $env:D3D10UMD_UMDVIDEO = '2'
@@ -550,7 +565,7 @@ jobs:
           Get-ChildItem C:\mali\log | ForEach-Object {
             Copy-Item $_.FullName "fl-umdlog-$($_.Name)"
             Write-Host "===== UMD log $($_.Name)"
-            Get-Content $_.FullName | Select-String 'UmdReportFL11|pipeline level|3D pipeline|shader:|ddi-error|not carried out|XXX' | Select-Object -First 60 | ForEach-Object { $_.Line }
+            Get-Content $_.FullName | Select-String 'UmdReportFL11|pipeline level|3D pipeline|shader:|ddi-error|not carried out|XXX|GetCaps|QueryAdapterInfo: type|CalcPrivateDeviceSize|GetSupportedVersions|CreateDevice|CloseAdapter' | Select-Object -First 60 | ForEach-Object { $_.Line }
           }
           Remove-Item -Recurse -Force C:\mali\log
 
