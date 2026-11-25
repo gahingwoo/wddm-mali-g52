@@ -180,12 +180,13 @@ jobs:
           Get-ChildItem C:\llvm\lib -Filter 'clang*.lib' | Measure-Object | ForEach-Object { "clang libraries: $($_.Count)" }
           Get-ChildItem C:\llvm\lib -Filter 'LLVM*.lib' | Measure-Object | ForEach-Object { "LLVM libraries: $($_.Count)" }
           if (-not (Test-Path C:\llvm\lib\cmake\llvm\LLVMConfig.cmake)) { throw 'no LLVMConfig.cmake in the release' }
-          # LLVM's CMake exports check that every tool they name exists, and
-          # the cache keeps only a few: empty stand-ins for the others (the
-          # translator's build runs none of them).
+          # LLVM's CMake exports check that every file they name exists, and
+          # the cache leaves out tools and the lldb, lld and OpenMP
+          # libraries: empty stand-ins for those (nothing here runs or links
+          # them).
           $n = 0
           Get-ChildItem C:\llvm\lib\cmake -Recurse -Filter '*Exports-*.cmake' | ForEach-Object {
-            Select-String -Path $_.FullName -Pattern '\$\{_IMPORT_PREFIX\}/(bin/[^" ]+\.exe)' -AllMatches | ForEach-Object { $_.Matches } | ForEach-Object {
+            Select-String -Path $_.FullName -Pattern '\$\{_IMPORT_PREFIX\}/((bin|lib)/[^" ;]+\.(exe|dll|lib))' -AllMatches | ForEach-Object { $_.Matches } | ForEach-Object {
               $f = Join-Path C:\llvm $_.Groups[1].Value
               if (-not (Test-Path $f)) { New-Item -ItemType File -Force $f | Out-Null; $n++ }
             }
