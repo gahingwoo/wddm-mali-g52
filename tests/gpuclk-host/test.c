@@ -81,10 +81,51 @@ static void board(void)
     CHECK(MwClkSteps(MwClkVal(0, 2), MwClkVal(0, 2), pll, w) == 0, "no change, no write");
 }
 
+/* The default above 600 MHz (2026-11-25): GpuClkHigh on by itself only
+ * on the firmware's reading of at least 775 mV on a plain RK3576, a value
+ * that is set always wins, and a stored GpuClk always wins at start. */
+static void defaults(void)
+{
+    static const unsigned long rails[] = { 0, 550000, 700000, 750000, 768750, 774999, 775000, 781250, 850000, 900000 };
+    int fromDefault;
+
+    for (unsigned i = 0; i < sizeof(rails) / sizeof(rails[0]); i++)
+        for (int notPlain = 0; notPlain < 2; notPlain++) {
+            unsigned long want = (rails[i] >= 775000ul && !notPlain) ? 1ul : 0ul;
+            unsigned long h = MwClkHighDefault(MW_CK_SETTING_ABSENT, rails[i], notPlain, &fromDefault);
+            CHECK(h == want && fromDefault == 1, "absent, rail %lu, notPlain %d: got %lu", rails[i], notPlain, h);
+            for (unsigned long set = 0; set < 6; set++) {
+                h = MwClkHighDefault(set, rails[i], notPlain, &fromDefault);
+                CHECK(h == (set <= 2 ? set : 0) && fromDefault == 0, "set %lu, rail %lu: got %lu", set, rails[i], h);
+            }
+        }
+    /* The boards: TaishanPi 3M with 537ea09 (775 mV read back) on; the
+     * CM5-IO and the ROCK 4D at the PMIC's 750 mV, or with no report, off. */
+    CHECK(MwClkHighDefault(MW_CK_SETTING_ABSENT, 775000, 0, &fromDefault) == 1, "TSPI 775 mV: on");
+    CHECK(MwClkHighDefault(MW_CK_SETTING_ABSENT, 750000, 0, &fromDefault) == 0, "750 mV: off");
+    CHECK(MwClkHighDefault(MW_CK_SETTING_ABSENT, 0, 0, &fromDefault) == 0, "no report: off");
+    CHECK(MwClkHighDefault(0, 775000, 0, &fromDefault) == 0 && !fromDefault, "GpuClkHigh 0 turns it off");
+
+    /* The clock at start. */
+    CHECK(MwClkStartWant(0, 1, 1) == ((3ul << 8) | 1ul), "on, allowed, nothing stored: SPLL / 1");
+    CHECK(MwClkStartWant(0, 2, 1) == MW_CK_SPLL_702, "vendor table, allowed: 702");
+    CHECK(MwClkStartWant(0, 1, 0) == MW_CK_GPLL_594, "on but not allowed (rail, no guard): 594");
+    CHECK(MwClkStartWant(0, 0, 1) == MW_CK_GPLL_594, "off (CM5-IO, ROCK 4D at 750 mV): 594, not 198");
+    CHECK(MwClkStartWant(0, 0, 0) == MW_CK_GPLL_594, "off, nothing known: 594");
+    for (unsigned long h = 0; h < 3; h++)
+        for (int ok = 0; ok < 2; ok++)
+            CHECK(MwClkStartWant(0, h, ok) != 0, "never the firmware's 198 (High %lu, ok %d)", h, ok);
+    CHECK(MwClkRate(MwClkVal(MW_CK_GPLL_594 >> 8, MW_CK_GPLL_594 & 0xFF), pll) == 594000000ul, "GPLL / 2 is 594 MHz");
+    CHECK(MwClkStartWant(0x0002, 1, 1) == 0x0002, "stored 594 wins over the default");
+    CHECK(MwClkStartWant(0x0301, 0, 0) == 0x0301, "stored 702 is still asked for (GpuClkWrite refuses it)");
+    CHECK(MwClkRate(MwClkVal(MW_CK_SPLL_702 >> 8, MW_CK_SPLL_702 & 0xFF), pll) == 702000000ul, "SPLL / 1 is 702 MHz");
+}
+
 int main(void)
 {
     all_pairs();
     board();
+    defaults();
     printf("%d checks, %d failed\n", checks, fails);
     return fails != 0;
 }

@@ -306,7 +306,8 @@ typedef struct _MW_ESCAPE_STATS_DATA {
  * 32. At most 600 MHz unless the setting GpuClkHigh allows more and the
  * supply meets the operating point (adapter.c, GpuClkWrite).
  * Mode: 0 report only; 1 set now; 2 set now and at every start; 3 forget
- * the stored setting (the firmware's rate is kept from the next start).
+ * the stored setting (from the next start: 702 MHz when GpuClkHigh is on
+ * and allows it, else 594 MHz).
  * A caller may send only the first six fields (MW_ESCAPE_GPUCLK_V1_SIZE). */
 typedef struct _MW_ESCAPE_GPUCLK_DATA {
     mw_u32 Code;                        /* MW_ESCAPE_GPUCLK */
@@ -314,9 +315,9 @@ typedef struct _MW_ESCAPE_GPUCLK_DATA {
     mw_u32 Parent, Div;
     mw_u32 Applied;                     /* what this driver last wrote, or 0: (Parent << 8) | Div */
     mw_u32 Stored;                      /* the setting kept for the next start, same form, or 0 */
-    mw_u32 High;                        /* the GpuClkHigh setting this start: 0 off, 1 mainline OPPs, 2 vendor slowest */
+    mw_u32 High;                        /* GpuClkHigh this start: 0 off, 1 mainline OPPs, 2 vendor slowest (not set: 1 when the firmware's rail is >= 775 mV) */
     mw_u32 RailUv;                      /* the supply the checks use, 0 unknown */
-    mw_u32 RailSource;                  /* 1 firmware, 2 GpuRailUv, 3 both; 0x100: not a plain RK3576 */
+    mw_u32 RailSource;                  /* 1 firmware, 2 GpuRailUv, 3 both; 0x100: not a plain RK3576; 0x200: High is the default, GpuClkHigh not set */
     mw_u32 AllowedHz;                   /* the highest operating point allowed now */
     mw_u32 NeedUv702;                   /* what 702 MHz (SPLL / 1) needs, 0 with High 0 */
     mw_u32 Fallbacks;                   /* clocks dropped to 594 MHz by a job fault */

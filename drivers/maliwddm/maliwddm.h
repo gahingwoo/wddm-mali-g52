@@ -470,6 +470,7 @@ struct _MW_ADAPTER {
     ULONG RailSource;           /* 1 firmware, 2 setting, 3 both (the lower) */
     ULONG RailOtpMv, RailOtpMinMhz, RailOtpMaxMhz;
     BOOLEAN RailNotPlain;       /* the firmware read a J, M or S variant */
+    BOOLEAN GpuClkHighDefault;  /* GpuClkHigh not set: chosen from the firmware's rail */
     volatile BOOLEAN GpuClkIsHigh;
     PUCHAR CruClkVa;
     volatile ULONG GpuClkFallbacks;

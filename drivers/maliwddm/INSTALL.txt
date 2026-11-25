@@ -259,7 +259,8 @@ Profiling (m5test prof, m5test ring; docs/PERF.md)
   and the CPU time in the runtime's render call, by process.
 
   Settings, DWORDs in Device Parameters, each off (today's behaviour)
-  unless set, except UmdMergeSubmit and PerfData, which are on unless 0:
+  unless set, except UmdMergeSubmit and PerfData, which are on unless 0,
+  and GpuClkHigh, whose default depends on the firmware's GPU rail:
 
     UmdCopyBatch 1     a GPU copy (CopySubresourceRegion, CopyResource)
                        becomes a draw in the batches the UMD already has
@@ -284,6 +285,16 @@ Profiling (m5test prof, m5test ring; docs/PERF.md)
                        Manager, no clock in m5test temp. On (1) by default;
                        at 1.3 they are never answered. Read at the
                        adapter's start: reboot. docs/PERFDATA.md.
+    GpuClkHigh 0       no GPU clock above 600 MHz. Not set, the default:
+                       on (mainline's operating points) only when the
+                       firmware reports vdd_gpu_s0 at 775 mV or more
+                       (edk2-rk3576 raises it on the TaishanPi 3M), and
+                       then the GPU starts at 702 MHz unless a GpuClk is
+                       stored (else 594 MHz, never the firmware's
+                       198); dropped to 594 MHz at 85 C, back after 90 s
+                       below 75 C, locked at 594 MHz after two faults in
+                       10 minutes. 1 or 2 as in docs/PERF.md. Read at the
+                       adapter's start: reboot.
     GpuClkRestoreHoldSec n  with GpuClkHigh: the seconds the GPU must stay
                        below 75 C before the clock asked for comes back
                        after a thermal hold (default 90, at most 3600).

@@ -100,3 +100,55 @@ MW_CK_INLINE unsigned long MwClkApplyWrite(unsigned long Reg, unsigned long Writ
     unsigned long mask = (Write >> 16) & 0xFFFFu;
     return (Reg & ~mask) | (Write & mask);
 }
+
+/* ---- the default above 600 MHz (2026-11-25, the user's decision) ----
+ *
+ * With the temperature guard and the fault policy (thermal_calc.h) and the
+ * switch between job chains above, 702 MHz is the default where the
+ * firmware has put vdd_gpu_s0 at the voltage mainline asks for it: 775 mV,
+ * mainline's 800 MHz operating point, which covers 702 (edk2-rk3576
+ * 537ea09 does it on the TaishanPi 3M; GpuRail reports the rail it read
+ * back). Everywhere else GpuClkHigh stays off: the CM5-IO and the ROCK 4D
+ * leave BUCK5 at the PMIC's default (750 mV). There, with no GpuClk
+ * stored, the GPU now starts at GPLL / 2 = 594 MHz instead of the
+ * firmware's GPLL / 6 = 198 MHz (the user's decision, 2026-11-25): 594 is
+ * at or below mainline's 600 MHz operating point, 700 mV, which every
+ * supply above 600 MHz checks already assumes.
+ *
+ * Only the firmware's reading turns it on by default, never GpuRailUv:
+ * that setting is somebody's claim, and it can still only lower the rail
+ * the checks use (adapter.c takes the lower of the two).
+ *
+ * MwClkHighDefault: the GpuClkHigh this start. Setting is the DWORD in
+ * Device Parameters, or MW_CK_SETTING_ABSENT. A value that is there is
+ * taken as it is (0 off, 1 mainline, 2 vendor, anything else off), so
+ * GpuClkHigh 0 still turns it off. Absent: 1 when the firmware reported a
+ * valid rail of at least MW_CK_DEFAULT_RAIL_UV on a plain RK3576, else 0.
+ * *FromDefault says which of the two it was. */
+#define MW_CK_SETTING_ABSENT    0xFFFFFFFFul
+#define MW_CK_DEFAULT_RAIL_UV   775000ul
+
+MW_CK_INLINE unsigned long MwClkHighDefault(unsigned long Setting, unsigned long FwRailUv, int NotPlain,
+                                            int *FromDefault)
+{
+    *FromDefault = Setting == MW_CK_SETTING_ABSENT;
+    if (!*FromDefault)
+        return Setting <= 2ul ? Setting : 0ul;
+    return (FwRailUv >= MW_CK_DEFAULT_RAIL_UV && !NotPlain) ? 1ul : 0ul;
+}
+
+/* The clock to ask for at start, as (parent << 8) | divider. A stored
+ * GpuClk (m5test clk ... keep) wins, whatever it is, so a board kept at
+ * 594 MHz (0 2) stays there. With none stored and GpuClkHigh on, SPLL / 1
+ * = 702 MHz, but only when the checks would allow it (Ok702: the supply
+ * meets what 702 needs, the temperature guard runs); GpuClkWrite checks
+ * again. Otherwise GPLL / 2 = 594 MHz, never the firmware's 198. */
+#define MW_CK_SPLL_702          ((3ul << 8) | 1ul)
+#define MW_CK_GPLL_594          ((0ul << 8) | 2ul)
+
+MW_CK_INLINE unsigned long MwClkStartWant(unsigned long Stored, unsigned long High, int Ok702)
+{
+    if (Stored != 0)
+        return Stored;
+    return (High != 0 && Ok702) ? MW_CK_SPLL_702 : MW_CK_GPLL_594;
+}
