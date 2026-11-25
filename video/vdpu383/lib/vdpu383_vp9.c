@@ -48,6 +48,11 @@
  * - A reference that is not a surface is the current picture (MPP's
  *   fallback); on an intra frame the references' sizes in the global record
  *   are 0 (MPP's are whatever its parser had last).
+ * - The segment map the decoder reads (register 181) is cleared before
+ *   an intra or error resilient frame and after a size change, as
+ *   setup_past_independence() clears the previous map. MPP only swaps the
+ *   two maps there; the decoder then predicts segment ids from the
+ *   previous frame's map, which the board showed on vp90-2-trac3849.
  * - Only 4:2:0, 8 or 10 bit, raster output, no scale-down output.
  *
  * Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
@@ -595,6 +600,30 @@ int v383_vp9_build(const V383_Vp9Input *in, V383_RegFile *rf)
             s->ctx_valid[ctx] = 1;
     }
 
+    /* Segment maps. setup_past_independence() (VP9 spec, libvpx) clears
+     * the previous frame's segment map for an intra or error resilient
+     * frame, and a size change discards it, so a predicted or copied
+     * segment id is 0 there. The decoder reads register 181's map whatever
+     * the frame (board, 2026-11-25: vp90-2-trac3849, error resilient
+     * frames with temporal segment id prediction, decoded exactly as if
+     * predicted from the previous frame's map; MPP does the same and has
+     * the same fault), so that map is cleared here. Register 182's map is
+     * the decoder's to write and no longer known to be zero. */
+    {
+        unsigned int last_map = s->segid_flag ? 0u : 1u, cur_map = !last_map;
+
+        if ((intra || V383_VP9_ERROR_RESILIENT(pp) || pp->width != s->last_width ||
+             pp->height != s->last_height) && !(s->segid_zero & (1u << last_map))) {
+            unsigned int *m = (unsigned int *)(in->aux_cpu + V383_VP9_AUX_SEGID_OFF(last_map));
+            unsigned int n = V383_VP9_SEGID_BYTES / 4;
+
+            while (n--)
+                *m++ = 0;
+            s->segid_zero |= (unsigned char)(1u << last_map);
+        }
+        s->segid_zero &= (unsigned char)~(1u << cur_map);
+    }
+
     /* ---- registers */
     v_zero(rf, sizeof(*rf));
 
@@ -665,9 +694,9 @@ int v383_vp9_build(const V383_Vp9Input *in, V383_RegFile *rf)
     reg_set(rf, 216, in->colmv_dma[colmv_cur]);
     reg_set(rf, 217, in->colmv_dma[s->frames ? s->colmv_last : colmv_cur]);
 
-    mask_range(rf, 8, 30);
-    mask_range(rf, 64, 106);
-    mask_range(rf, 128, 232);
+    mask_range(rf, 8, 31);             /* the link mode's blocks, as vdpu383_h264.c */
+    mask_range(rf, 64, 107);
+    mask_range(rf, 128, 235);
 
     /* ---- what the next frame needs to know of this one (MPP ls_info) */
     if ((V383_VP9_SEG_ENABLED(pp) && V383_VP9_SEG_UPDATE_MAP(pp)) ||

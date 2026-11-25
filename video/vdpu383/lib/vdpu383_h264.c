@@ -700,10 +700,19 @@ int v383_h264_build(const V383_H264Input *in, V383_RegFile *rf)
         reg_set(rf, 217 + i, in->surfaces[ref].colmv_dma);
     }
 
-    /* What MPP writes: ctrl_regs, comm_paras and comm_addrs, whole. */
-    mask_range(rf, 8, 30);
-    mask_range(rf, 64, 106);
-    mask_range(rf, 128, 232);
+    /*
+     * What MPP writes (ctrl_regs, comm_paras, comm_addrs), widened to the
+     * three blocks the vendor kernel's link mode loads
+     * (rkvdec_link_vdpu383_hw_info part_w: 8-31, 64-107, 128-235). MPP
+     * leaves 31, 107 and 233-235 alone; the vendor's warm-up hands the link
+     * zero-filled blocks at every power-on, so after it they are presumably
+     * 0 for every vendor decode. Written as 0 here rather than left at
+     * whatever they power on with (a suspect for H.264 needing the
+     * warm-up, board 2026-11-25; not proven).
+     */
+    mask_range(rf, 8, 31);
+    mask_range(rf, 64, 107);
+    mask_range(rf, 128, 235);
 
     return V383_OK;
 }

@@ -125,6 +125,7 @@ typedef struct V383_Vp9State {
     unsigned char  last_intra_only;     /* key frame or intra-only */
     unsigned char  last_frame_type;
     unsigned char  last_seg_enabled;    /* MPP: set once segmentation was on, never cleared */
+    unsigned char  segid_zero;          /* bit i: segment map i is known to be all zero */
     unsigned int   last_width, last_height;
     signed char    last_ref_deltas[4];
     signed char    last_mode_deltas[2];

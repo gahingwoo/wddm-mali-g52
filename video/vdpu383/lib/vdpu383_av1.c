@@ -837,9 +837,9 @@ int v383_av1_build(const V383_Av1Input *in, V383_RegFile *rf)
     reg_set(rf, 179, in->surfaces[cur].cdf_dma + V383_AV1_NON_COEF_CDF_BYTES);
     reg_set(rf, 182, in->surfaces[cur].cdf_dma + V383_AV1_ALL_CDF_BYTES);
 
-    mask_range(rf, 8, 30);
-    mask_range(rf, 64, 106);
-    mask_range(rf, 128, 232);
+    mask_range(rf, 8, 31);             /* the link mode's blocks, as vdpu383_h264.c */
+    mask_range(rf, 64, 107);
+    mask_range(rf, 128, 235);
 
     /* ---- what later frames need to know of this surface */
     cs = &s->surf[cur];
