@@ -171,7 +171,7 @@ typedef struct _MW_UMD_PROC {
 typedef struct _MW_UMD_ADAPTER_INFO {
     mw_u32 Magic;                       /* MW_UMD_INFO_MAGIC */
     mw_u32 Size;                        /* bytes filled in */
-    mw_u32 Ddi;                         /* UmdDdi: the highest DDI, MW_UMD_DDI_* (default 100) */
+    mw_u32 Ddi;                         /* UmdDdi: the highest DDI, MW_UMD_DDI_* (default 101) */
     mw_u32 FeatureLevel;                /* UmdFeatureLevel: a D3D_FEATURE_LEVEL (default 0xa000) */
     mw_u32 Dxgi12;                      /* UmdDxgi12: the DXGI 1.2 DDI and flip model (default 0) */
     mw_u32 Video;                       /* UmdVideo: 0 none, 1 video DDI without profiles, 2 with (default 0) */

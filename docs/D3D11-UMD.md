@@ -181,14 +181,14 @@ step can be turned back without reinstalling:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `UmdDdi` | 100 until U0 has run, then 101, 110, 111 | 100: the D3D10.0 DDI as today (feature level 10_0); 101: the D3D10.1 DDI (10_1); 110: D3D11.0; 111: D3D11.1 |
+| `UmdDdi` | 101 (since 2026-11-25; was 100) | 100: the D3D10.0 DDI (feature level 10_0); 101: the D3D10.1 DDI (10_1), board-tested on the TaishanPi 3M; 110: D3D11.0; 111: D3D11.1 (not offered) |
 | `UmdDxgi12` | 0 until U3 has run | the DXGI 1.2 DDI and flip model |
 | `UmdVideo` | 0 | 0 none; 1 the video DDI with no profiles; 2 with the decoder's profiles |
 | `UmdMsaa` | 1 | 0: no multisampling, as before 0064; 1: every format Panfrost renders at 4x is a multisample render target at 1x and 4x, in the browsers and d3dprobe only (0066; ANGLE uses 1x); 2: the same in every process; 4 and 5: as 1 and 2 |
 | `UmdFeatureLevel` | 0xa000 (10_0) | the most the UMD reports |
 | `UmdRedirect` | 1 at WDDM 2.x, 2 at 1.3 | which processes get DXGI redirection by default (patch 0077): 1 none; 2 the browsers (0076); 3 every process. `C:\mali\redirect` and `C:\mali\noredirect` override it. EDGE-PRESENT.md, "The WDDM 2.0 session hang" |
 
-A KMD that does not answer the query means `UmdDdi` 100, so a new UMD on
+A KMD that does not answer the query means `UmdDdi` 100 (an older KMD), so a new UMD on
 an old KMD behaves as today. The structure only grows at the end and says
 its own size.
 
