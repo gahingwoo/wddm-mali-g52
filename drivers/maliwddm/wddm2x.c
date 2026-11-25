@@ -48,6 +48,7 @@
 
 static volatile LONG CopyFence;     /* last fence completed on node 1 */
 static volatile LONG CopySubmits;
+static volatile LONG CopyPreempts;  /* preemption requests on node 1 */
 
 /* Every node count, paging node and GpuMmu bit below comes from MwPlan
  * (wddm2plan.h, set in DriverEntry), whose rules tests/wddm2-host checks. */
@@ -135,6 +136,7 @@ NTSTATUS MwCopyNodePreempt(MW_ADAPTER *A, ULONG PreemptionFence)
 
     p.A = A;
     p.PreemptionFence = PreemptionFence;
+    InterlockedIncrement(&CopyPreempts);
     return A->Dxgk.DxgkCbSynchronizeExecution(A->Dxgk.DeviceHandle, SyncCopyPreempt, &p, 0, &ret);
 }
 
@@ -576,7 +578,7 @@ void Mw2xBcQai(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *Info, NTSTATUS St)
 /* For the watchdog. */
 void Mw2xCounters(ULONG *Out, ULONG Count)
 {
-    ULONG v[8];
+    ULONG v[9];
     v[0] = (ULONG)CopySubmits;
     v[1] = (ULONG)CopyFence;
     v[2] = (ULONG)Processes;
@@ -585,6 +587,7 @@ void Mw2xCounters(ULONG *Out, ULONG Count)
     v[5] = (ULONG)VirtSubmits3d;
     v[6] = (ULONG)PtEntries;
     v[7] = (ULONG)PtRefusedMode;
-    for (ULONG i = 0; i < Count && i < 8; i++)
+    v[8] = (ULONG)CopyPreempts;
+    for (ULONG i = 0; i < Count && i < 9; i++)
         Out[i] = v[i];
 }

@@ -281,6 +281,16 @@ static void TdrLogNew(MW_ADAPTER *A)
         L"SinceDpcMs", L"NotifyPending", L"LastNotifiedFence", L"LastNotifiedNode",
         L"CopySubmits", L"CopyFence", L"VsyncOn", L"SinceVsyncMs",
         L"FlipsUnreported", L"SinceFlipMs", L"SourceVisible",
+        L"PreemptCalls", L"PreemptAnswered", L"SincePreemptMs", L"LastPreemptFence", L"CopyPreempts",
+        L"Node0Submits", L"Node0Notifies",
+        L"S0Fence", L"S0Info", L"S0AgeMs", L"S0DoneMs",
+        L"S1Fence", L"S1Info", L"S1AgeMs", L"S1DoneMs",
+        L"S2Fence", L"S2Info", L"S2AgeMs", L"S2DoneMs",
+        L"S3Fence", L"S3Info", L"S3AgeMs", L"S3DoneMs",
+        L"S4Fence", L"S4Info", L"S4AgeMs", L"S4DoneMs",
+        L"S5Fence", L"S5Info", L"S5AgeMs", L"S5DoneMs",
+        L"S6Fence", L"S6Info", L"S6AgeMs", L"S6DoneMs",
+        L"S7Fence", L"S7Info", L"S7AgeMs", L"S7DoneMs",
     };
     LONG count = A->TdrCount;
 
@@ -815,6 +825,7 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
     MwLog(a, L"AdapterLuidHigh", (ULONG)StartInfo->AdapterLuid.HighPart);
     MwCommandSettings(a);
     MwLog(a, L"TimeSlice", a->Slice);
+    MwLog(a, L"PreemptAnswer", a->PreemptAnswer);
 #if !MW_RENDER_ONLY
     st = MwDisplayStart(a);
     if (!NT_SUCCESS(st))
@@ -1851,6 +1862,8 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         MwLog(a, L"T_PreemptDropped", a->PreemptDropped);
         MwLog(a, L"T_PreemptUsAvg", TicksEachUs(a, a->PreemptTicks, a->PreemptRequests));
         MwLog(a, L"T_PreemptUsMax", TicksToUs(a, a->PreemptMaxTicks));
+        MwLog(a, L"T_PreemptCalls", (ULONG)a->PreemptCalls);
+        MwLog(a, L"T_PreemptAnswered", a->PreemptAnswered);
         MwLog(a, L"T_SoftStops", a->SoftStops);
         MwLog(a, L"T_StopsTaken", a->StopsTaken);
         MwLog(a, L"T_StopsRacedDone", a->StopsRacedDone);

@@ -863,7 +863,9 @@ ICD, fan off: two event 4101 TDRs (702 MHz at 60 C, 594 MHz at 82 C).
 Every `Tdr<n>_*` snapshot says node 0, nothing running or queued, last
 submitted fence = last completed, the last completion and the last ISR
 2.0 to 2.8 s before the reset, no preemption request (`T_PreemptRequests`
-0), and no failed SubmitCommand (no `Fail_SubmitCommand`). So dxgkrnl
+0; wrong, that counter never saw requests at `TimeSlice` 0, see
+docs/PERF.md, "The cause: a forced preemption the driver never
+answered"), and no failed SubmitCommand (no `Fail_SubmitCommand`). So dxgkrnl
 believed something on node 0 was still outstanding while the driver had
 reported everything it was given.
 
@@ -941,3 +943,74 @@ What the next run should settle: which process made the OpenAllocation
 before the screen went invisible, and whether killing DWM releases the
 session. Then the removal itself (`removed:` and `recent:` lines of
 dwm.exe's UMD log, patch 0074) is the next thing to read.
+
+## Board result, 2026-11-25 evening (DriverVer 3.58.41.641, main 9c9b6c7)
+
+WDDM 2.0, the defaults (UmdRedirect 1 at 2.x, no `C:\mali\redirect` or
+`noredirect`), Edge with the debug port. `session-2026-11-25-night/results-tspi/edgegpu-3.58.txt`.
+
+- **The session hang is gone at UmdRedirect 1**: dwm.exe kept its PID and
+  Edge exited cleanly. That was step 2's pass criterion.
+- Edge's GPU process now gets through DirectComposition and the DXGI swap
+  chains, then each of the three dies the same way, within 0.2 to 8 s
+  of starting: `Present1 failed ... (0x887A0005)` in
+  `dxgi_swap_chain_image_backing.cc`, `DComp commit failed:
+  SolidColorSurfacePoolCreateSurface ... 0x887A0005`, ANGLE
+  `testDeviceLost: HRESULT 0x887A0020` (DXGI_ERROR_DRIVER_INTERNAL_ERROR),
+  context lost, restart. After three, software.
+
+**Which call fails.** This is step 2's expected result, the same failure
+as on 2026-11-24 (d3dprobe sandbox at 2.0, `board-session-prep/edge-wddm20/edge-umdlog.zip`,
+`msedge.exe-3176.txt` line 1822) and as run A at 1.3:
+
+    CreateDevice: done, DXGI_STATUS_NO_REDIRECTION
+    present: shared allocation 0x40000ec0 -> 0x0, pfnPresentCb 0x88760873 (D3DDDIERR_INVALIDHANDLE)
+    Present: shared, result 0x88760873
+    dxgi-result: Present 0x88760873 (failed)
+
+Chromium's `SwapChainImageBacking` is a composition swap chain (DComp
+visual content), and a composition swap chain's buffers are shared with
+DWM by construction. The UMD's DXGI Present (`PresentImpl`, the shared
+allocation branch) hands the buffer to `pfnPresentCb`. Under
+DXGI_STATUS_NO_REDIRECTION the runtime has no shared-presentation path to
+DWM for it, and the callback refuses it with D3DDDIERR_INVALIDHANDLE.
+The UMD passes that code back from the DXGI DDI, as patch 0069 requires
+(a failure is the application's to see). The runtime treats a code it
+does not expect from the driver as an internal error and removes the
+device: removed reason 0x887A0020. Then DComp's next surface and ANGLE's
+`testDeviceLost` report the same removed device. Window swap chains
+(FLIP_DISCARD, FLIP_SEQUENTIAL, DISCARD on an HWND) do not share their
+buffers this way and present fine at 2.0 with NO_REDIRECTION (the same
+d3dprobe run).
+
+So nothing in the present path is broken: at UmdRedirect 1 a composition
+swap chain cannot work. What makes Edge hardware-accelerated at 2.0 is
+one of:
+
+1. **Redirection that does not hang the session** (UmdRedirect 2, step 3
+   above). Why DWM's device goes when it opens a browser's buffer is
+   still open (the `removed:`/`recent:` lines of dwm.exe's UMD log). One
+   new thing to check in the same run: the forced preemption of node 0
+   that was never answered (docs/PERF.md, "The cause: a forced preemption
+   the driver never answered"). That one shows up as a 4101, and the hang
+   had none, so it is not known to be involved. It is fixed in the same
+   package, so step 3 is worth repeating with it.
+2. **No DirectComposition in Edge**: `--disable-direct-composition`.
+   ANGLE then presents through a window swap chain, which works at 2.0
+   with NO_REDIRECTION. This is a test of the theory, not a fix for
+   users.
+
+A UMD change that would hide the failure (S_OK from the composition
+present) would only turn a clean software fallback into a blank Edge
+window, so none is made. The UMD log already names the call. Nothing
+further was added.
+
+### Board test for this (after the FurMark test in PERF.md)
+
+1. Edge as before (UmdRedirect 1), then once more with
+   `--disable-direct-composition` and a fresh profile: edge://gpu. Expected
+   with the flag: Compositing and WebGL "Hardware accelerated", crash
+   count 0. If so, the composition swap chain is the only thing missing
+   at 2.0.
+2. Step 3 above (UmdRedirect 2, prepared for the hang), with the UMD log
+   on and `Tdr*` / `T_PreemptCalls` read afterwards.

@@ -14,9 +14,13 @@
  *
  * Preemption (setting TimeSlice, off by default). The scheduler asks for it
  * with DxgkDdiPreemptCommand when a context of higher priority (dwm) has
- * work; the INF's EnablePreemption 0 stops it from ever asking, so both
- * have to be set. A request is answered with DMA_PREEMPTED once nothing of
- * the submissions before it is on the GPU: those not started are handed
+ * work. The INF's EnablePreemption 0 only stops the policy from asking:
+ * dxgkrnl still forces a preemption when a context holds the node past its
+ * switch deadline (MwPreemptCommand). With TimeSlice 0 such a request is
+ * answered once the queue has drained; with TimeSlice set (and
+ * EnablePreemption 1 for the policy requests) a request is answered with
+ * DMA_PREEMPTED once nothing of the submissions before it is on the GPU:
+ * those not started are handed
  * back, a fragment chain that has run for at least TimeSlice ms is
  * soft-stopped (the Job Manager stops it between tiles and JS_TAIL says
  * where it stopped), and a vertex/tiler chain is let finish. The scheduler
@@ -60,6 +64,8 @@ void MwCommandSettings(MW_ADAPTER *A)
      * raised. */
     v = MwSetting(A, L"PollMs", MW_POLL_MS);
     A->PollMs = v < 1 ? 1 : v > MW_POLL_MAX_MS ? MW_POLL_MAX_MS : v;
+    /* PreemptAnswer (default 1): see MwPreemptCommand. */
+    A->PreemptAnswer = MwSetting(A, L"PreemptAnswer", 1) != 0;
     A->SliceRead = TRUE;
 }
 
@@ -471,6 +477,10 @@ static void NotifyCompleted(MW_ADAPTER *A, ULONG Fence)
     A->LastNotifiedNode = 0;
     A->LastCompletedFence = Fence;
     A->LastDoneTick = MwTick();
+    A->Node0Notifies++;
+    for (ULONG i = 0; i < MW_SUB_LOG; i++)
+        if (A->SubLog[i].Fence == Fence && A->SubLog[i].DoneTick == 0)
+            A->SubLog[i].DoneTick = A->LastDoneTick;
     A->NeedDpc = TRUE;
     (void)InterlockedCompareExchange64(&A->NotifyTick, (LONG64)MwTick(), 0);
 }
@@ -518,6 +528,7 @@ static void FinishPreempt(MW_ADAPTER *A)
     n.DmaPreempted.EngineOrdinal = 0;
     MwRing(MW_RING_PREEMPTED, 0, A->PreemptFence);
     A->Dxgk.DxgkCbNotifyInterrupt(A->Dxgk.DeviceHandle, &n);
+    A->PreemptAnswered++;
     A->PreemptPending = FALSE;
     MwTickAdd(&A->PreemptTicks, &A->PreemptMaxTicks, A->PreemptTick);
     A->NeedDpc = TRUE;
@@ -540,7 +551,7 @@ static void Kick(MW_ADAPTER *A)
             A->QCount--;
             continue;
         }
-        if (A->PreemptPending) {
+        if (A->PreemptPending && A->Slice != 0) {
             /* Nothing is running: answer before anything else starts. */
             if (FenceBefore(s->FenceId, A->PreemptFence) && s->Next != 0 && s->ResumeTail == 0)
                 A->StopsAtBoundary++;
@@ -581,6 +592,10 @@ static void Kick(MW_ADAPTER *A)
         InterlockedExchange(&A->Gpu.MmuIrqStatus, 0);
         MkJobStart(&A->Gpu, c->Slot, jc, A->RunningFlag);
     }
+    /* TimeSlice 0 answers here only: the queue has drained, every DMA
+     * buffer ran to its end and was notified complete, so the answer hands
+     * nothing back and nothing is resubmitted (dxgkrnl submits nothing on
+     * the node while its preemption packet waits). */
     if (!A->Running && A->PreemptPending)
         FinishPreempt(A);
     if (!A->Running)
@@ -595,7 +610,7 @@ static void MaybeStop(MW_ADAPTER *A)
 {
     ULONG64 now;
 
-    if (!A->PreemptPending || !A->Running)
+    if (!A->PreemptPending || !A->Running || A->Slice == 0)
         return;
     now = KeQueryInterruptTime();
     if (A->StopAsked) {
@@ -748,6 +763,13 @@ static BOOLEAN SyncSubmit(PVOID Context)
     }
     a->QCount++;
     a->LastSubmittedFence = s->New->FenceId;
+    {
+        MW_SUB_REC *r = &a->SubLog[a->SubLogNext++ % MW_SUB_LOG];
+        r->Fence = s->New->FenceId;
+        r->Info = s->New->Info;
+        r->SubmitTick = a->LastSubmitTick;
+        r->DoneTick = 0;
+    }
     Kick(a);
     if (a->NeedDpc) {
         a->NeedDpc = FALSE;
@@ -1155,6 +1177,11 @@ NTSTATUS APIENTRY MwSubmitCommand(IN_CONST_HANDLE hAdapter, const DXGKARG_SUBMIT
         sub.Count = priv->Count;
         RtlCopyMemory(sub.Commands, priv->Commands, sub.Count * sizeof(MW_COMMAND));
     }
+    sub.Info = (sub.Count & MW_SUB_CHAINS) | (Arg->Flags.Paging ? MW_SUB_PAGING : 0);
+    if (priv == NULL || Arg->DmaBufferPrivateDataSize < sizeof(*priv) || priv->Reserved != MW_DMA_MAGIC)
+        sub.Info |= MW_SUB_NOPRIV;
+    else if (!Arg->Flags.Paging && priv->Present.Kind != MW_PRESENT_NONE)
+        sub.Info |= MW_SUB_PRESENT | ((ULONG)priv->Present.Kind & 0xFF) << 16;
 
     sync.A = a;
     sync.New = &sub;
@@ -1205,10 +1232,24 @@ NTSTATUS APIENTRY MwPreemptCommand(IN_CONST_HANDLE hAdapter, const DXGKARG_PREEM
     if (Arg->NodeOrdinal == MW_COPY_NODE && MwNodeCount() > 1)
         return MwCopyNodePreempt(a, Arg->PreemptionFenceId);
 
-    /* TimeSlice 0: as before, when the INF's EnablePreemption 0 meant this
-     * was never called. With EnablePreemption 1 and TimeSlice 0 the request
-     * is never answered and dxgkrnl's timeout detection resets the GPU. */
-    if (a->Slice == 0)
+    InterlockedIncrement(&a->PreemptCalls);
+    InterlockedExchange64(&a->LastPreemptCallTick, (LONG64)MwTick());
+    InterlockedExchange((volatile LONG *)&a->LastPreemptCallFence, (LONG)Arg->PreemptionFenceId);
+    /* EnablePreemption 0 (the INF) does not keep this from being called.
+     * dxgmms2 (22631) has a second path: when it wants another context on
+     * the node and the policy refuses (EnablePreemption 0), it sets a
+     * deadline (VidSchiSwitchContextWithCheck, node +0x80/+0x88), and if
+     * the same context still holds the hardware queue when it passes,
+     * VidSchiCheckHwProgress -> VidSchiNeedToForcePreemptNode ->
+     * VidSchiSubmitPreemptionCommand preempts anyway. Until 2026-11-25 a
+     * request with TimeSlice 0 was dropped here, never answered, and
+     * TdrDelay later dxgkrnl reset node 0 with the driver idle: FurMark at
+     * 5.5 frames a second against dwm, 4 TDRs in 5 minutes, every snapshot
+     * with nothing queued and everything notified (docs/PERF.md).
+     * With TimeSlice 0 it is now answered once the queue has drained (Kick):
+     * no chain is stopped and nothing is handed back. PreemptAnswer 0 drops
+     * it as before. */
+    if (a->Slice == 0 && !a->PreemptAnswer)
         return STATUS_SUCCESS;
     p.A = a;
     p.Fence = Arg->PreemptionFenceId;
@@ -1296,6 +1337,28 @@ static void TdrSnap(MW_ADAPTER *a)
     t->FlipsUnreported = (ULONG)(a->FlipSeq - a->ReportedSeq);
     t->SinceFlipMs = MsSince(a, a->FlipTick, now);
     t->SourceVisible = a->SourceVisible;
+    t->PreemptCalls = (ULONG)a->PreemptCalls;
+    t->PreemptAnswered = a->PreemptAnswered;
+    t->SincePreemptMs = MsSince(a, (ULONG64)a->LastPreemptCallTick, now);
+    t->LastPreemptFence = a->LastPreemptCallFence;
+    {
+        ULONG c[9];
+        Mw2xCounters(c, 9);
+        t->CopyPreempts = c[8];
+    }
+    t->Node0Submits = a->Submissions;
+    t->Node0Notifies = a->Node0Notifies;
+    for (ULONG k = 0; k < MW_SUB_LOG; k++) {
+        const MW_SUB_REC *r = &a->SubLog[(a->SubLogNext - 1 - k) % MW_SUB_LOG];
+        if (r->SubmitTick == 0) {
+            t->Sub[k][2] = t->Sub[k][3] = 0xFFFFFFFFu;
+            continue;
+        }
+        t->Sub[k][0] = r->Fence;
+        t->Sub[k][1] = r->Info;
+        t->Sub[k][2] = MsSince(a, r->SubmitTick, now);
+        t->Sub[k][3] = MsSince(a, r->DoneTick, now);
+    }
 }
 
 static BOOLEAN SyncTdrSnapOnly(PVOID Context)

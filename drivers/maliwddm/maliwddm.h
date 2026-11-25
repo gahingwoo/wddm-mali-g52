@@ -317,6 +317,7 @@ typedef struct _MW_SUBMISSION {
     ULONG64 ResumeTail;
     ULONG64 SubmitTick;
     BOOLEAN Started, BehindOther;
+    ULONG Info;                 /* MW_SUB_*, for the TDR snapshot */
 } MW_SUBMISSION;
 
 /* One TDR as the job layer saw it (command.c, TdrSnap). Times in ms
@@ -338,7 +339,28 @@ typedef struct {
     ULONG SinceDpcMs, NotifyPending, LastNotifiedFence, LastNotifiedNode;
     ULONG CopySubmits, CopyFence, VsyncOn, SinceVsyncMs;
     ULONG FlipsUnreported, SinceFlipMs, SourceVisible;
+    /* Preemption (2026-11-25: dxgkrnl forces one when a context overstays
+     * its switch deadline, whatever EnablePreemption says; command.c).
+     * Node-0 requests seen, DMA_PREEMPTED sent for node 0, the last
+     * request's age and fence, node-1 requests; node-0 submissions and
+     * DMA_COMPLETED notifications. */
+    ULONG PreemptCalls, PreemptAnswered, SincePreemptMs, LastPreemptFence, CopyPreempts;
+    ULONG Node0Submits, Node0Notifies;
+    /* The last MW_SUB_LOG node-0 submissions, newest first: fence, what it
+     * was (MW_SUB_*), ms since it was submitted and since it was notified
+     * complete (0xFFFFFFFF: not notified). */
+    ULONG Sub[8][4];
 } MW_TDR_SNAP;
+
+#define MW_SUB_LOG 8
+#define MW_SUB_CHAINS   0x000000FFu     /* job chains */
+#define MW_SUB_PRESENT  0x00000100u     /* carried a present (done on the CPU) */
+#define MW_SUB_PAGING   0x00000200u
+#define MW_SUB_NOPRIV   0x00000400u     /* no private data of ours */
+typedef struct {
+    ULONG Fence, Info;
+    ULONG64 SubmitTick, DoneTick;
+} MW_SUB_REC;
 
 struct _MW_ADAPTER {
     PDEVICE_OBJECT Pdo;
@@ -625,6 +647,17 @@ struct _MW_ADAPTER {
     ULONG64 StopAskedAt;        /* interrupt time the soft-stop was written */
     /* Counters (MW_ESCAPE_STATS_DATA has the meanings). */
     ULONG PreemptRequests, PreemptIdle, PreemptOverlap, PreemptDropped;
+    /* Setting PreemptAnswer (default 1): with TimeSlice 0, answer node-0
+     * preemption requests at the end of the DMA buffers submitted before
+     * them; 0 ignores them as before (dxgkrnl then resets node 0). */
+    BOOLEAN PreemptAnswer;
+    volatile LONG PreemptCalls;         /* node-0 PreemptCommand calls, any setting */
+    ULONG PreemptAnswered;              /* node-0 DMA_PREEMPTED sent */
+    volatile LONG64 LastPreemptCallTick;
+    volatile ULONG LastPreemptCallFence;
+    ULONG Node0Notifies;                /* node-0 DMA_COMPLETED sent */
+    ULONG SubLogNext;
+    MW_SUB_REC SubLog[MW_SUB_LOG];
     ULONG SoftStops, StopsTaken, StopsRacedDone, StopsAtBoundary, StopSlow;
     ULONG Resumes, ResumeMismatch, ResumeLost, StopBadTail, StopUnasked;
     ULONG64 PreemptTicks, PreemptMaxTicks;

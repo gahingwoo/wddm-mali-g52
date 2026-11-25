@@ -1165,6 +1165,140 @@ what the driver dropped is in the dump's recovery context.
    which packet was outstanding for 2 s and whether the driver ever
    completed it.
 
+### The cause: a forced preemption the driver never answered (2026-11-25)
+
+Board run of 2026-11-25 evening (`session-2026-11-25-night/results-tspi`):
+package 3.58.41.641, WDDM 2.0, 702 MHz, fan on (55 C max), FurMark 5
+minutes, four 4101 events (17:54:33, 17:55:05, 17:55:31, 17:58:16). All
+four snapshots read the same:
+
+| Field | Tdr0 | Tdr1 | Tdr2 | Tdr3 |
+|---|---|---|---|---|
+| `LastSubmitted` = `LastCompleted` | 0x1f42 | 0x221b | 0x240b | 0x31c7 |
+| `SinceSubmitMs` | 2351 | 2480 | 2469 | 2467 |
+| `SinceDoneMs` = `SinceChainEndMs` = `SinceIsrMs` | 2199 | 2328 | 2289 | 2289 |
+| `SinceFlipMs` | 2366 | 2649 | 2483 | 2482 |
+| `SinceDpcMs`, `SinceVsyncMs` | 4 | 6 | 11 | 8 |
+| `LastNotifiedNode`, `LastNotifiedFence` = `CopyFence` | 1, 0xac4 | 1, 0xc82 | 1, 0xe88 | 1, 0xf3a |
+
+`Running` 0, `QCount` 0, `NotifyPending` 0, `FlipsUnreported` 0,
+`PreemptPending` 0 everywhere. So the last node-0 submission (a FurMark
+frame, about 150 ms of GPU work at 5.5 frames a second) was submitted,
+ran, ended on its interrupt and was notified; after it dxgkrnl gave node 0
+nothing for 2.3 s, while the DPC, the vsync and the copy node all kept
+going, and then reset node 0. dxgkrnl stopped feeding the node and then
+timed it out. That is what a preemption request waiting for its answer
+looks like from the driver's side.
+
+`PreemptPending` 0 did not rule that out: with `TimeSlice` 0 (the
+default) `MwPreemptCommand` returned at once without recording the call
+(`T_PreemptRequests` counts only requests that reach `SyncPreempt`), and
+`Enter_PreemptCommand` is never written because the DDI runs at
+DISPATCH_LEVEL. The driver was written on the assumption that the INF's
+`EnablePreemption` 0 means the scheduler never asks.
+
+It does ask. dxgmms2.sys of the board (22621.2428, the file and PDB in
+`board-session-prep/wddm2x-stepF`), read from the disassembly:
+
+- `VidSchiReadGlobalConfiguration` reads `EnablePreemption` into bit 0
+  of the scheduler's flags (VIDSCH_GLOBAL +0x9e8).
+- `VidSchiCheckPreemptionPolicy` tests that bit and, with it clear,
+  refuses (reason 3). That is the normal priority preemption, and it is
+  the only thing the registry value turns off.
+- When the policy refuses, `VidSchiSwitchContextWithCheck` sets a
+  deadline on the node (+0x80, and the context at +0x88).
+- `VidSchiCheckHwProgress`, the TDR watchdog, checks each node's deadline
+  first. When it has passed, `VidSchiNeedToForcePreemptNode` returns TRUE
+  if the node still has packets in its hardware queue (+0xb48), no
+  preemption is already in flight (+0xb50), and the running context is the
+  same one (+0x60 = +0x88). The watchdog then calls
+  `VidSchiSubmitPreemptionCommand`. The flag is not checked anywhere on
+  that path, and `VidSchiSubmitPreemptionCommand` (which
+  `VidSchiSwitchFromSuspendedDevices`, `VidSchiResetEngine` and
+  `VidSchiPreemptEngineNodes` also call) does not check it either. It
+  queues a preemption packet that ends in `DxgkDdiPreemptCommand`.
+- `VidSchiCheckNodeTimeout` then times out the node when the packet at the
+  head of its hardware queue does not change for `TdrDelay`. A preemption
+  packet that is never answered is such a packet.
+
+FurMark holds node 0 with long frames, and dwm wants it for every
+composition. Each time a FurMark packet was still running when the switch
+deadline passed, the request went unanswered and node 0 was reset about
+2 s later. A short run can miss the window, which fits the 60 s run with
+none. At 1.3 the same dxgmms2 code runs, so this is not WDDM 2.0's.
+
+### The fix (branch `tdr-node0-notify`)
+
+- `MwPreemptCommand` with `TimeSlice` 0 now answers. The request goes
+  through `SyncPreempt` as with a time slice. No chain is soft-stopped
+  (`MaybeStop` returns at `TimeSlice` 0), and the queue is not cut short:
+  `Kick` answers only once nothing is running and nothing is queued. By
+  then every DMA buffer submitted before the request has run to its end
+  and been notified, so DMA_PREEMPTED carries `LastCompletedFenceId` =
+  the last fence and nothing is handed back to be resubmitted. That is
+  preemption at the DMA-buffer boundary, which is what the adapter
+  reports (dxdiag: "Graphics Preemption: DMA"). dxgkrnl submits nothing
+  on the node while its preemption packet waits, so the drain is bounded
+  by what was already queued (a FurMark frame or two). With the driver
+  idle, the request is answered on the spot.
+- `TimeSlice` set: unchanged (soft-stop and resume).
+- Setting `PreemptAnswer` (Device Parameters, default 1): 0 drops node-0
+  requests at `TimeSlice` 0 as before, for an A/B run. Read at start,
+  logged as `PreemptAnswer`.
+- The copy node already answered its requests (wddm2x.c); it now counts
+  them.
+
+New snapshot fields (`Tdr<n>_*`):
+
+| Field | Meaning |
+|---|---|
+| `PreemptCalls`, `PreemptAnswered` | node-0 PreemptCommand calls (with any setting) and node-0 DMA_PREEMPTED sent |
+| `SincePreemptMs`, `LastPreemptFence` | the last node-0 request: its age and its fence |
+| `CopyPreempts` | node-1 requests |
+| `Node0Submits`, `Node0Notifies` | node-0 SubmitCommand calls queued, and node-0 DMA_COMPLETED sent |
+| `S<k>Fence`, `S<k>Info`, `S<k>AgeMs`, `S<k>DoneMs` | the last eight node-0 submissions, k = 0 newest: fence; chains (bits 0-7), 0x100 present, 0x200 paging, 0x400 no private data, present kind in bits 16-23; ms since submitted; ms since notified complete (0xFFFFFFFF not notified) |
+
+The other suspects from the same day, read through again in the source
+and not the cause:
+
+- Fences per node: node 0's come from `NotifyCompleted` (NodeOrdinal 0)
+  and only for submissions of the node-0 queue. Node 1's come from
+  `SyncCopyDone` (NodeOrdinal 1), with the fence dxgkrnl gave that
+  submission. The two are separate sequences, as dxgkrnl numbers them per
+  node, and the snapshots agree: 0x1f42 against 0xac4.
+- Submissions completed without a notify: none. Presents, paging
+  buffers, empty buffers and anything without our private data go through
+  the same queue with `Count` 0. `Kick` completes them in order with a
+  notify. UmdCopyBatch and UmdMergeSubmit only make fewer submissions in
+  the UMD, and every one that reaches SubmitCommand is notified.
+  `SubmitCommandVirtual` on node 0 goes through `MwSubmitCommand`.
+- The clock switch between chains (`MwGpuClkBetweenChains`) runs inside
+  `Kick` and does not touch the queue. `ClkPending` was 0 in all four.
+- Flips: `FlipsUnreported` 0 and the vsync ran to the last moment. The
+  flips stopped because FurMark's next frame was never submitted.
+
+### Board test
+
+Stage and reboot as usual (new test certificate per package). Fan as in
+the failing run.
+
+1. `reg query "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\maliwddm" /v PreemptAnswer`
+   should read 1 (the trace value).
+2. FurMark through the GL ICD, 1024x640, 702 MHz, 5 minutes, twice.
+   Expected: no 4101, a score like the 60 s run's (338).
+   `m5test prof 60` during the run (its "preemption:" line) or the
+   `T_Preempt*` trace values after it: the request count is now above 0, which shows dxgkrnl asking with
+   `EnablePreemption` 0. The longest wait for an answer (`T_PreemptUsMax`)
+   is at most about one FurMark frame (200 ms), far below 2 s.
+3. A/B, once: `reg add ...\Device Parameters /v PreemptAnswer /t REG_DWORD /d 0 /f`,
+   reboot, 5 minutes FurMark. Expected: 4101s come back. In every `Tdr<n>_*`,
+   `SincePreemptMs` should be about 2000 or more with `PreemptAnswered`
+   unchanged, and `S0DoneMs` < `SincePreemptMs` < `S0AgeMs` when the
+   request came during the last frame. Then delete the value and reboot.
+4. If a 4101 still comes with `PreemptAnswer` 1, the new fields say where:
+   `PreemptCalls` > `PreemptAnswered`, or `Node0Submits` against
+   `Node0Notifies`, and the eight `S<k>*`.
+
 ## 702 MHz by default where the firmware set 775 mV (2026-11-25)
 
 Branch `gpu702-default`, off `edge-wddm2` (which carries
