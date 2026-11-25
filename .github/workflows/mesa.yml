@@ -532,10 +532,12 @@ jobs:
           $env:D3D10UMD_KMT_WDDM = '1000'
           $r['wddm10'] = Run-Fl 'wddm10' 'msedge.exe' "`"$dll`" --type=gpu-process"
           $env:D3D10UMD_KMT_WDDM = '1300'
-          # Also for the record: which GetCaps answer the runtime wants for
-          # 11_0 (0080's D3D10UMD_FL11_EXP, software path only), the GPU
-          # process asking for 10_1 only, and UmdVideo's D3D11.1 at 10_1.
-          foreach ($e in 1, 2, 3) {
+          # Also for the record: the other shader caps answers (0080's
+          # D3D10UMD_FL11_EXP, software path only: 1 free threading, 2
+          # doubles instead of shader 4.x compute, 4 none, which the runtime
+          # refused in run 45537590835), the GPU process asking for 10_1
+          # only, and UmdVideo's D3D11.1 device at 10_1.
+          foreach ($e in 1, 2, 4) {
             $env:D3D10UMD_FL11_EXP = "$e"
             $r["exp$e"] = Run-Fl "exp$e" 'msedge.exe' "`"$dll`" --type=gpu-process"
           }

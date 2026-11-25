@@ -1,5 +1,5 @@
 diff --git a/src/gallium/frontends/d3d10umd/Adapter.cpp b/src/gallium/frontends/d3d10umd/Adapter.cpp
-index 8fc15d7..6af15bf 100644
+index 8fc15d7..5ee60c6 100644
 --- a/src/gallium/frontends/d3d10umd/Adapter.cpp
 +++ b/src/gallium/frontends/d3d10umd/Adapter.cpp
 @@ -79,16 +79,19 @@ struct MaliUmdInfo {
@@ -153,7 +153,7 @@ index 8fc15d7..6af15bf 100644
     }
  
     return S_OK;
-@@ -354,16 +429,39 @@ GetCaps(D3D10DDI_HADAPTER hAdapter,
+@@ -354,16 +429,53 @@ GetCaps(D3D10DDI_HADAPTER hAdapter,
  
     memset(pData->pData, 0, pData->DataSize);
     /* Every answer zero, as always, unless this adapter offers the D3D11.1
@@ -180,20 +180,34 @@ index 8fc15d7..6af15bf 100644
 +      break;
 +   case D3D11DDICAPS_THREADING:
 +   case D3D11DDICAPS_SHADER:
-+      /* Zero (no free threading, no doubles), as for UmdVideo. On the
-+       * software driver path only (no KMD: a CI runner),
-+       * D3D10UMD_FL11_EXP bit 0 answers free threading and bit 1 doubles
-+       * and shader 4.x compute, to see which answer the runtime wants
-+       * before it offers 11_0. */
-+      if (pAdapter->fl11 && !pAdapter->kmd && pData->DataSize >= sizeof(UINT)) {
-+         unsigned exp = (unsigned)debug_get_num_option("D3D10UMD_FL11_EXP", 0);
++      /*
++       * Zero (no free threading, no doubles), as for UmdVideo, except
++       * SHADER with UmdReportFL11: the runtime closes the adapter without
++       * a device (0x887A0020) when 11_0 is in the pipeline levels and the
++       * shader caps are 0, even for a caller that asks for 10_1 only
++       * (mesa.yml runs 45537590835 and on). So the GPU process is told
++       * D3D11DDICAPS_SHADER_COMPUTE_PLUS_RAW_AND_STRUCTURED_BUFFERS_IN_SHADER_4_X,
++       * which says something only below 11_0, where the device is not.
++       * Doubles stay off: ANGLE does not use them.
++       *
++       * On the software driver path only (no KMD: a CI runner),
++       * D3D10UMD_FL11_EXP changes the answers to see what the runtime
++       * needs: bit 0 free threading, bit 1 doubles instead, bit 2 zero.
++       */
++      if (pAdapter->fl11 && pData->DataSize >= sizeof(UINT)) {
++         unsigned exp = pAdapter->kmd ? 0 : (unsigned)debug_get_num_option("D3D10UMD_FL11_EXP", 0);
++         UINT *caps = (UINT *)pData->pData;
 +         if (pData->Type == D3D11DDICAPS_THREADING && (exp & 1))
-+            *(UINT *)pData->pData = D3D11DDICAPS_FREETHREADED;
-+         if (pData->Type == D3D11DDICAPS_SHADER && (exp & 2))
-+            *(UINT *)pData->pData = D3D11DDICAPS_SHADER_DOUBLES |
-+                                    D3D11DDICAPS_SHADER_COMPUTE_PLUS_RAW_AND_STRUCTURED_BUFFERS_IN_SHADER_4_X;
++            *caps = D3D11DDICAPS_FREETHREADED;
++         if (pData->Type == D3D11DDICAPS_SHADER) {
++            *caps = D3D11DDICAPS_SHADER_COMPUTE_PLUS_RAW_AND_STRUCTURED_BUFFERS_IN_SHADER_4_X;
++            if (exp & 2)
++               *caps = D3D11DDICAPS_SHADER_DOUBLES;
++            if (exp & 4)
++               *caps = 0;
++         }
 +         DebugPrintf("GetCaps: type %u answered 0x%x (D3D10UMD_FL11_EXP %u)\n",
-+                     (unsigned)pData->Type, *(UINT *)pData->pData, exp);
++                     (unsigned)pData->Type, *caps, exp);
        }
        break;
     case D3D11_1DDICAPS_ARCHITECTURE_INFO:
