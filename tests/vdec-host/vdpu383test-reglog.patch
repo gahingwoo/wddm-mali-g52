@@ -1,0 +1,125 @@
+--- a/tools/vdpu383test/main.c
++++ b/tools/vdpu383test/main.c
+@@ -376,6 +376,67 @@
+     unsigned av1_synth, av1_synth_hdr;
+ } Dec;
+ 
++
++/* --reglog FILE: each register file as wddm-mali-g52's UMD backend logs it
++ * (video/vdec.c, reglog): addresses as buffer+offset, then hashes of the
++ * auxiliary buffer and of the stream bytes the decoder reads. */
++static FILE *g_reglog;
++static unsigned g_reglog_pics;
++
++static uint64_t rl_fnv1a(const uint8_t *p, size_t n)
++{
++    uint64_t h = 0xcbf29ce484222325ull;
++    size_t i;
++    for (i = 0; i < n; i++) {
++        h ^= p[i];
++        h *= 0x100000001b3ull;
++    }
++    return h;
++}
++
++static int rl_in(const DevBuf *b, uint32_t a)
++{
++    return b->handle && a >= b->dma && a < b->dma + b->size;
++}
++
++static void reglog(Dec *d, const char *codec, const V383_RegFile *rf, const DevBuf *aux, unsigned aux_len)
++{
++    unsigned r, i;
++    uint32_t sa = rf->regs[128], sl = rf->regs[66];
++
++    if (!g_reglog)
++        return;
++    fprintf(g_reglog, "pic %s %u\n", codec, g_reglog_pics++);
++    for (r = 0; r < V383_NUM_REGS; r++) {
++        uint32_t a = rf->regs[r];
++        int addr;
++
++        if (!(rf->write_mask[r / 32] & (1u << (r % 32))))
++            continue;
++        addr = (r >= 128 && r <= 134) || (r >= 140 && r <= 160 && !(r & 1)) || (r >= 168 && r <= 185) ||
++               r == 192 || (r >= 194 && r <= 210) || (r >= 216 && r <= 232);
++        if (addr && a) {
++            if (rl_in(&d->strm, a)) { fprintf(g_reglog, "r%u strm+0x%x\n", r, a - d->strm.dma); continue; }
++            if (rl_in(aux, a)) { fprintf(g_reglog, "r%u aux+0x%x\n", r, a - aux->dma); continue; }
++            if (rl_in(&d->rcb, a)) { fprintf(g_reglog, "r%u rcb+0x%x\n", r, a - d->rcb.dma); continue; }
++            if (rl_in(&d->colmv[0], a)) { fprintf(g_reglog, "r%u colmv0+0x%x\n", r, a - d->colmv[0].dma); continue; }
++            if (rl_in(&d->colmv[1], a)) { fprintf(g_reglog, "r%u colmv1+0x%x\n", r, a - d->colmv[1].dma); continue; }
++            for (i = 0; i < H264_MAX_SLOTS; i++)
++                if (rl_in(&d->surf[i], a))
++                    break;
++            if (i < H264_MAX_SLOTS) { fprintf(g_reglog, "r%u s%u+0x%x\n", r, i, a - d->surf[i].dma); continue; }
++        }
++        fprintf(g_reglog, "r%u 0x%08x\n", r, a);
++    }
++    fprintf(g_reglog, "timeout 0x%08x\n", rf->core_timeout);
++    fprintf(g_reglog, "aux %u %016llx\n", aux_len, (unsigned long long)rl_fnv1a(aux->cpu, aux_len));
++    if (sa >= d->strm.dma && sa - d->strm.dma + (uint64_t)sl <= d->strm.size)
++        fprintf(g_reglog, "strm %u %016llx\n", (unsigned)sl,
++                (unsigned long long)rl_fnv1a(d->strm.cpu + (sa - d->strm.dma), sl));
++    else
++        fprintf(g_reglog, "strm outside the buffer\n");
++}
++
+ static unsigned popcount(unsigned v)
+ {
+     unsigned n = 0;
+@@ -572,6 +633,7 @@
+         fprintf(stderr, "picture %u: register builder failed (%d)\n", pic->decode_index, rc);
+         return -1;
+     }
++    reglog(d, "h264", &rf, &d->aux, V383_H264_AUX_SIZE);
+     if (d->dxva_only && v383_h264_parse_pps_id(pic->stream, (unsigned)pic->stream_len) != (int)pic->pps_id)
+         fprintf(stderr, "picture %u: pps id from the slice header disagrees with the parser\n", pic->decode_index);
+ 
+@@ -805,6 +867,7 @@
+         fprintf(stderr, "picture %u: register builder failed (%d)\n", pic->decode_index, rc);
+         return -1;
+     }
++    reglog(d, "hevc", &rf, &d->aux, V383_HEVC_AUX_SIZE);
+     if (d->dxva_only && v383_hevc_parse_pps_id(&pic->pp, pic->stream, (unsigned)pic->stream_len) !=
+                             (int)pic->extra.pps_id)
+         fprintf(stderr, "picture %u: pps id from the slice header disagrees with the parser\n", pic->decode_index);
+@@ -1006,6 +1069,7 @@
+         fprintf(stderr, "frame %u: register builder failed (%d)\n", pic->decode_index, rc);
+         return -1;
+     }
++    reglog(d, "vp9", &rf, &d->vp9aux, V383_VP9_AUX_SIZE);
+     if (check_vp9_addrs(d, &rf, why, sizeof(why))) {
+         d->addr_bad++;
+         printf("    frame %u: %s\n", pic->decode_index, why);
+@@ -1325,6 +1389,7 @@
+         fprintf(stderr, "frame %u: register builder failed (%d)\n", pic->decode_index, rc);
+         return -1;
+     }
++    reglog(d, "av1", &rf, &d->vp9aux, v383_av1_aux_size(d->width, d->height));
+     if (check_av1_addrs(d, &rf, why, sizeof(why))) {
+         d->addr_bad++;
+         printf("    frame %u: %s\n", pic->decode_index, why);
+@@ -1444,6 +1509,13 @@
+         else if (!strcmp(argv[i], "--stride") && i + 1 < argc) d.stride_mpp = !strcmp(argv[++i], "mpp");
+         else if (!strcmp(argv[i], "--link-vendor")) d.link_vendor = 1;
+         else if (!strcmp(argv[i], "--null")) ;
++        else if (!strcmp(argv[i], "--reglog") && i + 1 < argc) {
++            g_reglog = fopen(argv[++i], "w");
++            if (!g_reglog) {
++                fprintf(stderr, "cannot write %s\n", argv[i]);
++                return 1;
++            }
++        }
+         else if (!strcmp(argv[i], "--hevc")) codec = 2;
+         else if (!strcmp(argv[i], "--h264")) codec = 1;
+         else if (!strcmp(argv[i], "--av1-synth") && i + 1 < argc) {
+@@ -1555,6 +1627,8 @@
+     free(data);
+     free(d.ref);
+     free(d.frame);
++    if (g_reglog)
++        fclose(g_reglog);
+     return (rc || d.hw_errors || d.mismatches || d.rps_real_bad || d.rps_rebuilt_bad || d.addr_bad ||
+             (d.ref && codec >= 3 && d.ref_off != d.ref_len) ||
+             (d.dxva_only && d.rps_unsupported)) ? 2 : 0;

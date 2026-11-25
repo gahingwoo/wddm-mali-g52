@@ -71,8 +71,17 @@ Foundation decoder of our own:
 |---|---|
 | 0, absent | as `main` |
 | 1 | the D3D11.1 interface and a video device with **no** decoder profiles, in mpv.exe, ffmpeg.exe, ffplay.exe, ffprobe.exe, vlc.exe, vdectest.exe, d3dprobe.exe. Players fall back to software: checks the new interface alone |
-| 2 | the same with the H.264 profile, when `\\.\VDPU383` opens |
+| 2 | the same with the decoder's profiles (H.264, HEVC Main, VP9 profile 0, AV1 Main; section 7), when `\\.\VDPU383` opens |
 | 3 | 2 in every process except dwm.exe, LogonUI.exe, consent.exe (Media Player, Edge) |
+
+With `UmdVideo` set, three more Device Parameters (read only then; the KMD
+packs them above `UmdVideo` in `MW_UMD_ADAPTER_INFO.Video`):
+
+| Setting | Default | Effect |
+|---|---|---|
+| `UmdVideoCodecs` | 0 | which profiles are listed: bit 0 H.264, 1 HEVC Main, 2 VP9 profile 0, 3 AV1 Main; 0 all four. 1 is the H.264-only UMD of patch 0078 |
+| `UmdAv1Synth` | 0 | how the AV1 tile data is wrapped for the decoder, which parses OBUs itself: 0 one `OBU_TILE_GROUP`, 1 an `OBU_FRAME` with 16 zero bytes of frame header. Which one the VDPU383 accepts is the first AV1 question for the board |
+| `UmdVp9Mpp` | 0 | VP9 frame contexts: 0 as the specification says, 1 MPP's reset of all four on intra frames, 2 MPP's write of the adapted context into a context the frame does not keep, 3 both (vdpu383test `--vp9-mpp`) |
 
 ### Who owns the VDPU383
 
@@ -121,8 +130,10 @@ interrupts and its own IOMMU. Three stages:
 | | Goal | State |
 |---|---|---|
 | V3a H.264 | `ID3D11VideoDevice` with H.264 VLD (no FGT), short slice format, NV12 decoder output, `DecoderEndFrame` decodes on the VDPU383; FFmpeg d3d11va(-copy) and mpv `--hwdec=d3d11va-copy` | **this branch**: Mesa 0078, `video/`, vdectest, CI; vdpu383.sys `UserAccess` on woa-rk3576 `vdpu383-d3d11va`. Not run on the board |
-| V3a HEVC Main | the same for `D3D11_DECODER_PROFILE_HEVC_VLD_MAIN` | register builder and parser written (woa-rk3576 branch `vdpu383-hevc`, `lib/vdpu383_hevc.c`); 75 conformance streams pass the parser and the reference set checks on Linux, with the SPS's sets and with DXVA alone. Next: vdpu383test on the board (`hevc-conformance.ps1`), then the profile in the UMD |
-| V3a VP9 profile 0 | `D3D11_DECODER_PROFILE_VP9_VLD_PROFILE0` | not started. VDPU383 VP9 is in MPP only (`hal_vp9d_vdpu383.c`, no mainline driver). DXVA hands the decoder the frame header and the compressed header in the bitstream; the driver keeps the four frame contexts, decodes the probability deltas of the compressed header (a bool decoder) and adapts the probabilities from the counts the hardware writes after each frame (MPP `vp9d` does all three). Then vdpu383test with the libvpx test vectors, then the UMD |
+| V3a HEVC Main | the same for `D3D11_DECODER_PROFILE_HEVC_VLD_MAIN`, `ConfigBitstreamRaw` 1 | vdpu383test on the board 2026-11-25: 60 of 75 conformance streams bit-exact, the rest allocation failures (fixed by the driver's IOMMU, not yet rerun). In the UMD: Mesa 0081 (section 7), CI only |
+| V3a VP9 profile 0 | `D3D11_DECODER_PROFILE_VP9_VLD_PROFILE0`, `ConfigBitstreamRaw` 1 | register builder on woa-rk3576 `main` (the decoder parses the compressed header and adapts the probabilities itself; the builder keeps the frame contexts' bookkeeping); 215 test vectors checked off the board, none run on it. In the UMD: Mesa 0081, CI only |
+| V3a AV1 Main | `DXVA_ModeAV1_VLD_Profile0`, 8 bit, `ConfigBitstreamRaw` 1 | register builder on woa-rk3576 `main` (the decoder parses OBUs and keeps the CDFs itself; DXVA has only the tiles, so they are wrapped in OBUs, `UmdAv1Synth`); 24 streams checked off the board, none run on it. In the UMD: Mesa 0081, CI only |
+| 10 bit | HEVC Main 10, VP9 profile 2, 10-bit AV1 | not offered: the decoder writes 10-bit pictures packed (4 samples in 5 bytes), the UMD has no P010 texture, the HEVC builder is Main only (section 7) |
 | V4 | NV12 as two shader views (R8 and R8G8 planes), the D3D11 video processor (NV12 and RGB in, RGB out, on the GPU): Media Player, Edge, mpv zero-copy rendering | **this branch**: Mesa 0079, `vdectest --vp`, CI on softpipe. Not run on the board |
 | V3b | zero copy through maliwddm and the decoder's IOMMU; sandboxed processes | not started |
 
@@ -149,9 +160,15 @@ register builder handles them, up to 4096x2304; no encryption.
   R8_UNORM or R8G8_UNORM view of NV12 is a view of a plane), `Video.cpp`
   (a decode writes the planes too), `Device.cpp` (video processor input
   and output in `CheckFormatSupport`).
+- `mesa-patches/0081-...`: `Video.cpp` (HEVC Main, VP9 profile 0 and AV1
+  Main next to H.264: the profiles, their configurations, the per-codec
+  picture parameters, slice control and tile buffers, `UmdVideoCodecs`,
+  `UmdAv1Synth`, `UmdVp9Mpp`), `meson.build` (the new register builders).
+  Section 7.
 - `video/vdec.c`: the backend (README in `video/`). With
   `D3D10UMD_VDEC_FAKE=1` it builds and checks the register file and
-  writes a known pattern instead of decoding.
+  writes a known pattern instead of decoding; with
+  `D3D10UMD_VDEC_REGLOG=<file>` it logs every register file it builds.
 - `tools/windows/vdectest/`: drives `ID3D11VideoContext` the way FFmpeg's
   d3d11va-copy does (texture array with `BIND_DECODER`, an output view
   per slice, picture parameters, scaling matrix, short slice control,
@@ -317,3 +334,109 @@ Hashed 2026-11-24 from the URL in section 5:
 |---|---|---|
 | `bbb_sunflower_1080p_30fps_normal.mp4.zip` | | `e320fef389ec749117d0c1583945039266a40f25483881c2ff0d33207e62b362` |
 | `bbb_sunflower_1080p_30fps_normal.mp4` (inside) | 276134947 | `ae51005850b0ff757fe60c3dd7a12d754d3cd2397d87d939b55235e457f97658` |
+
+## 7. HEVC, VP9 and AV1 (Mesa patch 0081)
+
+Written 2026-11-25, branch `video-decode-codecs`. CI only; nothing of this
+has run on the board through D3D11.
+
+**What the UMD offers.** With `UmdVideo` 2 (or 3) and `\\.\VDPU383` open,
+four profiles, in this order, all with NV12 output only:
+
+| Profile | GUID | `ConfigBitstreamRaw` | Buffers the UMD reads |
+|---|---|---|---|
+| H.264 VLD no FGT | `1b81be68-a0c7-11d3-b984-00c04f2e73c5` | 2 | picture parameters, matrix, short slices (counted), bitstream |
+| HEVC Main | `5b11d51b-2f4c-4452-bcc3-09f2a1160cc0` | 1 | `DXVA_PicParams_HEVC`, `DXVA_Qmatrix_HEVC` (when scaling lists are on), `DXVA_Slice_HEVC_Short` (where the data ends), bitstream |
+| VP9 profile 0 | `463707f8-a1d0-4585-876d-83aa6d60b89e` | 1 | `DXVA_PicParams_VP9`, `DXVA_Slice_VPx_Short`, the whole frame |
+| AV1 Main (8 bit) | `b8be4ccb-cf53-46ba-8d59-d6b8a6da5d2a` | 1 | `DXVA_PicParams_AV1`, `DXVA_Tile_AV1` per tile, the tile data |
+
+Slice and tile offsets are taken relative to the bitstream buffer of the
+same `SubmitDecoderBuffers` call, so a frame submitted in several calls
+(Chromium does that when a bitstream buffer is full) still adds up.
+Sizes up to 4096x2304, as H.264.
+
+**Per decoder** (`video/vdec.c`, one `vdec` per `ID3D11VideoDecoder`):
+HEVC keeps its reference picture set scratch table and sizes surfaces per
+stream as H.264 does; VP9 keeps `V383_Vp9State`, the 640 KiB auxiliary
+buffer with the four frame contexts and the segment maps, and two
+co-located motion vector buffers, all sized once for the decoder's
+`SampleWidth` x `SampleHeight`; AV1 keeps `V383_Av1State` and gives each
+surface its co-located motion vectors and its CDF and segment map buffer.
+Surfaces are allocated when a DXVA index is first used (current picture or
+reference). AV1 texture indices must be below 32 (the state the builder
+keeps per surface); a higher index fails that frame.
+
+**10 bit is not offered.** The decoder writes 10-bit pictures in a packed
+layout of its own (4 samples in 5 bytes, `vdpu383_vp9.h`), not P010; the
+UMD has no P010 texture (Resource.cpp, the plane views and the video
+processor are NV12 only); the HEVC builder is Main only. So HEVC Main 10
+and VP9 profile 2 are not listed, and `CheckVideoDecoderFormat` says no to
+P010 for AV1: a player decodes a 10-bit stream in software. P010 would be:
+a P010 texture (R16 storage of 1.5 times the height, R16/R16G16 plane
+views, a video processor input), unpacking in `CopyToTarget`, and the
+HEVC builder's Main 10 path.
+
+**Film grain.** The VDPU383 does not apply AV1 film grain (vdpu383test's
+refs: a stream with grain matches dav1d's output without it). A player
+that leaves grain to the hardware decoder shows those streams without it.
+
+**What CI checks.** `tests/vdec-host` (ci.yml): every test stream of
+`tests/data` through the backend with vdpu383test's parsers and the fake
+decoder, and the backend's register log against vdpu383test
+`--dxva-only`'s for the same stream (`tests/vdec-host/reglog.md5`,
+`video/README.md`), with both `UmdAv1Synth` forms. mesa.yml: vdectest
+through the D3D11 runtime and the UMD on softpipe, HEVC, VP9 and AV1, the
+fake pattern on every shown frame and the UMD's register log against the
+same md5 (H.264 is checked on the host only: vdectest pads its bitstream to
+128 bytes as FFmpeg does, vdpu383test does not, so register 66 differs),
+and four profiles listed. Off the board, the backend's register logs were
+identical to vdpu383test's for all 8-bit streams of the three kits (75
+HEVC, 215 VP9, 21 AV1).
+
+**Board test** (after section 5's install; one driver package, stage only,
+`ConfigFlags` 0x20, full reboot):
+
+- Inputs: firmware with *Video Decoder (VDPU383)* on (setup option
+  `AcpiVdec`); vdpu383.sys from woa-rk3576 `main` (Iommu 1 by default,
+  `UserAccess` 1); the maliwddm package and `vdectest-arm64` (with
+  `codec-conformance.ps1`) of the run that built this branch; the kits
+  `woa-vdpu383-hevc-2026-11-25`, `-vp9-`, `-av1-` (streams and FFmpeg
+  6.1.1 references). The CI test certificate changes per build: import the
+  package's `.cer` into Root and TrustedPublisher first.
+- Settings: `UmdVideo` 2 (3 for Media Player and other players not on the
+  list), `UmdVideoCodecs` absent, `UmdAv1Synth` 0, `UmdVp9Mpp` 0.
+
+1. `vdectest hw --probe`: `decoder profiles: 4`, each with `NV12 yes`.
+2. Each test stream: `vdectest hw testsrc-176x144-main.hevc`,
+   `vdectest hw testsrc-176x144-p0.ivf`, `vdectest hw
+   testsrc-352x288-2tiles.av1.ivf`: 12 frames out, 0 decode errors, the
+   `output md5` of `video/README.md`, and `vdpu383.sys runs` up by the
+   pictures decoded (13 for AV1).
+3. The kits, one codec at a time:
+   `codec-conformance.ps1 -Kit <kit>`; every 8-bit stream MATCH. If VP9
+   shows mismatches, run again with `UmdVp9Mpp` 3 (full restart: the
+   setting is read when the adapter opens) and send both result sets. If
+   AV1 frames fail or come out grey, run again with `UmdAv1Synth` 1.
+4. FFmpeg against itself on the same stream:
+
+   ```
+   ffmpeg -hide_banner -i F -autoscale 0 -pix_fmt yuv420p -f md5 -
+   ffmpeg -hide_banner -hwaccel d3d11va -i F -autoscale 0 -pix_fmt yuv420p -f md5 -
+   ```
+
+   the same MD5 (AV1 with film grain excepted). Then mpv with
+   `--hwdec=d3d11va-copy` and `--hwdec=d3d11va` on a 1080p HEVC, VP9 and
+   AV1 file (the status line says the decoder is used, frame drops near
+   0), as section 5 step 5.
+5. `UmdVideoCodecs` 1 (H.264 only), full restart: `--probe` lists one
+   profile again: the back-out that keeps H.264.
+
+Send back: every vdectest output, `codec-results\results.txt` per kit,
+`C:\mali\log` (the `video:` lines name the codec, the AV1 stream form and
+the VP9 options), `vdpu383test info`.
+
+**Risks.** VP9 and AV1 have never run on this decoder outside MPP; the AV1
+stream form is a guess between two (`UmdAv1Synth`); a 4K HEVC stream with
+20 surfaces of vdpu383test's layout (room for 4:2:2, about 19 MB each) is
+near vdpu383.sys's 384 MiB per handle; Chromium needs C1 (feature level
+11_0) before it asks for any of this.

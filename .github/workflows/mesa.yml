@@ -412,7 +412,12 @@ jobs:
           New-Item -ItemType Directory -Force vt | Out-Null
           cl /nologo /W3 /O2 /EHsc /MD /Itools\windows\vdectest tools\windows\vdectest\vdectest.cpp `
              tools\windows\vdectest\vptest.cpp tools\windows\vdectest\chromeprobe.cpp `
-             tools\windows\vdectest\h264parse.c `
+             tools\windows\vdectest\codecs.cpp tools\windows\vdectest\h264parse.c `
+             tools\windows\vdectest\hevcparse.c tools\windows\vdectest\vp9parse.c `
+             tools\windows\vdectest\av1parse.c `
+             video\vdpu383\lib\vdpu383_hevc.c video\vdpu383\lib\vdpu383_hevc_cabac.c `
+             video\vdpu383\lib\vdpu383_vp9.c video\vdpu383\lib\vdpu383_vp9_probs.c `
+             video\vdpu383\lib\vdpu383_av1.c video\vdpu383\lib\vdpu383_av1_cdf.c `
              tools\windows\vdectest\md5.c /Fe:vt\vdectest.exe
           if ($LASTEXITCODE) { throw 'vdectest build failed' }
           Copy-Item vt\vdectest.exe vt\notaplayer.exe
@@ -445,6 +450,32 @@ jobs:
           $env:D3D10UMD_UMDVIDEO = '2'
           $env:D3D10UMD_VDEC_FAKE = '1'
           $dec = Run-Exe 'decode' 'vdectest.exe' "`"$dll`" `"$stream`" --fake --vp"
+          # 0081: HEVC Main, VP9 profile 0, AV1 Main through the same path,
+          # and the register files the UMD builds from what the runtime
+          # handed it (D3D10UMD_VDEC_REGLOG) against vdpu383test
+          # --dxva-only's for the same stream (tests/vdec-host/reglog.md5;
+          # H.264 is checked on the host only: vdectest pads its bitstream,
+          # vdpu383test does not, so the stream length register differs).
+          $codecRuns = @()
+          $n = 0
+          foreach ($line in Get-Content tests\vdec-host\reglog.md5) {
+            if ($line -match '^\s*#' -or -not $line.Trim()) { continue }
+            $f = -split $line
+            if ($f[0] -like '*.264') { continue }
+            $n++
+            $tag = "codec$n"
+            $log = Join-Path $PWD "vdec-reglog-$tag.txt"
+            Remove-Item $log -ErrorAction SilentlyContinue
+            $env:D3D10UMD_VDEC_REGLOG = $log
+            # UmdVideo 2, with UmdAv1Synth in bit 16 when the line asks for it.
+            $env:D3D10UMD_UMDVIDEO = if ($line -match '--av1-synth 1') { '65538' } else { '2' }
+            $c = Run-Exe $tag 'vdectest.exe' "`"$dll`" `"$((Resolve-Path tests\data\$($f[0])).Path)`" --fake"
+            Remove-Item Env:D3D10UMD_VDEC_REGLOG
+            $md5 = if (Test-Path $log) { (Get-FileHash -Algorithm MD5 $log).Hash.ToLower() } else { 'none' }
+            Write-Host "===== ${tag}: $($f[0]) $($f[3..9] -join ' '): register log md5 $md5, vdpu383test's $($f[2])"
+            $codecRuns += [pscustomobject]@{ Tag = $tag; Stream = $f[0]; Frames = $f[1]; Want = $f[2]; Got = $md5; Exit = $c }
+          }
+          $env:D3D10UMD_UMDVIDEO = '2'
           # What Chromium's D3D11VideoDecoder would get from this device:
           # printed, not a pass or fail yet (it needs feature level 11_0).
           $chr = Run-Exe 'chromium' 'vdectest.exe' "`"$dll`" --chromium"
@@ -472,6 +503,13 @@ jobs:
           if ($vpt -ne 0 -or $t['vp'] -notmatch 'video processor tests: PASS') { throw "video processor or NV12 plane views failed ($vpt)" }
           if ($t['decode'] -notmatch 'through the video processor: MATCH') { throw 'the decoded picture through the video processor did not match' }
           if ($nodev -ne 3 -or $t['nodevice'] -notmatch 'decoder profiles: 0') { throw "without \\.\VDPU383 the profile must not be offered ($nodev)" }
+          if ($t['decode'] -notmatch 'decoder profiles: 4') { throw 'UmdVideo 2 with the decoder: expected 4 profiles (H.264, HEVC, VP9, AV1)' }
+          if ($codecRuns.Count -lt 4) { throw "expected 4 HEVC/VP9/AV1 runs from reglog.md5, got $($codecRuns.Count)" }
+          foreach ($r in $codecRuns) {
+            $out = (Get-Content "vdec-$($r.Tag).txt" -ErrorAction SilentlyContinue) -join "`n"
+            if ($r.Exit -ne 0 -or $out -notmatch 'fake pattern: MATCH' -or $out -notmatch "frames out $($r.Frames)\b") { throw "$($r.Stream) through ID3D11VideoContext failed ($($r.Exit))" }
+            if ($r.Got -ne $r.Want) { throw "$($r.Stream): the UMD's register log ($($r.Got)) is not vdpu383test --dxva-only's ($($r.Want))" }
+          }
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -480,6 +518,9 @@ jobs:
           path: |
             vt/vdectest.exe
             tests/data/testsrc-176x144-high.264
+            tests/data/testsrc-176x144-main.hevc
+            tests/data/testsrc-176x144-p0.ivf
+            tests/data/testsrc-352x288-2tiles.av1.ivf
             vdec-*.txt
             vdec-*.err
 
