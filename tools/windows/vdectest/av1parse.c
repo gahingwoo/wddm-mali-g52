@@ -1070,7 +1070,11 @@ static void fill_dxva(Av1Parser *p, const Fh *h, int cur, Av1Picture *pic)
         e->Index = V383_AV1_NO_SURFACE;
         if (!h->intra && p->ref[h->ref_idx[i]].surface >= 0) {
             const Av1Slot *r = &p->ref[h->ref_idx[i]];
-            e->Index = (unsigned char)r->surface;
+            /* The reference slot (ref_frame_idx[i]), not the surface: the
+             * DXVA AV1 specification, FFmpeg's dxva2_av1.c and Mesa's d3d12
+             * all write the slot here; RefFrameMapTextureIndex[slot] is the
+             * surface. */
+            e->Index = (unsigned char)h->ref_idx[i];
             e->width = r->upscaled_width;
             e->height = r->height;
         }

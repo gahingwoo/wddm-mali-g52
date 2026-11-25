@@ -12,9 +12,12 @@
  * Conventions, from the Microsoft "DirectX Video Acceleration Specification
  * for AV1" and what FFmpeg's dxva2_av1.c and Mesa's d3d12 driver write:
  *
- * - CurrPicTextureIndex, frame_refs[i].Index and RefFrameMapTextureIndex[]
- *   are surface indices, 0xFF none. frame_refs[i] is reference LAST + i;
- *   RefFrameMapTextureIndex[j] is reference slot j.
+ * - CurrPicTextureIndex and RefFrameMapTextureIndex[] are surface indices,
+ *   0xFF none; RefFrameMapTextureIndex[j] is reference slot j. frame_refs[i]
+ *   is reference LAST + i, and its Index is the slot it refers to
+ *   (ref_frame_idx[i], 0 to 7), not a surface: what FFmpeg's dxva2_av1.c
+ *   and Mesa's d3d12 write. (Until 2026-11-25 this said surface, and FFmpeg
+ *   decoded wrong references from the third picture of a stream on.)
  * - width and height are the upscaled frame size; with superres the coded
  *   width is (width * 8 + superres_denom / 2) / superres_denom.
  * - frame_refs[i].wmmat[] are the global motion parameters in force

@@ -827,10 +827,8 @@ int vdec_av1_decode(vdec *d, const V383_DXVA_PicParams_AV1 *pp, const V383_DXVA_
         if (pp->RefFrameMapTextureIndex[i] < V383_AV1_MAX_SURFACES &&
             ensure_surface(d, pp->RefFrameMapTextureIndex[i], err, errlen))
             goto fail;
-    for (i = 0; i < 7; i++)
-        if (pp->frame_refs[i].Index < V383_AV1_MAX_SURFACES &&
-            ensure_surface(d, pp->frame_refs[i].Index, err, errlen))
-            goto fail;
+    /* frame_refs[i].Index is a slot of RefFrameMapTextureIndex, whose
+     * surfaces are all there now. */
 
     need = v383_av1_stream_read_len(sum + 16 + hdr) + 64;
     if (stream_room(d, need, err, errlen))

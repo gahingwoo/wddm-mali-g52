@@ -30,9 +30,9 @@
  *
  * Differences from MPP, deliberate:
  *
- * - DXVA gives surfaces, not slots: a reference's slot is the first slot of
- *   RefFrameMapTextureIndex holding its surface (slots holding the same
- *   surface hold the same frame, so any of them gives the same record).
+ * - DXVA gives each reference's slot (frame_refs[i].Index, ref_frame_idx[i])
+ *   and the surface each slot holds (RefFrameMapTextureIndex); the slot
+ *   state the decoder needs is kept per surface.
  * - What MPP keeps per slot (CDF valid, coefficient class) is kept per
  *   surface, the CDF buffer being the surface's. A frame with
  *   disable_frame_end_update_cdf leaves its surface marked as holding the
@@ -278,13 +278,10 @@ void v383_av1_derive(const V383_DXVA_PicParams_AV1 *pp, const V383_Av1Extra *ex,
         h->ref_frame_idx[i] = 0;
         if (ex && ex->valid) {
             h->ref_frame_idx[i] = ex->ref_frame_idx[i] & 7;
-        } else if (!intra) {
-            for (j = 0; j < 8; j++)
-                if (pp->frame_refs[i].Index != V383_AV1_NO_SURFACE &&
-                    pp->RefFrameMapTextureIndex[j] == pp->frame_refs[i].Index) {
-                    h->ref_frame_idx[i] = j;
-                    break;
-                }
+        } else if (!intra && pp->frame_refs[i].Index < 8) {
+            /* frame_refs[i].Index is the slot, ref_frame_idx[i] (the DXVA
+             * AV1 specification; FFmpeg's dxva2_av1.c, Mesa's d3d12) */
+            h->ref_frame_idx[i] = pp->frame_refs[i].Index;
         }
     }
 
