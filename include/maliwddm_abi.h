@@ -183,8 +183,18 @@ typedef struct _MW_UMD_ADAPTER_INFO {
                                          * in the browsers and d3dprobe only (ANGLE then
                                          * uses 1x, which Skia needs); 2 the same in every
                                          * process; 4 and 5 as 1 and 2 (default 1) */
-    mw_u32 Reserved[6];
+    mw_u32 Redirect;                    /* UmdRedirect, MW_UMD_REDIRECT_*: which processes
+                                         * get DXGI redirection by default (Mesa patch
+                                         * 0077); 0 from a KMD that predates it */
+    mw_u32 Reserved[5];
 } MW_UMD_ADAPTER_INFO;
+
+/* MW_UMD_ADAPTER_INFO.Redirect. The files C:\mali\redirect and
+ * C:\mali\noredirect still win over it in the UMD. */
+#define MW_UMD_REDIRECT_UNSAID  0       /* an older KMD: the UMD keeps patch 0076's default */
+#define MW_UMD_REDIRECT_NONE    1       /* no process (the default at WDDM 2.x) */
+#define MW_UMD_REDIRECT_BROWSERS 2      /* msedge, chrome, msedgewebview2, d3dprobe (the default at 1.3) */
+#define MW_UMD_REDIRECT_ALL     3       /* every process */
 
 /* The KMD's counters, for tests and bring-up. */
 typedef struct _MW_ESCAPE_STATS_DATA {
@@ -317,9 +327,18 @@ typedef struct _MW_ESCAPE_GPUCLK_DATA {
     mw_u32 ThermalDrops;                /* times held for heat */
     mw_u32 ThermalRestores;             /* times the clock asked for came back */
     mw_u32 Wanted;                      /* the clock above 600 MHz asked for, (Parent << 8) | Div, or 0 */
+    /* The switch between job chains and the fault policy (gpuclk_calc.h,
+     * thermal_calc.h). */
+    mw_u32 ThrottleReason;              /* 0 none, 1 thermal, 2 faults (locked at 594 MHz until restart) */
+    mw_u32 HighFaults;                  /* job faults, timeouts and TDRs while above 600 MHz */
+    mw_u32 RestoreHoldSec;              /* the time below 75 C before the clock comes back */
+    mw_u32 CoolForSec;                  /* below 75 C for this long now, while held */
+    mw_u32 Switches;                    /* clock changes written, each between two job chains */
+    mw_u32 Deferred;                    /* of those, how many waited for a running chain to end */
 } MW_ESCAPE_GPUCLK_DATA;
 #define MW_ESCAPE_GPUCLK_V1_SIZE  24
 #define MW_ESCAPE_GPUCLK_V2_SIZE  48
+#define MW_ESCAPE_GPUCLK_V3_SIZE  80
 #define MW_MEM_PROCS            64
 
 typedef struct _MW_MEM_PROC {

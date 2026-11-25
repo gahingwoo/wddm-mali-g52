@@ -27,13 +27,24 @@
  *     flushes it and reads it back. If it does not read back, the probe is
  *     not used this boot (WddmProbeArmFailed, WDDM 1.3): an unarmed 2.x
  *     boot that hangs would hang every boot after it.
- *   - The probe's watchdog thread (probe.c) clears WddmProbeArmed and
- *     writes WddmProbeConfirmed once the boot is good by Mw2Confirm
- *     (wddm2plan.h): 300 renders, 120 s up and no DDI stuck.
+ *   - The probe's watchdog thread (probe.c) writes WddmProbeStage as the
+ *     boot gets further (2 started, 3 presented, 15 TDR storm), and clears
+ *     WddmProbeArmed and writes WddmProbeConfirmed once the boot is good by
+ *     Mw2Confirm (wddm2plan.h): 60 renders, 10 presents, 20 s up, no DDI
+ *     stuck, fewer than three TDRs. (Until 2026-11-24: 300 renders and
+ *     120 s, and a power cut in those two minutes counted as a hang.)
  *   - If DriverEntry finds WddmProbeArmed equal to WddmProbe, the last boot
- *     with this value never got that far. It then deletes WddmProbe, writes
- *     WddmProbeFellBack = the refused value and WddmProbeFellBackBoot = the
- *     journal number of that boot, and starts as WDDM 1.3.
+ *     with this value never confirmed. An explicit WddmProbe then falls back
+ *     at once: it deletes WddmProbe, writes WddmProbeFellBack = the refused
+ *     value, WddmProbeFellBackBoot = the journal number of that boot and
+ *     WddmProbeFellBackReason, and starts as WDDM 1.3.
+ *   - The default (no WddmProbe) judges that boot by its stage first: no
+ *     frame or a TDR storm is a failure (WddmProbeHardMisses), frames and
+ *     then nothing is a cut (WddmProbeSoftMisses). It falls back after two
+ *     failures in a row or three unconfirmed boots of any kind in a row,
+ *     and otherwise runs 2.0 again. WddmProbeLastMiss keeps the class of
+ *     the last one; m5test wddm and the "WDDM fallback reason" counter
+ *     show why. docs/WDDM2.md 16.14.
  *   - Every 2.x boot re-arms, a confirmed one too: a later boot that hangs
  *     also costs only itself.
  *
@@ -44,7 +55,7 @@
  *     boots. A new package tries 2.0 once more; wddm-probe set/default
  *     clear it.
  *
- * So a refused version costs one boot. WddmProbeKeep = 1 turns the arming
+ * So a refused probe costs one boot, a refused default two or three. WddmProbeKeep = 1 turns the arming
  * off (for repeating a probe that is known to start; never for a first
  * test). The decisions are wddm2plan.h's, checked by tests/wddm2-host.
  *
@@ -87,6 +98,7 @@ ULONG MwDdiInterface = DXGKDDI_INTERFACE_VERSION_WDDM1_3;
 ULONG MwWddmProbe;              /* the 2.x version in effect (WddmProbe's or the default), 0 at 1.3 */
 BOOLEAN MwWddmDefault;          /* MwWddmProbe is the default, no WddmProbe value */
 ULONG MwWddmProbeResult;        /* see MW_PROBE_* in maliwddm.h */
+ULONG MwWddmFallbackReason;     /* MW2_REASON_*: why this boot is 1.3 (m5test wddm, pcw.c) */
 
 ULONG MwProbeWatchdog;
 ULONG MwProbeUart;
@@ -210,7 +222,22 @@ void MwVersionInit(PUNICODE_STRING RegistryPath)
     in.FellBack = ParamRead(L"WddmProbeFellBack", 0);
     in.FellBackBuild = ParamRead(L"WddmProbeFellBackBuild", 0xFFFFFFFF);
     in.Build = (ULONG)MW_BUILD;
+    in.Stage = ParamRead(L"WddmProbeStage", 0);
+    in.HardMisses = ParamRead(L"WddmProbeHardMisses", 0);
+    in.SoftMisses = ParamRead(L"WddmProbeSoftMisses", 0);
     Mw2BootDecide(&in, &out);
+    /* How the last armed boot ended, when it never confirmed, and the
+     * misses in a row (wddm2plan.h): kept whatever is decided. */
+    if (out.Class != MW2_CLASS_NONE)
+        ParamWrite(L"WddmProbeLastMiss", out.Class);
+    if (out.HardMisses != in.HardMisses)
+        ParamWrite(L"WddmProbeHardMisses", out.HardMisses);
+    if (out.SoftMisses != in.SoftMisses)
+        ParamWrite(L"WddmProbeSoftMisses", out.SoftMisses);
+    if (Mw2Wanted(in.Want, in.Default) == MW2_WDDM_1_3)
+        MwWddmFallbackReason = MW2_REASON_FORCED;
+    else if (out.Result == MW_PROBE_STAYED_BACK)
+        MwWddmFallbackReason = ParamRead(L"WddmProbeFellBackReason", MW2_REASON_NONE);
 
     if (out.Result == MW_PROBE_UNKNOWN)
         ParamWrite(L"WddmProbeUnknown", in.Want);
@@ -225,8 +252,11 @@ void MwVersionInit(PUNICODE_STRING RegistryPath)
         ParamWrite(L"WddmProbeFellBack", out.Wanted);
         ParamWrite(L"WddmProbeFellBackBuild", (ULONG)MW_BUILD);
         ParamWrite(L"WddmProbeFellBackBoot", ParamRead(L"ProbeBoots", 0));
+        ParamWrite(L"WddmProbeFellBackReason", out.Reason);
+        MwWddmFallbackReason = out.Reason;
     }
     if (out.Arm) {
+        ParamWrite(L"WddmProbeStage", MW2_STAGE_ARMED);
         ParamWrite(L"WddmProbeArmed", out.Wanted);
         out.Result = Mw2BootArmed(out.Result, out.Arm, ParamRead(L"WddmProbeArmed", 0), out.Wanted);
         if (out.Result == MW_PROBE_ARM_FAILED)
@@ -285,23 +315,37 @@ void MwVersionRendered(void)
         InterlockedIncrement(&ProbeRenders);
 }
 
-/* From the probe's watchdog thread, once a second, at PASSIVE_LEVEL. A boot
- * is good when wddm2plan.h's Mw2Confirm says so: renders, two minutes up,
- * and nothing stuck. Until then WddmProbeArmed stays set, and a hang, a
- * bugcheck or a power cut leads to 1.3 on the next boot. */
-void MwVersionConfirmCheck(ULONG Renders, ULONG Seconds, BOOLEAN Stuck)
+/* From the probe's watchdog thread, once a second, at PASSIVE_LEVEL. How
+ * far an armed boot has got goes into WddmProbeStage, flushed, at each
+ * step: what the next DriverEntry judges a boot that never confirmed by
+ * (wddm2plan.h). A boot is good when Mw2Confirm says so: renders,
+ * presents, 20 s up, nothing stuck, no TDR storm. Until then
+ * WddmProbeArmed stays set. */
+void MwVersionConfirmCheck(ULONG Renders, ULONG Presents, ULONG Seconds, BOOLEAN Stuck, ULONG Tdrs)
 {
+    static ULONG stage = MW2_STAGE_ARMED;
+    ULONG next;
+
     UNREFERENCED_PARAMETER(Renders);
     if (MwWddmProbe == 0 || ProbeConfirmed || KeGetCurrentIrql() != PASSIVE_LEVEL)
         return;
-    if (!Mw2Confirm((unsigned)ProbeRenders, (unsigned)Seconds, Stuck ? 1u : 0u))
+    next = Mw2StageNow(stage, Presents, Tdrs);
+    if (next != 0) {
+        stage = next;
+        ParamWrite(L"WddmProbeStage", stage);
+        MwBc("stage %u at %u s: %u renders, %u presents, %u TDRs", stage, Seconds, (ULONG)ProbeRenders,
+             Presents, Tdrs);
+    }
+    if (!Mw2Confirm((unsigned)ProbeRenders, Presents, (unsigned)Seconds, Stuck ? 1u : 0u, Tdrs))
         return;
     if (InterlockedExchange(&ProbeConfirmed, 1) != 0)
         return;
     ParamWrite(L"WddmProbeArmed", 0);
     ParamWrite(L"WddmProbeConfirmed", MwWddmProbe);
-    MwBc("confirmed: %u renders, %u s up; WddmProbeArmed cleared%hs", (ULONG)ProbeRenders, Seconds,
-         MwWddmDefault ? "; the journal ends here (the default)" : "");
+    ParamWrite(L"WddmProbeHardMisses", 0);
+    ParamWrite(L"WddmProbeSoftMisses", 0);
+    MwBc("confirmed: %u renders, %u presents, %u s up; WddmProbeArmed cleared%hs", (ULONG)ProbeRenders,
+         Presents, Seconds, MwWddmDefault ? "; the journal ends here (the default)" : "");
     /* A daily-driver boot: nothing more into the registry journal. */
     if (MwWddmDefault)
         MwBcEnd();

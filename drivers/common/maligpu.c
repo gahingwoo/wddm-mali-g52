@@ -383,6 +383,11 @@ ULONG MkJobTakeStatus(MK_GPU *Gpu, ULONG Slot)
     return bits | raw;
 }
 
+ULONG MkJobRawStat(MK_GPU *Gpu)
+{
+    return MK_RD(Gpu, JOB_INT_RAWSTAT);
+}
+
 ULONG MkJobSlotStatus(MK_GPU *Gpu, ULONG Slot)
 {
     return MK_RD(Gpu, JS_SLOT(Slot) + JS_STATUS);

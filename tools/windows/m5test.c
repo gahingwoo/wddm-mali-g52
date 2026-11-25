@@ -19,6 +19,9 @@
  * chains), m5test scan [mode] and m5test mem (GPU memory by process) only
  * ask the driver; nothing is submitted.
  *
+ * m5test wddm prints the WDDM version decision: the stage and misses of
+ * the last armed boots and why it fell back, if it did (docs/WDDM2.md 16.14).
+ *
  * m5test temp [seconds] asks dxgkrnl, as Task Manager does, for the
  * adapter's and each node's performance data (D3DKMTQueryAdapterInfo
  * KMTQAITYPE_ADAPTERPERFDATA and NODEPERFDATA): temperature, clock and
@@ -625,6 +628,44 @@ static double mib(unsigned long long bytes)
  * they count in a process's working set only where its UMD has them mapped
  * (Panfrost keeps a CPU view of every BO it has touched). Run elevated to
  * see the working sets of dwm.exe and the others. */
+/* m5test wddm: the WDDM version decision of this boot and the last ones
+ * (version.c, wddm2plan.h), from Services\maliwddm\Parameters. */
+static DWORD param(const wchar_t *Name, DWORD Default)
+{
+    DWORD v = Default, size = sizeof(v);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Services\\maliwddm\\Parameters", Name,
+                     RRF_RT_REG_DWORD, NULL, &v, &size) != ERROR_SUCCESS)
+        return Default;
+    return v;
+}
+
+static int wddm(void)
+{
+    static const char *const miss[] = { "none", "no frame (hang, bugcheck, black screen or a very early cut)",
+                                         "TDR storm", "frames, then no confirm (power cut, reset or a later crash)" };
+    static const char *const reason[] = { "none", "two 2.0 boots in a row showed no frame",
+                                          "two 2.0 boots in a row failed, the last a TDR storm",
+                                          "three unconfirmed 2.0 boots in a row",
+                                          "an explicit WddmProbe never confirmed (one-shot)",
+                                          "WddmProbe 0x1300 asks for 1.3" };
+    DWORD want = param(L"WddmProbe", 0), armed = param(L"WddmProbeArmed", 0), fb = param(L"WddmProbeFellBack", 0);
+    DWORD r = param(L"WddmProbeFellBackReason", 0), last = param(L"WddmProbeLastMiss", 0);
+
+    printf("WddmProbe 0x%lx (%s)\n", want, want == 0 ? "none: the default, 2.0" : "set");
+    printf("armed now 0x%lx (cleared once this boot confirms: 60 renders, 10 presents, 20 s, no TDR storm)\n", armed);
+    printf("stage of the last armed boot %lu (1 armed, 2 started, 3 presented, 15 TDR storm); confirmed 0x%lx\n",
+           param(L"WddmProbeStage", 0), param(L"WddmProbeConfirmed", 0));
+    printf("unconfirmed boots in a row: %lu failed (no frame / TDR storm), %lu cut; the last: %s\n",
+           param(L"WddmProbeHardMisses", 0), param(L"WddmProbeSoftMisses", 0), miss[last < 4 ? last : 0]);
+    if (fb != 0)
+        printf("FELL BACK from 0x%lx with build %lu at boot %lu: %s. Sticky for this build; "
+               "wddm-probe default resets it.\n", fb, param(L"WddmProbeFellBackBuild", 0),
+               param(L"WddmProbeFellBackBoot", 0), reason[r < 6 ? r : 0]);
+    else
+        printf("no fallback recorded\n");
+    return 0;
+}
+
 /* m5test temp [seconds]: the queries Task Manager's GPU page makes. */
 static int temp(D3DKMT_HANDLE adapter, unsigned seconds)
 {
@@ -975,10 +1016,22 @@ int main(int argc, char **argv)
                    d.ThermalMilliC / 1000.0,
                    d.ThermalHeld ? "HELD at 594 MHz now" : "not held",
                    d.ThermalDrops, d.ThermalRestores);
+        if (d.High)
+            printf("  throttled reason %u (%s); %u faults above 600 MHz (two within 10 min lock 594 MHz until "
+                   "restart); back after %u s below 75 C; %u clock switches, %u of them waited for a running "
+                   "job chain\n",
+                   d.ThrottleReason,
+                   d.ThrottleReason == 2 ? "FAULTS: 594 MHz until restart" :
+                   d.ThrottleReason == 1 ? "thermal" : "none",
+                   d.HighFaults, d.RestoreHoldSec, d.Switches, d.Deferred);
+        if (d.High && d.ThermalHeld && d.CoolForSec)
+            printf("  below 75 C for %u s now\n", d.CoolForSec);
         return st < 0 ? 1 : 0;
     }
     if (argc >= 2 && strcmp(argv[1], "mem") == 0)
         return mem(adapter);
+    if (argc >= 2 && strcmp(argv[1], "wddm") == 0)
+        return wddm();
     if (argc >= 2 && strcmp(argv[1], "temp") == 0) {
         int seconds = argc >= 3 ? atoi(argv[2]) : 3;
         return temp(adapter, seconds > 0 && seconds <= 600 ? (unsigned)seconds : 3);

@@ -912,9 +912,12 @@ own 1 s timer, and takes the hotter one:
 
 - at or above 85 C (mainline's `gpu-alert`) the clock goes to GPLL / 2 =
   594 MHz at once and is held there;
-- it goes back to the clock that was asked for only below 75 C;
+- it goes back to the clock that was asked for only below 75 C (since
+  `gpu-clk-safe-switch`: below 75 C at every reading for 90 s, see the
+  next section);
 - three readings in a row with neither channel valid count as hot;
-- a job fault still drops the clock and nothing brings it back by itself;
+- a job fault still drops the clock and nothing brings it back by itself
+  (changed on `gpu-clk-safe-switch`, next section);
 - the adapter stopping drops it as before.
 
 The decisions are `drivers/maliwddm/thermal_calc.h`, checked on the host
@@ -952,3 +955,211 @@ Not run on a board yet. To see a drop:
    channel falling below 75 C, "not held", back 1 time, 702 MHz again.
 5. Fan on, FurMark 60 s three times: the scores of 2026-11-24 (334 to
    336), held 0 times, JobsFailed 0.
+
+## The fallback on the board, and the switch between job chains (2026-11-24)
+
+TaishanPi 3M, the `main` package of 01dc1bf/d4b1e8f (which carries
+`gpu-perfdata` and the fallback), `GpuClkHigh` 1, firmware at 775 mV, fan
+unplugged, FurMark. The tray log
+(`board-session-prep/gpu-thermal-fallback-2026-11-24.log`, every 8 s):
+
+    20:30:52 gpu 79C 702MHz throttled=0 busy=90%
+    20:31:00 gpu 83C 702MHz throttled=0 busy=80%
+    20:31:08 gpu 79C 594MHz throttled=1 busy=15%
+    20:31:17 gpu 80C 594MHz throttled=1 busy=10%
+    ...
+    20:32:00 gpu 73C 594MHz throttled=0 busy=11%
+
+The drop came as designed, at 85 C between two log lines. At 20:31:11
+Windows logged Display event 4101 (TDR, "display driver stopped
+responding and has recovered"). The driver's counters: one job failed,
+one timed out, two GPU resets. Afterwards FurMark stuttered and "% busy"
+stayed at 10 to 15%. With the fan back on the GPU cooled (66 C, not held)
+and the clock stayed at 594 MHz: a job fault cleared the clock asked for,
+so the TDR that the switch itself caused lost 702 MHz until the next
+start.
+
+### What was wrong with the switch
+
+The drop was one register write, `(0xFF << 16) | GPLL << 5 | (2 - 1)`:
+mux and divider together, from the 1 s DPC, while a job chain ran.
+
+- **The order.** Nothing says the mux and the divider of
+  `CLKSEL_CON165` take effect on the same edge. From SPLL / 1 to GPLL / 2
+  the state "new mux, old divider" is GPLL / 1 = 1188 MHz, on a rail set
+  for 702. Mainline changes this clock in two writes:
+  `clk_composite_set_rate_and_parent` (drivers/clk/clk-composite.c; the
+  RK3576's `clk_gpu_src_pre` is a `COMPOSITE` in clk-rk3576.c) writes the
+  divider first when the old divider on the new parent would be faster
+  than the target, else the mux first. TF-A's SCMI GPU clock
+  (`plat/rockchip/rk3576/scmi/rk3576_clk.c`, `clk_gpu_set_rate`), which
+  mainline's rk3576.dtsi uses for the GPU's assigned rate, writes the
+  divider, then the mux, each with its own mask.
+- **The moment.** Neither mainline (panfrost's devfreq calls
+  `dev_pm_opp_set_rate` while jobs run) nor TF-A waits for an idle GPU.
+  So the order alone may have been the fault. One run cannot tell which,
+  and waiting is cheap here, so both are fixed.
+
+Which of the two caused this TDR is not known; the fix does not depend on
+it. A board run of the fixed package with the same load answers whether
+the switch was the whole story (no 4101).
+
+### The fix (branch `gpu-clk-safe-switch`)
+
+- `drivers/maliwddm/gpuclk_calc.h`, `MwClkSteps`: the writes from one
+  mux/divider to another, one field per write under its own mask, in the
+  order whose halfway state is the slower (never faster than the faster
+  end: the two halfway rates multiply to the product of the end rates).
+  702 to 594: divider first (SPLL / 2 = 351 MHz on the way), as TF-A.
+  594 to 702: mux first (SPLL / 2 again). `tests/gpuclk-host` checks every
+  pair of GPLL, CPLL and SPLL with every divider (78727 checks).
+- **Only between job chains.** Every clock change (the drop, the
+  restore, `m5test clk`, the stored `GpuClk` at start, a fault) asks
+  through `ClkRequest` at the interrupt's level: written at once when no
+  chain runs, else by `Kick` (command.c) after the running chain ends and
+  before the next starts. The driver runs one chain at a time, so this
+  holds nothing back, and a chain is bounded by the 2 s job timeout, which
+  bounds the wait. `m5test clk` counts the switches and how many waited.
+- **The restore waits for a cool GPU.** Below 75 C at every reading for
+  `GpuClkRestoreHoldSec` (default 90 s, at most 3600; a DWORD in Device
+  Parameters, read at start). One reading at or above 75 C, or an
+  unreadable one, starts the hold over. The drop at 85 C stays immediate.
+- **The fault policy.** A job fault, a job timeout or a TDR while above
+  600 MHz drops to 594 MHz at once, as before, but keeps the clock asked
+  for: it comes back at the next reading (1 s) unless heat holds it. Two
+  such faults within 10 minutes lock 594 MHz until the next start. A fault
+  at 594 MHz does not count, so a fault and the TDR of the same hang count
+  once (the first drop already made it 594). `tests/thermal-host` checks
+  the band, the hold, the fault policy and a replay of the board log
+  (2738 checks).
+- **Why the clock is held.** `Throttled reason` in the performance
+  counters and in `m5test clk`: 0 none, 1 thermal, 2 faults. The registry
+  trace (`Device Parameters\maliwddm`) gets `GpuClkThrottleReason`,
+  `GpuClkFaultLocked`, `GpuClkHighFaults`, `GpuClkThermalDrops`,
+  `GpuClkThermalRestores`, `GpuClkSwitches` and `GpuClkDeferred` from a
+  work item each time one changes, and `GpuClkRestoreHoldMs` at start.
+
+### "% busy" after the TDR
+
+"% busy" is the time job chains ran (`SlotTicks`), which grows only when
+a chain ends; a reset does not add to it. So 10% with FurMark stuttering
+means chains really ran about 100 ms a second, and "10 while idle" means
+something kept the GPU busy that long. Not explained yet. Two candidates,
+each checkable with `m5test prof 10` after a TDR: DWM compositing with
+the GPU (its process line in the UMD section, and flips copied instead of
+scanned out), or FurMark's context recovering slowly. The next board run
+should not have a TDR; if one happens, `m5test prof 10` right after it.
+
+### Board test of the fix
+
+1. Install the `gpu-clk-safe-switch` package as usual (full restart).
+   `GpuClkHigh` 1, the kept `GpuClk` 3 1.
+2. `m5test clk`: 702 MHz, guard on, throttled reason 0, back after 90 s.
+3. Fan unplugged, FurMark, `maliwddm-counters check` or the tray tool.
+   Expect at 85 C: 594 MHz, Throttled 1, reason 1, **no event 4101**,
+   "% busy" staying high (about the 702 MHz figure) at 594 MHz, and
+   FurMark's frame rate falling to the 594 MHz rate without stutter.
+   `m5test clk`: switches 2 or more (the start, the drop), some of them
+   "waited for a running job chain".
+4. Fan back on: after the hotter channel has stayed below 75 C for 90 s,
+   702 MHz again, Throttled 0. `GpuClkThermalRestores` 1 in the trace.
+5. The event log: `Get-WinEvent -FilterHashtable @{LogName='System';Id=4101}
+   -MaxEvents 5` shows nothing newer than the start.
+6. If a TDR still comes: the clock comes back after 1 s, and a second one
+   within 10 minutes locks 594 MHz (reason 2, `GpuClkFaultLocked` 1). Then
+   the switch was not the whole cause; keep `m5test prof 10` and the
+   event, and stop raising the clock.
+
+## TDRs with no job fault (board retest, 2026-11-24)
+
+Package 7.42.44.26 (`gpu-clk-safe-switch`), `HdmiHpd` 3, fan off,
+FurMark, then fan on (`board-session-prep/gpu-thermal-fallback-2-2026-11-24.log`).
+
+**The switch passed.** The drop at 85 C (21:06:16) to 594 MHz was smooth:
+"% busy" stayed at 88 to 91% and FurMark did not stutter. `m5test clk`:
+5 clock switches, 3 of them waited for a running job chain. Below 75 C
+from 21:07:07, 702 MHz again at 21:08:40: the 90 s hold works.
+
+**Two TDRs (event 4101) anyway**, neither at a switch:
+
+| Time | Clock | Before it | Counted as |
+|---|---|---|---|
+| 21:03:29 | 702 MHz, about 45 s into FurMark | the 8 s line before reads 15% busy | one fault above 600 MHz; 702 MHz back 1 s later |
+| 21:08:23 | 594 MHz (held, cooling) | that line reads 73% | nothing (at 594) |
+
+The job layer saw nothing: jobs done 25366, failed 0, timed out 0, JS
+status 0, no MMU fault, resets 2. So both resets were dxgkrnl's
+(`DxgkDdiResetEngine` or `DxgkDdiResetFromTimeout`, which run `SyncReset`),
+not the driver's. dxgkrnl's rule ("TDR in Windows 8 and later"): a packet
+or a preemption that does not complete within `TdrDelay` (2 s). The
+driver's own chain timeout is also 2 s, so a chain that really hung would
+show the same way: dxgkrnl gets there first and the driver counts nothing.
+
+What the driver kept until now does not tell these apart: the boot
+journal stops at the confirm (120 s), and the chain ring keeps chains,
+not the state at the reset. So this branch adds a snapshot.
+
+### The TDR snapshot
+
+At every `ResetEngine` (node 0 or 1) and `ResetFromTimeout`, before
+anything is reset, `TdrSnap` (command.c) records, at the interrupt's
+level; a work item writes it to `Device Parameters\maliwddm` as
+`Tdr<n>_<field>` (n = 0 to 3, the last four) and `TdrCount`:
+
+| Field | Meaning |
+|---|---|
+| `Node` | 0 3D, 1 the copy node, 0xFFFFFFFF adapter-wide |
+| `Running`, `Slot`, `RunMs` | a chain on the GPU, its slot, for how many ms |
+| `JsStatus`, `JsHeadLo`, `JsTailLo`, `JobRaw`, `JobPending` | the slot's JS_STATUS and JS_HEAD/JS_TAIL, JOB_INT_RAWSTAT, and what the ISR collected but nothing reaped yet |
+| `QCount`, `HeadFence`, `HeadNext`, `HeadCount`, `HeadStarted`, `HeadAgeMs` | the driver's queue and its head submission (chains started of how many, since when) |
+| `LastSubmitted`, `LastCompleted` | the fences |
+| `SinceDoneMs`, `SinceChainEndMs`, `SinceIsrMs`, `SincePollMs`, `SinceSubmitMs` | ms since the last DMA_COMPLETED, chain end, GPU interrupt, poll and submission |
+| `PreemptPending`, `PreemptMs`, `StopAsked`, `StopMs` | an unanswered preemption request or soft-stop, and its age |
+| `GpuClk`, `MilliC`, `JobsDone`, `ClkPending` | the clock (mux * 256 + divider), the temperature, jobs done, a clock change waiting |
+
+How to read it:
+
+- `Running` 1, `RunMs` about 2000, `JsStatus` 0x08 (active), `JobRaw`
+  without the slot's bit: **the GPU is really on one chain for 2 s**.
+  Either it hung (then it hangs at 594 MHz too, so not the clock) or a
+  FurMark chain is that long (then `RunMs` is large on most snapshots, and
+  the answer is longer chains in the UMD, not a driver fix).
+- `Running` 1 but `JsStatus` 0x01 (done) or the slot's bit set in
+  `JobRaw` or `JobPending`: **a completion was missed**; `SinceIsrMs` and
+  `SincePollMs` say whether the interrupt and the 1 ms poll were running.
+- `Running` 0 and `QCount` above 0: **the queue stalled** with work in it
+  (nothing called `Kick`).
+- `Running` 0, `QCount` 0, `LastCompleted` = `LastSubmitted`: **the
+  driver finished everything** and dxgkrnl did not see it: a lost
+  DMA_COMPLETED or DPC (`SinceDoneMs` against 2000).
+- `PreemptPending` 1 with `PreemptMs` near 2000: **a preemption not
+  answered**.
+- `Node` 1: the copy node, which completes inside `SubmitCommand`.
+
+A finding to check against the dump, not changed here: after a reset the
+driver drops its whole queue but reports `LastAbortedFenceId` =
+`LastCompleted`. Microsoft's text says it should be the fence of the
+packet aborted in the middle of execution (the head), and that the
+scheduler resubmits packets submitted later. Whether dxgkrnl resubmitted
+what the driver dropped is in the dump's recovery context.
+
+### What to collect on the next run
+
+1. The same run (fan off, FurMark, then fan on), with the tray log.
+2. After each 4101, at once: `m5test ring csv > ring-<n>.csv` (the last
+   128 chains with their times) and `m5test prof 5`.
+3. At the end: `reg query "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters\maliwddm" > devkey.txt`
+   (the `Tdr*` values), `m5test clk`, and the System log's 4101 events
+   (`Get-WinEvent -FilterHashtable @{LogName='System';Id=4101} | Format-List *`).
+4. The LiveKernelReport: copy everything in
+   `C:\Windows\LiveKernelReports\WATCHDOG\` (the `.dmp` of each TDR,
+   0x117 VIDEO_TDR_TIMEOUT_DETECTED). From it `!analyze -v` and `dt
+   dxgkrnl!_TDR_RECOVERY_CONTEXT` give the node, the TDR reason, the fence
+   dxgkrnl waited for and what it resubmitted; the 21:08:37 one from this
+   run as well.
+5. Optional, best evidence: a DxgKrnl ETW capture over the run
+   (`wpr -start tools\windows\dxgkrnl.wprp -filemode`, then `wpr -stop
+   tdr.etl` after a 4101): per-node packet submit and complete times show
+   which packet was outstanding for 2 s and whether the driver ever
+   completed it.
+

@@ -145,13 +145,21 @@ static void check_per_node(void)
     CHECK(Mw2PerNodeEntries(8, 0) == 0, "QAI 10: no divide by zero");
 }
 
-/* ---- the one-shot fallback over boots ---- */
+/* ---- the fallback over boots ---- */
+
+/* How a 2.x boot ends. */
+#define B_OK        0   /* confirms */
+#define B_NOFRAME   1   /* hangs, bugchecks or is cut before any frame */
+#define B_TDRS      2   /* frames, then a TDR storm */
+#define B_CUT       3   /* frames, then a power cut or reset before the confirm */
 
 typedef struct {
     unsigned Want, Armed, Keep, FellBack, FellBackBuild, Confirmed;
+    unsigned Stage, Hard, Soft, Reason, LastMiss;
     unsigned RegistryBroken;    /* writes do not stick */
     unsigned Build;             /* MW_BUILD of the installed package */
-    unsigned Default;           /* MW2_WDDM_DEFAULT, or 1.3 for the old behaviour */
+    unsigned Default;           /* MW2_WDDM_DEFAULT */
+    unsigned LastFallbackReason;
 } REG;
 
 static unsigned known(unsigned v)
@@ -159,38 +167,80 @@ static unsigned known(unsigned v)
     return v == MW2_WDDM_2_0 || v == 0x2100u;
 }
 
-/* One boot as DriverEntry (version.c) and the watchdog see it. Returns the
- * version that boot ran. Hangs = the 2.x boot never confirms. */
-static unsigned boot(REG *r, int hangs)
+/* The watchdog over one boot, second by second (probe.c and version.c):
+ * the stage written as it goes, the confirm when it comes. */
+static void run(REG *r, int how)
+{
+    unsigned renders = 0, presents = 0, tdrs = 0, stage = MW2_STAGE_ARMED, confirmed = 0;
+
+    for (unsigned t = 1; t <= 300 && !confirmed; t++) {
+        unsigned next;
+        if (how == B_NOFRAME)
+            break;                              /* no tick ever: hung in StartDevice */
+        if (t >= 3) {
+            renders += 30;
+            presents += 5;
+        }
+        if (how == B_TDRS && t >= 5)
+            tdrs = t - 4;
+        if (how == B_CUT && t == 12)
+            break;                              /* the power switch */
+        next = Mw2StageNow(stage, presents, tdrs);
+        if (next != 0) {
+            stage = next;
+            if (!r->RegistryBroken)
+                r->Stage = stage;
+        }
+        if (Mw2Confirm(renders, presents, t, 0, tdrs)) {
+            CHECK(how == B_OK, "only a good boot confirms (how %d)", how);
+            CHECK(t >= MW2_CONFIRM_SECONDS && t <= MW2_CONFIRM_SECONDS + 5, "confirm at %u s", t);
+            confirmed = 1;
+            if (!r->RegistryBroken) {
+                r->Armed = 0;
+                r->Confirmed = Mw2Wanted(r->Want, r->Default);
+                r->Hard = r->Soft = 0;
+            }
+        }
+    }
+    if (how == B_OK)
+        CHECK(confirmed, "a good boot confirms");
+}
+
+/* One boot as DriverEntry (version.c) sees it, then the boot itself.
+ * Returns the version it ran. */
+static unsigned boot(REG *r, int how)
 {
     MW2_BOOT_IN in = { r->Want, r->Default, known(Mw2Wanted(r->Want, r->Default)), r->Armed, r->Keep,
-                       r->FellBack, r->FellBackBuild, r->Build };
+                       r->FellBack, r->FellBackBuild, r->Build, r->Stage, r->Hard, r->Soft };
     MW2_BOOT_OUT out;
     unsigned result;
 
     Mw2BootDecide(&in, &out);
     CHECK(out.Wanted == Mw2Wanted(r->Want, r->Default), "Wanted is WddmProbe or the default");
+    if (!r->RegistryBroken) {
+        if (out.Class != MW2_CLASS_NONE)
+            r->LastMiss = out.Class;
+        r->Hard = out.HardMisses;
+        r->Soft = out.SoftMisses;
+    }
     if (out.FallBack && !r->RegistryBroken) {
+        CHECK(out.Reason != MW2_REASON_NONE, "a fallback has a reason");
         r->FellBack = out.Wanted;
         r->FellBackBuild = r->Build;
+        r->Reason = out.Reason;
+        r->LastFallbackReason = out.Reason;
         if (r->Want != 0)
             r->Want = 0;
         r->Armed = 0;
     }
-    if (out.Arm && !r->RegistryBroken)
+    if (out.Arm && !r->RegistryBroken) {
+        r->Stage = MW2_STAGE_ARMED;
         r->Armed = out.Wanted;
+    }
     result = Mw2BootArmed(out.Result, out.Arm, r->Armed, out.Wanted);
     if (result != MW2_RESULT_ACTIVE)
         return MW2_WDDM_1_3;
-    if (!hangs) {
-        CHECK(!Mw2Confirm(MW2_CONFIRM_RENDERS, MW2_CONFIRM_SECONDS - 1, 0), "no confirm before 120 s");
-        CHECK(!Mw2Confirm(MW2_CONFIRM_RENDERS - 1, 600, 0), "no confirm before 300 renders");
-        CHECK(!Mw2Confirm(5000, 600, 1), "no confirm while a DDI is stuck");
-        if (Mw2Confirm(5000, 600, 0) && !r->RegistryBroken) {
-            r->Armed = 0;
-            r->Confirmed = out.Wanted;
-        }
-    }
+    run(r, how);
     return out.Wanted;
 }
 
@@ -199,7 +249,7 @@ static void reg_init(REG *r, unsigned want)
     memset(r, 0, sizeof(*r));
     r->Want = want;
     r->Default = MW2_WDDM_DEFAULT;
-    r->Build = 350;
+    r->Build = 371;
     r->FellBackBuild = 0xFFFFFFFFu;     /* version.c's default when the value is absent */
 }
 
@@ -211,6 +261,27 @@ static void reg_reset(REG *r)
     r->FellBackBuild = 0xFFFFFFFFu;
     r->Confirmed = 0;
     r->Keep = 0;
+    r->Stage = r->Hard = r->Soft = r->Reason = r->LastMiss = 0;
+}
+
+static void check_stage_confirm(void)
+{
+    CHECK(Mw2StageNow(MW2_STAGE_ARMED, 0, 0) == MW2_STAGE_STARTED, "first tick: started");
+    CHECK(Mw2StageNow(MW2_STAGE_STARTED, 9, 0) == 0, "9 presents: nothing new");
+    CHECK(Mw2StageNow(MW2_STAGE_STARTED, 10, 0) == MW2_STAGE_PRESENTED, "10 presents: presented");
+    CHECK(Mw2StageNow(MW2_STAGE_PRESENTED, 500, 2) == 0, "two TDRs: nothing new");
+    CHECK(Mw2StageNow(MW2_STAGE_PRESENTED, 500, 3) == MW2_STAGE_TDR_STORM, "three: a storm");
+    CHECK(Mw2StageNow(MW2_STAGE_TDR_STORM, 500, 0) == 0, "a storm stays");
+    CHECK(!Mw2Confirm(1000, 100, 19, 0, 0), "not before 20 s");
+    CHECK(!Mw2Confirm(59, 100, 60, 0, 0), "not before 60 renders");
+    CHECK(!Mw2Confirm(1000, 9, 60, 0, 0), "not before 10 presents");
+    CHECK(!Mw2Confirm(1000, 100, 60, 1, 0), "not while stuck");
+    CHECK(!Mw2Confirm(1000, 100, 60, 0, 3), "not after a TDR storm");
+    CHECK(Mw2Confirm(60, 10, 20, 0, 2), "60 renders, 10 presents, 20 s, two TDRs: good");
+    CHECK(Mw2ClassOf(MW2_STAGE_ARMED) == MW2_CLASS_NO_PRESENT && Mw2ClassOf(MW2_STAGE_STARTED) == MW2_CLASS_NO_PRESENT,
+          "armed or started only: no frame");
+    CHECK(Mw2ClassOf(MW2_STAGE_PRESENTED) == MW2_CLASS_UNCONFIRMED, "presented: unconfirmed");
+    CHECK(Mw2ClassOf(MW2_STAGE_TDR_STORM) == MW2_CLASS_TDR_STORM, "storm");
 }
 
 static void check_fallback(void)
@@ -220,78 +291,93 @@ static void check_fallback(void)
 
     CHECK(MW2_WDDM_DEFAULT == MW2_WDDM_2_0, "the default is WDDM 2.0");
 
-    /* An explicit probe: set, hang, fall back, stay at 1.3. */
-    reg_init(&r, MW2_WDDM_2_0);
-    CHECK(boot(&r, 1) == MW2_WDDM_2_0, "first boot runs 2.0");
-    CHECK(boot(&r, 0) == MW2_WDDM_1_3, "the boot after a hang is 1.3");
-    CHECK(r.FellBack == MW2_WDDM_2_0 && r.Want == 0, "WddmProbeFellBack written, WddmProbe deleted");
-    for (int i = 0; i < 5; i++)
-        CHECK(boot(&r, 1) == MW2_WDDM_1_3, "and every boot after it (the default does not retry it)");
-
-    /* The default, no WddmProbe at all: 2.0, armed like a probe. */
+    /* The 2026-11-24 evening: power cuts during firmware tests. One cut
+     * boot, and another: still 2.0. */
     reg_init(&r, 0);
-    CHECK(boot(&r, 0) == MW2_WDDM_2_0, "no WddmProbe: 2.0");
-    CHECK(r.Confirmed == MW2_WDDM_2_0 && r.Armed == 0, "the default boot confirms and disarms");
-    CHECK(boot(&r, 1) == MW2_WDDM_2_0 && r.Armed == MW2_WDDM_2_0, "every default boot re-arms");
-    CHECK(boot(&r, 0) == MW2_WDDM_1_3, "a default boot that hung: the next one is 1.3");
-    CHECK(r.FellBack == MW2_WDDM_2_0 && r.FellBackBuild == r.Build, "the fallback names the build");
-    /* Sticky: no alternation of 2.0 and 1.3, whatever the boots do. */
-    for (int i = 0; i < 6; i++)
-        CHECK(boot(&r, i & 1) == MW2_WDDM_1_3, "default fallback is sticky (boot %d)", i);
-    /* A new package tries 2.0 once more. */
-    r.Build = 351;
-    CHECK(boot(&r, 1) == MW2_WDDM_2_0, "a new package: 2.0 again");
-    CHECK(boot(&r, 0) == MW2_WDDM_1_3, "and it falls back once more if it hangs");
-    CHECK(boot(&r, 0) == MW2_WDDM_1_3, "and stays");
-    /* The user resets it (wddm-probe default). */
-    reg_reset(&r);
-    CHECK(boot(&r, 0) == MW2_WDDM_2_0, "after a reset: 2.0");
+    CHECK(boot(&r, B_OK) == MW2_WDDM_2_0, "default: 2.0");
+    CHECK(boot(&r, B_CUT) == MW2_WDDM_2_0, "cut after the first frames");
+    CHECK(boot(&r, B_CUT) == MW2_WDDM_2_0 && r.Soft == 1, "the next boot: 2.0, one cut counted");
+    CHECK(boot(&r, B_OK) == MW2_WDDM_2_0, "two cuts in a row: still 2.0");
+    CHECK(r.Soft == 0 && r.Hard == 0 && r.Armed == 0, "a good boot clears the counts");
+    CHECK(r.FellBack == 0, "no fallback");
+    /* Three cuts in a row: unconfirmed three times, 1.3. */
+    CHECK(boot(&r, B_CUT) == MW2_WDDM_2_0 && boot(&r, B_CUT) == MW2_WDDM_2_0 &&
+          boot(&r, B_CUT) == MW2_WDDM_2_0, "three cut boots, each 2.0");
+    CHECK(boot(&r, B_OK) == MW2_WDDM_1_3 && r.Reason == MW2_REASON_UNCONFIRMED, "the fourth: 1.3, unconfirmed x3");
 
-    /* Over any pattern of hangs, with the default: never two hung 2.x
-     * boots in a row, and after the first hung one never 2.x again with
-     * the same build. */
-    for (unsigned pat = 0; pat < 256; pat++) {
-        unsigned prevHung = 0, everHung = 0;
+    /* No frame once: 2.0 again. Twice: 1.3. */
+    reg_init(&r, 0);
+    CHECK(boot(&r, B_NOFRAME) == MW2_WDDM_2_0, "no frame");
+    CHECK(boot(&r, B_OK) == MW2_WDDM_2_0 && r.LastMiss == MW2_CLASS_NO_PRESENT, "retried at 2.0, and it works");
+    CHECK(boot(&r, B_NOFRAME) == MW2_WDDM_2_0 && boot(&r, B_NOFRAME) == MW2_WDDM_2_0, "no frame twice");
+    CHECK(boot(&r, B_OK) == MW2_WDDM_1_3 && r.Reason == MW2_REASON_NO_PRESENT, "then 1.3: no frame x2");
+    for (int i = 0; i < 6; i++)
+        CHECK(boot(&r, i & 1 ? B_OK : B_NOFRAME) == MW2_WDDM_1_3, "sticky for the build (boot %d)", i);
+    r.Build++;
+    CHECK(boot(&r, B_OK) == MW2_WDDM_2_0, "a new package tries 2.0 again");
+    reg_reset(&r);
+    CHECK(boot(&r, B_OK) == MW2_WDDM_2_0, "after wddm-probe default: 2.0");
+
+    /* TDR storms. */
+    reg_init(&r, 0);
+    CHECK(boot(&r, B_TDRS) == MW2_WDDM_2_0 && boot(&r, B_TDRS) == MW2_WDDM_2_0, "two storms");
+    CHECK(boot(&r, B_OK) == MW2_WDDM_1_3 && r.Reason == MW2_REASON_TDR_STORM, "1.3, TDR storm");
+    /* Mixed: a cut and a no-frame boot, then a cut: three in a row. */
+    reg_init(&r, 0);
+    CHECK(boot(&r, B_CUT) == MW2_WDDM_2_0 && boot(&r, B_NOFRAME) == MW2_WDDM_2_0 &&
+          boot(&r, B_CUT) == MW2_WDDM_2_0, "cut, no frame, cut");
+    CHECK(boot(&r, B_OK) == MW2_WDDM_1_3 && r.Reason == MW2_REASON_UNCONFIRMED, "1.3 after three");
+
+    /* An explicit probe stays one-shot. */
+    reg_init(&r, MW2_WDDM_2_0);
+    CHECK(boot(&r, B_CUT) == MW2_WDDM_2_0, "probe: cut");
+    CHECK(boot(&r, B_OK) == MW2_WDDM_1_3 && r.Reason == MW2_REASON_PROBE && r.Want == 0,
+          "probe: 1.3 at once, WddmProbe deleted");
+
+    /* Every pattern of eight boots (4^8): no more than two failed 2.x boots
+     * in a row, no more than three unconfirmed ones in a row, never 2.0
+     * again after a fallback with the same build, and no fallback at all
+     * unless a limit was reached. */
+    for (unsigned pat = 0; pat < 65536; pat++) {
+        unsigned hardRun = 0, missRun = 0, fell = 0, limit = 0;
         reg_init(&r, 0);
         for (int i = 0; i < 8; i++) {
-            int hangs = (pat >> i) & 1;
-            v = boot(&r, hangs);
-            int hung2x = v == MW2_WDDM_2_0 && hangs;
-            CHECK(!(prevHung && hung2x), "pattern 0x%02x boot %d: two hung 2.x boots in a row", pat, i);
-            CHECK(!(everHung && v == MW2_WDDM_2_0), "pattern 0x%02x boot %d: 2.0 again after a fallback", pat, i);
-            if (v == MW2_WDDM_1_3 && r.FellBack)
-                everHung = 1;
-            prevHung = hung2x;
-        }
-    }
-    /* The same with an explicit probe. */
-    for (unsigned pat = 0; pat < 256; pat++) {
-        unsigned prevHung = 0;
-        reg_init(&r, MW2_WDDM_2_0);
-        for (int i = 0; i < 8; i++) {
-            int hangs = (pat >> i) & 1;
-            v = boot(&r, hangs);
-            int hung2x = v == MW2_WDDM_2_0 && hangs;
-            CHECK(!(prevHung && hung2x), "probe pattern 0x%02x boot %d: two hung 2.x boots in a row", pat, i);
-            prevHung = hung2x;
+            int how = (pat >> (2 * i)) & 3;
+            v = boot(&r, how);
+            if (v == MW2_WDDM_2_0) {
+                CHECK(!fell, "pattern %04x boot %d: 2.0 after a fallback", pat, i);
+                if (how == B_OK) {
+                    hardRun = missRun = 0;
+                } else {
+                    missRun++;
+                    if (how != B_CUT)
+                        hardRun++;
+                    if (hardRun >= MW2_HARD_LIMIT || missRun >= MW2_MISS_LIMIT)
+                        limit = 1;
+                }
+                CHECK(hardRun <= MW2_HARD_LIMIT, "pattern %04x boot %d: %u failed in a row", pat, i, hardRun);
+                CHECK(missRun <= MW2_MISS_LIMIT, "pattern %04x boot %d: %u unconfirmed in a row", pat, i, missRun);
+            } else {
+                CHECK(limit, "pattern %04x boot %d: 1.3 with no limit reached", pat, i);
+                fell = 1;
+            }
         }
     }
 
     /* The arming did not reach the registry: 1.3, never an unarmed 2.x. */
     reg_init(&r, 0);
     r.RegistryBroken = 1;
-    CHECK(boot(&r, 1) == MW2_WDDM_1_3, "no arming, no 2.0, default too");
+    CHECK(boot(&r, B_NOFRAME) == MW2_WDDM_1_3, "no arming, no 2.0, default too");
     reg_init(&r, MW2_WDDM_2_0);
     r.RegistryBroken = 1;
-    CHECK(boot(&r, 1) == MW2_WDDM_1_3, "no arming, no probe");
+    CHECK(boot(&r, B_NOFRAME) == MW2_WDDM_1_3, "no arming, no probe");
 
-    /* Forced 1.3 (wddm-probe set 1300, wddm-probe off): 1.3, nothing armed,
-     * nothing written, every boot. */
+    /* Forced 1.3: 1.3, nothing armed, nothing written, every boot. */
     reg_init(&r, MW2_WDDM_1_3);
     for (int i = 0; i < 3; i++)
-        CHECK(boot(&r, 1) == MW2_WDDM_1_3 && r.Armed == 0 && r.FellBack == 0, "0x1300: 1.3, untouched");
+        CHECK(boot(&r, B_NOFRAME) == MW2_WDDM_1_3 && r.Armed == 0 && r.FellBack == 0, "0x1300: 1.3, untouched");
     {
-        MW2_BOOT_IN in = { MW2_WDDM_1_3, MW2_WDDM_DEFAULT, 1, 0, 0, 0, 0, 1 };
+        MW2_BOOT_IN in = { MW2_WDDM_1_3, MW2_WDDM_DEFAULT, 1, 0, 0, 0, 0, 1, 0, 0, 0 };
         MW2_BOOT_OUT out;
         Mw2BootDecide(&in, &out);
         CHECK(out.Result == MW2_RESULT_NONE && !out.Arm && !out.FallBack, "0x1300: result NONE, no arming");
@@ -305,12 +391,12 @@ static void check_fallback(void)
 
     /* A value that is not a WDDM version. */
     reg_init(&r, 0x1234);
-    CHECK(boot(&r, 1) == MW2_WDDM_1_3, "unknown value: 1.3");
+    CHECK(boot(&r, B_NOFRAME) == MW2_WDDM_1_3, "unknown value: 1.3");
 
     /* Keep = 1 turns the arming off: documented as never for a first test. */
     reg_init(&r, MW2_WDDM_2_0);
     r.Keep = 1;
-    CHECK(boot(&r, 1) == MW2_WDDM_2_0 && boot(&r, 1) == MW2_WDDM_2_0, "Keep: no fallback (by design)");
+    CHECK(boot(&r, B_NOFRAME) == MW2_WDDM_2_0 && boot(&r, B_NOFRAME) == MW2_WDDM_2_0, "Keep: no fallback (by design)");
 
     /* The journal is bounded. */
     CHECK(Mw2JournalMax(0, 0xFFFFFFFFu) == MW2_JOURNAL_DEFAULT, "default boot: 400 events");
@@ -374,6 +460,7 @@ static void check_budget_knobs(void)
 
 int main(void)
 {
+    check_stage_confirm();
     for (unsigned shape = 0; shape <= 1; shape++)
         for (unsigned budget = MW2_BUDGET_NONE; budget <= MW2_BUDGET_LOCAL; budget++) {
             check_plan(MW2_WDDM_1_3, shape, budget);

@@ -530,3 +530,414 @@ Not run yet: Edge at 2.0.
   shows no device error. The next run's `recent:` lines name the call.
 - Redirected presents of blt-model windowed applications: Notepad in
   round 5 ran only as a process started after DWM had already stopped.
+
+## Edge at WDDM 2.0 (2026-11-24, branch `edge-wddm2`)
+
+TaishanPi 3M, WDDM 2.0 by default, maliwddm 9.6.46.569, Edge
+158.0.4370.33. Edge renders everything in software. edge://gpu (read over
+CDP) after the GPU process gave up:
+
+- `GPU process crash count: 3`, compositing, WebGL, rasterization and
+  video decode disabled, "GPU process was unable to boot".
+- The current GPU0 line is `VENDOR=0x0000, DEVICE=0x0000, LUID={0,0}`:
+  that is SwiftShader, which Chromium falls back to. The earlier entries
+  in the same page show the GPU process on the Mali: `VENDOR=0x50434b52,
+  DEVICE=0x32303437 [Rockchip RK3576 Mali-G52 (WDDM)]`, ANGLE on D3D11,
+  `vs_4_1 ps_4_1`. So the adapter's IDs are there and stable: DXGI makes
+  them from the ACPI hardware ID `RKCP7402` ("RKCP" and "7402" as
+  four-character codes, as d3dprobe has printed since 2026-11-22). They
+  are not a PCI vendor, so Chromium's lists for NVIDIA, Intel and AMD do
+  not apply (GPU rasterization is off for an unknown vendor by
+  Chromium's rule, not a failure). `DRIVER_VERSION=0.0.0.0` is the UMD's
+  file version: the Mesa DLLs carry no version resource. Neither is why
+  the GPU process crashed.
+- The log, in each of the three GPU processes:
+
+      direct_composition_support.cc:762 DCompositionCreateDevice3 failed: Access is denied. (0x80070005)
+      SwapChain11.cpp:632 rx::SwapChain11::reset: Could not create additional swap chains or offscreen surfaces, HRESULT: 0x887A0022
+      SwapChain11.cpp:639 Device lost in SwapChain11::reset HRESULT: 0x887A0022
+      eglCreateWindowSurface failed with error EGL_CONTEXT_LOST
+      Restarting GPU process due to unrecoverable error. Context was lost.
+
+  DirectComposition is refused first, so ANGLE makes a swap chain on a
+  window instead, and that fails with 0x887A0022
+  (DXGI_ERROR_NOT_CURRENTLY_AVAILABLE). ANGLE counts that code as a lost
+  device (`d3d11::isDeviceLostError`), so the context is lost and the GPU
+  process restarts; after three, Chromium gives up.
+
+What is known from earlier runs:
+
+- At 1.3 (rounds 3 to 6) Edge's GPU process got as far as Present1 on a
+  composition swap chain, so DCompositionCreateDevice worked in its
+  sandbox then. Its log said `integrity 0x1000 (low), app container 0,
+  restricted 1`.
+- d3dprobe at medium integrity made flip-model and blt swap chains on a
+  window and passed the whole edge path at 1.3, with and without
+  `C:\mali\redirect`.
+
+So both failures are refusals ("access denied", "not currently
+available"), both in the sandboxed GPU process, and both new at 2.0.
+Nothing in maliwddm checks a caller's token, and no KMD or UMD trace from
+a 2.0 Edge run exists yet. Which of these it is cannot be told from the
+edge://gpu page:
+
+1. **The sandbox at 2.0**: something DXGI or DirectComposition does only
+   for a WDDM 2.x adapter (for example sharing a monitored fence or a
+   composition surface with DWM by NT handle) is refused to a low
+   integrity, restricted token. Then a medium-integrity process passes
+   and a sandboxed one fails, at 2.0 only.
+2. **2.0 itself**: the same steps fail at medium integrity too. Then
+   the UMD log (`ddi-error`) or the KMD trace (`Fail_*`) of that process
+   names the call.
+3. **Redirection**: the UMD answers DXGI_STATUS_NO_REDIRECTION unless
+   `C:\mali\redirect` exists (patch 0023). At 1.3 a window swap chain
+   worked either way; at 2.0 that is not known.
+
+### `d3dprobe sandbox`
+
+To tell them apart without Edge, d3dprobe (this branch) runs Edge's GPU
+process steps on adapter 0 in three child processes, one per token:
+`medium` (a normal application), `low` (low integrity) and `gpu` (low
+integrity, a restricted token whose restricting SIDs are Everyone,
+Users, RESTRICTED and the logon SID, no privileges, as Chromium's GPU
+process after its sandbox locks down). Each child prints its token and:
+
+- `DCompositionCreateDevice3` on the device, as Chromium calls it;
+- for FLIP_DISCARD, FLIP_SEQUENTIAL and DISCARD (blt), on a window of its
+  own: create, three presents, ResizeBuffers, the swap chain released and
+  made again on the same window (ANGLE's `SwapChain11::reset`), and a
+  second swap chain on another window at the same time;
+- the edge path as before (composition swap chain, DComp target, three
+  Present1, a DComp surface, a shared NT-handle texture with a keyed
+  mutex).
+
+Every step prints its HRESULT and the device's removed reason. Each
+child's exit code is its count of failed steps.
+
+### Board test
+
+Package: this branch's CI run. Copy `d3dprobe.exe` from the same run's
+`m3test-arm64` artifact to `C:\mali\fake\msedge.exe` (the UMD gives
+browsers their answers by process name) and `C:\mali\fake\plainprobe.exe`.
+
+1. WDDM 2.0 (the default; `m5test wddm` says confirmed 0x2000). In the
+   user's session (not over SSH, where every swap chain fails with
+   0x887A0022 for want of an interactive desktop):
+   - `C:\mali\fake\msedge.exe sandbox > C:\mali\sandbox-20.txt`
+   - with the UMD log on (`del C:\mali\log\off`, the ACL from round 3
+     lets a low-integrity process write there), the same again to
+     `sandbox-20-log.txt`, then `echo > C:\mali\log\off`.
+2. The same with `echo > C:\mali\redirect` (`sandbox-20-redirect.txt`),
+   then `del C:\mali\redirect`.
+3. `wddm-probe off`, reboot, step 1 again (`sandbox-13.txt`), then
+   `wddm-probe default` and reboot.
+4. Edge at 2.0, a fresh profile each time, `--enable-logging --v=1`,
+   edge://gpu saved each time:
+   - as is;
+   - `--disable-gpu-sandbox` (if this one is hardware accelerated, the
+     sandbox is the variable, as in case 1);
+   - `--disable-direct-composition`.
+5. Collect: the `sandbox-*.txt`, `C:\mali\log\*.txt` of the run with
+   the log, the three edge://gpu pages and Edge logs, and `reg query`
+   of `Device Parameters\maliwddm` (any `Fail_*`).
+
+How to read `sandbox-20.txt`:
+
+- `medium` passes and `gpu` fails at `DCompositionCreateDevice3
+  0x80070005` and the window swap chains `0x887A0022`: case 1, the
+  sandbox at 2.0. Compare with `sandbox-13.txt`, which should pass in all
+  three; the next step is the call that needs the access (an ETW capture
+  of the `gpu` child: `wpr -start tools\windows\dxgkrnl.wprp`).
+- `medium` fails the same way: case 2. The log of that run has the
+  `ddi-error` or the KMD trace has the `Fail_` that names the call.
+- Only `sandbox-20-redirect.txt` passes: case 3.
+
+What should come out once fixed: `d3dprobe sandbox` exit 0 for all three,
+and edge://gpu with Canvas, Compositing, WebGL and Rasterization
+"Hardware accelerated" (Rasterization may stay "Software only" for an
+unknown vendor, which is Chromium's rule), GPU process crash count 0, and
+a long page (for example https://en.wikipedia.org/wiki/Windows) scrolling
+with the mouse wheel without the frame-by-frame stutter of software
+compositing (edge://gpu-internals or `--show-fps-counter` for a number).
+
+### Board result: `d3dprobe sandbox` at 2.0 (2026-11-24)
+
+maliwddm 9.6.46.569, UMD log on. Files:
+`board-session-prep/edge-wddm20/` (`sandbox-20.txt`, `sandbox-20log.txt`,
+`edge-umdlog.zip`, the three children's UMD logs as msedge.exe).
+
+**Not the sandbox.** All three children (medium; low; low and
+restricted) behave the same:
+
+- `DCompositionCreateDevice3` succeeds in all three, the restricted one
+  included.
+- Every window swap chain step passes: FLIP_DISCARD and FLIP_SEQUENTIAL
+  create, present (`0x087A0001`, DXGI_STATUS_OCCLUDED, a success code),
+  ResizeBuffers, the swap chain made again on the same window, and a
+  second one alongside.
+- The one failure, in each child: `edge path: frame 0: Present1
+  0x887a0005, device removed reason 0x887a0020`.
+
+The UMD log of each child: `CreateDevice: done,
+DXGI_STATUS_NO_REDIRECTION`, the window swap chains' presents
+`pfnPresentCb 0x00000000 (S_OK)`, then the composition swap chain's first
+present `present: shared allocation 0x40000e80 -> 0x0, pfnPresentCb
+0x88760873 (D3DDDIERR_INVALIDHANDLE)`, `RelocateDeviceFuncs1`, removed.
+
+That is, line for line, run A of 2026-11-23 at 1.3: a composition swap
+chain under `DXGI_STATUS_NO_REDIRECTION`. "-> 0x0" (no destination
+allocation) is normal for a composition present: it was the same in run
+B, where the present succeeded. What run B changed was redirection
+(`C:\mali\redirect`), and round 6 then ran Edge with it with DWM alive.
+WDDM 2.0 did not bring this; it was there at 1.3 without the redirect
+file, which the board no longer has.
+
+### The change (patch 0076)
+
+The UMD's CreateDevice answers S_OK (redirection allowed) to the
+browsers: msedge.exe, chrome.exe, msedgewebview2.exe, and d3dprobe.exe
+(the names whose multisample answers it already special-cases). Every
+other process keeps DXGI_STATUS_NO_REDIRECTION, the path the desktop has
+been tested with since 2026-11-13. `C:\mali\redirect` still allows it for
+every process, and the new `C:\mali\noredirect` refuses it for every
+process (to compare, or as a way back without reinstalling). The log
+line says which: `S_OK (redirection allowed: a browser)`.
+
+Risk, from rounds 4 and 5: with redirection on, DWM lost its device
+soon after opening a freshly presented composition buffer. Round 6
+(patch 0074, the deadlock fix) ran Edge with redirection and DWM stayed
+alive and responsive; why DWM's device was removed in rounds 4 and 5 is
+still not known. If DWM restarts or the screen flickers black while Edge
+runs, that is it; `echo > C:\mali\noredirect` stops it at once for new
+processes.
+
+Not explained by this: Edge's own GPU process logged
+`DCompositionCreateDevice3 failed: Access is denied` and a window swap
+chain failing with 0x887A0022, which the d3dprobe children, even the
+restricted one, do not show. Chromium's GPU sandbox locks down further
+than d3dprobe's `gpu` token (job object, desktop and handle policy). If
+Edge still falls back after this package, `--disable-gpu-sandbox`
+separates that from the present failure.
+
+### Regression test and board test
+
+`d3dprobe sandbox` is the regression test for this path (no Edge
+needed): run as `C:\mali\fake\msedge.exe sandbox` and as
+`C:\mali\fake\plainprobe.exe sandbox` in the user's session.
+
+1. Install this branch's package (DriverVer in the report). The UMD log
+   off (`C:\mali\log\off`), no `C:\mali\redirect`, no
+   `C:\mali\noredirect`.
+2. `C:\mali\fake\msedge.exe sandbox > C:\mali\sandbox-20-fix.txt`.
+   Expect `exit 0` for medium, low and gpu, and the last line `exit 0`.
+3. `C:\mali\fake\plainprobe.exe sandbox > C:\mali\sandbox-20-plain.txt`:
+   as before the fix (Present1 removed in the edge path, exit 4), since
+   plainprobe.exe is not a browser name. This shows the switch is by name.
+4. Edge, a fresh profile, `--enable-logging --v=1`: edge://gpu. Expect
+   Canvas, Compositing and WebGL "Hardware accelerated", GPU process crash
+   count 0, no `Present1 failed` and no `0x887A0022` in the log.
+   Rasterization may say "Software only" (Chromium's rule for a vendor it
+   does not know).
+5. Smoothness: https://en.wikipedia.org/wiki/Windows, scroll with the
+   wheel for 10 s with `--show-fps-counter`; note the frame rate, and the
+   same with `--disable-gpu` for comparison. DWM must stay up throughout
+   (the same dwm.exe PID before and after, no black flash).
+6. If edge://gpu still shows software: the same with
+   `--disable-gpu-sandbox` (then the sandbox is the second problem) and
+   collect the Edge log and `C:\mali\log\msedge.exe-*.txt` (log on).
+
+
+## The WDDM 2.0 session hang (2026-11-25, branch `edge-wddm2-hang`)
+
+### What happened
+
+TaishanPi 3M, WDDM 2.0 (WddmProbeConfirmed 0x2000), package 10.24.57.813
+(`edge-wddm2` d590bc4: patch 0076, the browsers get DXGI redirection by
+default). Edge 158 started in the user's session with a debug port and
+edge://gpu. Within seconds: the debug port never answered, every Edge
+process was unkillable (termination pending), dwm.exe stopped using CPU
+and the desktop froze, GPU performance-counter queries hung, no TDR and no
+LiveKernelReports, and `shutdown /r` never finished. A live dump was taken
+with `Get-StorageDiagnosticInfo -IncludeLiveDump`
+(`board-session-prep/edge-fix-10.24.57.813/hang/LiveDump.dmp`).
+
+### What the dump shows
+
+The file's first 0x29000 bytes are zero: the dump header and the page
+bitmap are missing, so no debugger opens it. The pages after them are
+in physical order (the self-map entries of 64 page-table roots grow with
+the file offset), and the dump holds only part of memory: no ntoskrnl,
+dxgkrnl or dxgmms2 image pages, about 640 threads, and the EPROCESS of
+neither dwm.exe nor csrss.exe. It was read without a header: maliwddm's
+image by content (its pages are contiguous from file page 30137),
+structures by self-pointers (empty list heads, KWAIT_BLOCK.Thread), module
+bases from the adapter's DXGKRNL_INTERFACE (dxgkrnl at
+0xfffff807dfd30000, its DpXxx callbacks resolve exactly) and call sites
+(ntoskrnl at 0xfffff80348a00000), and names from the Microsoft PDBs of
+the board's build (22621.2428). Where a statement below rests on a
+guess, it says so.
+
+From the dump:
+
+- **maliwddm was idle.** Every DDI's enter and exit counters in .data are
+  equal: no thread was inside the driver. Node 0: last submitted fence
+  0xc5d = last completed 0xc5d, nothing queued or running, no job failed
+  or timed out, no fault. The paging node: 1175 submitted, fence 1175. With
+  no work outstanding, dxgkrnl had nothing to time out: that is why no TDR
+  fired, and a TDR could not have fired.
+- **dxgkrnl's last calls were the screen going away.** In DDI sequence
+  order, at about 132 s after boot (performance counter at 24 MHz):
+  OpenAllocation, Escape, Render, the GPU interrupt, a paging buffer and
+  its submission, DestroyAllocation, CloseAllocation, SetPointerPosition
+  and SetVidPnSourceVisibility(FALSE), all within 14 ms. The source was
+  left invisible (SourceVisible 0, VisibleOff 3 against VisibleOn 3; the
+  third off at 132053 ms, the first two at boot). After that the only
+  calls for the next 15 minutes were the emulated vsync's DPCs (68094 in
+  all): no flip, no present, no render, and no DestroyDevice or
+  DestroyContext, not even for the exiting Edge processes.
+- **Every GUI thread waited for one win32k lock.** 37 threads in
+  WrResource, in Edge's processes (pids 4812, 1308, 1520, 5532, by their
+  Chromium thread start address) and in svchost, taskhostw and others,
+  all in `ExEnterCriticalRegionAndAcquireResource{Exclusive,Shared}`
+  called from win32k: from NtUserMsgWaitForMultipleObjectsEx,
+  NtUserGetKeyboardLayout, NtUserMessageCall, NtUserGetHDevName (syscall
+  numbers resolved from the board's win32u.dll) and, for Edge's exiting
+  threads, from `PspExitThread -> PsWin32CallBack`. Every one of them has
+  the same ERESOURCE (0xffffd68195b02a10, in nonpaged pool) in its frames.
+  That page is not in the dump, so its owner cannot be read. 217 more
+  threads had already terminated and wait to be freed, which is the
+  "unkillable" Edge: its processes cannot finish exiting while the lock
+  is held.
+- maliwddm's own watchdog thread kept running until the dump (its last
+  snapshot is two seconds older than the dump), so the registry and the
+  paging path worked; it never saw a DDI stuck.
+
+From the source and the earlier rounds (not from the dump):
+
+- With redirection, DWM opens the composition buffers a browser
+  presents. Rounds 4 and 5 at WDDM 1.3 showed DWM's device being removed
+  by the runtime about 30 ms after it opened such a buffer; round 5 then
+  froze the whole UI in the same way until dwm.exe was killed. Round 6
+  (patch 0074) survived at 1.3, and 0076 made that the default for the
+  browsers at 2.0 too.
+- The sequence above fits DWM losing its device right after opening an
+  allocation and letting go of the screen: the allocations destroyed and
+  closed, the pointer, the source made invisible. Which process made each
+  call is not in the dump (this build recorded no caller), so that it was
+  DWM, and that the allocation was Edge's buffer, is inference.
+
+Guess (not shown by anything above): the win32k lock is held by a thread
+of DWM or csrss in the DWM-restart path, waiting for something only the
+stopped DWM would do. Nothing in maliwddm is waited for.
+
+### The change
+
+1. **Redirection by default is the KMD's call, and off at 2.x** (patch
+   0077, `MW_UMD_ADAPTER_INFO.Redirect`). Device Parameters
+   `UmdRedirect`: 1 no process, 2 the browsers (0076), 3 every process.
+   The default is 1 at WDDM 2.x and 2 at 1.3. It is read at each adapter
+   query, so a new value applies to processes started after it is set,
+   without a reboot. `C:\mali\redirect` and `C:\mali\noredirect` still win
+   over it. A KMD without the field answers 0, which the UMD treats as
+   0076 did. This removes the one change between the working 9.6.46.569
+   and the hanging 10.24.57.813 at 2.0; it does not explain why DWM's
+   device goes, which is still open (below). At 2.0 the browsers are back
+   where they were on 2026-11-24: Edge falls back to software, the
+   desktop stays.
+2. **Who called last, kept across a power cut** (probe.c). Every DDI
+   entered below DISPATCH_LEVEL is noted with the caller's image name,
+   pid and tid. The watchdog writes, every second, under Device
+   Parameters\maliwddm\Probe2000: `Wd_Recent` (the last twelve: sequence,
+   DDI, image, pid.tid, ms ago), `Wd_Visible`, `Wd_SinceDdiMs`, and
+   `Wd_Stall` ("screen invisible and no DDI for N s", the shape of this
+   hang, at 10 s; also in the boot journal and on the UART). The next boot
+   copies the last boot's values to `Prev_*` before writing its own. This
+   only reports: with no work outstanding there is nothing for the driver
+   to time out, and no reset of the GPU releases a win32k lock.
+3. **maliwddm.pdb in the package** (`symbols\`), for the next dump.
+
+### The FurMark TDRs of the same day: a separate problem
+
+Same package, WDDM 2.0, `C:\mali\noredirect`, FurMark through the GL
+ICD, fan off: two event 4101 TDRs (702 MHz at 60 C, 594 MHz at 82 C).
+Every `Tdr<n>_*` snapshot says node 0, nothing running or queued, last
+submitted fence = last completed, the last completion and the last ISR
+2.0 to 2.8 s before the reset, no preemption request (`T_PreemptRequests`
+0), and no failed SubmitCommand (no `Fail_SubmitCommand`). So dxgkrnl
+believed something on node 0 was still outstanding while the driver had
+reported everything it was given.
+
+The Edge hang is the opposite: there dxgkrnl went 15 minutes without a
+TDR, which it would not have done had it believed a node-0 packet was
+outstanding, and the dump shows the driver idle. One lost completion
+cannot be both. They are treated as separate; the change above does not
+touch the completion path.
+
+Read through for this (source, not board-proven): every DMA_COMPLETED is
+notified inside DxgkCbSynchronizeExecution or the ISR, in queue order,
+with NodeOrdinal 0 (the copy node's with 1), and each notify sets
+NeedDpc, which every caller turns into DxgkCbQueueDpc; the DPC calls
+DxgkCbNotifyDpc, and the emulated vsync's DPC does too, 60 times a
+second, so a completion that was notified is seen within one vsync. No
+path found that drops one. What the snapshots cannot tell is what dxgkrnl
+was waiting for, so they now also record (`Tdr<n>_*`, new fields):
+`SinceDpcMs` and `NotifyPending` (was the last completion followed by a
+DPC), `LastNotifiedFence` and `LastNotifiedNode`, the copy node's
+`CopySubmits` and `CopyFence`, `VsyncOn`, `SinceVsyncMs`,
+`FlipsUnreported` (flips no vsync has reported yet), `SinceFlipMs` and
+`SourceVisible`. A TDR with `FlipsUnreported` > 0 or `VsyncOn` 0 points at
+the flip path, `NotifyPending` 1 at the DPC, `CopyFence` < `CopySubmits`
+at the copy node; none of them at something outside this driver.
+
+### Board test (one variable at a time)
+
+Stage only, never hot-install: import the package's new test
+certificate (from `maliwddm.cat`: `openssl pkcs7 -print_certs`, or the
+`.cer` in the package) into Root and TrustedPublisher, `pnputil
+/add-driver ...\driver\maliwddm.inf`, set ConfigFlags 0x20 on
+`HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0` as SYSTEM, reboot.
+Keep `C:\mali\noredirect` for the first boot.
+
+1. **Install, nothing else changed.** `m5test wddm`: confirmed 0x2000.
+   `reg query "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device
+   Parameters\maliwddm\Probe2000"`: `Wd_Recent` lists DDIs with dwm.exe
+   among the callers, `Wd_Stall` none, `Wd_Visible` 1. Desktop as before.
+2. **The new default.** `del C:\mali\noredirect`, no reboot. UMD log on
+   for one run: `C:\mali\fake\msedge.exe sandbox` in the user's session.
+   Expect `CreateDevice: done, DXGI_STATUS_NO_REDIRECTION (a browser, but
+   UmdRedirect 1)` and `OpenAdapter: ... UmdRedirect 1`; the edge path's
+   composition Present1 fails as on 2026-11-24 (not a regression). Then
+   Edge with the debug port: edge://gpu shows software, but the desktop
+   stays alive for 3 minutes, dwm.exe keeps its PID, and Edge closes.
+   This is the pass criterion of this package.
+3. **Only if 2 passed, the risky one, prepared for the hang.**
+   `reg add ...\Device Parameters\maliwddm /v UmdRedirect /t REG_DWORD /d 2 /f`
+   (no reboot), Edge again. If the desktop freezes:
+   - over SSH: `reg query ...\Probe2000 /v Wd_Recent` and `/v Wd_Stall`
+     (they are written every second until the watchdog stops);
+   - then one discriminating step: `taskkill /f /im dwm.exe`, and note
+     whether the desktop comes back (round 5 did) and whether the Edge
+     processes then exit;
+   - if a live dump is taken again, check its first bytes before copying
+     (`Format-Hex -Count 8` must show `PAGEDU64`); this one had none;
+   - after the power cycle, before anything else: `reg query
+     ...\Probe2000` and save every `Prev_*` value.
+   Either way, `reg delete ... /v UmdRedirect /f` afterwards.
+
+4. **FurMark TDR, separately** (with `C:\mali\noredirect`, fan off, as on
+   2026-11-25): after a 4101, `reg query` Device Parameters\maliwddm for
+   `Tdr*` and save it; the new fields say which of the three it was. For
+   a dump of the TDR itself: `C:\Windows\LiveKernelReports\WATCHDOG` was
+   empty. Windows throttles these live dumps (one per component per
+   several days by default). Check before the run, and note what was
+   found: `HKLM\SYSTEM\CurrentControlSet\Control\CrashControl\FullLiveKernelReports`
+   (`ComponentThrottleThreshold`, `SystemThrottleThreshold`, 0 = no
+   throttle, as Microsoft documents for newer builds; not verified on
+   22621), and that `TdrDebugMode` under
+   `HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers` is absent or 2
+   (recover). Reboot after changing either.
+
+What the next run should settle: which process made the OpenAllocation
+before the screen went invisible, and whether killing DWM releases the
+session. Then the removal itself (`removed:` and `recent:` lines of
+dwm.exe's UMD log, patch 0074) is the next thing to read.

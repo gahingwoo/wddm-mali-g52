@@ -18,6 +18,7 @@
 #include "rotate.h"
 #include "hdmi_calc.h"
 #include "thermal_calc.h"
+#include "gpuclk_calc.h"
 #include "perfdata_calc.h"
 #include "scale.h"
 
@@ -278,6 +279,27 @@ typedef struct _MW_SUBMISSION {
     BOOLEAN Started, BehindOther;
 } MW_SUBMISSION;
 
+/* One TDR as the job layer saw it (command.c, TdrSnap). Times in ms
+ * before the reset; 0xFFFFFFFF: never. */
+#define MW_TDR_SNAPS 4
+typedef struct {
+    ULONG Node;                 /* 0 3D, 1 copy, 0xFFFFFFFF adapter-wide */
+    ULONG Running, Slot, RunMs; /* a chain on the GPU, its slot, for how long */
+    ULONG JsStatus, JsHeadLo, JsTailLo, JobRaw, JobPending;
+    ULONG QCount, HeadFence, HeadNext, HeadCount, HeadStarted, HeadAgeMs;
+    ULONG LastSubmitted, LastCompleted;
+    ULONG SinceDoneMs, SinceChainEndMs, SinceIsrMs, SincePollMs, SinceSubmitMs;
+    ULONG PreemptPending, PreemptMs, StopAsked, StopMs;
+    ULONG GpuClk, MilliC, JobsDone, ClkPending;
+    /* Whether dxgkrnl was told (2026-11-25: TDRs with everything done).
+     * NotifyPending: a DMA_COMPLETED notified and no DPC since; the last
+     * one notified, on which node; the copy node's fence; the vsync and
+     * the flips a vsync has not reported yet. */
+    ULONG SinceDpcMs, NotifyPending, LastNotifiedFence, LastNotifiedNode;
+    ULONG CopySubmits, CopyFence, VsyncOn, SinceVsyncMs;
+    ULONG FlipsUnreported, SinceFlipMs, SourceVisible;
+} MW_TDR_SNAP;
+
 struct _MW_ADAPTER {
     PDEVICE_OBJECT Pdo;
     DXGKRNL_INTERFACE Dxgk;
@@ -453,8 +475,9 @@ struct _MW_ADAPTER {
     volatile ULONG GpuClkFallbacks;
     /* The temperature fallback (adapter.c, ThermDpc; thermal_calc.h): with
      * GpuClkHigh on, the TSADC read once a second; above 85 C the clock is
-     * held at 594 MHz until below 75 C. GpuClkWanted is the clock above
-     * 600 MHz that was asked for (0 none, or dropped by a job fault). The
+     * held at 594 MHz until below 75 C for GpuClkRestoreHoldSec.
+     * GpuClkWanted is the clock above 600 MHz that was asked for (0 none);
+     * a job fault no longer clears it (the fault policy does). The
      * clock writes of GpuClkWrite and the DPC are under ClkLock; the DPC's
      * write itself runs synchronised with the interrupt, where a job fault
      * drops the clock. */
@@ -466,6 +489,31 @@ struct _MW_ADAPTER {
     KDPC ThermDpc;
     MW_THERMAL Therm;
     volatile ULONG GpuClkThermalDrops, GpuClkThermalRestores;
+    /* The clock switch (gpuclk_calc.h): a change asked for is written
+     * between two job chains (MwGpuClkBetweenChains, from Kick) or at once
+     * when none runs, never under a running chain. ClkPending is the
+     * register's low byte | MW_CLK_PENDING, or 0. All at the interrupt's
+     * level (synchronised). */
+    volatile ULONG ClkPending;
+    volatile ULONG ClkSwitches, ClkDeferred;
+    /* The fault policy (thermal_calc.h): faults above 600 MHz, counted at
+     * the interrupt, folded into Therm by ThermDpc. RestoreHoldMs is the
+     * setting GpuClkRestoreHoldSec. The registry trace of drops, restores
+     * and the fault lock is written by a work item (ClkLogItem). */
+    /* What the job layer saw when dxgkrnl reset the engine or the adapter
+     * (a TDR): taken in SyncReset before anything is reset, written to the
+     * trace as Tdr<n>_* (n = count mod MW_TDR_SNAPS) by the work item.
+     * docs/PERF.md, "TDRs with no job fault". */
+    ULONG TdrNode;              /* the node ResetEngine named; 0xFFFFFFFF: ResetFromTimeout */
+    MW_TDR_SNAP Tdr[MW_TDR_SNAPS];
+    volatile LONG TdrCount;
+    LONG TdrLogged;
+    ULONG64 LastIsrTick, LastDoneTick, LastChainEndTick, LastPollTick, LastSubmitTick;
+    volatile LONG HighFaultEvents;
+    LONG HighFaultsSeen;
+    ULONG64 RestoreHoldMs;
+    PIO_WORKITEM ClkLogItem;
+    volatile LONG ClkLogQueued;
     /* dxgkrnl's performance queries, QAI 24 to 27 (adapter.c,
      * perfdata_calc.h): PerfData the setting (default 1, read at start),
      * PerfSeen one bit per type answered once (24 and 25 are journaled and
@@ -552,6 +600,8 @@ struct _MW_ADAPTER {
     ULONG64 LastJobEndTick;     /* when the last chain was collected; 0 once the next has started */
     ULONG ReapIsr, ReapPoll, PollRuns;
     volatile LONG64 NotifyTick; /* first DMA_COMPLETED not yet seen by a DPC */
+    volatile LONG64 LastDpcTick;    /* the last MwDpcRoutine (DxgkCbNotifyDpc) */
+    volatile ULONG LastNotifiedFence, LastNotifiedNode;     /* the last DMA_COMPLETED */
     ULONG64 DpcCount, DpcTicks, DpcMaxTicks;
     ULONG64 QueueDepthSum;
     ULONG QueueDepthMax, Submissions;
@@ -689,6 +739,11 @@ void MwPcwExit(void);
 void MwPcwAttach(MW_ADAPTER *A);
 void MwPcwDetach(MW_ADAPTER *A);
 void MwGpuClkFallback(MW_ADAPTER *A);
+void MwGpuClkBetweenChains(MW_ADAPTER *A);
+void MwGpuClkResetFault(MW_ADAPTER *A);
+void MwTdrLogQueue(MW_ADAPTER *A);
+#define MW_CLK_PENDING 0x80000000u
+extern PDRIVER_OBJECT MwDriverObject;
 void MwSetSetting(MW_ADAPTER *A, PCWSTR Name, ULONG Value);
 void MwScanStart(MW_ADAPTER *A);
 void MwScanStop(MW_ADAPTER *A);

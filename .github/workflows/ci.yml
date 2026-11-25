@@ -52,6 +52,13 @@ jobs:
             Where-Object { $_.FullName -match '\\ARM64\\Release\\' } |
             Copy-Item -Destination $out -Force
           if (-not (Test-Path "$out\$env:DRV.sys")) { throw "no $env:DRV.sys came out of the build" }
+          # The kernel driver's symbols, outside the folder that is packaged and
+          # signed: a dump of a hang (docs/EDGE-PRESENT.md, "The WDDM 2.0 session
+          # hang") had maliwddm's frames and .data but nothing to name them with.
+          New-Item -ItemType Directory -Force -Path pkg\symbols | Out-Null
+          Get-ChildItem drivers\$env:DRV -Recurse -Include "$env:DRV.pdb" |
+            Where-Object { $_.FullName -match '\\ARM64\\Release\\' } |
+            Copy-Item -Destination pkg\symbols -Force
           # maliwddm's performance counter manifest goes with the .sys (the INF copies it).
           if ($env:DRV -eq 'maliwddm') { Copy-Item drivers\maliwddm\maliwddm.man $out }
           $kits = 'C:\Program Files (x86)\Windows Kits\10'
@@ -109,7 +116,7 @@ jobs:
           .\out\m3test.exe
           if ($LASTEXITCODE -ne 1) { throw "unexpected exit code $LASTEXITCODE" }
           # The D3DKMT test: no maliwddm adapter here, so it must exit 1.
-          cl /nologo /W4 /WX /O2 /I include tools\windows\m5test.c gdi32.lib /Fe:out\m5test.exe
+          cl /nologo /W4 /WX /O2 /I include tools\windows\m5test.c gdi32.lib advapi32.lib /Fe:out\m5test.exe
           if ($LASTEXITCODE) { throw 'm5test build failed' }
           .\out\m5test.exe
           if ($LASTEXITCODE -ne 1) { throw "m5test: unexpected exit code $LASTEXITCODE" }
@@ -159,6 +166,8 @@ jobs:
         run: make -C tests/wddm2-host run
       - name: maliwddm's GPU temperature fallback (hold at 85 C, back below 75 C)
         run: make -C tests/thermal-host run
+      - name: maliwddm's GPU clock switch, one field at a time (gpuclk_calc.h)
+        run: make -C tests/gpuclk-host run
       - name: maliwddm's temperature and clock for Task Manager (perfdata_calc.h)
         run: make -C tests/perfdata-host run
       - name: maliwddm's source modes and VOP2 window scaling (scale.h)
@@ -393,6 +402,7 @@ jobs:
           # The "RK3576 GPU" performance counters: lodctr on the installed manifest.
           Copy-Item tools\windows\maliwddm-counters.cmd $rel
           Copy-Item umd\libgallium_d3d10.pdb "$rel\symbols\" -ErrorAction SilentlyContinue
+          Copy-Item kmd\symbols\maliwddm.pdb "$rel\symbols\" -ErrorAction SilentlyContinue
           $info = @(
             (Get-Content drivers\maliwddm\INSTALL.txt -Raw).TrimEnd(),
             '',

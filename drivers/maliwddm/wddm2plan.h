@@ -46,6 +46,11 @@ typedef struct {
     unsigned FellBack;      /* Parameters\WddmProbeFellBack */
     unsigned FellBackBuild; /* Parameters\WddmProbeFellBackBuild */
     unsigned Build;         /* MW_BUILD of this driver */
+    /* How far the last armed boot got (Parameters\WddmProbeStage, MW2_STAGE_*)
+     * and the unconfirmed boots in a row before it (WddmProbeHardMisses,
+     * WddmProbeSoftMisses). Only read when Armed says it never confirmed. */
+    unsigned Stage;
+    unsigned HardMisses, SoftMisses;
 } MW2_BOOT_IN;
 
 typedef struct {
@@ -54,7 +59,53 @@ typedef struct {
     unsigned FallBack;      /* WddmProbeArmed = 0, WddmProbeFellBack = Wanted, WddmProbeFellBackBuild =
                              * Build; and delete WddmProbe if it was set */
     unsigned Arm;           /* write WddmProbeArmed = Wanted, flush, read it back */
+    /* The last armed boot, when it never confirmed (MW2_CLASS_*), the miss
+     * counts to write back (WddmProbeHardMisses, WddmProbeSoftMisses), and
+     * with FallBack why (WddmProbeFellBackReason, MW2_REASON_*). */
+    unsigned Class;
+    unsigned HardMisses, SoftMisses;
+    unsigned Reason;
 } MW2_BOOT_OUT;
+
+/* How far an armed 2.x boot got (version.c writes WddmProbeStage, flushed,
+ * at each step). A power cut or a reset leaves the last one written. */
+#define MW2_STAGE_ARMED         1u  /* DriverEntry armed it */
+#define MW2_STAGE_STARTED       2u  /* the adapter started (the watchdog's first second) */
+#define MW2_STAGE_PRESENTED     3u  /* DWM presented: MW2_STAGE_PRESENTS flips or presents */
+#define MW2_STAGE_TDR_STORM     15u /* MW2_TDR_STORM TDRs before the confirm */
+#define MW2_STAGE_PRESENTS      10u
+#define MW2_TDR_STORM           3u
+
+/* The last armed boot that never confirmed, from its stage. */
+#define MW2_CLASS_NONE          0u  /* it confirmed, or nothing was armed */
+#define MW2_CLASS_NO_PRESENT    1u  /* never showed a frame: a hang, a bugcheck, a black screen, or a cut that early */
+#define MW2_CLASS_TDR_STORM     2u  /* frames, then TDR after TDR */
+#define MW2_CLASS_UNCONFIRMED   3u  /* frames, and then nothing: a power cut, a reset, a later crash */
+
+/* Why the default fell back (WddmProbeFellBackReason; m5test wddm, the
+ * "WDDM fallback reason" counter). */
+#define MW2_REASON_NONE         0u
+#define MW2_REASON_NO_PRESENT   1u  /* MW2_HARD_LIMIT boots in a row without a frame */
+#define MW2_REASON_TDR_STORM    2u  /* the same, the last of them a TDR storm */
+#define MW2_REASON_UNCONFIRMED  3u  /* MW2_MISS_LIMIT unconfirmed boots in a row */
+#define MW2_REASON_PROBE        4u  /* an explicit WddmProbe that never confirmed (one-shot) */
+#define MW2_REASON_FORCED       5u  /* not a fallback: WddmProbe 0x1300 asks for 1.3 */
+
+/* The default falls back after MW2_HARD_LIMIT failed boots in a row (no
+ * frame, or a TDR storm), or MW2_MISS_LIMIT unconfirmed boots of any kind
+ * in a row: a boot that showed frames and was cut counts, but alone
+ * never falls back. */
+#define MW2_HARD_LIMIT          2u
+#define MW2_MISS_LIMIT          3u
+
+static __inline unsigned Mw2ClassOf(unsigned Stage)
+{
+    if (Stage == MW2_STAGE_TDR_STORM)
+        return MW2_CLASS_TDR_STORM;
+    if (Stage >= MW2_STAGE_PRESENTED)
+        return MW2_CLASS_UNCONFIRMED;
+    return MW2_CLASS_NO_PRESENT;
+}
 
 static __inline unsigned Mw2Wanted(unsigned Want, unsigned Default)
 {
@@ -62,11 +113,21 @@ static __inline unsigned Mw2Wanted(unsigned Want, unsigned Default)
 }
 
 /* The first half: what the registry says. A 2.x version is armed before it
- * is used, every boot, so any boot that never confirms costs one boot. The
- * fallback is sticky: with no WddmProbe, a default that fell back with this
- * very build stays at 1.3, so a default that hangs does not alternate with
- * 1.3 boot after boot. A new package (another MW_BUILD) tries it once
- * more; `wddm-probe set` and `wddm-probe default` clear WddmProbeFellBack. */
+ * is used, every boot. A boot that never confirms leaves WddmProbeArmed set
+ * and its stage (how far it got) behind.
+ *
+ * An explicit WddmProbe stays one-shot: one unconfirmed boot falls back,
+ * whatever its stage (MW2_REASON_PROBE).
+ *
+ * The default (no WddmProbe) tells a failure from a cut (2026-11-24: one
+ * 2.0 boot cut by the power switch before the confirm sent a working board
+ * to 1.3 for good): a boot that never showed a frame or ended in a TDR storm
+ * is a failure, one that showed frames and then stopped is only
+ * unconfirmed. It falls back after MW2_HARD_LIMIT failures in a row or
+ * MW2_MISS_LIMIT unconfirmed boots of any kind in a row; a confirmed boot
+ * clears both counts. The fallback is sticky per build as before: a new
+ * package (another MW_BUILD) tries it once more; `wddm-probe set` and
+ * `wddm-probe default` clear it. */
 static __inline void Mw2BootDecide(const MW2_BOOT_IN *In, MW2_BOOT_OUT *Out)
 {
     unsigned want = Mw2Wanted(In->Want, In->Default);
@@ -75,6 +136,10 @@ static __inline void Mw2BootDecide(const MW2_BOOT_IN *In, MW2_BOOT_OUT *Out)
     Out->Wanted = want;
     Out->FallBack = 0;
     Out->Arm = 0;
+    Out->Class = MW2_CLASS_NONE;
+    Out->HardMisses = In->HardMisses;
+    Out->SoftMisses = In->SoftMisses;
+    Out->Reason = MW2_REASON_NONE;
     if (want == 0 || want == MW2_WDDM_1_3)
         return;
     if (!In->Known) {
@@ -86,9 +151,29 @@ static __inline void Mw2BootDecide(const MW2_BOOT_IN *In, MW2_BOOT_OUT *Out)
         return;
     }
     if (In->Armed == want && !In->Keep) {
-        Out->Result = MW2_RESULT_FELL_BACK;
-        Out->FallBack = 1;
-        return;
+        Out->Class = Mw2ClassOf(In->Stage);
+        if (In->Want != 0) {
+            Out->Result = MW2_RESULT_FELL_BACK;
+            Out->FallBack = 1;
+            Out->Reason = MW2_REASON_PROBE;
+            Out->HardMisses = Out->SoftMisses = 0;
+            return;
+        }
+        if (Out->Class == MW2_CLASS_UNCONFIRMED) {
+            Out->SoftMisses = In->SoftMisses + 1;
+        } else {
+            Out->HardMisses = In->HardMisses + 1;
+        }
+        if (Out->HardMisses >= MW2_HARD_LIMIT || Out->HardMisses + Out->SoftMisses >= MW2_MISS_LIMIT) {
+            Out->Result = MW2_RESULT_FELL_BACK;
+            Out->FallBack = 1;
+            Out->Reason = Out->HardMisses >= MW2_HARD_LIMIT ?
+                          (Out->Class == MW2_CLASS_TDR_STORM ? MW2_REASON_TDR_STORM : MW2_REASON_NO_PRESENT) :
+                          MW2_REASON_UNCONFIRMED;
+            Out->HardMisses = Out->SoftMisses = 0;
+            return;
+        }
+        /* Not enough to fall back: 2.x once more, armed again. */
     }
     Out->Result = MW2_RESULT_ACTIVE;
     Out->Arm = !In->Keep;
@@ -119,14 +204,34 @@ static __inline unsigned Mw2JournalMax(unsigned Want, unsigned Configured)
 }
 
 /* When a 2.x boot counts as good (the watchdog, probe.c, at PASSIVE_LEVEL):
- * DWM has drawn for a while, the boot has been up for two minutes, and no
- * DDI is stuck. The time matters: 300 renders can all happen at LogonUI. */
-#define MW2_CONFIRM_RENDERS     300u
-#define MW2_CONFIRM_SECONDS     120u
+ * DWM has drawn and presented, the adapter has been up for a while, no
+ * DDI is stuck and no TDR storm. Until 2026-11-24 it took 300 renders and
+ * 120 s on the desktop, and a power cut in those two minutes looked like a
+ * hang; now it is seconds after the first frames, LogonUI included (a
+ * static LogonUI presents rarely, hence few presents asked for). */
+#define MW2_CONFIRM_RENDERS     60u
+#define MW2_CONFIRM_PRESENTS    MW2_STAGE_PRESENTS
+#define MW2_CONFIRM_SECONDS     20u
 
-static __inline unsigned Mw2Confirm(unsigned Renders, unsigned Seconds, unsigned Stuck)
+static __inline unsigned Mw2Confirm(unsigned Renders, unsigned Presents, unsigned Seconds, unsigned Stuck,
+                                    unsigned Tdrs)
 {
-    return Renders >= MW2_CONFIRM_RENDERS && Seconds >= MW2_CONFIRM_SECONDS && !Stuck;
+    return Renders >= MW2_CONFIRM_RENDERS && Presents >= MW2_CONFIRM_PRESENTS &&
+           Seconds >= MW2_CONFIRM_SECONDS && !Stuck && Tdrs < MW2_TDR_STORM;
+}
+
+/* The stage to record now for an armed boot (0: nothing new). */
+static __inline unsigned Mw2StageNow(unsigned Recorded, unsigned Presents, unsigned Tdrs)
+{
+    if (Recorded == MW2_STAGE_TDR_STORM)
+        return 0;
+    if (Tdrs >= MW2_TDR_STORM)
+        return MW2_STAGE_TDR_STORM;
+    if (Presents >= MW2_STAGE_PRESENTS && Recorded < MW2_STAGE_PRESENTED)
+        return MW2_STAGE_PRESENTED;
+    if (Recorded < MW2_STAGE_STARTED)
+        return MW2_STAGE_STARTED;
+    return 0;
 }
 
 /* ---- the adapter the 2.x driver describes ---- */
