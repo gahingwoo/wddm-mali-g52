@@ -28,6 +28,7 @@
 #include "../../tools/windows/vdectest/av1parse.h"
 #include "../../tools/windows/vdectest/md5.h"
 #include "../../video/vdec.h"
+#include "../../video/vdpu383/lib/vdpu383_av1.h"
 
 #define MAX_SLOTS 128
 
@@ -188,6 +189,41 @@ static int av1_cb(void *ctx, const Av1Picture *pic)
     return decoded(pp.CurrPicTextureIndex, pp.StatusReportFeedbackNumber, rc, &out, err, pic->decode_index);
 }
 
+/*
+ * frame_refs[i].Index is the slot reference i uses (ref_frame_idx[i]), as
+ * FFmpeg's dxva2_av1.c and the DXVA AV1 specification have it, not a
+ * surface: slots that hold other surfaces than their numbers, two slots
+ * holding one surface, and references whose slot number is some other
+ * slot's surface.
+ */
+static void av1_slots_check(void)
+{
+    static V383_DXVA_PicParams_AV1 pp;
+    static V383_Av1State s;
+    static V383_Av1Hdr h;
+    static const unsigned char map[8] = { 3, 3, 7, 0, 1, 5, 6, 2 };
+    static const unsigned char ref[7] = { 1, 0, 4, 2, 7, 3, 6 };
+    unsigned i;
+
+    memset(&pp, 0, sizeof(pp));
+    v383_av1_reset(&s);
+    pp.width = pp.height = pp.max_width = pp.max_height = 64;
+    pp.bitdepth = 8;
+    pp.superres_denom = 8;
+    pp.order_hint_bits = 7;
+    pp.FormatAndPictureInfoFlags = V383_AV1_INTER_FRAME | (1 << 4) | (1 << 5);
+    pp.CurrPicTextureIndex = 4;
+    for (i = 0; i < 8; i++) {
+        pp.RefFrameMapTextureIndex[i] = map[i];
+        s.surf[map[i]].valid = 1;
+    }
+    for (i = 0; i < 7; i++)
+        pp.frame_refs[i].Index = ref[i];
+    v383_av1_derive(&pp, NULL, &s, &h);
+    for (i = 0; i < 7; i++)
+        CHECK(h.ref_frame_idx[i] == ref[i]);
+}
+
 /* ----------------------------------------------------------------- main */
 
 static uint8_t *read_file(const char *path, size_t *len)
@@ -239,6 +275,7 @@ int main(int argc, char **argv)
         printf("cannot open %s\n", path);
         return 1;
     }
+    av1_slots_check();
     remove(log);
     setenv("D3D10UMD_VDEC_FAKE", "1", 1);
     setenv("D3D10UMD_VDEC_REGLOG", log, 1);

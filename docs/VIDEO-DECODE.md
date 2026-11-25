@@ -376,6 +376,22 @@ a P010 texture (R16 storage of 1.5 times the height, R16/R16G16 plane
 views, a video processor input), unpacking in `CopyToTarget`, and the
 HEVC builder's Main 10 path.
 
+**AV1 references from FFmpeg (fixed 2026-11-25).** On the board, FFmpeg's
+`-hwaccel d3d11va` matched software decode for H.264, HEVC and VP9 but
+not for a 1080p libsvtav1 clip (hw md5 `2b66808f3b1342a415c9a2c9cc745fb0`,
+software `30f47ce96ff1f56a402f02373b39f7a5`), while vdectest passed the
+AV1 kit. The register builder read `frame_refs[i].Index` as a surface
+index; the DXVA AV1 specification, FFmpeg's `dxva2_av1.c` and Mesa's d3d12
+driver put the reference's slot there (`ref_frame_idx[i]`, 0 to 7), and
+only vdpu383test's parser (copied into vdectest) wrote the surface. Off the
+board, the backend's register log for that clip with FFmpeg's convention
+differed from the parser's from the third picture on (297 of 300
+pictures); with the builder reading a slot (woa-rk3576 c373611) the
+reference registers built from DXVA alone equal those built with the
+parser's own `ref_frame_idx` for all 300 pictures. `tests/vdec-host` checks
+the slot reading with references whose slot numbers are other slots'
+surfaces.
+
 **Film grain.** The VDPU383 does not apply AV1 film grain (vdpu383test's
 refs: a stream with grain matches dav1d's output without it). A player
 that leaves grain to the hardware decoder shows those streams without it.

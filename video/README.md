@@ -10,7 +10,8 @@ board test are in [docs/VIDEO-DECODE.md](../docs/VIDEO-DECODE.md).
   (`D3D10UMD_VDEC_FAKE=1`); a register log (`D3D10UMD_VDEC_REGLOG=<file>`)
   that tests/vdec-host and mesa.yml compare with vdpu383test's.
 - `vdpu383/`: copied unchanged from
-  [woa-rk3576](https://github.com/gahingwoo/woa-rk3576) `main` at a16bd9a
+  [woa-rk3576](https://github.com/gahingwoo/woa-rk3576) at c373611 (AV1
+  frame_refs[i].Index read as a slot)
   (`drivers/video/vdpu383/lib` and `vdpu383_ioctl.h`, interface version 2:
   the driver maps buffers through the decoder's IOMMU by default, which
   changes nothing for this code). H.264 and HEVC are the builders that
@@ -22,17 +23,17 @@ board test are in [docs/VIDEO-DECODE.md](../docs/VIDEO-DECODE.md).
 27bd92dc0dc14c883c9ed948dab5f1ce671722f4a9c6bf244a53e9a1aa75e76a  lib/v383_dxva.h
 7ff68fd43d3effd1c69029eef754a1baeef7a5cb99513dfeb6267b058b923c3c  lib/v383_dxva_hevc.h
 64b298485553a076048155f49d963c850e12feec9b923c7cbc00324dfd2544d6  lib/v383_dxva_vp9.h
-266b031869e0733a6ae750222b1542c5544f8770e4932f31a1c11c12deacf8f2  lib/v383_dxva_av1.h
-7446e5749846039456f451dd11095970b99aba5737d7049bd286f5d2821f1060  lib/vdpu383_h264.c
+ff8de91ad7402abd08b56c62e2af945d73e45a7791b933a781d02df880a8fa7d  lib/v383_dxva_av1.h
+4f700310cb88d9600b90880b693e82df5b6c3fc66cbcdbbb3022b3d3a68db6e5  lib/vdpu383_h264.c
 463c6df35b8952eb2c0d431ff4d40109a61d695a85b30654889d46686b1f98e7  lib/vdpu383_h264.h
 2b008ae34c932bdd3c92eb66da7931ea4c69a9962f3e8c8cbedc57fc6a2861ed  lib/vdpu383_cabac.c
-f1a8e6ee9eeda93e93ee2ef11ac40f240e547db93c6fd5239f5493813ce221ce  lib/vdpu383_hevc.c
+5b1b7d7c56c6785222b9c5e170d800fe020aaf681587ae921ae3f7d799c88feb  lib/vdpu383_hevc.c
 c35a4b745bc7c5f18884eaf64517c5f2994ac8c7f7fa025514018ffb87d41677  lib/vdpu383_hevc.h
 e55453b5b7769294f5180fc1893a7442c92fc8685fc0853166daf6aa50f4a89c  lib/vdpu383_hevc_cabac.c
-77d55b78e1e1a19379d64619f15ea977df5bf72d1c08c1bba3fd386902890181  lib/vdpu383_vp9.c
-a745beee2dc0df989b6ad3ddb565baa757ba6ff86ac01570936163205d39fd3c  lib/vdpu383_vp9.h
+c383fb96f8e9f1a0b6fcd026e344789a017e21e3872323d2683c95952a2d1613  lib/vdpu383_vp9.c
+58469fc5a6037c6dd0300256ef4731db841078798ac93f5913205812b59e0dc4  lib/vdpu383_vp9.h
 e0e62f53651b80e9009b41df1e83958067f84cd3b0ded9ef6afaf00d3d698568  lib/vdpu383_vp9_probs.c
-a765cf647e9bb75579114c6108efff65d0db6190d6b77a06c0170820dad6d58c  lib/vdpu383_av1.c
+10eca42edffed73a2869bbbf57f1732d353742ba9a341829d8313d0f1eebc007  lib/vdpu383_av1.c
 81d91d1a583f3a8f336f9d81051fc49c27141b4e8e26f3f590a7e99e5d633681  lib/vdpu383_av1.h
 a4294a22a13b5fa5eadbd1ab5ec8452a7a89e6937bf318a72d7f1abb0a9976d2  lib/vdpu383_av1_cdf.c
 0dedb55852d9ef6bbc110d126a2dd874a4255133fbc18331bf29dc466abbf7df  vdpu383_ioctl.h
