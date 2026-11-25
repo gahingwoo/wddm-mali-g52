@@ -187,6 +187,7 @@ step can be turned back without reinstalling:
 | `UmdMsaa` | 1 | 0: no multisampling, as before 0064; 1: every format Panfrost renders at 4x is a multisample render target at 1x and 4x, in the browsers and d3dprobe only (0066; ANGLE uses 1x); 2: the same in every process; 4 and 5: as 1 and 2 |
 | `UmdFeatureLevel` | 0xa000 (10_0) | the most the UMD reports |
 | `UmdRedirect` | 1 at WDDM 2.x, 2 at 1.3 | which processes get DXGI redirection by default (patch 0077): 1 none; 2 the browsers (0076); 3 every process. `C:\mali\redirect` and `C:\mali\noredirect` override it. EDGE-PRESENT.md, "The WDDM 2.0 session hang" |
+| `UmdReportFL11` | 0 | 1: Chromium's GPU process (msedge.exe, chrome.exe, msedgewebview2.exe with `--type=gpu-process`) gets the D3D11.1 DDI at feature level 11_0, shader model 5 (the subset FXC emits for ANGLE's ES 3.0 shaders), no hull, domain or compute shaders; with it, `UmdVideo` 1 and 2 apply to that process too (patch 0080, CHROMIUM-VIDEO.md C1). Read at each adapter query: new GPU processes see a change without a reboot |
 
 A KMD that does not answer the query means `UmdDdi` 100 (an older KMD), so a new UMD on
 an old KMD behaves as today. The structure only grows at the end and says

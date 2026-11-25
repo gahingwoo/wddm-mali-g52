@@ -1,0 +1,608 @@
+diff --git a/src/gallium/frontends/d3d10umd/Adapter.cpp b/src/gallium/frontends/d3d10umd/Adapter.cpp
+index 8fc15d7..5ee60c6 100644
+--- a/src/gallium/frontends/d3d10umd/Adapter.cpp
++++ b/src/gallium/frontends/d3d10umd/Adapter.cpp
+@@ -79,16 +79,19 @@ struct MaliUmdInfo {
+    UINT Magic, Size, Ddi, FeatureLevel, Dxgi12, Video, DecodeNode, VirtualMode, KmdBuild;
+    UINT Msaa;                    /* UmdMsaa; 0 from a KMD that had a reserved word here */
+    UINT Redirect;                /* UmdRedirect; 0 from a KMD that had a reserved word here */
+-   UINT Reserved[5];
++   UINT ReportFl11;              /* UmdReportFL11; 0 from a KMD that had a reserved word here */
++   UINT Reserved[4];
+ };
+ #define MALI_UMD_INFO_MAGIC 0x3149574Du
+ 
+-/* Below: UmdMsaa as it applies to this process. */
++/* Below: UmdMsaa and UmdReportFL11 as they apply to this process. */
+ static unsigned EffectiveMsaa(unsigned setting);
++static bool EffectiveFl11(unsigned setting);
+ 
+ static unsigned
+ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL,
+-            unsigned *pRedirect = NULL, unsigned *pVideo = NULL)
++            unsigned *pRedirect = NULL, unsigned *pVideo = NULL, bool *pFl11 = NULL,
++            bool *pKmd = NULL)
+ {
+    MaliUmdInfo info = {};
+    D3DDDICB_QUERYADAPTERINFO q = {};
+@@ -101,6 +104,8 @@ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL,
+       *pRedirect = 0;
+    if (pVideo)
+       *pVideo = 0;
++   if (pFl11)
++      *pFl11 = false;
+ 
+    if (pOpenData->pAdapterCallbacks && pOpenData->pAdapterCallbacks->pfnQueryAdapterInfoCb) {
+       q.pPrivateDriverData = &info;
+@@ -121,8 +126,19 @@ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL,
+       if (pVideo && SUCCEEDED(hr) && info.Magic == MALI_UMD_INFO_MAGIC &&
+           info.Size >= offsetof(MaliUmdInfo, Video) + sizeof(UINT))
+          *pVideo = VideoEffective(info.Video);
++      /* UmdReportFL11 (0 by default): feature level 11_0 in Chromium's GPU
++       * process. That process is not on UmdVideo's list of players, so
++       * with this on it is one: UmdVideo 1 or 2 then applies to it too. */
++      if (pFl11 && SUCCEEDED(hr) && info.Magic == MALI_UMD_INFO_MAGIC &&
++          info.Size >= offsetof(MaliUmdInfo, ReportFl11) + sizeof(UINT))
++         *pFl11 = EffectiveFl11(info.ReportFl11);
++      if (pVideo && pFl11 && *pFl11 && *pVideo == 0 && (info.Video == 1 || info.Video == 2))
++         *pVideo = info.Video;
+       if (pVideo)
+          DebugPrintf("OpenAdapter: UmdVideo %u, here %u\n", info.Video, *pVideo);
++      if (pFl11)
++         DebugPrintf("OpenAdapter: UmdReportFL11 %u, here %u\n", info.ReportFl11,
++                     *pFl11 ? 1u : 0u);
+       DebugPrintf("OpenAdapter: KMD adapter info 0x%08lx, magic 0x%08x, UmdDdi %u, UmdMsaa %u"
+                   " (here %u), UmdRedirect %u: offering D3D10.%u\n", (unsigned long)hr, info.Magic,
+                   info.Ddi, info.Msaa, pMsaa ? *pMsaa : 0, info.Redirect, ddi == 101 ? 1 : 0);
+@@ -142,7 +158,16 @@ QueryUmdDdi(const D3D10DDIARG_OPENADAPTER *pOpenData, unsigned *pMsaa = NULL,
+          *pMsaa = EffectiveMsaa((unsigned)debug_get_num_option("D3D10UMD_UMDMSAA", 0));
+       if (pVideo)
+          *pVideo = VideoEffective((unsigned)debug_get_num_option("D3D10UMD_UMDVIDEO", 0));
++      if (pFl11)
++         *pFl11 = EffectiveFl11((unsigned)debug_get_num_option("D3D10UMD_UMDFL11", 0));
++      if (pVideo && pFl11 && *pFl11 && *pVideo == 0) {
++         unsigned v = (unsigned)debug_get_num_option("D3D10UMD_UMDVIDEO", 0);
++         if (v == 1 || v == 2)
++            *pVideo = v;
++      }
+    }
++   if (pKmd)
++      *pKmd = kmd;
+    return ddi;
+ }
+ 
+@@ -186,6 +211,53 @@ EffectiveMsaa(unsigned setting)
+    return samples;
+ }
+ 
++/*
++ * Whether this is Chromium's GPU process: msedge.exe, chrome.exe or
++ * msedgewebview2.exe started with --type=gpu-process. Its D3D11 video
++ * decoder takes ANGLE's device and refuses one below feature level 11_0
++ * (media/gpu/windows/d3d11_video_decoder_backend.cc). The browser process,
++ * the renderers and the utility processes have other --type values, or
++ * none, and keep what they had.
++ */
++static bool
++IsChromiumGpuProcess(void)
++{
++   static const char *const names[] = {
++      "msedge.exe", "chrome.exe", "msedgewebview2.exe",
++   };
++   char path[MAX_PATH];
++   DWORD n = GetModuleFileNameA(NULL, path, sizeof path);
++   const char *base = path;
++   const wchar_t *cmd = GetCommandLineW();
++   bool named = false;
++
++   if (n == 0 || n >= sizeof path || !cmd)
++      return false;
++   for (const char *c = path; *c; c++)
++      if (*c == '\\' || *c == '/')
++         base = c + 1;
++   for (unsigned i = 0; i < ARRAYSIZE(names); i++)
++      if (_stricmp(base, names[i]) == 0)
++         named = true;
++   return named && wcsstr(cmd, L"--type=gpu-process") != NULL;
++}
++
++/*
++ * UmdReportFL11 (maliwddm Device Parameters, default 0):
++ *   0  nothing changes anywhere.
++ *   1  Chromium's GPU process gets the D3D11.1 interface (D3D11.cpp) at
++ *      feature level 11_0: shader model 5 shaders are taken (the subset
++ *      FXC emits for OpenGL ES 3.0 code, ShaderParse.c), hull, domain and
++ *      compute shaders and unordered access views fail as the DDI allows.
++ *      ANGLE stays on OpenGL ES 3.0 at 11_0 (renderer11_utils.cpp,
++ *      GetMaximumClientVersion), so it never asks for them.
++ */
++static bool
++EffectiveFl11(unsigned setting)
++{
++   return setting == 1 && IsChromiumGpuProcess();
++}
++
+ static bool
+ IsD3D10_1Interface(UINT Interface)
+ {
+@@ -211,7 +283,7 @@ OpenAdapterCommon(__inout D3D10DDIARG_OPENADAPTER *pOpenData)   // IN
+ 
+    pAdaptor->hRTAdapter = pOpenData->hRTAdapter.handle;
+    pAdaptor->ddi = QueryUmdDdi(pOpenData, &pAdaptor->msaa, &pAdaptor->redirect,
+-                               &pAdaptor->video);
++                               &pAdaptor->video, &pAdaptor->fl11, &pAdaptor->kmd);
+    pOpenData->hAdapter.pDrvPrivate = pAdaptor;
+ 
+    pOpenData->pAdapterFuncs->pfnCalcPrivateDeviceSize = CalcPrivateDeviceSize;
+@@ -318,7 +390,7 @@ GetSupportedVersions(D3D10DDI_HADAPTER hAdapter,
+    if (pAdapter->ddi < 101)
+       n = 3;
+    memcpy(list, SupportedDDIInterfaceVersions, n * sizeof list[0]);
+-   if (pAdapter->video)
++   if (pAdapter->video || pAdapter->fl11)
+       list[n++] = D3D11_1_DDI_SUPPORTED;
+ 
+    if (pSupportedDDIInterfaceVersions && *puEntries < n) {
+@@ -329,6 +401,9 @@ GetSupportedVersions(D3D10DDI_HADAPTER hAdapter,
+ 
+    if (pSupportedDDIInterfaceVersions) {
+       memcpy(pSupportedDDIInterfaceVersions, list, n * sizeof list[0]);
++      if (pAdapter->fl11)
++         for (UINT i = 0; i < n; i++)
++            DebugPrintf("GetSupportedVersions: 0x%016llx\n", (unsigned long long)list[i]);
+    }
+ 
+    return S_OK;
+@@ -354,16 +429,53 @@ GetCaps(D3D10DDI_HADAPTER hAdapter,
+ 
+    memset(pData->pData, 0, pData->DataSize);
+    /* Every answer zero, as always, unless this adapter offers the D3D11.1
+-    * interface: nothing changes for a process that does not decode. */
+-   switch (pAdapter->video ? (unsigned)pData->Type : 0u) {
++    * interface: nothing changes for a process that does not decode and is
++    * not Chromium's GPU process with UmdReportFL11. */
++   switch (pAdapter->video || pAdapter->fl11 ? (unsigned)pData->Type : 0u) {
+    case D3D11DDICAPS_3DPIPELINESUPPORT:
+       /* Asked by the runtime only of a D3D11.x interface, whose feature
+-       * level is this answer: 10_0, and 10_1 where UmdDdi offers it. */
++       * level is this answer: 10_0, and 10_1 where UmdDdi offers it;
++       * with UmdReportFL11 in Chromium's GPU process 10_1 and 11_0 too. */
+       if (pData->DataSize >= sizeof(D3D11DDI_3DPIPELINESUPPORT_CAPS)) {
+          D3D11DDI_3DPIPELINESUPPORT_CAPS *caps = (D3D11DDI_3DPIPELINESUPPORT_CAPS *)pData->pData;
+          caps->Caps = D3D11DDI_ENCODE_3DPIPELINESUPPORT_CAP(D3D11DDI_3DPIPELINELEVEL_10_0);
+-         if (pAdapter->ddi >= 101)
++         if (pAdapter->ddi >= 101 || pAdapter->fl11)
+             caps->Caps |= D3D11DDI_ENCODE_3DPIPELINESUPPORT_CAP(D3D11DDI_3DPIPELINELEVEL_10_1);
++         if (pAdapter->fl11)
++            caps->Caps |= D3D11DDI_ENCODE_3DPIPELINESUPPORT_CAP(D3D11DDI_3DPIPELINELEVEL_11_0);
++         DebugPrintf("GetCaps: 3D pipeline levels 0x%x\n", caps->Caps);
++      }
++      break;
++   case D3D11DDICAPS_THREADING:
++   case D3D11DDICAPS_SHADER:
++      /*
++       * Zero (no free threading, no doubles), as for UmdVideo, except
++       * SHADER with UmdReportFL11: the runtime closes the adapter without
++       * a device (0x887A0020) when 11_0 is in the pipeline levels and the
++       * shader caps are 0, even for a caller that asks for 10_1 only
++       * (mesa.yml runs 45537590835 and on). So the GPU process is told
++       * D3D11DDICAPS_SHADER_COMPUTE_PLUS_RAW_AND_STRUCTURED_BUFFERS_IN_SHADER_4_X,
++       * which says something only below 11_0, where the device is not.
++       * Doubles stay off: ANGLE does not use them.
++       *
++       * On the software driver path only (no KMD: a CI runner),
++       * D3D10UMD_FL11_EXP changes the answers to see what the runtime
++       * needs: bit 0 free threading, bit 1 doubles instead, bit 2 zero.
++       */
++      if (pAdapter->fl11 && pData->DataSize >= sizeof(UINT)) {
++         unsigned exp = pAdapter->kmd ? 0 : (unsigned)debug_get_num_option("D3D10UMD_FL11_EXP", 0);
++         UINT *caps = (UINT *)pData->pData;
++         if (pData->Type == D3D11DDICAPS_THREADING && (exp & 1))
++            *caps = D3D11DDICAPS_FREETHREADED;
++         if (pData->Type == D3D11DDICAPS_SHADER) {
++            *caps = D3D11DDICAPS_SHADER_COMPUTE_PLUS_RAW_AND_STRUCTURED_BUFFERS_IN_SHADER_4_X;
++            if (exp & 2)
++               *caps = D3D11DDICAPS_SHADER_DOUBLES;
++            if (exp & 4)
++               *caps = 0;
++         }
++         DebugPrintf("GetCaps: type %u answered 0x%x (D3D10UMD_FL11_EXP %u)\n",
++                     (unsigned)pData->Type, *caps, exp);
+       }
+       break;
+    case D3D11_1DDICAPS_ARCHITECTURE_INFO:
+diff --git a/src/gallium/frontends/d3d10umd/D3DKMT.cpp b/src/gallium/frontends/d3d10umd/D3DKMT.cpp
+index 1769999..48a488a 100644
+--- a/src/gallium/frontends/d3d10umd/D3DKMT.cpp
++++ b/src/gallium/frontends/d3d10umd/D3DKMT.cpp
+@@ -33,6 +33,7 @@
+ 
+ 
+ #include "DriverIncludes.h"
++#include "util/u_debug.h"
+ 
+ #ifndef STATUS_NOT_IMPLEMENTED
+ #define STATUS_NOT_IMPLEMENTED 0xC0000002
+@@ -268,6 +269,8 @@ EXTERN_C NTSTATUS APIENTRY
+ D3DKMTQueryAdapterInfo(CONST D3DKMT_QUERYADAPTERINFO *pData)
+ {
+    LOG_ENTRYPOINT();
++   DebugPrintf("D3DKMTQueryAdapterInfo: type %u, %u bytes\n", (unsigned)pData->Type,
++               pData->PrivateDriverDataSize);
+ 
+    switch (pData->Type) {
+    case KMTQAITYPE_UMDRIVERNAME:
+@@ -311,7 +314,12 @@ D3DKMTQueryAdapterInfo(CONST D3DKMT_QUERYADAPTERINFO *pData)
+    case KMTQAITYPE_DRIVERVERSION:
+       {
+          D3DKMT_DRIVERVERSION *pResult = (D3DKMT_DRIVERVERSION *)pData->pPrivateDriverData;
+-         *pResult = KMT_DRIVERVERSION_WDDM_1_0;
++         /* The software driver path only (a CI runner): D3D10UMD_KMT_WDDM,
++          * a D3DKMT_DRIVERVERSION such as 1105 for WDDM 1.1, stands in for
++          * the KMD the runtime asks before it offers feature level 11_0
++          * (mesa-patches/0080). Unset: WDDM 1.0, as always. */
++         *pResult = (D3DKMT_DRIVERVERSION)debug_get_num_option("D3D10UMD_KMT_WDDM",
++                                                               KMT_DRIVERVERSION_WDDM_1_0);
+          return STATUS_SUCCESS;
+       }
+    case KMTQAITYPE_XBOX:
+diff --git a/src/gallium/frontends/d3d10umd/Device.cpp b/src/gallium/frontends/d3d10umd/Device.cpp
+index c30c4eb..f3b3232 100644
+--- a/src/gallium/frontends/d3d10umd/Device.cpp
++++ b/src/gallium/frontends/d3d10umd/Device.cpp
+@@ -96,6 +96,8 @@ SIZE_T APIENTRY
+ CalcPrivateDeviceSize(D3D10DDI_HADAPTER hAdapter,                          // IN
+                       __in const D3D10DDIARG_CALCPRIVATEDEVICESIZE *pData) // IN
+ {
++   DebugPrintf("CalcPrivateDeviceSize: interface 0x%08x, version 0x%x, flags 0x%x\n",
++               pData->Interface, pData->Version, pData->Flags);
+    return sizeof(Device);
+ }
+ 
+@@ -179,8 +181,10 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+       DebugPrintf("%s: the D3D10.1 interface is not offered on this adapter\n", __func__);
+       return E_FAIL;
+    }
+-   if (pCreateData->Interface == D3D11_1_DDI_INTERFACE_VERSION && !pAdapter->video) {
+-      DebugPrintf("%s: the D3D11.1 interface is offered only where UmdVideo applies\n", __func__);
++   if (pCreateData->Interface == D3D11_1_DDI_INTERFACE_VERSION && !pAdapter->video &&
++       !pAdapter->fl11) {
++      DebugPrintf("%s: the D3D11.1 interface is offered only where UmdVideo or UmdReportFL11"
++                  " applies\n", __func__);
+       return E_FAIL;
+    }
+ 
+@@ -204,6 +208,7 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+    pDevice->msaa = pAdapter->msaa;
+    pDevice->video = pAdapter->video;
+    pDevice->ddi11_1 = pCreateData->Interface == D3D11_1_DDI_INTERFACE_VERSION;
++   pDevice->fl11 = pAdapter->fl11;
+    pDevice->caps_logged = 0;
+    pDevice->cso = cso_create_context(pipe, CSO_NO_VBUF);
+    /* The first draw binds the vertex elements, even if IaSetInputLayout
+@@ -259,8 +264,9 @@ CreateDevice(D3D10DDI_HADAPTER hAdapter,                 // IN
+       if (pCreateData->ppfnRetrieveSubObject)
+          *pCreateData->ppfnRetrieveSubObject = VideoRetrieveSubObject;
+       D3D11FillDxgi12Funcs(pCreateData->DXGIBaseDDI.pDXGIDDIBaseFunctions3);
+-      DebugPrintf("CreateDevice: D3D11.1 interface, video %u, flags 0x%x (pipeline level %u)\n",
+-                  pDevice->video, pCreateData->Flags,
++      DebugPrintf("CreateDevice: D3D11.1 interface, video %u, fl11 %u, flags 0x%x"
++                  " (pipeline level %u)\n", pDevice->video, pDevice->fl11 ? 1u : 0u,
++                  pCreateData->Flags,
+                   (unsigned)D3D11DDI_EXTRACT_3DPIPELINELEVEL_FROM_FLAGS(pCreateData->Flags));
+       return CreateDeviceResult(pAdapter);
+    }
+diff --git a/src/gallium/frontends/d3d10umd/ShaderParse.c b/src/gallium/frontends/d3d10umd/ShaderParse.c
+index 5f6f566..1c3ca4d 100644
+--- a/src/gallium/frontends/d3d10umd/ShaderParse.c
++++ b/src/gallium/frontends/d3d10umd/ShaderParse.c
+@@ -56,6 +56,7 @@ Shader_parse_init(struct Shader_parser *parser,
+ #define OP_TEST_BOOLEAN (1 << 2) /* test boolean in opcode specific control */
+ #define OP_DCL (1 << 3) /* custom opcode specific control */
+ #define OP_RESINFO_RET_TYPE (1 << 4) /* return type for resinfo */
++#define OP_NO_OPERANDS (1 << 5) /* operands not parsed (a stream index): skipped by length */
+ 
+ struct dx10_opcode_info {
+    D3D10_SB_OPCODE_TYPE type;
+@@ -180,7 +181,35 @@ opcode_info[D3D10_SB_NUM_OPCODES] = {
+    {_(D3D10_1_SB_OPCODE_LOD),                            0, 0, OP_NOT_DONE},
+    {_(D3D10_1_SB_OPCODE_GATHER4),                        0, 0, OP_NOT_DONE},
+    {_(D3D10_1_SB_OPCODE_SAMPLE_POS),                     0, 0, OP_NOT_DONE},
+-   {_(D3D10_1_SB_OPCODE_SAMPLE_INFO),                    0, 0, OP_NOT_DONE}
++   {_(D3D10_1_SB_OPCODE_SAMPLE_INFO),                    0, 0, OP_NOT_DONE},
++
++   /*
++    * Shader model 5, which the D3D11 runtime hands over only at feature
++    * level 11_0 (UmdReportFL11, Adapter.cpp): the instructions FXC emits
++    * for OpenGL ES 3.0 code under vs_5_0, ps_5_0 and gs_5_0. Every other
++    * shader model 5 opcode has no entry (name NULL) and is skipped with a
++    * log line, below. A device below 11_0 is never given one.
++    */
++   [D3D11_SB_OPCODE_EMIT_STREAM] =        {_(D3D11_SB_OPCODE_EMIT_STREAM),        0, 0, OP_NO_OPERANDS},
++   [D3D11_SB_OPCODE_CUT_STREAM] =         {_(D3D11_SB_OPCODE_CUT_STREAM),         0, 0, OP_NO_OPERANDS},
++   [D3D11_SB_OPCODE_EMITTHENCUT_STREAM] = {_(D3D11_SB_OPCODE_EMITTHENCUT_STREAM), 0, 0, OP_NO_OPERANDS},
++   [D3D11_SB_OPCODE_DERIV_RTX_COARSE] =   {_(D3D11_SB_OPCODE_DERIV_RTX_COARSE),   1, 1, OP_SATURATE},
++   [D3D11_SB_OPCODE_DERIV_RTX_FINE] =     {_(D3D11_SB_OPCODE_DERIV_RTX_FINE),     1, 1, OP_SATURATE},
++   [D3D11_SB_OPCODE_DERIV_RTY_COARSE] =   {_(D3D11_SB_OPCODE_DERIV_RTY_COARSE),   1, 1, OP_SATURATE},
++   [D3D11_SB_OPCODE_DERIV_RTY_FINE] =     {_(D3D11_SB_OPCODE_DERIV_RTY_FINE),     1, 1, OP_SATURATE},
++   [D3D11_SB_OPCODE_RCP] =                {_(D3D11_SB_OPCODE_RCP),                1, 1, OP_SATURATE},
++   [D3D11_SB_OPCODE_F32TOF16] =           {_(D3D11_SB_OPCODE_F32TOF16),           1, 1, 0},
++   [D3D11_SB_OPCODE_F16TOF32] =           {_(D3D11_SB_OPCODE_F16TOF32),           1, 1, 0},
++   [D3D11_SB_OPCODE_COUNTBITS] =          {_(D3D11_SB_OPCODE_COUNTBITS),          1, 1, 0},
++   [D3D11_SB_OPCODE_FIRSTBIT_HI] =        {_(D3D11_SB_OPCODE_FIRSTBIT_HI),        1, 1, 0},
++   [D3D11_SB_OPCODE_FIRSTBIT_LO] =        {_(D3D11_SB_OPCODE_FIRSTBIT_LO),        1, 1, 0},
++   [D3D11_SB_OPCODE_FIRSTBIT_SHI] =       {_(D3D11_SB_OPCODE_FIRSTBIT_SHI),       1, 1, 0},
++   [D3D11_SB_OPCODE_UBFE] =               {_(D3D11_SB_OPCODE_UBFE),               1, 3, 0},
++   [D3D11_SB_OPCODE_IBFE] =               {_(D3D11_SB_OPCODE_IBFE),               1, 3, 0},
++   [D3D11_SB_OPCODE_BFI] =                {_(D3D11_SB_OPCODE_BFI),                1, 4, 0},
++   [D3D11_SB_OPCODE_BFREV] =              {_(D3D11_SB_OPCODE_BFREV),              1, 1, 0},
++   [D3D11_SB_OPCODE_DCL_STREAM] =         {_(D3D11_SB_OPCODE_DCL_STREAM),         0, 0, OP_DCL | OP_NO_OPERANDS},
++   [D3D11_SB_OPCODE_DCL_GS_INSTANCE_COUNT] = {_(D3D11_SB_OPCODE_DCL_GS_INSTANCE_COUNT), 0, 0, OP_DCL},
+ };
+ 
+ #undef _
+@@ -326,6 +355,16 @@ Shader_parse_opcode(struct Shader_parser *parser,
+    /* Lookup extra information based on opcode type. */
+    assert(opcode->type < D3D10_SB_NUM_OPCODES);
+    info = &opcode_info[opcode->type];
++   if (!info->name) {
++      /* A shader model 5 instruction this frontend does not carry out
++       * (compute, hull and domain shader ones, UAVs, doubles, ...). Its
++       * operands are not parsed; the instruction is skipped by its length,
++       * and ShaderTGSI.c emits nothing for it. */
++      static const struct dx10_opcode_info unknown = {D3D10_SB_OPCODE_NOP, "(shader model 5)",
++                                                       0, 0, OP_NOT_DONE};
++      DebugPrintf("shader: opcode %u not carried out, skipped\n", (unsigned)opcode->type);
++      info = &unknown;
++   }
+ 
+    /* Opcode specific. */
+    switch (opcode->type) {
+@@ -389,10 +428,17 @@ Shader_parse_opcode(struct Shader_parser *parser,
+ 
+    curr++;
+ 
+-   if (opcode_is_extended) {
+-      /* NOTE: DECODE_IS_D3D10_SB_OPCODE_DOUBLE_EXTENDED is broken.
+-       */
+-      assert(!((*curr & D3D10_SB_OPERAND_DOUBLE_EXTENDED_MASK) >> D3D10_SB_OPERAND_DOUBLE_EXTENDED_SHIFT));
++   /*
++    * Extended opcode tokens. Shader model 4 has at most one (the texel
++    * offsets). Shader model 5 chains them: FXC's sample_indexable, ld_
++    * indexable and resinfo_indexable carry the resource's dimension and
++    * return type in two more, each with bit 31 set when another follows.
++    * Those two repeat what the resource's declaration says and are not
++    * needed; every token of the chain is consumed, or its words would be
++    * read as operands.
++    */
++   while (opcode_is_extended) {
++      opcode_is_extended = DECODE_IS_D3D10_SB_OPCODE_EXTENDED(*curr);
+ 
+       switch (DECODE_D3D10_SB_EXTENDED_OPCODE_TYPE(*curr)) {
+       case D3D10_SB_EXTENDED_OPCODE_EMPTY:
+@@ -402,6 +448,9 @@ Shader_parse_opcode(struct Shader_parser *parser,
+          opcode->imm_texel_offset.v = DECODE_IMMEDIATE_D3D10_SB_ADDRESS_OFFSET(D3D10_SB_IMMEDIATE_ADDRESS_OFFSET_V, *curr);
+          opcode->imm_texel_offset.w = DECODE_IMMEDIATE_D3D10_SB_ADDRESS_OFFSET(D3D10_SB_IMMEDIATE_ADDRESS_OFFSET_W, *curr);
+          break;
++      case D3D11_SB_EXTENDED_OPCODE_RESOURCE_DIM:
++      case D3D11_SB_EXTENDED_OPCODE_RESOURCE_RETURN_TYPE:
++         break;
+       default:
+          assert(0);
+       }
+@@ -409,12 +458,12 @@ Shader_parse_opcode(struct Shader_parser *parser,
+       curr++;
+    }
+ 
+-   if (info->flags & OP_NOT_DONE) {
++   if (info->flags & (OP_NOT_DONE | OP_NO_OPERANDS)) {
+       /* XXX: Need to figure out the number of operands for this opcode.
+        *      Should be okay to continue execution -- we have enough info
+        *      to skip to the next instruction.
+        */
+-      LOG_UNSUPPORTED(true);
++      LOG_UNSUPPORTED(!(info->flags & OP_NO_OPERANDS));
+       opcode->num_dst = 0;
+       opcode->num_src = 0;
+       goto skip;
+diff --git a/src/gallium/frontends/d3d10umd/ShaderTGSI.c b/src/gallium/frontends/d3d10umd/ShaderTGSI.c
+index e9748ed..1dfe114 100644
+--- a/src/gallium/frontends/d3d10umd/ShaderTGSI.c
++++ b/src/gallium/frontends/d3d10umd/ShaderTGSI.c
+@@ -175,7 +175,30 @@ static struct dx10_opcode_xlate opcode_xlate[D3D10_SB_NUM_OPCODES] = {
+    {D3D10_1_SB_OPCODE_LOD,                            OF_FLOAT, TGSI_LOG_UNSUPPORTED},
+    {D3D10_1_SB_OPCODE_GATHER4,                        OF_FLOAT, TGSI_LOG_UNSUPPORTED},
+    {D3D10_1_SB_OPCODE_SAMPLE_POS,                     OF_FLOAT, TGSI_LOG_UNSUPPORTED},
+-   {D3D10_1_SB_OPCODE_SAMPLE_INFO,                    OF_FLOAT, TGSI_LOG_UNSUPPORTED}
++   {D3D10_1_SB_OPCODE_SAMPLE_INFO,                    OF_FLOAT, TGSI_LOG_UNSUPPORTED},
++
++   /* Shader model 5 (feature level 11_0 only, ShaderParse.c). An opcode
++    * without an entry here has type 0 and is skipped (below). */
++   [D3D11_SB_OPCODE_EMIT_STREAM] =        {D3D11_SB_OPCODE_EMIT_STREAM,        OF_FLOAT, TGSI_EXPAND},
++   [D3D11_SB_OPCODE_CUT_STREAM] =         {D3D11_SB_OPCODE_CUT_STREAM,         OF_FLOAT, TGSI_EXPAND},
++   [D3D11_SB_OPCODE_EMITTHENCUT_STREAM] = {D3D11_SB_OPCODE_EMITTHENCUT_STREAM, OF_FLOAT, TGSI_EXPAND},
++   [D3D11_SB_OPCODE_DERIV_RTX_COARSE] =   {D3D11_SB_OPCODE_DERIV_RTX_COARSE,   OF_FLOAT, TGSI_OPCODE_DDX},
++   [D3D11_SB_OPCODE_DERIV_RTX_FINE] =     {D3D11_SB_OPCODE_DERIV_RTX_FINE,     OF_FLOAT, TGSI_OPCODE_DDX_FINE},
++   [D3D11_SB_OPCODE_DERIV_RTY_COARSE] =   {D3D11_SB_OPCODE_DERIV_RTY_COARSE,   OF_FLOAT, TGSI_OPCODE_DDY},
++   [D3D11_SB_OPCODE_DERIV_RTY_FINE] =     {D3D11_SB_OPCODE_DERIV_RTY_FINE,     OF_FLOAT, TGSI_OPCODE_DDY_FINE},
++   [D3D11_SB_OPCODE_RCP] =                {D3D11_SB_OPCODE_RCP,                OF_FLOAT, TGSI_EXPAND},
++   [D3D11_SB_OPCODE_F32TOF16] =           {D3D11_SB_OPCODE_F32TOF16,           OF_FLOAT, TGSI_EXPAND},
++   [D3D11_SB_OPCODE_F16TOF32] =           {D3D11_SB_OPCODE_F16TOF32,           OF_UINT,  TGSI_EXPAND},
++   [D3D11_SB_OPCODE_COUNTBITS] =          {D3D11_SB_OPCODE_COUNTBITS,          OF_UINT,  TGSI_OPCODE_POPC},
++   [D3D11_SB_OPCODE_FIRSTBIT_HI] =        {D3D11_SB_OPCODE_FIRSTBIT_HI,        OF_UINT,  TGSI_EXPAND},
++   [D3D11_SB_OPCODE_FIRSTBIT_LO] =        {D3D11_SB_OPCODE_FIRSTBIT_LO,        OF_UINT,  TGSI_OPCODE_LSB},
++   [D3D11_SB_OPCODE_FIRSTBIT_SHI] =       {D3D11_SB_OPCODE_FIRSTBIT_SHI,       OF_INT,   TGSI_EXPAND},
++   [D3D11_SB_OPCODE_UBFE] =               {D3D11_SB_OPCODE_UBFE,               OF_UINT,  TGSI_EXPAND},
++   [D3D11_SB_OPCODE_IBFE] =               {D3D11_SB_OPCODE_IBFE,               OF_INT,   TGSI_EXPAND},
++   [D3D11_SB_OPCODE_BFI] =                {D3D11_SB_OPCODE_BFI,                OF_UINT,  TGSI_EXPAND},
++   [D3D11_SB_OPCODE_BFREV] =              {D3D11_SB_OPCODE_BFREV,              OF_UINT,  TGSI_OPCODE_BREV},
++   [D3D11_SB_OPCODE_DCL_STREAM] =         {D3D11_SB_OPCODE_DCL_STREAM,         OF_FLOAT, TGSI_EXPAND},
++   [D3D11_SB_OPCODE_DCL_GS_INSTANCE_COUNT] = {D3D11_SB_OPCODE_DCL_GS_INSTANCE_COUNT, OF_FLOAT, TGSI_EXPAND},
+ };
+ 
+ #define SHADER_MAX_TEMPS 4096
+@@ -1239,6 +1262,83 @@ expand_unary_to_scalarf(struct ureg_program *ureg, unary_ureg_func func,
+    ureg_release_temporary(ureg, tmp);
+ }
+ 
++/*
++ * Shader model 5's bit-field instructions take the field's width and
++ * offset in their low five bits (D3D11 functional spec, ubfe/ibfe/bfi);
++ * TGSI's (GLSL's) take them as they are.
++ */
++static struct ureg_src
++low5_bits(struct ureg_program *ureg, struct ureg_dst tmp, struct ureg_src src)
++{
++   ureg_AND(ureg, tmp, src, ureg_imm1u(ureg, 31));
++   return ureg_src(tmp);
++}
++
++/* ubfe/ibfe dst, width, offset, value */
++static void
++expand_bfe(struct ureg_program *ureg, struct Shader_xlate *sx,
++           struct Shader_opcode *opcode, bool is_signed)
++{
++   enum dx10_opcode_format f = is_signed ? OF_INT : OF_UINT;
++   struct ureg_dst w = ureg_DECL_temporary(ureg);
++   struct ureg_dst o = ureg_DECL_temporary(ureg);
++   struct ureg_src width = low5_bits(ureg, w, translate_src_operand(sx, &opcode->src[0], OF_UINT));
++   struct ureg_src offset = low5_bits(ureg, o, translate_src_operand(sx, &opcode->src[1], OF_UINT));
++   struct ureg_dst dst = translate_dst_operand(sx, &opcode->dst[0], opcode->saturate);
++   struct ureg_src value = translate_src_operand(sx, &opcode->src[2], f);
++
++   if (is_signed)
++      ureg_IBFE(ureg, dst, value, offset, width);
++   else
++      ureg_UBFE(ureg, dst, value, offset, width);
++   ureg_release_temporary(ureg, w);
++   ureg_release_temporary(ureg, o);
++}
++
++/* bfi dst, width, offset, insert, base */
++static void
++expand_bfi(struct ureg_program *ureg, struct Shader_xlate *sx, struct Shader_opcode *opcode)
++{
++   struct ureg_dst w = ureg_DECL_temporary(ureg);
++   struct ureg_dst o = ureg_DECL_temporary(ureg);
++   struct ureg_src width = low5_bits(ureg, w, translate_src_operand(sx, &opcode->src[0], OF_UINT));
++   struct ureg_src offset = low5_bits(ureg, o, translate_src_operand(sx, &opcode->src[1], OF_UINT));
++   struct ureg_dst dst = translate_dst_operand(sx, &opcode->dst[0], opcode->saturate);
++
++   ureg_BFI(ureg, dst, translate_src_operand(sx, &opcode->src[3], OF_UINT),
++            translate_src_operand(sx, &opcode->src[2], OF_UINT), offset, width);
++   ureg_release_temporary(ureg, w);
++   ureg_release_temporary(ureg, o);
++}
++
++/*
++ * firstbit_hi / firstbit_shi: the first set (for shi: differing from the
++ * sign) bit counted from the most significant end, ~0 when there is none.
++ * TGSI's UMSB and IMSB count from the least significant end, also ~0 when
++ * there is none: 31 - n, which for 0 <= n <= 31 is n ^ 31.
++ */
++static void
++expand_firstbit_hi(struct ureg_program *ureg, struct Shader_xlate *sx,
++                   struct Shader_opcode *opcode, bool is_signed)
++{
++   struct ureg_dst n = ureg_DECL_temporary(ureg);
++   struct ureg_dst none = ureg_DECL_temporary(ureg);
++   struct ureg_dst flip = ureg_DECL_temporary(ureg);
++   struct ureg_dst dst;
++
++   if (is_signed)
++      ureg_IMSB(ureg, n, translate_src_operand(sx, &opcode->src[0], OF_INT));
++   else
++      ureg_UMSB(ureg, n, translate_src_operand(sx, &opcode->src[0], OF_UINT));
++   ureg_USEQ(ureg, none, ureg_src(n), ureg_imm1u(ureg, 0xffffffff));
++   ureg_XOR(ureg, flip, ureg_src(n), ureg_imm1u(ureg, 31));
++   dst = translate_dst_operand(sx, &opcode->dst[0], opcode->saturate);
++   ureg_UCMP(ureg, dst, ureg_src(none), ureg_src(n), ureg_src(flip));
++   ureg_release_temporary(ureg, n);
++   ureg_release_temporary(ureg, none);
++   ureg_release_temporary(ureg, flip);
++}
++
+ const struct tgsi_token *
+ Shader_tgsi_translate(const unsigned *code,
+                       unsigned *output_mapping)
+@@ -2226,7 +2326,55 @@ Shader_tgsi_translate(const unsigned *code,
+       case D3D10_SB_OPCODE_DCL_GLOBAL_FLAGS:
+          /* Ignore */
+          break;
++
++      /* Shader model 5 (ShaderParse.c): stream 0 is the only stream a
++       * D3D10-level geometry shader has; the stream operand is not read. */
++      case D3D11_SB_OPCODE_EMIT_STREAM:
++         ureg_EMIT(ureg, ureg_imm1u(ureg, 0));
++         break;
++      case D3D11_SB_OPCODE_CUT_STREAM:
++         ureg_ENDPRIM(ureg, ureg_imm1u(ureg, 0));
++         break;
++      case D3D11_SB_OPCODE_EMITTHENCUT_STREAM:
++         ureg_EMIT(ureg, ureg_imm1u(ureg, 0));
++         ureg_ENDPRIM(ureg, ureg_imm1u(ureg, 0));
++         break;
++      case D3D11_SB_OPCODE_DCL_STREAM:
++      case D3D11_SB_OPCODE_DCL_GS_INSTANCE_COUNT:
++         /* One stream, one instance. */
++         break;
++      case D3D11_SB_OPCODE_RCP:
++         /* Per component; TGSI's RCP reads one. */
++         expand_unary_to_scalarf(ureg, ureg_RCP, &sx, &opcode);
++         break;
++      case D3D11_SB_OPCODE_UBFE:
++         expand_bfe(ureg, &sx, &opcode, false);
++         break;
++      case D3D11_SB_OPCODE_IBFE:
++         expand_bfe(ureg, &sx, &opcode, true);
++         break;
++      case D3D11_SB_OPCODE_BFI:
++         expand_bfi(ureg, &sx, &opcode);
++         break;
++      case D3D11_SB_OPCODE_FIRSTBIT_HI:
++         expand_firstbit_hi(ureg, &sx, &opcode, false);
++         break;
++      case D3D11_SB_OPCODE_FIRSTBIT_SHI:
++         expand_firstbit_hi(ureg, &sx, &opcode, true);
++         break;
++      case D3D11_SB_OPCODE_F32TOF16:
++      case D3D11_SB_OPCODE_F16TOF32:
++         /* GLSL ES 3.0's packHalf2x16 and unpackHalf2x16. Not carried out:
++          * logged, and the destination is left as it was. */
++         DebugPrintf("shader: %s not carried out\n",
++                     opcode.type == D3D11_SB_OPCODE_F32TOF16 ? "f32tof16" : "f16tof32");
++         break;
+       default:
++         if (opcode.type != D3D10_SB_OPCODE_ADD && ox->type == D3D10_SB_OPCODE_ADD) {
++            /* No entry: a shader model 5 instruction this frontend does not
++             * have (ShaderParse.c logged it and parsed no operands). */
++            break;
++         }
+          {
+             uint i;
+             struct ureg_dst dst[SHADER_MAX_DST_OPERANDS];
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index bd0570d..b290426 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -68,6 +68,12 @@ struct Adapter
+     * DDI with no decoder profiles; 2 with the VDPU383's profiles. Nonzero
+     * makes this adapter offer the D3D11.1 interface (Adapter.cpp). */
+    unsigned video;
++   /* maliwddm's UmdReportFL11 as it applies to this process (Adapter.cpp,
++    * EffectiveFl11): Chromium's GPU process gets the D3D11.1 interface at
++    * feature level 11_0. */
++   bool fl11;
++   /* maliwddm answered the adapter query (false: the software driver path). */
++   bool kmd;
+ };
+ 
+ 
+@@ -96,6 +102,7 @@ struct Device
+    unsigned msaa;               /* the adapter's (Adapter::msaa) */
+    unsigned video;              /* the adapter's (Adapter::video) */
+    bool ddi11_1;                /* created on the D3D11.1 interface */
++   bool fl11;                   /* the adapter's (Adapter::fl11) */
+    unsigned caps_logged;        /* format answers logged so far (Device.cpp, LogCaps) */
+    unsigned errors_logged;      /* errors reported to the runtime so far (SetError) */
+    unsigned stilldrawing_logged; /* of them DXGI_DDI_ERR_WASSTILLDRAWING, an answer */

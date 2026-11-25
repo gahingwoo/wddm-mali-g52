@@ -75,7 +75,7 @@ chrome_probe(ID3D11Device *dev, ID3D11DeviceContext *ctx)
 
    g_blocked = NULL;
    printf("chromium probe:\n");
-   printf("  feature level %x_%x (D3D11VideoDecoder needs 11_0)\n", ((unsigned)fl >> 12) & 0xF,
+   printf("  feature level %u_%u (D3D11VideoDecoder needs 11_0)\n", ((unsigned)fl >> 12) & 0xF,
           ((unsigned)fl >> 8) & 0xF);
    need(fl >= D3D_FEATURE_LEVEL_11_0, "feature level below 11_0");
 
