@@ -1014,3 +1014,119 @@ further was added.
    at 2.0.
 2. Step 3 above (UmdRedirect 2, prepared for the hang), with the UMD log
    on and `Tdr*` / `T_PreemptCalls` read afterwards.
+
+## DirectComposition off without a flag (2026-11-25, branch `edge-dcomp-off`)
+
+Board, 2026-11-25 night (maliwddm 5.17.13.886 = main 80bafae, WDDM 2.0,
+UmdRedirect 1): Edge 158 started with `--disable-direct-composition` is
+fully GPU accelerated on the Mali (ANGLE D3D11, FL 10_1, crash count 0,
+dwm unaffected; `session-2026-11-25-night/results-tspi/edgegpu-nodcomp.txt`).
+Without the flag the composition swap chain's Present1 fails as above
+(`edgegpu-3.58.txt`). The goal was the flag's effect without the flag.
+Nothing in the driver was changed for it, for the reason below.
+
+### What the flag does: two processes, not one
+
+`--disable-direct-composition` is read in two places:
+
+1. **The GPU process**, `ui/gl/direct_composition_support.cc`,
+   `InitializeDirectComposition`: with the switch no DComp device is made,
+   `DirectCompositionSupported()` is false, and viz presents through
+   `NativeViewGLSurfaceEGL` on the browser's window
+   (`ui/gl/init/gl_factory_win.cc`), which is ANGLE's window swap chain:
+   `CreateSwapChainForHwnd` with `DXGI_SWAP_EFFECT_SEQUENTIAL`, the blt
+   model (ANGLE `NativeWindow11Win32::createSwapChain`). That path works at
+   2.0 with NO_REDIRECTION.
+2. **The browser process**, `components/viz/common/features.cc`,
+   `ShouldRemoveRedirectionBitmap`: on Windows 11 22H2 and later (the board
+   is 22631) every browser window is created with
+   `WS_EX_NOREDIRECTIONBITMAP` (`ui/views/widget/widget_hwnd_utils.cc`,
+   feature `RemoveRedirectionBitmap`, enabled by default) unless the
+   switch is there. Chromium's comment: "If direct composition is disabled
+   say for testing, we will use an ANGLE EGLSurface which uses a BitBlt
+   swap chain that needs a redirection surface." Microsoft's
+   DXGI_SWAP_EFFECT documentation says the same of the blt model: each
+   present copies the back buffer into the window's redirection surface.
+
+The switch reaches the GPU process by the browser copying it, so with the
+flag both agree. Nothing the UMD does can reach the second place: the
+browser process decides the window style from its own command line and
+feature list, before any GPU process reports anything, and the GPU
+process's report (`overlay_info.direct_composition`) is read back only
+for frame sink teardown (`viz_process_transport_factory.cc`) and the CDM
+registry.
+
+### a) Make the GPU process decide DirectComposition is unsupported
+
+The conditions in `InitializeDirectComposition` that a driver can make
+true: `MCTU.dll` or `MCTUX.dll` loaded in the process (a third party
+module block; `GetModuleHandle`, so any module of that name: the UMD
+could load a stub of that name into Chromium GPU processes), or
+`DCompositionCreateDevice3` failing on our device (not under our control:
+it succeeded in every d3dprobe token and in Edge since 11-25). The other
+exits are the switch, a null device, or a `CHECK` on `IDXGIDevice`. Feature
+level, video device and overlay caps are no longer conditions (the
+"Failed to retrieve video device" lines in `edgegpu-3.58.txt` come from the
+overlay probes, after DComp was already up).
+
+Either would turn DComp off in the GPU process only. The browser's windows
+would still have no redirection bitmap, so ANGLE's blt presents would have
+nowhere to go: the expected result is an Edge window with nothing in it,
+where today it falls back to software and is usable. That is the case
+this document refused before ("would only turn a clean software fallback
+into a blank Edge window"), so the stub was not built.
+
+The one assumption that could be wrong: that Edge (not Chromium) keeps
+`RemoveRedirectionBitmap` on. `tools/windows/browser-exstyle.ps1` reads
+the extended style of Edge's windows. If Edge's windows keep their
+redirection bitmap (exit 0), option a works and is about a day: a
+stub `MCTU.dll` (ARM64 and x64, signed in the package job, copied to a
+`System32` subdirectory by the INF), loaded by full path from the UMD's
+CreateDevice in a process with `--type=gpu-process` that gets
+NO_REDIRECTION, behind a Device Parameter `UmdDComp` passed in
+`MW_UMD_ADAPTER_INFO` like `UmdRedirect`. The GPU process could even check
+the bit itself before blocking (reading another process's window style
+is allowed; its windows may not exist yet at GPU start).
+
+### b) Composition swap chains without redirection
+
+Not possible as such: a composition swap chain's buffers exist to be
+opened by DWM, and NO_REDIRECTION tells DXGI there is no such path, so
+`pfnPresentCb` refuses the buffer (D3DDDIERR_INVALIDHANDLE) and the device
+is removed. The real fix is redirection for the browsers at 2.0
+(`UmdRedirect 2`) without the session hang of 2026-11-25. Its cause is not
+known: DWM's device was removed right after it opened a browser buffer
+(rounds 4 and 5 at 1.3, and, by inference, the 2.0 hang), and the 2.0 hang
+then held a win32k lock with the driver idle. That needs board runs with
+the caller recorder of `edge-wddm2-hang` (who opened what, then
+`removed:`/`recent:` in dwm.exe's UMD log), not a desk change: large and
+of unknown size. One cheap thing first: the 2.0 hang was before the
+forced preemption fix (80bafae), so `UmdRedirect 2` is worth one more run
+on the current package (step 3 of "Board test (one variable at a time)").
+
+### c) A setting for the browsers
+
+No Edge or Chrome policy turns DirectComposition off, and neither offers
+a policy for extra command-line switches; chrome://flags has no entry for
+`disable-direct-composition` or `RemoveRedirectionBitmap`. What exists:
+
+- WebView2: the environment variable `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`
+  (machine-wide, read by the WebView2 loader for every app) set to
+  `--disable-direct-composition`.
+- Edge and Chrome: the switch in the Start menu and taskbar shortcuts and
+  in the `MSEdgeHTM`/`ChromeHTML` open commands. Browser updates rewrite
+  these, and a browser started some other way does not get it.
+
+A Maskrom Studio or RK3576 tools option could set these, as a stopgap
+until b.
+
+### Board test for this
+
+1. Edge started normally (no flags), in the user's session:
+   `powershell -ExecutionPolicy Bypass -File C:\mali\browser-exstyle.ps1 > C:\mali\exstyle.txt`.
+   Exit 2 (`NOREDIRECTIONBITMAP yes`): option a cannot work, as expected
+   above. Exit 0: it can, and the stub is worth building.
+2. The same with `--disable-direct-composition`: expect `no` on every
+   window (the flag's second effect, for comparison).
+3. `UmdRedirect 2` at 2.0 on the current package, prepared for the hang
+   as in "Board test (one variable at a time)", step 3.
