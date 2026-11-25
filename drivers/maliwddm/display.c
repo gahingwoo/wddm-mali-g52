@@ -781,6 +781,10 @@ NTSTATUS APIENTRY MwSetVidPnSourceVisibility(IN_CONST_HANDLE hAdapter,
                                              const DXGKARG_SETVIDPNSOURCEVISIBILITY *Arg)
 {
     MW_ADAPTER *dev = (MW_ADAPTER *)hAdapter;
+    /* HdmiExtend's second source has its own (hpd.c). Without it the
+     * source is always 0. */
+    if (Arg->VidPnSourceId == 1 && MwDualOn(dev))
+        return MwDualVisibility(dev, Arg->Visible);
     dev->SourceVisible = Arg->Visible;
     if (Arg->Visible) dev->VisibleOn++; else dev->VisibleOff++;
     if (dev->Hdmi.Switch) {
@@ -1032,8 +1036,11 @@ NTSTATUS APIENTRY MwSetVidPnSourceAddress(IN_CONST_HANDLE hAdapter, const DXGKAR
     MW_ALLOCATION *p = (MW_ALLOCATION *)Arg->hAllocation;
     ULONG64 t0 = MwTick();
 
-    if (Arg->VidPnSourceId != 0)
+    if (Arg->VidPnSourceId != 0) {
+        if (Arg->VidPnSourceId == 1 && MwDualOn(dev))
+            return MwDualSetAddress(dev, Arg);
         return STATUS_INVALID_PARAMETER;
+    }
     /* The gap since the previous flip: with FlipIntervals, the flip rate. */
     if (dev->FlipTick != 0) {
         ULONG64 gap = t0 - dev->FlipTick;

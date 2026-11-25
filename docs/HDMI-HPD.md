@@ -28,6 +28,7 @@ Other DWORDs, all optional:
 | `HdmiHpdSource` | 0 | Which bit is HPD: 0 `IOC_HDMI_HPD_STATUS` bit 3 (LEVEL_INT, what mainline and the firmware's HPD wait read), 1 bit 6 (vendor's HPD_PORT_LEVEL), 2 the GPIO4_PC1 pad. |
 | `HdmiHpdPollMs` | 200 | Poll period, 50 to 2000. |
 | `HdmiExclusive` | 1 | Level 3, DSI boot: the panel is reported gone while a monitor is on HDMI (one display at a time). 0: both reported. |
+| `HdmiExtend` | 0 | Level 3, DSI boot: 1 reports two VidPN sources, the panel and HDMI as an extended desktop, and `HdmiExclusive` is ignored. See [DUAL-DISPLAY.md](DUAL-DISPLAY.md). |
 | `HdmiHpdDebounceMs` | 1000 | A level counts only after it has held this long with no edge, 300 to 10000. |
 | `HdmiAudio` | 1 | 0: no audio setup after a mode set. |
 | `HdmiDefault60` | 1 | Level 3, HDMI: the mode marked preferred (what Windows takes for a monitor it has no saved arrangement for) is the largest size at the rate closest to 60 Hz; every other mode is still offered. 0: the monitor's (or the firmware's) preferred timing, as before. docs/DISPLAY-MODES.md, "Default: the largest size at 60 Hz". |
@@ -487,6 +488,10 @@ Since then:
   boot. It stays the default until the extended desktop below exists.
 
 ## Plan: extend and duplicate, panel on VP2 and HDMI on VP0
+
+Written on branch `dual-display` as `HdmiExtend` (extend; duplicate is
+refused): [DUAL-DISPLAY.md](DUAL-DISPLAY.md). What follows is the plan
+as it was before that.
 
 What Linux does on this board (Armbian 7.3.5, drm.debug): HDMI on VP0
 (Cluster0 window), the panel on VP2 (Esmart0), both running at once. The

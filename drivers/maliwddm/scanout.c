@@ -165,6 +165,11 @@ void MwScanStart(MW_ADAPTER *A)
     SIZE_T n;
 
     A->ScanReady = FALSE;
+    A->Win0Mst = VOP_ESMART0_YRGB_MST;
+    A->Win0Cfg = 0x00018001;
+    /* HdmiExtend: room for both sources' primaries (DWM keeps three or so
+     * per source). Without it the six there always were. */
+    A->ScanSlotCount = A->Hdmi.ExtendSetting && A->Hdmi.Level >= 3 ? MW_SCAN_SLOTS_MAX : MW_SCAN_SLOTS;
     if (A->FbVa == NULL || A->FbSize == 0 || fb < 0x40000000ull || fb + A->FbSize > 0x100000000ull)
         return;
     if (res != 0 && (res < 0x40000000ull || res + A->Hdmi.ResBytes > 0x100000000ull))
@@ -181,7 +186,7 @@ void MwScanStart(MW_ADAPTER *A)
     if (A->ScanSlotBytes > SCAN_SLOT_MAX)
         return;
     A->ScanTablesTotal = 1 + (ULONG)(((fb + A->FbSize - 1) >> 22) - (fb >> 22) + 1) +
-                         MW_SCAN_SLOTS * (A->ScanSlotBytes / SCAN_PT_SPAN);
+                         A->ScanSlotCount * (A->ScanSlotBytes / SCAN_PT_SPAN);
     if (res != 0)
         A->ScanTablesTotal += (ULONG)(((res + A->Hdmi.ResBytes - 1) >> 22) - (res >> 22) + 1);
     hi.QuadPart = 0xFFFFFFFFll;
@@ -202,7 +207,7 @@ void MwScanStart(MW_ADAPTER *A)
     A->VopVa = (PUCHAR)MmMapIoSpaceEx(vop, VOP_SIZE, PAGE_READWRITE | PAGE_NOCACHE);
     if (A->VopVa == NULL)
         goto fail;
-    for (int i = 0; i < MW_SCAN_SLOTS; i++)
+    for (int i = 0; i < MW_SCAN_SLOTS_MAX; i++)
         A->ScanSlot[i] = NULL;
     A->ScanReady = TRUE;
     A->Scaled = FALSE;
@@ -233,8 +238,10 @@ void MwScanToFb(MW_ADAPTER *A)
         A->WinVir = A->Fb.Pitch / 4;
         W(A, MW_ESMART0_VIR, A->WinVir);
     }
-    W(A, VOP_ESMART0_YRGB_MST, A->Fb.PhysicAddress.LowPart);
-    W(A, VOP_CFG_DONE, 0x00018001);
+    /* Source 0's window: Esmart0 on VP0 unless HdmiExtend has the panel,
+     * source 0's, on VP2. */
+    W(A, A->Win0Mst, A->Fb.PhysicAddress.LowPart);
+    W(A, VOP_CFG_DONE, A->Win0Cfg);
     A->ScanShowing = FALSE;
     A->ScanToFbs++;
     if (A->Hdmi.Switch)
@@ -289,6 +296,7 @@ void MwScanCheck(MW_ADAPTER *A)
     InterlockedExchange(&A->ScanOn, 0);
     A->Hdmi.ToFbFrom = 5;
     MwScanToFb(A);
+    MwScan2ToFb(A);
     /* The rest of the frame being read can fault again before the window
      * moves: acknowledge for a little while, about a millisecond. */
     for (int i = 0; i < 64; i++) {
@@ -368,11 +376,67 @@ BOOLEAN MwScanFlip(MW_ADAPTER *A, MW_ALLOCATION *P)
         if (A->Scaled)
             A->SclFlips++;
     }
-    W(A, VOP_ESMART0_YRGB_MST, P->ScanIova);
-    W(A, VOP_CFG_DONE, 0x00018001);
+    W(A, A->Win0Mst, P->ScanIova);
+    W(A, VOP_CFG_DONE, A->Win0Cfg);
     A->ScanShowing = TRUE;
     A->ScanFlips++;
     return TRUE;
+}
+
+/* ---- HdmiExtend: source 1 (hpd.c has its state, dual_calc.h the windows) ----
+ *
+ * The same two writes as a flip of source 0, to the window source 1 is
+ * shown through: Esmart0 on VP0 when it is HDMI's, Esmart1 on VP2 when it
+ * is the panel's. A primary is scanned out only at the size and stride of
+ * source 1's framebuffer, which is its committed mode. */
+ULONG MwScan2Why(MW_ADAPTER *A, MW_ALLOCATION *P)
+{
+    const MW_SRC2 *s = &A->Hdmi.S2;
+
+    if (!A->ScanOn || !A->ScanPaging || s->WinMst == 0)
+        return MW_SCAN_WHY_OFF;
+    if (P == NULL || P->ScanIova == 0 || !P->Mapped)
+        return MW_SCAN_WHY_NOT_MAPPED;
+    if (P->Width != s->FbW || P->Height != s->FbH || P->Pitch != s->FbPitch)
+        return MW_SCAN_WHY_SIZE;
+    return 0;
+}
+
+/* At the level SetVidPnSourceAddress is. */
+BOOLEAN MwScan2Flip(MW_ADAPTER *A, MW_ALLOCATION *P)
+{
+    MW_SRC2 *s = &A->Hdmi.S2;
+
+    if (MwScan2Why(A, P) != 0 || A->Hdmi.Busy || A->Hdmi.Hold)
+        return FALSE;
+    W(A, s->WinMst, P->ScanIova);
+    W(A, VOP_CFG_DONE, s->WinCfg);
+    s->Showing = TRUE;
+    s->ScanFlips++;
+    return TRUE;
+}
+
+/* Source 1's window back on its framebuffer. Any IRQL. */
+void MwScan2ToFb(MW_ADAPTER *A)
+{
+    MW_SRC2 *s = &A->Hdmi.S2;
+
+    if (!A->Hdmi.Extend || !A->ScanReady || !s->Showing || s->WinMst == 0 || A->Hdmi.Busy || A->Hdmi.Hold)
+        return;
+    W(A, s->WinMst, s->FbPa.LowPart);
+    W(A, VOP_CFG_DONE, s->WinCfg);
+    s->Showing = FALSE;
+    s->ToFbs++;
+}
+
+/* A window onto a framebuffer whatever it showed, for a commit that has
+ * just given a source its target (hpd.c). PASSIVE_LEVEL, flips held off. */
+void MwScanWinToFb(MW_ADAPTER *A, ULONG Mst, ULONG Cfg, ULONG Pa)
+{
+    if (A->VopVa == NULL || Mst == 0)
+        return;
+    W(A, Mst, Pa);
+    W(A, VOP_CFG_DONE, Cfg);
 }
 
 /* A primary of one of the smaller source modes, with a stride Esmart0 can
@@ -493,10 +557,10 @@ void MwScanMap(MW_ADAPTER *A, MW_ALLOCATION *P, PPFN_NUMBER Pfn, ULONG Pages)
         A->ScanLastPitch = P->Pitch;
         return;
     }
-    for (s = 0; s < MW_SCAN_SLOTS; s++)
+    for (s = 0; s < (int)A->ScanSlotCount; s++)
         if (A->ScanSlot[s] == P || A->ScanSlot[s] == NULL)
             break;
-    if (s == MW_SCAN_SLOTS) {
+    if (s == (int)A->ScanSlotCount) {
         A->ScanNoSlot++;
         return;
     }
@@ -523,13 +587,14 @@ void MwScanUnmap(MW_ADAPTER *A, MW_ALLOCATION *P)
     if (A->ScanShowing)
         A->Hdmi.ToFbFrom = 4;
         MwScanToFb(A);          /* whichever primary it was: be safe */
+    MwScan2ToFb(A);             /* HdmiExtend's source 1 likewise; nothing without it */
     /* The entries stay. The window moves at the next frame start, and
      * until then the VOP2 is still reading this primary: with the entries
      * cleared it faulted (IOMMU status 0x40b, seen when dwm.exe was ended
      * a dozen times in a row). It reads at most one frame from pages that
      * are no longer ours, and the next primary in the slot overwrites the
      * entries. */
-    for (int s = 0; s < MW_SCAN_SLOTS; s++)
+    for (int s = 0; s < (int)A->ScanSlotCount; s++)
         if (A->ScanSlot[s] == P)
             A->ScanSlot[s] = NULL;
 }
@@ -571,6 +636,7 @@ NTSTATUS MwScanSet(MW_ADAPTER *A, MW_ESCAPE_SCANOUT_DATA *D)
         InterlockedExchange(&A->ScanOn, 0);
         A->Hdmi.ToFbFrom = 6;
         MwScanToFb(A);
+        MwScan2ToFb(A);
         if (D->Mode == 2 && A->ScanPaging) {
             LARGE_INTEGER frames;
             frames.QuadPart = -500000;          /* 50 ms: the window has moved */

@@ -858,7 +858,8 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
 
     /* Render-only: no sources and no children, and the firmware framebuffer
      * stays with Basic Display, which keeps the desktop up. */
-    *Sources = MW_RENDER_ONLY ? 0 : 1;
+    /* Two with HdmiExtend on a DSI boot (hpd.c MwHpdStart decides). */
+    *Sources = MW_RENDER_ONLY ? 0 : (a->Hdmi.Extend ? 2 : 1);
     *Children = MW_RENDER_ONLY ? 0 : a->Hdmi.Children;
     MwPcwAttach(a);
     MwLog(a, L"Started", 1);

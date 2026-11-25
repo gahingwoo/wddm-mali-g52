@@ -336,7 +336,24 @@ static void DoPresent(MW_ADAPTER *A, const MW_PRESENT_OP *Op)
      * source mode's that the window scales (MwScrW, scanout.c). */
     UINT sw = MwScrW(A), sh = MwScrH(A);
 
-    if (Op->Dst != NULL && (Op->Dst->Flags & MW_ALLOC_PRIMARY) && A->FbVa != NULL) {
+    if (MwDualOn(A) && Op->Dst != NULL && (Op->Dst->Flags & MW_ALLOC_PRIMARY) &&
+        MwDualSourceOfAlloc(A, Op->Dst) == 1) {
+        /* HdmiExtend: a primary of source 1's goes to source 1's
+         * framebuffer, unrotated (rotation is source 0's). */
+        MW_SRC2 *s2 = &A->Hdmi.S2;
+        if (s2->FbVa == NULL) {
+            A->PresentSkips++;
+            return;
+        }
+        MwScan2ToFb(A);
+        dst = s2->FbVa;
+        dstW = (LONG)s2->FbW;
+        dstH = (LONG)s2->FbH;
+        dstPitch = (LONG)s2->FbPitch;
+        sw = s2->FbW;
+        sh = s2->FbH;
+        s2->Blts++;
+    } else if (Op->Dst != NULL && (Op->Dst->Flags & MW_ALLOC_PRIMARY) && A->FbVa != NULL) {
         UINT lw, lh;
         A->Hdmi.ToFbFrom = 2;
         MwScanToFb(A);          /* a blt goes to the framebuffer: show it */
@@ -801,12 +818,24 @@ static BOOLEAN SyncVsync(PVOID Context)
     MW_ADAPTER *a = (MW_ADAPTER *)Context;
     DXGKARGCB_NOTIFY_INTERRUPT_DATA n = {0};
 
-    n.InterruptType = DXGK_INTERRUPT_CRTC_VSYNC;
-    n.CrtcVsync.VidPnTargetId = a->Hdmi.ActiveTarget;     /* 0 unless HdmiHpd moved VP0 to HDMI */
-    /* The flip this vsync completes: the one whose pixels are shown. */
-    n.CrtcVsync.PhysicalAddress = a->CopyThread != NULL ? a->ShownAddr : a->ScanAddr;
-    MwRing(MW_RING_VSYNC, n.CrtcVsync.VidPnTargetId, (ULONG64)n.CrtcVsync.PhysicalAddress.QuadPart);
-    a->Dxgk.DxgkCbNotifyInterrupt(a->Dxgk.DeviceHandle, &n);
+    /* HdmiExtend: source 0's target only while source 0 has a path. */
+    if (!MwDualOn(a) || a->PathActive) {
+        n.InterruptType = DXGK_INTERRUPT_CRTC_VSYNC;
+        n.CrtcVsync.VidPnTargetId = a->Hdmi.ActiveTarget;     /* 0 unless HdmiHpd moved VP0 to HDMI */
+        /* The flip this vsync completes: the one whose pixels are shown. */
+        n.CrtcVsync.PhysicalAddress = a->CopyThread != NULL ? a->ShownAddr : a->ScanAddr;
+        MwRing(MW_RING_VSYNC, n.CrtcVsync.VidPnTargetId, (ULONG64)n.CrtcVsync.PhysicalAddress.QuadPart);
+        a->Dxgk.DxgkCbNotifyInterrupt(a->Dxgk.DeviceHandle, &n);
+    }
+    /* And source 1's target, from the same emulated tick (hpd.c). */
+    if (MwDualOn(a) && a->Hdmi.S2.Active) {
+        DXGKARGCB_NOTIFY_INTERRUPT_DATA n2 = {0};
+        n2.InterruptType = DXGK_INTERRUPT_CRTC_VSYNC;
+        n2.CrtcVsync.VidPnTargetId = a->Hdmi.S2.Target;
+        n2.CrtcVsync.PhysicalAddress = a->Hdmi.S2.ShownAddr;
+        MwRing(MW_RING_VSYNC, n2.CrtcVsync.VidPnTargetId, (ULONG64)n2.CrtcVsync.PhysicalAddress.QuadPart);
+        a->Dxgk.DxgkCbNotifyInterrupt(a->Dxgk.DeviceHandle, &n2);
+    }
     return TRUE;
 }
 
@@ -947,6 +976,24 @@ static VOID VsyncDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
             }
         }
     }
+    /* HdmiExtend: source 1's flip, if it was not scanned out at once, to
+     * the copy thread; without a primary, or invisible, it is done as it is.
+     * Without the copy thread it is shown as it stands (a copy takes
+     * CopyLock, which a DPC cannot). */
+    if (MwDualOn(a) && a->Hdmi.S2.Active) {
+        MW_SRC2 *s2 = &a->Hdmi.S2;
+        LONG seq = s2->FlipSeq;
+        if (seq != s2->ShownSeq) {
+            if (s2->ScanAlloc != NULL && s2->Visible && a->CopyThread != NULL) {
+                if (InterlockedCompareExchange(&s2->CopyBusy, 1, 0) == 0)
+                    KeSetEvent(&a->CopyEvent, IO_NO_INCREMENT, FALSE);
+            } else {
+                s2->ShownAddr = s2->ScanAddr;
+                InterlockedExchange(&s2->ShownSeq, seq);
+            }
+        }
+        s2->Vsyncs++;
+    }
     /* An IOMMU fault turns scan-out off (scanout.c); look every 8th tick. */
     if ((a->Vsyncs & 7) == 0)
         MwScanCheck(a);
@@ -972,7 +1019,10 @@ static VOID CopyThread(PVOID Context)
         if (a->CopyStop)
             break;
         ExAcquireFastMutex(&a->CopyLock);
-        {
+        /* HdmiExtend wakes this thread for source 1 too: source 0's copy only
+         * when the vsync DPC asked for it (CopyBusy). Without HdmiExtend
+         * every wake is source 0's, as it always was. */
+        if (!MwDualOn(a) || a->CopyBusy) {
             LONG seq = a->FlipSeq;
             MW_ALLOCATION *p = a->ScanAlloc;
             PHYSICAL_ADDRESS addr = a->ScanAddr;
@@ -996,8 +1046,12 @@ static VOID CopyThread(PVOID Context)
             if (flipped != 0)
                 MwTickAdd(&a->FlipWaitTicks, &a->FlipWaitMaxTicks, flipped);
         }
+        if (MwDualOn(a) && a->Hdmi.S2.CopyBusy)
+            MwDualCopy(a);
         ExReleaseFastMutex(&a->CopyLock);
         InterlockedExchange(&a->CopyBusy, 0);
+        if (MwDualOn(a))
+            InterlockedExchange(&a->Hdmi.S2.CopyBusy, 0);
     }
     PsTerminateSystemThread(STATUS_SUCCESS);
 }
@@ -1011,6 +1065,8 @@ void MwCopyForget(MW_ADAPTER *A, MW_ALLOCATION *Alloc, BOOLEAN Freed)
         InterlockedCompareExchangePointer((PVOID volatile *)&A->ScanAlloc, NULL, Alloc);
         if (A->ShownAlloc == Alloc)
             A->ShownAlloc = NULL;
+        /* HdmiExtend's source 1; NULL without it. */
+        InterlockedCompareExchangePointer((PVOID volatile *)&A->Hdmi.S2.ScanAlloc, NULL, Alloc);
     } else {
         Alloc->Mdl = NULL;
     }
