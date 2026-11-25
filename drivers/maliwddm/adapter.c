@@ -1188,7 +1188,13 @@ static NTSTATUS UmdAdapterInfo(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *In
     u.Ddi = MwSetting(A, L"UmdDdi", MW_UMD_DDI_D3D10_1);   /* 10_1 by default since 2026-11-25 */
     u.FeatureLevel = MwSetting(A, L"UmdFeatureLevel", 0xa000);
     u.Dxgi12 = MwSetting(A, L"UmdDxgi12", 0);
-    u.Video = MwSetting(A, L"UmdVideo", 0);
+    u.Video = MwSetting(A, L"UmdVideo", 0) & 0xFF;
+    /* The decoder's own switches ride above UmdVideo (MW_UMD_VIDEO_*),
+     * only when it is on: with UmdVideo 0 the UMD gets 0, as before. */
+    if (u.Video)
+        u.Video |= (MwSetting(A, L"UmdVideoCodecs", 0) & 0xFF) << 8 |
+                   (MwSetting(A, L"UmdAv1Synth", 0) & 1) << 16 |
+                   (MwSetting(A, L"UmdVp9Mpp", 0) & 3) << 18;
     u.DecodeNode = MW_UMD_NO_NODE;      /* no decode engine yet (U5) */
     u.VirtualMode = 0;                  /* WDDM 1.3, physical (WDDM2.md P2 sets it) */
     u.KmdBuild = MW_BUILD;

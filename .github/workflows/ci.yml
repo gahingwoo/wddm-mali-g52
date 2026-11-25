@@ -174,7 +174,7 @@ jobs:
         run: make -C tests/modes-host run
       - name: maliwddm's two displays at once, HdmiExtend (dual_calc.h)
         run: make -C tests/dual-host run
-      - name: the UMD's video backend and the VDPU383 register builder, fake decoder (video/vdec.c)
+      - name: the UMD's video backend and the VDPU383 register builders, fake decoder, against vdpu383test's registers (video/vdec.c)
         run: make -C tests/vdec-host run
 
   umd:

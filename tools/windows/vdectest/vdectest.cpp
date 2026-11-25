@@ -1,9 +1,9 @@
 /*
- * vdectest - H.264 through ID3D11VideoDevice, the way a player does it,
- * checked frame by frame.
+ * vdectest - H.264, HEVC, VP9 and AV1 through ID3D11VideoDevice, the way a
+ * player does it, checked frame by frame.
  *
- *   vdectest <umd.dll> <stream.264> [options]   the D3D10UMD software driver (CI)
- *   vdectest hw <stream.264> [options]          the Mali adapter (the board)
+ *   vdectest <umd.dll> <stream> [options]       the D3D10UMD software driver (CI)
+ *   vdectest hw <stream> [options]              the Mali adapter (the board)
  *   vdectest hw --probe                         what the adapter offers, no decode
  *
  * Options:
@@ -31,6 +31,12 @@
  * DecoderEndFrame, as FFmpeg's d3d11va does, and each frame copied to a
  * staging NV12 texture and mapped, as FFmpeg's d3d11va-copy does.
  *
+ * The stream: H.264 or HEVC Annex B (told apart by the first NAL unit), or
+ * IVF with VP9 (profile 0) or AV1 (Main, 8 bit). HEVC, VP9 and AV1 are in
+ * codecs.cpp; --ref there is the I420 output as vdpu383test writes it
+ * (VP9, AV1: each frame at its own size), and "output md5" is the kits'
+ * FFmpeg reference MD5.
+ *
  * Exit: 0 every frame matched (or --probe succeeded), 2 mismatch or decode
  * error, 1 setup failed, 3 the adapter offers no H.264 decoder.
  *
@@ -51,6 +57,7 @@ extern "C" {
 }
 #include "vptest.h"
 #include "chromeprobe.h"
+#include "codecs.h"
 
 #include "../../../video/vdpu383/vdpu383_ioctl.h"
 
@@ -220,8 +227,8 @@ probe(Test *t)
       if (FAILED(t->vdev->GetVideoDecoderProfile(i, &g)))
          continue;
       t->vdev->CheckVideoDecoderFormat(&g, DXGI_FORMAT_NV12, &nv12);
-      printf("  {%08lx-%04x-%04x-...}%s NV12 %s\n", g.Data1, g.Data2, g.Data3,
-             IsEqualGUID(g, ProfileH264) ? " H.264 VLD no FGT" : "", nv12 ? "yes" : "no");
+      printf("  {%08lx-%04x-%04x-...} %s NV12 %s\n", g.Data1, g.Data2, g.Data3, codec_profile_name(g),
+             nv12 ? "yes" : "no");
       if (IsEqualGUID(g, ProfileH264) && nv12)
          found = 1;
    }
@@ -537,6 +544,24 @@ main(int argc, char **argv)
    if (outp && !(t.out = fopen(outp, "wb"))) {
       fprintf(stderr, "cannot write %s\n", outp);
       return 1;
+   }
+
+   int kind = codec_kind(data, len);
+   if (kind != CODEC_H264) {
+      CodecOptions co = {};
+      co.fake = t.fake;
+      co.max_pictures = max_pictures;
+      co.ref = ref;
+      co.out = outp;
+      if (t.out)
+         fclose(t.out);
+      free(t.ref);
+      have_runs = driver_runs(&runs0) == 0;
+      rc = codec_run(t.dev, t.ctx, t.vdev, t.vctx, kind, data, len, &co);
+      if (have_runs && driver_runs(&runs1) == 0)
+         printf("vdpu383.sys runs: %u -> %u (+%u)\n", runs0, runs1, runs1 - runs0);
+      free(data);
+      return rc;
    }
 
    have_runs = driver_runs(&runs0) == 0;

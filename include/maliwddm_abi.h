@@ -174,7 +174,9 @@ typedef struct _MW_UMD_ADAPTER_INFO {
     mw_u32 Ddi;                         /* UmdDdi: the highest DDI, MW_UMD_DDI_* (default 101) */
     mw_u32 FeatureLevel;                /* UmdFeatureLevel: a D3D_FEATURE_LEVEL (default 0xa000) */
     mw_u32 Dxgi12;                      /* UmdDxgi12: the DXGI 1.2 DDI and flip model (default 0) */
-    mw_u32 Video;                       /* UmdVideo: 0 none, 1 video DDI without profiles, 2 with (default 0) */
+    mw_u32 Video;                       /* UmdVideo: 0 none, 1 video DDI without profiles, 2 with,
+                                         * 3 2 in every process (default 0); with it nonzero,
+                                         * the decoder's switches above it (MW_UMD_VIDEO_*) */
     mw_u32 DecodeNode;                  /* node ordinal of the VIDEO_DECODE engine, MW_UMD_NO_NODE none */
     mw_u32 VirtualMode;                 /* 1: WDDM 2.x with GPU virtual addressing (D3DWDDM2_0 DDI) */
     mw_u32 KmdBuild;                    /* the CI run that built the KMD (MW_BUILD) */
@@ -195,6 +197,19 @@ typedef struct _MW_UMD_ADAPTER_INFO {
                                          * changes (default 0) */
     mw_u32 Reserved[4];
 } MW_UMD_ADAPTER_INFO;
+
+/* MW_UMD_ADAPTER_INFO.Video: UmdVideo in the low byte; when it is not 0
+ * the KMD adds, from Device Parameters (Mesa patch 0081, Video.cpp):
+ * UmdVideoCodecs, which decoder profiles (bit 0 H.264, 1 HEVC Main, 2 VP9
+ * profile 0, 3 AV1 Main; 0 or absent: all four); UmdAv1Synth, how AV1
+ * tiles are wrapped for the decoder (0 a tile group OBU, 1 a frame OBU);
+ * UmdVp9Mpp, VP9 frame context handling (0 the specification's, 1-3
+ * MPP's, V383_VP9_OPT_*). A UMD that predates them offers no video at
+ * all when any is set. */
+#define MW_UMD_VIDEO_LEVEL(v)       ((v) & 0xFFu)
+#define MW_UMD_VIDEO_CODECS(v)      (((v) >> 8) & 0xFFu)
+#define MW_UMD_VIDEO_AV1_SYNTH(v)   (((v) >> 16) & 1u)
+#define MW_UMD_VIDEO_VP9_MPP(v)     (((v) >> 18) & 3u)
 
 /* MW_UMD_ADAPTER_INFO.Redirect. The files C:\mali\redirect and
  * C:\mali\noredirect still win over it in the UMD. */

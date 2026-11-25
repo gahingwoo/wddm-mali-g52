@@ -183,7 +183,10 @@ step can be turned back without reinstalling:
 |---|---|---|
 | `UmdDdi` | 101 (since 2026-11-25; was 100) | 100: the D3D10.0 DDI (feature level 10_0); 101: the D3D10.1 DDI (10_1), board-tested on the TaishanPi 3M; 110: D3D11.0; 111: D3D11.1 (not offered) |
 | `UmdDxgi12` | 0 until U3 has run | the DXGI 1.2 DDI and flip model |
-| `UmdVideo` | 0 | 0 none; 1 the video DDI with no profiles; 2 with the decoder's profiles |
+| `UmdVideo` | 0 | 0 none; 1 the video DDI with no profiles; 2 with the decoder's profiles; 3 as 2 in every process but dwm, LogonUI and consent (VIDEO-DECODE.md) |
+| `UmdVideoCodecs` | 0 | read only with `UmdVideo` set: which decoder profiles, bit 0 H.264, 1 HEVC Main, 2 VP9 profile 0, 3 AV1 Main; 0 all four (patch 0081) |
+| `UmdAv1Synth` | 0 | AV1 tiles to the decoder as 0 a tile group OBU, 1 a frame OBU with 16 zero header bytes (patch 0081; the board decides) |
+| `UmdVp9Mpp` | 0 | VP9 frame contexts: 0 as the specification, 1 to 3 as MPP (`V383_VP9_OPT_*`, patch 0081) |
 | `UmdMsaa` | 1 | 0: no multisampling, as before 0064; 1: every format Panfrost renders at 4x is a multisample render target at 1x and 4x, in the browsers and d3dprobe only (0066; ANGLE uses 1x); 2: the same in every process; 4 and 5: as 1 and 2 |
 | `UmdFeatureLevel` | 0xa000 (10_0) | the most the UMD reports |
 | `UmdRedirect` | 1 at WDDM 2.x, 2 at 1.3 | which processes get DXGI redirection by default (patch 0077): 1 none; 2 the browsers (0076); 3 every process. `C:\mali\redirect` and `C:\mali\noredirect` override it. EDGE-PRESENT.md, "The WDDM 2.0 session hang" |

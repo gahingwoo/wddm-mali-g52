@@ -1,0 +1,598 @@
+diff --git a/src/gallium/frontends/d3d10umd/Video.cpp b/src/gallium/frontends/d3d10umd/Video.cpp
+index a7f4aba..d34f535 100644
+--- a/src/gallium/frontends/d3d10umd/Video.cpp
++++ b/src/gallium/frontends/d3d10umd/Video.cpp
+@@ -1,14 +1,15 @@
+ /*
+  * Video.cpp --
+- *    D3D11 video decode: the D3D11.1 video DDI, H.264 on the RK3576 VDPU383.
++ *    D3D11 video decode: the D3D11.1 video DDI, H.264, HEVC Main, VP9
++ *    profile 0 and AV1 Main (8 bit) on the RK3576 VDPU383.
+  *
+- * What a player does (FFmpeg's d3d11va, mpv, Media Foundation's H.264
+- * decoder, Chromium's D3D11VideoDecoder) and where it lands here:
++ * What a player does (FFmpeg's d3d11va, mpv, Media Foundation's
++ * decoders, Chromium's D3D11VideoDecoder) and where it lands here:
+  *
+  *    ID3D11VideoDevice::GetVideoDecoderProfile...   VideoGetVideoDecoderProfile*
+  *    CreateTexture2D(NV12, BIND_DECODER, array)     Resource.cpp (NV12 as R8, Y over UV)
+  *    CreateVideoDecoderOutputView                   VideoCreateVideoDecoderOutputView
+- *    CreateVideoDecoder                             VideoCreateVideoDecoder (vdec_h264_create)
++ *    CreateVideoDecoder                             VideoCreateVideoDecoder (vdec_create)
+  *    GetDecoderBuffer / ReleaseDecoderBuffer        the runtime's buffers, Resource.cpp
+  *    DecoderBeginFrame                              VideoVideoDecoderBeginFrame
+  *    SubmitDecoderBuffers                           VideoVideoDecoderSubmitBuffers (copied)
+@@ -18,7 +19,7 @@
+  * (video/vdec.c; one per DXVA surface index, references are read from
+  * there) and copied into the application's texture at the end of the
+  * frame. That copy is the price of milestone V3a: the decoder writes
+- * contiguous memory of vdpu383.sys, the texture is an allocation of
++ * buffers of vdpu383.sys, the texture is an allocation of
+  * maliwddm's, and only the KMD could map one into the other (V3b in
+  * docs/VIDEO-DECODE.md).
+  *
+@@ -67,16 +68,30 @@ ProcessIs(const char *const *names, unsigned count)
+ }
+ 
+ /*
+- * UmdVideo (maliwddm Device Parameters, default 0):
++ * UmdVideo (maliwddm Device Parameters, default 0), the low byte of the
++ * value the KMD passes (MW_UMD_ADAPTER_INFO.Video):
+  *   0  nothing changes anywhere.
+  *   1  the D3D11.1 interface and the video DDI with no decoder profiles,
+  *      in the processes below: a player sees a video device and decodes
+  *      in software, which checks the new interface alone.
+- *   2  the same with the VDPU383's H.264 profile.
++ *   2  the same with the VDPU383's profiles.
+  *   3  2 in every process but the compositor and the logon screen
+  *      (for players not on the list; Media Foundation decodes in the
+  *      application's process).
++ * The KMD packs three more settings above it, read only when UmdVideo is
++ * not 0 (maliwddm_abi.h MW_UMD_VIDEO_*):
++ *   bits 8-15   UmdVideoCodecs: which profiles, bit 0 H.264, 1 HEVC Main,
++ *               2 VP9 profile 0, 3 AV1 Main; 0 (absent) all four.
++ *   bits 16-17  UmdAv1Synth: how AV1 tiles are wrapped for the decoder,
++ *               0 one tile group OBU, 1 a frame OBU with 16 zero header
++ *               bytes (vdec.h; the board decides which the VDPU383 takes).
++ *   bits 18-19  UmdVp9Mpp: VP9 frame context handling, V383_VP9_OPT_*
++ *               (0 the specification's, 3 MPP's).
++ * A UMD from before these bits sees a value above 3 and offers nothing.
+  */
++#define VIDEO_CODECS_ALL 0xFu
++static unsigned g_video_codecs, g_video_av1_synth, g_video_vp9_mpp;
++
+ unsigned
+ VideoEffective(unsigned setting)
+ {
+@@ -87,14 +102,18 @@ VideoEffective(unsigned setting)
+    static const char *const never[] = {
+       "dwm.exe", "logonui.exe", "consent.exe",
+    };
++   unsigned level = setting & 0xFF;
+ 
+-   if (setting == 0 || setting > 3)
++   if (level == 0 || level > 3)
+       return 0;
++   g_video_codecs = (setting >> 8) & VIDEO_CODECS_ALL;
++   g_video_av1_synth = (setting >> 16) & 1;
++   g_video_vp9_mpp = (setting >> 18) & 3;
+    if (ProcessIs(never, ARRAYSIZE(never)))
+       return 0;
+-   if (setting == 3)
++   if (level == 3)
+       return 2;
+-   return ProcessIs(players, ARRAYSIZE(players)) ? setting : 0;
++   return ProcessIs(players, ARRAYSIZE(players)) ? level : 0;
+ }
+ 
+ /* -------------------------------------------------------------- GUIDs */
+@@ -102,36 +121,124 @@ VideoEffective(unsigned setting)
+ /* D3D11_DECODER_PROFILE_H264_VLD_NOFGT (DXVA_ModeH264_E) */
+ static const GUID ProfileH264 =
+    { 0x1b81be68, 0xa0c7, 0x11d3, { 0xb9, 0x84, 0x00, 0xc0, 0x4f, 0x2e, 0x73, 0xc5 } };
++/* D3D11_DECODER_PROFILE_HEVC_VLD_MAIN (DXVA_ModeHEVC_VLD_Main) */
++static const GUID ProfileHevcMain =
++   { 0x5b11d51b, 0x2f4c, 0x4452, { 0xbc, 0xc3, 0x09, 0xf2, 0xa1, 0x16, 0x0c, 0xc0 } };
++/* D3D11_DECODER_PROFILE_VP9_VLD_PROFILE0 (DXVA_ModeVP9_VLD_Profile0) */
++static const GUID ProfileVp9Profile0 =
++   { 0x463707f8, 0xa1d0, 0x4585, { 0x87, 0x6d, 0x83, 0xaa, 0x6d, 0x60, 0xb8, 0x9e } };
++/* D3D11_DECODER_PROFILE_AV1_VLD_PROFILE0 (DXVA_ModeAV1_VLD_Profile0, Main) */
++static const GUID ProfileAv1Profile0 =
++   { 0xb8be4ccb, 0xcf53, 0x46ba, { 0x8d, 0x59, 0xd6, 0xb8, 0xa6, 0xda, 0x5d, 0x2a } };
+ /* DXVA_NoEncrypt */
+ static const GUID NoEncrypt =
+    { 0x1b81bed0, 0xa0c7, 0x11d3, { 0xb9, 0x84, 0x00, 0xc0, 0x4f, 0x2e, 0x73, 0xc5 } };
+ 
+-/* The VDPU383's H.264 limit (vendor: 4096x2304; the board has run CIF). */
++/*
++ * The profiles, in the order they are listed. 8 bit 4:2:0 only, NV12 out:
++ * the VDPU383 also decodes HEVC Main 10, VP9 profile 2 and 10-bit AV1, but
++ * writes 10-bit pictures in a packed layout of its own (4 samples in 5
++ * bytes) and this UMD has no P010 texture yet; the HEVC register builder
++ * is Main only. So HEVC Main 10 and VP9 profile 2 are not listed, and the
++ * AV1 profile takes NV12 only (a player asks for P010 for a 10-bit stream,
++ * is told no, and decodes it in software).
++ *
++ * ConfigBitstreamRaw: 2 (short slices) for H.264, 1 for the others, which
++ * is what Chromium's D3D11VideoDecoder asks for and FFmpeg takes.
++ */
++struct VideoProfile {
++   const GUID *guid;
++   vdec_codec codec;
++   UINT bitstream_raw;
++   const char *name;
++};
++
++static const VideoProfile Profiles[] = {
++   { &ProfileH264, VDEC_CODEC_H264, 2, "H.264" },
++   { &ProfileHevcMain, VDEC_CODEC_HEVC, 1, "HEVC Main" },
++   { &ProfileVp9Profile0, VDEC_CODEC_VP9, 1, "VP9 profile 0" },
++   { &ProfileAv1Profile0, VDEC_CODEC_AV1, 1, "AV1 Main" },
++};
++
++/* The VDPU383's limit as this UMD offers it, for every codec (vendor:
++ * H.264 4096x2304, the others 8K; the board has run up to 1080p). */
+ #define VIDEO_MAX_WIDTH  4096
+ #define VIDEO_MAX_HEIGHT 2304
+ 
++static bool
++CodecOffered(vdec_codec codec)
++{
++   unsigned mask = g_video_codecs ? g_video_codecs : VIDEO_CODECS_ALL;
++   return (mask >> codec) & 1;
++}
++
+ static bool
+ ProfilesOffered(const Device *pDevice)
+ {
+    return pDevice->video >= 2 && vdec_available();
+ }
+ 
++/* The profile of a GUID, NULL when it is not one offered here. */
++static const VideoProfile *
++FindProfile(const GUID *guid)
++{
++   for (unsigned i = 0; i < ARRAYSIZE(Profiles); i++)
++      if (IsEqualGUID(*guid, *Profiles[i].guid))
++         return CodecOffered(Profiles[i].codec) ? &Profiles[i] : NULL;
++   return NULL;
++}
++
++/* The Index-th profile offered. */
++static const VideoProfile *
++NthProfile(UINT index)
++{
++   for (unsigned i = 0; i < ARRAYSIZE(Profiles); i++)
++      if (CodecOffered(Profiles[i].codec) && index-- == 0)
++         return &Profiles[i];
++   return NULL;
++}
++
+ /* ------------------------------------------------------------ objects */
+ 
++/* The slice control buffer's size (GetVideoDecoderBufferInfo): AV1 up to
++ * 64 x 64 tiles of DXVA_Tile_AV1 (16 bytes). */
++#define SLICE_CONTROL_MAX (64 * 1024)
++
+ struct VideoOutputView {
+    Resource *resource;
+    UINT slice;
+ };
+ 
++/* The picture parameter structures, the largest of them. */
++union VideoPicParams {
++   V383_DXVA_PicParams_H264 h264;
++   V383_DXVA_PicParams_HEVC hevc;
++   V383_DXVA_PicParams_VP9 vp9;
++   V383_DXVA_PicParams_AV1 av1;
++};
++
++union VideoQmatrix {
++   V383_DXVA_Qmatrix_H264 h264;
++   V383_DXVA_Qmatrix_HEVC hevc;
++};
++
+ struct VideoDecoder {
+    UINT width, height;
+-   vdec_h264 *dec;
++   const VideoProfile *profile;
++   vdec *dec;
+    VideoOutputView *target;
+    bool have_pp, have_qm;
+-   V383_DXVA_PicParams_H264 pp;
+-   V383_DXVA_Qmatrix_H264 qm;
++   VideoPicParams pp;
++   VideoQmatrix qm;
+    uint8_t *bitstream;
+    unsigned bitstream_len, bitstream_cap;
++   /* HEVC, VP9: where the slice data ends, from the slice control (the
++    * bitstream buffer is padded); AV1: the tiles, offsets from the start
++    * of the frame's bitstream. */
++   unsigned data_end;
++   V383_DXVA_Tile_AV1 *tiles;
++   unsigned num_tiles, tiles_cap;
++   uint8_t *slice_tmp;                  /* SLICE_CONTROL_MAX, the slice control as read */
+    unsigned slices;
+    unsigned frames, errors, logged;
+ };
+@@ -167,30 +274,41 @@ static VOID APIENTRY
+ VideoGetVideoDecoderProfileCount(D3D10DDI_HDEVICE hDevice, UINT *pCount)
+ {
+    Device *pDevice = CastDevice(hDevice);
+-   *pCount = ProfilesOffered(pDevice) ? 1 : 0;
+-   DebugPrintf("video: %u decoder profile(s) (UmdVideo here %u, decoder %s)\n", *pCount,
+-               pDevice->video, vdec_available() ? "available" : "absent");
++   UINT n = 0;
++
++   if (ProfilesOffered(pDevice))
++      while (NthProfile(n))
++         n++;
++   *pCount = n;
++   DebugPrintf("video: %u decoder profile(s) (UmdVideo here %u, codecs 0x%x, decoder %s)\n", *pCount,
++               pDevice->video, g_video_codecs ? g_video_codecs : VIDEO_CODECS_ALL,
++               vdec_available() ? "available" : "absent");
+ }
+ 
+ static VOID APIENTRY
+ VideoGetVideoDecoderProfile(D3D10DDI_HDEVICE hDevice, UINT Index, GUID *pGuid)
+ {
++   const VideoProfile *p = NthProfile(Index);
+    (void)hDevice;
+-   (void)Index;
+-   *pGuid = ProfileH264;
++   if (p)
++      *pGuid = *p->guid;
++   else
++      memset(pGuid, 0, sizeof *pGuid);
+ }
+ 
+-static bool
++static const VideoProfile *
+ DescSupported(Device *pDevice, const GUID *guid, DXGI_FORMAT format)
+ {
+-   return ProfilesOffered(pDevice) && IsEqualGUID(*guid, ProfileH264) && format == DXGI_FORMAT_NV12;
++   if (!ProfilesOffered(pDevice) || format != DXGI_FORMAT_NV12)
++      return NULL;
++   return FindProfile(guid);
+ }
+ 
+ static VOID APIENTRY
+ VideoCheckVideoDecoderFormat(D3D10DDI_HDEVICE hDevice, const GUID *pGuid, DXGI_FORMAT Format,
+                              BOOL *pSupported)
+ {
+-   *pSupported = DescSupported(CastDevice(hDevice), pGuid, Format);
++   *pSupported = DescSupported(CastDevice(hDevice), pGuid, Format) != NULL;
+ }
+ 
+ static VOID APIENTRY
+@@ -205,16 +323,18 @@ static VOID APIENTRY
+ VideoGetVideoDecoderConfig(D3D10DDI_HDEVICE hDevice, const D3D11_1DDI_VIDEO_DECODER_DESC *pDesc,
+                            UINT Index, D3D11_1DDI_VIDEO_DECODER_CONFIG *pConfig)
+ {
++   const VideoProfile *p = FindProfile(&pDesc->Guid);
+    (void)hDevice;
+-   (void)pDesc;
+    (void)Index;
+    memset(pConfig, 0, sizeof *pConfig);
+    pConfig->guidConfigBitstreamEncryption = NoEncrypt;
+    pConfig->guidConfigMBcontrolEncryption = NoEncrypt;
+    pConfig->guidConfigResidDiffEncryption = NoEncrypt;
+-   /* 2: DXVA_Slice_H264_Short, the bitstream with its start codes, which
+-    * is what the VDPU383 reads (and the only form Chromium accepts). */
+-   pConfig->ConfigBitstreamRaw = 2;
++   /* H.264 2: DXVA_Slice_H264_Short, the bitstream with its start codes,
++    * which is what the VDPU383 reads (and the only form Chromium accepts).
++    * HEVC 1 (DXVA_Slice_HEVC_Short, start codes too), VP9 1 (the whole
++    * frame), AV1 1 (the tiles, DXVA_Tile_AV1). */
++   pConfig->ConfigBitstreamRaw = p ? p->bitstream_raw : 2;
+ }
+ 
+ static const D3D11_1DDI_VIDEO_DECODER_BUFFER_TYPE BufferTypes[] = {
+@@ -254,7 +374,7 @@ VideoGetVideoDecoderBufferInfo(D3D10DDI_HDEVICE, const D3D11_1DDI_VIDEO_DECODER_
+       pInfo->Size = 4096;
+       break;
+    case D3D11_1DDI_VIDEO_DECODER_BUFFER_SLICE_CONTROL:
+-      pInfo->Size = 64 * 1024;
++      pInfo->Size = SLICE_CONTROL_MAX;
+       break;
+    default:
+       pInfo->Size = BitstreamBufferSize(pDesc->SampleWidth, pDesc->SampleHeight);
+@@ -278,23 +398,31 @@ VideoCreateVideoDecoder(D3D10DDI_HDEVICE hDevice, const D3D11_1DDIARG_CREATEVIDE
+ {
+    Device *pDevice = CastDevice(hDevice);
+    VideoDecoder *d = CastDecoder(hDecode);
++   const VideoProfile *p;
++   vdec_options opt;
+    char err[160] = "";
+ 
+    memset(d, 0, sizeof *d);
+-   if (!DescSupported(pDevice, &pCreate->Desc.Guid, pCreate->Desc.OutputFormat) ||
+-       pCreate->Config.ConfigBitstreamRaw != 2) {
+-      DebugPrintf("video: CreateVideoDecoder refused (profile, format %u or bitstream form %u)\n",
+-                  (unsigned)pCreate->Desc.OutputFormat, pCreate->Config.ConfigBitstreamRaw);
++   p = DescSupported(pDevice, &pCreate->Desc.Guid, pCreate->Desc.OutputFormat);
++   if (!p || pCreate->Config.ConfigBitstreamRaw != p->bitstream_raw) {
++      DebugPrintf("video: CreateVideoDecoder refused (profile %s, format %u or bitstream form %u)\n",
++                  p ? p->name : "not offered", (unsigned)pCreate->Desc.OutputFormat,
++                  pCreate->Config.ConfigBitstreamRaw);
+       return E_INVALIDARG;
+    }
++   d->profile = p;
+    d->width = pCreate->Desc.SampleWidth;
+    d->height = pCreate->Desc.SampleHeight;
+-   d->dec = vdec_h264_create(d->width, d->height, err, sizeof err);
++   memset(&opt, 0, sizeof opt);
++   opt.av1_synth = g_video_av1_synth;
++   opt.vp9_options = g_video_vp9_mpp;
++   d->dec = vdec_create(p->codec, d->width, d->height, &opt, err, sizeof err);
+    if (!d->dec) {
+-      DebugPrintf("video: CreateVideoDecoder %ux%u: %s\n", d->width, d->height, err);
++      DebugPrintf("video: CreateVideoDecoder %s %ux%u: %s\n", p->name, d->width, d->height, err);
+       return E_OUTOFMEMORY;
+    }
+-   DebugPrintf("video: H.264 decoder %ux%u created\n", d->width, d->height);
++   DebugPrintf("video: %s decoder %ux%u created (AV1 stream form %u, VP9 options 0x%x)\n", p->name,
++               d->width, d->height, opt.av1_synth, opt.vp9_options);
+    return S_OK;
+ }
+ 
+@@ -305,12 +433,15 @@ VideoDestroyVideoDecoder(D3D10DDI_HDEVICE, D3D11_1DDI_HDECODE hDecode)
+    vdec_stats st;
+ 
+    vdec_get_stats(&st);
+-   DebugPrintf("video: decoder %ux%u destroyed after %u frames, %u errors; process total %u "
+-               "pictures, %u errors, %u us in the decoder, driver runs %u%s\n",
+-               d->width, d->height, d->frames, d->errors, st.pictures, st.errors,
+-               st.hw_us_total, st.driver_runs, st.fake ? " (fake)" : "");
+-   vdec_h264_destroy(d->dec);
++   DebugPrintf("video: %s decoder %ux%u destroyed after %u frames, %u errors; process total %u "
++               "pictures, %u errors, %u us in the decoder, driver runs %u%s%s\n",
++               d->profile ? d->profile->name : "?", d->width, d->height, d->frames, d->errors,
++               st.pictures, st.errors, st.hw_us_total, st.driver_runs, st.fake ? " (fake)" : "",
++               st.iommu ? " (IOMMU)" : "");
++   vdec_destroy(d->dec);
+    free(d->bitstream);
++   free(d->tiles);
++   free(d->slice_tmp);
+    memset(d, 0, sizeof *d);
+ }
+ 
+@@ -325,6 +456,8 @@ VideoVideoDecoderBeginFrame(D3D10DDI_HDEVICE, D3D11_1DDI_HDECODE hDecode,
+    d->target = CastOutputView(pBegin->hOutputView);
+    d->have_pp = d->have_qm = false;
+    d->bitstream_len = 0;
++   d->data_end = 0;
++   d->num_tiles = 0;
+    d->slices = 0;
+    return S_OK;
+ }
+@@ -355,6 +488,80 @@ ReadBuffer(Device *pDevice, const D3D11_1DDI_VIDEO_DECODER_BUFFER_DESC *desc, vo
+    return true;
+ }
+ 
++static unsigned
++PicParamsSize(vdec_codec codec)
++{
++   switch (codec) {
++   case VDEC_CODEC_HEVC: return sizeof(V383_DXVA_PicParams_HEVC);
++   case VDEC_CODEC_VP9: return sizeof(V383_DXVA_PicParams_VP9);
++   case VDEC_CODEC_AV1: return sizeof(V383_DXVA_PicParams_AV1);
++   default: return sizeof(V383_DXVA_PicParams_H264);
++   }
++}
++
++/*
++ * The slice control of one SubmitDecoderBuffers call. Its offsets are from
++ * the start of that call's bitstream buffer, and a frame may come in
++ * several calls (Chromium submits when a bitstream buffer is full), so they
++ * are moved by base: where that buffer's bytes start in d->bitstream.
++ */
++static bool
++ReadSliceControl(Device *pDevice, VideoDecoder *d, const D3D11_1DDI_VIDEO_DECODER_BUFFER_DESC *b,
++                 int64_t base)
++{
++   unsigned got, i, n;
++
++   if (!d->slice_tmp) {
++      d->slice_tmp = (uint8_t *)malloc(SLICE_CONTROL_MAX);
++      if (!d->slice_tmp)
++         return false;
++   }
++   uint8_t *tmp = d->slice_tmp;
++   if (!ReadBuffer(pDevice, b, tmp, SLICE_CONTROL_MAX, &got))
++      return false;
++   switch (d->profile->codec) {
++   case VDEC_CODEC_H264:
++      /* The short form only says where each slice starts; the decoder
++       * finds the slices from their start codes. */
++      d->slices += got / 10;     /* sizeof(DXVA_Slice_H264_Short) */
++      return true;
++   case VDEC_CODEC_HEVC:
++   case VDEC_CODEC_VP9:
++      /* DXVA_Slice_HEVC_Short, DXVA_Slice_VPx_Short: the same three fields. */
++      n = got / sizeof(V383_DXVA_Slice_HEVC_Short);
++      for (i = 0; i < n; i++) {
++         V383_DXVA_Slice_HEVC_Short sl;
++         memcpy(&sl, tmp + i * sizeof sl, sizeof sl);
++         int64_t end = base + (int64_t)sl.BSNALunitDataLocation + sl.SliceBytesInBuffer;
++         if (end > 0 && end <= 0xFFFFFFFFll && (unsigned)end > d->data_end)
++            d->data_end = (unsigned)end;
++      }
++      d->slices += n;
++      return true;
++   default:
++      n = got / sizeof(V383_DXVA_Tile_AV1);
++      if (d->num_tiles + n > d->tiles_cap) {
++         unsigned cap = MAX2(d->num_tiles + n, 64u);
++         V383_DXVA_Tile_AV1 *t = (V383_DXVA_Tile_AV1 *)realloc(d->tiles, cap * sizeof *t);
++         if (!t)
++            return false;
++         d->tiles = t;
++         d->tiles_cap = cap;
++      }
++      for (i = 0; i < n; i++) {
++         V383_DXVA_Tile_AV1 t;
++         memcpy(&t, tmp + i * sizeof t, sizeof t);
++         int64_t off = base + (int64_t)t.DataOffset;
++         if (off < 0 || off > 0xFFFFFFFFll)
++            return false;
++         t.DataOffset = (unsigned)off;
++         d->tiles[d->num_tiles++] = t;
++      }
++      d->slices += n;
++      return true;
++   }
++}
++
+ static HRESULT APIENTRY
+ VideoVideoDecoderSubmitBuffers(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HDECODE hDecode, UINT Count,
+                                const D3D11_1DDI_VIDEO_DECODER_BUFFER_DESC *pDescs)
+@@ -362,6 +569,15 @@ VideoVideoDecoderSubmitBuffers(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HDECODE hDec
+    Device *pDevice = CastDevice(hDevice);
+    VideoDecoder *d = CastDecoder(hDecode);
+    unsigned got;
++   /* Where this call's bitstream bytes will start, less the buffer offset
++    * the application reads them from. */
++   int64_t base = d->bitstream_len;
++
++   for (UINT i = 0; i < Count; i++)
++      if (pDescs[i].BufferType == D3D11_1DDI_VIDEO_DECODER_BUFFER_BITSTREAM) {
++         base -= pDescs[i].DataOffset;
++         break;
++      }
+ 
+    for (UINT i = 0; i < Count; i++) {
+       const D3D11_1DDI_VIDEO_DECODER_BUFFER_DESC *b = &pDescs[i];
+@@ -371,16 +587,17 @@ VideoVideoDecoderSubmitBuffers(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HDECODE hDec
+       switch (b->BufferType) {
+       case D3D11_1DDI_VIDEO_DECODER_BUFFER_PICTURE_PARAMETERS:
+          memset(&d->pp, 0, sizeof d->pp);
+-         d->have_pp = ReadBuffer(pDevice, b, &d->pp, sizeof d->pp, &got) && got >= sizeof d->pp;
++         d->have_pp = ReadBuffer(pDevice, b, &d->pp, sizeof d->pp, &got) &&
++                      got >= PicParamsSize(d->profile->codec);
+          break;
+       case D3D11_1DDI_VIDEO_DECODER_BUFFER_INVERSE_QUANTIZATION_MATRIX:
+          memset(&d->qm, 0, sizeof d->qm);
+-         d->have_qm = ReadBuffer(pDevice, b, &d->qm, sizeof d->qm, &got) && got >= sizeof d->qm;
++         d->have_qm = ReadBuffer(pDevice, b, &d->qm, sizeof d->qm, &got) &&
++                      got >= (d->profile->codec == VDEC_CODEC_HEVC ? sizeof d->qm.hevc : sizeof d->qm.h264);
+          break;
+       case D3D11_1DDI_VIDEO_DECODER_BUFFER_SLICE_CONTROL:
+-         /* The short form only says where each slice starts; the decoder
+-          * finds the slices from their start codes. */
+-         d->slices += b->DataSize / 10;     /* sizeof(DXVA_Slice_H264_Short) */
++         if (!ReadSliceControl(pDevice, d, b, base))
++            return E_OUTOFMEMORY;
+          break;
+       case D3D11_1DDI_VIDEO_DECODER_BUFFER_BITSTREAM: {
+          unsigned need = d->bitstream_len + b->DataSize;
+@@ -427,6 +644,25 @@ CopyToTarget(Device *pDevice, VideoOutputView *v, const vdec_picture *pic)
+    return true;
+ }
+ 
++/* The frame's bytes: up to where the slice control says the data ends
++ * (the rest is the application's padding), else all of them. */
++static unsigned
++DataLength(const VideoDecoder *d)
++{
++   return d->data_end && d->data_end <= d->bitstream_len ? d->data_end : d->bitstream_len;
++}
++
++static unsigned
++SurfaceIndex(const VideoDecoder *d)
++{
++   switch (d->profile->codec) {
++   case VDEC_CODEC_HEVC: return V383_PIC_INDEX(d->pp.hevc.CurrPic);
++   case VDEC_CODEC_VP9: return V383_PIC_INDEX(d->pp.vp9.CurrPic);
++   case VDEC_CODEC_AV1: return d->pp.av1.CurrPicTextureIndex;
++   default: return V383_PIC_INDEX(d->pp.h264.CurrPic);
++   }
++}
++
+ static VOID APIENTRY
+ VideoVideoDecoderEndFrame(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HDECODE hDecode)
+ {
+@@ -435,15 +671,34 @@ VideoVideoDecoderEndFrame(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HDECODE hDecode)
+    vdec_picture pic;
+    char err[160] = "";
+    bool ok = false;
++   int rc = -1;
+ 
+    if (!d->target || !d->have_pp || !d->bitstream_len) {
+       snprintf(err, sizeof err, "incomplete frame (view %d, parameters %d, %u bitstream bytes)",
+                d->target != NULL, d->have_pp, d->bitstream_len);
+-   } else if (vdec_h264_decode(d->dec, &d->pp, d->have_qm ? &d->qm : NULL, d->bitstream,
+-                               d->bitstream_len, &pic, err, sizeof err) == 0) {
+-      ok = CopyToTarget(pDevice, d->target, &pic);
+-      if (!ok)
+-         snprintf(err, sizeof err, "the output view is not an NV12 texture");
++   } else {
++      switch (d->profile->codec) {
++      case VDEC_CODEC_HEVC:
++         rc = vdec_hevc_decode(d->dec, &d->pp.hevc, d->have_qm ? &d->qm.hevc : NULL, d->bitstream,
++                               DataLength(d), &pic, err, sizeof err);
++         break;
++      case VDEC_CODEC_VP9:
++         rc = vdec_vp9_decode(d->dec, &d->pp.vp9, d->bitstream, DataLength(d), &pic, err, sizeof err);
++         break;
++      case VDEC_CODEC_AV1:
++         rc = vdec_av1_decode(d->dec, &d->pp.av1, d->tiles, d->num_tiles, d->bitstream, d->bitstream_len,
++                              &pic, err, sizeof err);
++         break;
++      default:
++         rc = vdec_h264_decode(d->dec, &d->pp.h264, d->have_qm ? &d->qm.h264 : NULL, d->bitstream,
++                               d->bitstream_len, &pic, err, sizeof err);
++         break;
++      }
++      if (rc == 0) {
++         ok = CopyToTarget(pDevice, d->target, &pic);
++         if (!ok)
++            snprintf(err, sizeof err, "the output view is not an NV12 texture");
++      }
+    }
+ 
+    d->frames++;
+@@ -452,12 +707,12 @@ VideoVideoDecoderEndFrame(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HDECODE hDecode)
+       /* The frame is wrong, not the device: nothing reported that would
+        * remove it (mesa-patches 0069). */
+       if (d->logged++ < 20)
+-         DebugPrintf("video: frame %u (surface %u, %u slices): %s\n", d->frames,
+-                     V383_PIC_INDEX(d->pp.CurrPic), d->slices, err);
++         DebugPrintf("video: %s frame %u (surface %u, %u slices): %s\n", d->profile->name, d->frames,
++                     SurfaceIndex(d), d->slices, err);
+    } else if (d->frames <= 3 || (d->frames % 300) == 0) {
+-      DebugPrintf("video: frame %u decoded into slice %u (surface %u, %u slices, %u bytes)\n",
+-                  d->frames, d->target->slice, V383_PIC_INDEX(d->pp.CurrPic), d->slices,
+-                  d->bitstream_len);
++      DebugPrintf("video: %s frame %u decoded into slice %u (surface %u, %ux%u, %u slices, %u bytes)\n",
++                  d->profile->name, d->frames, d->target->slice, SurfaceIndex(d), pic.width, pic.height,
++                  d->slices, d->bitstream_len);
+    }
+    d->target = NULL;
+ }
+@@ -480,7 +735,7 @@ VideoCreateVideoDecoderOutputView(D3D10DDI_HDEVICE, const D3D11_1DDIARG_CREATEVI
+    Resource *r = CastResource(p->hDrvResource);
+ 
+    memset(v, 0, sizeof *v);
+-   if (!r || !r->nv12 || !IsEqualGUID(p->DecodeProfile, ProfileH264) ||
++   if (!r || !r->nv12 || !FindProfile(&p->DecodeProfile) ||
+        p->FirstArraySlice >= r->resource->array_size)
+       return E_INVALIDARG;
+    v->resource = r;
+diff --git a/src/gallium/frontends/d3d10umd/meson.build b/src/gallium/frontends/d3d10umd/meson.build
+index d186b26..657a9e7 100644
+--- a/src/gallium/frontends/d3d10umd/meson.build
++++ b/src/gallium/frontends/d3d10umd/meson.build
+@@ -33,6 +33,12 @@ libd3d10umd = static_library(
+     'video/vdec.c',
+     'video/vdpu383/lib/vdpu383_h264.c',
+     'video/vdpu383/lib/vdpu383_cabac.c',
++    'video/vdpu383/lib/vdpu383_hevc.c',
++    'video/vdpu383/lib/vdpu383_hevc_cabac.c',
++    'video/vdpu383/lib/vdpu383_vp9.c',
++    'video/vdpu383/lib/vdpu383_vp9_probs.c',
++    'video/vdpu383/lib/vdpu383_av1.c',
++    'video/vdpu383/lib/vdpu383_av1_cdf.c',
+   ),
+   c_args : _c_args_d3d10umd,
+   cpp_args : _c_args_d3d10umd,
