@@ -186,7 +186,14 @@ typedef struct _MW_UMD_ADAPTER_INFO {
     mw_u32 Redirect;                    /* UmdRedirect, MW_UMD_REDIRECT_*: which processes
                                          * get DXGI redirection by default (Mesa patch
                                          * 0077); 0 from a KMD that predates it */
-    mw_u32 Reserved[5];
+    mw_u32 ReportFl11;                  /* UmdReportFL11: 1 the Chromium GPU process
+                                         * (msedge.exe, chrome.exe, msedgewebview2.exe
+                                         * with --type=gpu-process) gets the D3D11.1
+                                         * DDI at feature level 11_0, without hull,
+                                         * domain or compute shaders (Mesa patch 0080,
+                                         * docs/CHROMIUM-VIDEO.md C1); 0 nothing
+                                         * changes (default 0) */
+    mw_u32 Reserved[4];
 } MW_UMD_ADAPTER_INFO;
 
 /* MW_UMD_ADAPTER_INFO.Redirect. The files C:\mali\redirect and

@@ -16,6 +16,7 @@ on:
       - 'tools/windows/emucheck.cpp'
       - 'tools/windows/gltri.cpp'
       - 'tools/windows/copytest.cpp'
+      - 'tools/windows/fl11test.cpp'
       - 'tools/windows/vdectest/**'
       - 'video/**'
   workflow_dispatch:
@@ -481,6 +482,88 @@ jobs:
             tests/data/testsrc-176x144-high.264
             vdec-*.txt
             vdec-*.err
+
+      - name: Feature level 11_0 for Chromium's GPU process only (fl11test, UmdReportFL11)
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          # 0080: with UmdReportFL11 (D3D10UMD_UMDFL11 stands in for it without
+          # a KMD), msedge.exe/chrome.exe started with --type=gpu-process get
+          # the D3D11.1 interface at 11_0 and shader model 5; every other
+          # process, and that one without the switch, gets what it had.
+          $dll = (Resolve-Path out\libgallium_d3d10.dll).Path
+          New-Item -ItemType Directory -Force fl | Out-Null
+          cl /nologo /W3 /O2 /EHsc /MD tools\windows\fl11test.cpp /Fe:fl\fl11test.exe
+          if ($LASTEXITCODE) { throw 'fl11test build failed' }
+          Copy-Item fl\fl11test.exe fl\msedge.exe
+          Copy-Item vt\vdectest.exe fl\chrome.exe
+          function Run-Fl($tag, $exe, $argl) {
+            $p = Start-Process -FilePath (Resolve-Path fl\$exe).Path -ArgumentList $argl -NoNewWindow -PassThru `
+                   -RedirectStandardOutput "fl-$tag.txt" -RedirectStandardError "fl-$tag.err"
+            if (-not $p.WaitForExit(180000)) { Stop-Process -Id $p.Id -Force; $c = 'hang' } else { $c = $p.ExitCode }
+            Write-Host "===== ${tag}: $exe $argl -> exit $c"
+            Get-Content "fl-$tag.txt", "fl-$tag.err" -ErrorAction SilentlyContinue | Select-Object -Last 200 | Out-Host
+            return $c
+          }
+          New-Item -ItemType Directory -Force C:\mali\log | Out-Null
+          $env:GALLIUM_DRIVER = 'softpipe'
+          $env:D3D10UMD_UMDDDI = '101'
+          $r = @{}
+          # Off: the GPU process keeps 10_1.
+          Remove-Item Env:D3D10UMD_UMDFL11 -ErrorAction SilentlyContinue
+          $r['off'] = Run-Fl 'off' 'msedge.exe' "`"$dll`" --type=gpu-process"
+          $env:D3D10UMD_UMDFL11 = '0'
+          $r['zero'] = Run-Fl 'zero' 'msedge.exe' "`"$dll`" --type=gpu-process"
+          $env:D3D10UMD_UMDFL11 = '1'
+          # On, but not the GPU process: by name, and by --type.
+          $r['name'] = Run-Fl 'name' 'fl11test.exe' "`"$dll`" --type=gpu-process"
+          $r['browser'] = Run-Fl 'browser' 'msedge.exe' "`"$dll`""
+          $r['renderer'] = Run-Fl 'renderer' 'msedge.exe' "`"$dll`" --type=renderer"
+          # On, the GPU process: shader model 5 on softpipe, pixels checked.
+          $r['gpu'] = Run-Fl 'gpu' 'msedge.exe' "`"$dll`" --type=gpu-process"
+          # What Chromium's D3D11VideoDecoder sees at 11_0 (UmdVideo 2, fake
+          # decoder): every step but the shared NV12 texture, which needs a KMD.
+          $env:D3D10UMD_UMDVIDEO = '2'
+          $env:D3D10UMD_VDEC_FAKE = '1'
+          $r['chromium'] = Run-Fl 'chromium' 'chrome.exe' "`"$dll`" --chromium --fl11 --type=gpu-process"
+          Remove-Item Env:D3D10UMD_VDEC_FAKE, Env:D3D10UMD_UMDVIDEO
+
+          # The same SM5 shaders through Panfrost on the emulated G52: the
+          # TGSI from shader model 5 must get through tgsi_to_nir and the
+          # Bifrost compiler. Nothing runs the jobs: pixels are not checked.
+          $env:GALLIUM_DRIVER = 'panfrost'
+          $env:MALIKM_FAKE = '2'
+          $r['panfrost'] = Run-Fl 'panfrost' 'msedge.exe' "`"$dll`" --type=gpu-process"
+          Remove-Item Env:MALIKM_FAKE, Env:D3D10UMD_UMDFL11, Env:D3D10UMD_UMDDDI, Env:GALLIUM_DRIVER
+
+          Get-ChildItem C:\mali\log | ForEach-Object {
+            Copy-Item $_.FullName "fl-umdlog-$($_.Name)"
+            Write-Host "===== UMD log $($_.Name)"
+            Get-Content $_.FullName | Select-String 'UmdReportFL11|pipeline level|3D pipeline|shader:|ddi-error|not carried out|XXX' | Select-Object -First 60 | ForEach-Object { $_.Line }
+          }
+          Remove-Item -Recurse -Force C:\mali\log
+
+          $t = @{}
+          foreach ($k in $r.Keys) { $t[$k] = (Get-Content "fl-$k.txt" -ErrorAction SilentlyContinue) -join "`n" }
+          foreach ($k in 'off', 'zero', 'name', 'browser', 'renderer') {
+            if ($r[$k] -ne 2 -or $t[$k] -notmatch 'feature level 10_1') { throw "${k}: expected feature level 10_1, exit 2 ($($r[$k]))" }
+          }
+          if ($r['gpu'] -ne 0 -or $t['gpu'] -notmatch 'feature level 11_0' -or $t['gpu'] -notmatch '(?m)^PASS') { throw "the GPU process at 11_0 failed ($($r['gpu']))" }
+          if ($t['chromium'] -notmatch 'feature level 11_0 \(D3D11VideoDecoder needs 11_0\)') { throw 'the Chromium probe did not get 11_0' }
+          if ($t['chromium'] -notmatch 'decoder profiles: 1') { throw 'the Chromium probe at 11_0 lost the H.264 profile' }
+          if ($t['chromium'] -match 'blocked by: feature level') { throw 'the Chromium probe is still blocked by the feature level' }
+          if ($r['panfrost'] -eq 'hang' -or [int]$r['panfrost'] -lt 0 -or [int]$r['panfrost'] -gt 1) { throw "Panfrost on shader model 5: $($r['panfrost'])" }
+          if ($t['panfrost'] -notmatch 'feature level 11_0') { throw 'Panfrost: not at 11_0' }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fl11test-arm64
+          path: |
+            fl/fl11test.exe
+            fl-*.txt
+            fl-*.err
+            fl-umdlog-*
 
       - name: The runtime's view of the multisample answers (d3dprobe, MALIKM_FAKE)
         timeout-minutes: 10

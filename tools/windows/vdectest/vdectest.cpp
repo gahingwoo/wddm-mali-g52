@@ -12,6 +12,9 @@
  *   --fake             the UMD runs with D3D10UMD_VDEC_FAKE=1: check its pattern instead
  *   --chromium         what Chromium's D3D11VideoDecoder asks of the device, step by step
  *                      (chromeprobe.cpp); exit 0 when all of it is there, 4 otherwise
+ *   --fl11             ask for feature level 11_0 first (with UmdReportFL11, as msedge.exe
+ *                      --type=gpu-process: what ANGLE gets in the Chromium GPU process)
+ *   --type=...         ignored (the argument Chromium's child processes have)
  *   --vp               the video processor and NV12 plane view tests (vptest.cpp); with
  *                      a stream, the decoder texture is also a shader resource and the
  *                      first frame goes through the video processor (with --fake)
@@ -141,10 +144,18 @@ driver_runs(unsigned *runs)
    return 0;
 }
 
+/* --fl11: ask for 11_0 first, as ANGLE does (UmdReportFL11 gives it to
+ * Chromium's GPU process only: run as msedge.exe with --type=gpu-process). */
+static int g_fl11;
+
 static HRESULT
 create_device(const char *what, Test *t)
 {
-   static const D3D_FEATURE_LEVEL levels[] = { D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0 };
+   static const D3D_FEATURE_LEVEL levels10[] = { D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0 };
+   static const D3D_FEATURE_LEVEL levels11[] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1,
+                                                 D3D_FEATURE_LEVEL_10_0 };
+   const D3D_FEATURE_LEVEL *levels = g_fl11 ? levels11 : levels10;
+   UINT nlevels = g_fl11 ? 3 : 2;
    D3D_FEATURE_LEVEL got = (D3D_FEATURE_LEVEL)0;
    UINT flags = D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
    HRESULT hr;
@@ -170,7 +181,7 @@ create_device(const char *what, Test *t)
          printf("no adapter named Mali\n");
          return E_FAIL;
       }
-      hr = D3D11CreateDevice(pick, D3D_DRIVER_TYPE_UNKNOWN, NULL, flags, levels, 2, D3D11_SDK_VERSION,
+      hr = D3D11CreateDevice(pick, D3D_DRIVER_TYPE_UNKNOWN, NULL, flags, levels, nlevels, D3D11_SDK_VERSION,
                              &t->dev, &got, &t->ctx);
       pick->Release();
    } else {
@@ -179,10 +190,10 @@ create_device(const char *what, Test *t)
          printf("cannot load %s (%lu)\n", what, GetLastError());
          return E_FAIL;
       }
-      hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_SOFTWARE, m, flags, levels, 2, D3D11_SDK_VERSION,
+      hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_SOFTWARE, m, flags, levels, nlevels, D3D11_SDK_VERSION,
                              &t->dev, &got, &t->ctx);
    }
-   printf("D3D11CreateDevice with VIDEO_SUPPORT: 0x%08lx, feature level %x_%x\n", (unsigned long)hr,
+   printf("D3D11CreateDevice with VIDEO_SUPPORT: 0x%08lx, feature level %u_%u\n", (unsigned long)hr,
           ((unsigned)got >> 12) & 0xF, ((unsigned)got >> 8) & 0xF);
    return hr;
 }
@@ -487,6 +498,8 @@ main(int argc, char **argv)
       else if (!strcmp(argv[i], "--fake")) t.fake = 1;
       else if (!strcmp(argv[i], "--vp")) t.vp = 1;
       else if (!strcmp(argv[i], "--chromium")) chromium = 1;
+      else if (!strcmp(argv[i], "--fl11")) g_fl11 = 1;
+      else if (!strncmp(argv[i], "--type=", 7)) { /* as Chromium's child processes have; ignored */ }
       else if (!strcmp(argv[i], "--ref") && i + 1 < argc) ref = argv[++i];
       else if (!strcmp(argv[i], "-o") && i + 1 < argc) outp = argv[++i];
       else if (!strcmp(argv[i], "-n") && i + 1 < argc) max_pictures = (unsigned)atoi(argv[++i]);
