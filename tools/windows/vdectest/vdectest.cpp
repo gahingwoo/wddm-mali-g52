@@ -18,6 +18,11 @@
  *   --vp               the video processor and NV12 plane view tests (vptest.cpp); with
  *                      a stream, the decoder texture is also a shader resource and the
  *                      first frame goes through the video processor (with --fake)
+ *   --srv              the decoder texture is also a shader resource (as FFmpeg makes
+ *                      it, BIND_DECODER | BIND_SHADER_RESOURCE), with R8_UNORM and
+ *                      R8G8_UNORM views of each slice made before the first decode;
+ *                      every frame is also read through them (with --fake)
+ *   --srv-late         the same, the views made at the first frame out, after decodes
  *   -n <pictures>      stop after that many
  *   -o <file.yuv>      write the frames (I420)
  *
@@ -86,6 +91,9 @@ struct Test {
    unsigned tex_w, tex_h;
 
    int fake, vp, vp_done, vp_rc;
+   int srv_mode;                           /* 1 --srv, 2 --srv-late */
+   ID3D11ShaderResourceView *srv[H264_MAX_SLOTS][2];
+   unsigned srv_frames, srv_bad, srv_failed;
    unsigned slot_status[H264_MAX_SLOTS];   /* StatusReportFeedbackNumber last decoded there */
 
    unsigned width, height, crop_l, crop_r, crop_t, crop_b;
@@ -273,12 +281,17 @@ setup_decoder(Test *t, unsigned width, unsigned height)
    td.Format = DXGI_FORMAT_NV12;
    td.SampleDesc.Count = 1;
    td.Usage = D3D11_USAGE_DEFAULT;
-   td.BindFlags = D3D11_BIND_DECODER | (t->vp ? D3D11_BIND_SHADER_RESOURCE : 0);
+   td.BindFlags = D3D11_BIND_DECODER | ((t->vp || t->srv_mode) ? D3D11_BIND_SHADER_RESOURCE : 0);
    hr = t->dev->CreateTexture2D(&td, NULL, &t->tex);
-   printf("NV12 decoder texture array %ux%u x %u: 0x%08lx\n", td.Width, td.Height, td.ArraySize,
-          (unsigned long)hr);
+   printf("NV12 decoder texture array %ux%u x %u, BindFlags 0x%x: 0x%08lx\n", td.Width, td.Height,
+          td.ArraySize, td.BindFlags, (unsigned long)hr);
    if (FAILED(hr))
       return 1;
+   for (UINT i = 0; t->srv_mode == 1 && i < H264_MAX_SLOTS; i++)
+      if (vp_make_plane_views(t->dev, t->tex, i, t->srv[i]))
+         return 1;
+   if (t->srv_mode == 1)
+      printf("R8_UNORM and R8G8_UNORM views of the %u slices: made\n", H264_MAX_SLOTS);
    td.ArraySize = 1;
    td.Usage = D3D11_USAGE_STAGING;
    td.BindFlags = 0;
@@ -471,6 +484,17 @@ output_cb(void *ctx, int slot, unsigned decode_index, int poc)
          printf("frame %4u (pic %u, slot %d): %zu bytes not the fake decoder's pattern\n",
                 t->frames_out, decode_index, slot, bad);
       }
+      if (t->srv_mode == 2 && !t->srv[slot][0] && vp_make_plane_views(t->dev, t->tex, (UINT)slot, t->srv[slot]))
+         t->srv_failed = 1;
+      if (t->srv[slot][0] && t->srv[slot][1]) {
+         int r = vp_check_plane_views(t->dev, t->ctx, t->srv[slot], 0, t->tex_w, t->tex_h, t->crop_l,
+                                      t->crop_t, w, h, ly, lc);
+         t->srv_frames++;
+         if (r == 1)
+            t->srv_failed = 1;
+         else if (r)
+            t->srv_bad++;
+      }
       if (t->vp && !t->vp_done) {
          t->vp_done = 1;
          t->vp_rc = vp_check_decoded(t->dev, t->ctx, t->vdev, t->vctx, t->tex, (UINT)slot, t->tex_w,
@@ -504,6 +528,8 @@ main(int argc, char **argv)
       if (!strcmp(argv[i], "--probe")) probe_only = 1;
       else if (!strcmp(argv[i], "--fake")) t.fake = 1;
       else if (!strcmp(argv[i], "--vp")) t.vp = 1;
+      else if (!strcmp(argv[i], "--srv")) t.srv_mode = 1;
+      else if (!strcmp(argv[i], "--srv-late")) t.srv_mode = 2;
       else if (!strcmp(argv[i], "--chromium")) chromium = 1;
       else if (!strcmp(argv[i], "--fl11")) g_fl11 = 1;
       else if (!strncmp(argv[i], "--type=", 7)) { /* as Chromium's child processes have; ignored */ }
@@ -602,5 +628,29 @@ main(int argc, char **argv)
       fclose(t.out);
    if (t.vp && !t.vp_done)
       printf("decoded picture through the video processor: not run (needs --fake)\n");
-   return (prc || t.decode_errors || t.mismatches || !t.frames_out || t.vp_rc) ? 2 : 0;
+   int srv_rc = 0;
+   if (t.srv_mode) {
+      if (!t.fake)
+         printf("decoded pictures through the plane views: not run (needs --fake)\n");
+      else
+         printf("decoded pictures through the plane views (%s): %s, %u frames, %u differ\n",
+                t.srv_mode == 1 ? "made before decoding" : "made after decoding",
+                (t.srv_failed || !t.srv_frames) ? "FAILED" : t.srv_bad ? "MISMATCH" : "MATCH", t.srv_frames,
+                t.srv_bad);
+      srv_rc = t.fake && (t.srv_failed || !t.srv_frames || t.srv_bad);
+      for (UINT j = 0; j < H264_MAX_SLOTS; j++)
+         for (int i = 0; i < 2; i++)
+            if (t.srv[j][i])
+               t.srv[j][i]->Release();
+   }
+   /* The decoder goes, so the UMD logs its last line (Video.cpp). */
+   for (UINT i = 0; i < H264_MAX_SLOTS; i++)
+      if (t.views[i])
+         t.views[i]->Release();
+   if (t.dec)
+      t.dec->Release();
+   t.dec = NULL;
+   t.ctx->ClearState();
+   t.ctx->Flush();
+   return (prc || t.decode_errors || t.mismatches || !t.frames_out || t.vp_rc || srv_rc) ? 2 : 0;
 }

@@ -18,4 +18,14 @@ int vp_check_decoded(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11VideoDev
                      ID3D11VideoContext *vctx, ID3D11Texture2D *tex, UINT slice, UINT w, UINT h,
                      uint8_t luma, uint8_t chroma);
 
+/* A slice of the decoder's texture array as R8_UNORM and R8G8_UNORM views
+ * (0 made, 1 refused), and read through them (slice 0 of the views): 0
+ * every texel of the w x h area at x0,y0 is luma, chroma, chroma, 2 not,
+ * 1 setup. */
+int vp_make_plane_views(ID3D11Device *dev, ID3D11Texture2D *tex, UINT slice,
+                        ID3D11ShaderResourceView *srv[2]);
+int vp_check_plane_views(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11ShaderResourceView *srv[2],
+                         UINT slice, UINT tex_w, UINT tex_h, UINT x0, UINT y0, UINT w, UINT h,
+                         uint8_t luma, uint8_t chroma);
+
 #endif

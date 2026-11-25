@@ -450,6 +450,16 @@ jobs:
           $env:D3D10UMD_UMDVIDEO = '2'
           $env:D3D10UMD_VDEC_FAKE = '1'
           $dec = Run-Exe 'decode' 'vdectest.exe' "`"$dll`" `"$stream`" --fake --vp"
+          # 0083: the decoder texture as FFmpeg makes it (BIND_DECODER |
+          # BIND_SHADER_RESOURCE, 0x208) with R8/R8G8 views over its slices,
+          # made before the first decode and after decodes (the plane
+          # textures come with the first view), every frame read through
+          # them; and with zero copy off (D3D10UMD_VDEC_ZEROCOPY=0).
+          $srv = Run-Exe 'srv' 'vdectest.exe' "`"$dll`" `"$stream`" --fake --srv"
+          $srvlate = Run-Exe 'srvlate' 'vdectest.exe' "`"$dll`" `"$stream`" --fake --srv-late"
+          $env:D3D10UMD_VDEC_ZEROCOPY = '0'
+          $srvzc0 = Run-Exe 'srvzc0' 'vdectest.exe' "`"$dll`" `"$stream`" --fake --srv"
+          Remove-Item Env:D3D10UMD_VDEC_ZEROCOPY
           # 0081: HEVC Main, VP9 profile 0, AV1 Main through the same path,
           # and the register files the UMD builds from what the runtime
           # handed it (D3D10UMD_VDEC_REGLOG) against vdpu383test
@@ -489,10 +499,19 @@ jobs:
             Copy-Item $_.FullName "vdec-umdlog-$($_.Name)"
             Get-Content $_.FullName | Select-String 'video:|refused|NV12' | Select-Object -First 80 | ForEach-Object { $_.Line }
           }
+          # The decoder's last line says what became of its NV12 textures
+          # (0083): the 0x208 runs made plane textures, the run with
+          # D3D10UMD_VDEC_ZEROCOPY=0 counted its texture as zero copy off.
+          $nv12 = @(Get-ChildItem C:\mali\log -Filter 'vdectest*' | ForEach-Object { Get-Content $_.FullName } |
+                    Select-String 'video: NV12 decoder textures:' | ForEach-Object { $_.Line })
+          Write-Host "===== decoder texture counters"
+          $nv12 | ForEach-Object { Write-Host $_ }
+          if (-not ($nv12 -match 'plane textures for [1-9]')) { throw 'no decoder log line with plane textures made for a 0x208 texture' }
+          if (-not ($nv12 -match '[1-9][0-9]* zero copy off')) { throw 'no decoder log line counting a texture with zero copy off' }
           Remove-Item -Recurse -Force C:\mali\log
 
           $t = @{}
-          foreach ($k in 'off', 'noprofiles', 'vp', 'otherprocess', 'decode', 'nodevice') { $t[$k] = (Get-Content "vdec-$k.txt" -ErrorAction SilentlyContinue) -join "`n" }
+          foreach ($k in 'off', 'noprofiles', 'vp', 'otherprocess', 'decode', 'nodevice', 'srv', 'srvlate', 'srvzc0') { $t[$k] = (Get-Content "vdec-$k.txt" -ErrorAction SilentlyContinue) -join "`n" }
           if ($off -eq 'hang' -or $off -eq 0) { throw "UmdVideo 0: a video device was created ($off)" }
           if ($t['off'] -match 'ID3D11VideoDevice: yes') { throw 'UmdVideo 0 offered a video device' }
           if ($noprof -ne 3 -or $t['noprofiles'] -notmatch 'ID3D11VideoDevice: yes' -or $t['noprofiles'] -notmatch 'decoder profiles: 0') { throw "UmdVideo 1: expected a video device with no profiles ($noprof)" }
@@ -502,6 +521,10 @@ jobs:
           if ($dec -ne 0 -or $t['decode'] -notmatch 'fake pattern: MATCH' -or $t['decode'] -notmatch 'frames out 12') { throw "decode through ID3D11VideoContext failed ($dec)" }
           if ($vpt -ne 0 -or $t['vp'] -notmatch 'video processor tests: PASS') { throw "video processor or NV12 plane views failed ($vpt)" }
           if ($t['decode'] -notmatch 'through the video processor: MATCH') { throw 'the decoded picture through the video processor did not match' }
+          foreach ($r in @(@{ k = 'srv'; c = $srv }, @{ k = 'srvlate'; c = $srvlate }, @{ k = 'srvzc0'; c = $srvzc0 })) {
+            $o = $t[$r.k]
+            if ($r.c -ne 0 -or $o -notmatch 'BindFlags 0x208' -or $o -notmatch 'fake pattern: MATCH' -or $o -notmatch 'frames out 12' -or $o -notmatch 'through the plane views \([a-z ]+\): MATCH, 12 frames') { throw "0x208 decoder texture with plane views ($($r.k)) failed ($($r.c))" }
+          }
           if ($nodev -ne 3 -or $t['nodevice'] -notmatch 'decoder profiles: 0') { throw "without \\.\VDPU383 the profile must not be offered ($nodev)" }
           if ($t['decode'] -notmatch 'decoder profiles: 4') { throw 'UmdVideo 2 with the decoder: expected 4 profiles (H.264, HEVC, VP9, AV1)' }
           if ($codecRuns.Count -lt 4) { throw "expected 4 HEVC/VP9/AV1 runs from reglog.md5, got $($codecRuns.Count)" }
