@@ -17,6 +17,18 @@
  * memory, the register file is still built and checked, and the "decoded"
  * picture is a pattern vdectest knows (vdec_fake_luma, vdec_fake_chroma).
  *
+ * Zero copy (milestone V3b, docs/VIDEO-DECODE.md): given the application's
+ * texture (vdec_set_target before a decode: the token of maliwddm's export
+ * of its allocation and where the picture goes in it), the decoder writes
+ * the picture into the texture's pages, imported into the decoder's IOMMU
+ * by vdpu383.sys (IOCTL_VDPU383_IMPORT, interface version 3), and the
+ * caller copies nothing (vdec_picture.in_target). The layout of every
+ * surface of a decoder is then the texture's; a frame whose texture does
+ * not fit goes into a surface of the decoder's own, in that layout, and is
+ * copied as before. Without a target, with a texture layout the decoder
+ * cannot use, with vdec_options.no_zero_copy, D3D10UMD_VDEC_ZEROCOPY=0 or a
+ * driver without imports, everything is as in V3a.
+ *
  * With D3D10UMD_VDEC_REGLOG=<file>, every register file built is appended
  * to that file with its addresses written as buffer and offset (vdec.c,
  * reglog), so that a host test and vdectest can compare what the UMD
@@ -61,12 +73,15 @@ typedef struct vdec_options {
     /* VP9: V383_VP9_OPT_* (MPP's frame context handling where it differs
      * from the specification); 0 the specification's. */
     unsigned vp9_options;
+    /* 1: never decode into the application's texture (UmdVideoZeroCopy 0) */
+    unsigned no_zero_copy;
 } vdec_options;
 
 typedef struct vdec vdec;
 typedef struct vdec vdec_h264;          /* the name of milestone V3a */
 
 typedef struct vdec_picture {
+    unsigned in_target;         /* 1: decoded into the target (vdec_set_target); data is NULL */
     const uint8_t *data;        /* luma rows, then chroma rows (NV12) */
     unsigned stride;            /* bytes per row, both planes */
     unsigned luma_rows;         /* rows of luma before the chroma starts */
@@ -80,7 +95,31 @@ typedef struct vdec_stats {
     unsigned driver_runs;       /* vdpu383.sys's own counter (all processes), 0 if unknown */
     unsigned fake;              /* 1: D3D10UMD_VDEC_FAKE */
     unsigned iommu;             /* 1: the driver maps buffers through the decoder's IOMMU */
+    unsigned zero_copy;         /* pictures decoded into the application's texture */
+    unsigned imports;           /* textures imported into the decoder (IOCTL_VDPU383_IMPORT) */
+    unsigned import_failures;
+    unsigned refreshes;         /* imports refreshed after the display driver took the pages back */
+    unsigned can_import;        /* 1: the driver imports (interface 3, IOMMU on) or the fake */
 } vdec_stats;
+
+/*
+ * The application's texture for the next decode (zero copy). refresh, given
+ * refresh_ctx, returns a new export token of the same allocation (and its
+ * pages) after the display driver took the old one back, 0 if there is
+ * none; fake_map is the allocation's memory for the fake decoder.
+ */
+typedef uint64_t (*vdec_refresh_fn)(void *ctx, unsigned *pages);
+
+typedef struct vdec_target {
+    uint64_t token;             /* maliwddm MW_ESCAPE_VDEC_EXPORT */
+    unsigned pages;             /* the allocation's size in 4 KiB pages */
+    uint64_t offset;            /* the picture's first luma byte in the allocation */
+    unsigned stride;            /* bytes per row, both planes */
+    unsigned luma_rows;         /* rows of luma before the chroma rows */
+    vdec_refresh_fn refresh;
+    void *refresh_ctx;
+    uint8_t *fake_map;
+} vdec_target;
 
 /* 1 when a decoder can be opened in this process (the device or the fake);
  * cached after the first call. */
@@ -121,6 +160,17 @@ int vdec_vp9_decode(vdec *d, const V383_DXVA_PicParams_VP9 *pp, const uint8_t *f
 int vdec_av1_decode(vdec *d, const V383_DXVA_PicParams_AV1 *pp, const V383_DXVA_Tile_AV1 *tiles,
                     unsigned num_tiles, const uint8_t *data, unsigned data_len, vdec_picture *out,
                     char *err, size_t errlen);
+
+/* 1 when zero copy can be used in this process: the decoder opens, its
+ * driver imports (or the fake), D3D10UMD_VDEC_ZEROCOPY is not 0. */
+int vdec_zero_copy_possible(void);
+
+/* The target of the next vdec_*_decode call only; NULL for none. */
+void vdec_set_target(vdec *d, const vdec_target *t);
+
+/* The allocation of this token is going away (its texture is destroyed):
+ * the decoder lets go of its import. */
+void vdec_forget(uint64_t token);
 
 /* The old names. */
 vdec *vdec_h264_create(unsigned width, unsigned height, char *err, size_t errlen);

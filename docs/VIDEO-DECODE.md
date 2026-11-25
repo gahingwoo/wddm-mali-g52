@@ -135,7 +135,7 @@ interrupts and its own IOMMU. Three stages:
 | V3a AV1 Main | `DXVA_ModeAV1_VLD_Profile0`, 8 bit, `ConfigBitstreamRaw` 1 | register builder on woa-rk3576 `main` (the decoder parses OBUs and keeps the CDFs itself; DXVA has only the tiles, so they are wrapped in OBUs, `UmdAv1Synth`); 24 streams checked off the board, none run on it. In the UMD: Mesa 0081, CI only |
 | 10 bit | HEVC Main 10, VP9 profile 2, 10-bit AV1 | not offered: the decoder writes 10-bit pictures packed (4 samples in 5 bytes), the UMD has no P010 texture, the HEVC builder is Main only (section 7) |
 | V4 | NV12 as two shader views (R8 and R8G8 planes), the D3D11 video processor (NV12 and RGB in, RGB out, on the GPU): Media Player, Edge, mpv zero-copy rendering | **this branch**: Mesa 0079, `vdectest --vp`, CI on softpipe. Not run on the board |
-| V3b | zero copy through maliwddm and the decoder's IOMMU; sandboxed processes | not started |
+| V3b | zero copy through maliwddm and the decoder's IOMMU; sandboxed processes | zero copy: branch `vdec-zerocopy` with woa-rk3576 `vdpu383-import` (section 8), CI only. Sandboxed processes: not started (still `UserAccess`) |
 
 H.264 limits in V3a: 8-bit 4:2:0, progressive and field/MBAFF as the
 register builder handles them, up to 4096x2304; no encryption.
@@ -456,3 +456,138 @@ stream form is a guess between two (`UmdAv1Synth`); a 4K HEVC stream with
 20 surfaces of vdpu383test's layout (room for 4:2:2, about 19 MB each) is
 near vdpu383.sys's 384 MiB per handle; Chromium needs C1 (feature level
 11_0) before it asks for any of this.
+
+## 8. Zero copy (V3b), and where the CPU time went
+
+Written 2026-11-25, branches `vdec-zerocopy` (this repository) and
+`vdpu383-import` (woa-rk3576). CI only; nothing of it has run on the board.
+
+**What the board measured** (TaishanPi 3M, 2026-11-25, driver
+5.17.13.886, FFmpeg BtbN master winarm64, 1080p30 clips of 300 frames,
+`UmdVideo` 2): H.264 with `-hwaccel_output_format d3d11` (frames stay on
+the GPU) 6.43 s wall and 5.0 s user CPU, 47 fps; downloaded, 11.07 s and
+8.7 s; software 1.35 s. HEVC on the GPU 7.53 s and 6.6 s, software 2.29 s.
+The decoder itself does a 1080p HEVC picture in about 2.2 ms (vdpu383test,
+100 pictures, 223.8 ms in the decoder calls): ~450 fps, MPP's class.
+
+**Where 15 to 20 ms of CPU per picture went**, read from the code (V3a,
+`Video.cpp` and `video/vdec.c`, per picture):
+
+| Step | Work | Cost at 1080p |
+|---|---|---|
+| `SubmitDecoderBuffers` | the picture parameters, matrix, slice control and bitstream copied out of the runtime's staging buffers (uncached, maliwddm's segment is not cache coherent) into memory of the UMD | the bitstream: 30 to 40 KB a picture for these clips, well under 0.5 ms |
+| `vdec_*_decode` | the bitstream zeroed and copied into the decoder's buffer (write-combined), the register file built, `IOCTL_VDPU383_RUN` (synchronous: the thread sleeps while the decoder works) | the build and the ioctl: tens of us of CPU; the 2 to 3 ms in the decoder are wall time, not CPU |
+| `CopyToTarget` | 3.1 MB of NV12 read from the decoder's surface, which is write-combined (Normal non-cacheable: every load goes to DRAM, no prefetch, no line fill), uploaded with `texture_subdata` into the texture: a staging copy, then Panfrost's tiled store into the texture's uncached pages | **the 15 ms**: uncached reads run at a few hundred MB/s on the A72; the tiled store and the staging copy add a few ms |
+| (planes) | with shader resource views (mpv, Chromium) the same picture written again into the R8 and R8G8 plane textures | another copy, of the same kind |
+| download (`-hwaccel d3d11va`) | FFmpeg's copy into a staging texture and its CPU read of that staging texture, uncached again | the other 12 ms of the download run |
+
+Nothing else per picture is close: no allocation (surfaces are made once
+per DXVA index), the register log and its hashing only with
+`D3D10UMD_VDEC_REGLOG`, a log line only for the first three pictures and
+every 300th.
+
+**The design.**
+
+1. A decoder output texture (NV12, `D3D10_DDI_USAGE_DEFAULT`, no shader
+   resource views, no CPU access, not shared) is made linear
+   (`PIPE_BIND_LINEAR`, Mesa patch 0082 `Resource.cpp`). Its BO is marked in
+   the shim (`malikm_vdec_mark`) so that its export succeeds, which makes
+   Panfrost treat it as shared: never swapped for a new BO when it is
+   mapped for writing (the decoder would keep writing the old pages), never
+   kept in the BO cache when freed (its destruction reaches the KMD at
+   once). Its pitch and slice stride are read back from Panfrost.
+2. At the first decode into it, the UMD asks maliwddm to export the
+   allocation (`MW_ESCAPE_VDEC_EXPORT`, `include/maliwddm_abi.h`). maliwddm
+   resolves the handle in the calling process, checks the allocation is
+   resident with all its pages, copies the page frame numbers VidMm gave
+   `MAP_APERTURE_SEGMENT` and returns a token, valid for that process only
+   (`drivers/maliwddm/vdecexport.c`).
+3. vdec hands the token to vdpu383.sys (`IOCTL_VDPU383_IMPORT`, interface
+   version 3), which asks maliwddm for the pages kernel to kernel (the
+   callback object `\Callback\MaliwddmVdecExport`,
+   `video/vdpu383/vdpu383_import.h`; maliwddm checks token and process, so a
+   process reaches only its own GPU memory and never names pages itself),
+   and maps them at a free run of the decoder's IO addresses. Once per
+   texture (all its array slices); freed when the texture is destroyed
+   (`vdec_forget`).
+4. The decoder's surfaces take the texture's layout: hor stride = the
+   texture's pitch, ver stride = its luma rows (chroma at pitch x rows, the
+   UMD's NV12 layout). Decided per stream geometry (H.264, HEVC) or at the
+   first picture (VP9, AV1) from the first picture's texture; the surfaces
+   of the decoder's own then hold only the co-located motion vectors (and
+   AV1's CDFs). The picture's address is the import's IO address plus the
+   slice's offset; references are read from wherever their index was
+   decoded. Conditions: pitch a multiple of 64 and at least the copy path's
+   (64-aligned width), rows at least the copy path's and a multiple of 16
+   (H.264, HEVC) or 64 (VP9, AV1), slice offset 256-aligned. FFmpeg's
+   1080p textures: 1920 x 1088 (H.264, VP9), 1920 x 1152 (HEVC, AV1: 128-row
+   alignment), all inside.
+5. Before the decoder writes a slice the UMD maps it for writing, 1 x 1
+   texel: Panfrost then flushes and waits for every batch that reads or
+   writes the texture (a shared BO is never replaced, so this waits). After
+   the decode returns, any GPU job that samples the texture starts with an
+   L2 clean and invalidate (maligpu.c), and the CPU's view of the pages is
+   uncached: no cache maintenance is needed anywhere.
+6. Pages taken back: VidMm may unmap (evict) a resident allocation, or it
+   is destroyed. maliwddm calls vdpu383.sys's revoke routine right after the
+   unmap's MMU section and before it returns (VidMm keeps the pages until
+   then), or before a destruction; vdpu383.sys waits for a decode in
+   progress (its decode gate), clears the mapping and marks the import dead.
+   A decode naming it is refused before the decoder starts
+   (`VDPU383_RUN_REVOKED`); vdec asks the UMD for a new export of the same
+   texture, refreshes the import at the same IO addresses and runs the
+   same register file again. An export racing an unmap is made under
+   maliwddm's MMU lock, so it either precedes the unmap (and is ended by
+   it) or sees the allocation unmapped.
+7. Fallbacks, all to the V3a copy: a texture with shader resource views
+   (mpv's `d3d11va`, Chromium; their plane textures are copies, so the
+   picture is decoded into a surface of the decoder's own and copied as
+   before), a layout outside the conditions, a texture made before the
+   decoder's driver could import, an export maliwddm refuses (not resident:
+   asked again every 64 frames), an import vdpu383.sys refuses, an older
+   vdpu383.sys (interface 2), `UmdVideoZeroCopy` 0, `D3D10UMD_VDEC_ZEROCOPY=0`.
+   Within a zero-copy stream, a frame whose texture does not fit is decoded
+   into a picture of the decoder's own in the same layout and copied.
+
+| Setting (GPU0 Device Parameters) | Default | Effect |
+|---|---|---|
+| `UmdVideoZeroCopy` | 1 | with `UmdVideo` on: maliwddm registers the export callback at start, the UMD makes decoder outputs linear and decodes into them. 0: neither, every picture copied as in V3a (full restart) |
+
+With the copy gone, a picture costs the decoder's time plus the ioctl, the
+register build and the small bitstream copies: at 2.2 ms in the decoder
+(HEVC) that is about 400 fps in FFmpeg's single-threaded decode loop, and
+user CPU a small fraction of the wall time. The download path keeps its
+own copies (FFmpeg's staging read).
+
+**AV1.** The mismatch of 2026-11-25 was not the copy: section 7, "AV1
+references from FFmpeg".
+
+**Board test.** Inputs: firmware with the decoder on; vdpu383.sys from
+woa-rk3576 `vdpu383-import` (interface 3; `vdpu383test info` prints an
+`imports` line); the maliwddm package of `vdec-zerocopy` (its CI
+artifact); FFmpeg (BtbN winarm64); the four clips of 2026-11-25. Stage
+both drivers only, `ConfigFlags` 0x20, full restart, as section 5.
+`UmdVideo` 2 and `UserAccess` 1 as before; `UmdVideoZeroCopy` absent.
+Then, as the normal user:
+
+```
+powershell -ExecutionPolicy Bypass -File vdec-bench.ps1 -Clips D:\clips -Ffmpeg D:\ffmpeg\bin\ffmpeg.exe
+```
+
+(`tools/windows/vdectest/vdec-bench.ps1`; vdpu383test.exe next to it for
+the decoder's counters). Pass: every clip MATCH; `gpu` at 300 fps or more
+for each codec with user time a small share of the wall; the decoder's
+decode count up by the frames decoded; imports made, none failed. Then
+`UmdVideoZeroCopy` 0, full restart, the same script: the V3a numbers
+again (the comparison, and the back-out). Send `vdec-bench\bench.txt` of
+both runs and `C:\mali\log`.
+
+**Back-out.** `UmdVideoZeroCopy` 0 (copy path, same drivers), or the
+previous vdpu383.sys (interface 2: the UMD sees no imports and copies).
+
+**Risks.** The VDPU383 has not written pictures with a ver stride other
+than the 16 or 64-aligned height MPP and vdpu383test use (HEVC and AV1 at
+1152 rows); if those two mismatch while H.264 and VP9 match, that is it,
+and the condition in `target_fits` (video/vdec.c) needs the rows equal to
+the copy path's. VidMm under WDDM 2.0 has never evicted an allocation on
+this board, so the revoke path has run only on paper.

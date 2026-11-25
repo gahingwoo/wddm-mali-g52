@@ -21,6 +21,10 @@ run: vdec-host
 	@set -e; grep -v '^#' reglog.md5 | while read s f m o; do \
 	  echo "== $$s $$o"; ./vdec-host $(D)/$$s --frames $$f --reglog-md5 $$m $$o --log reglog-$$s.txt; \
 	done
+	@# zero copy (V3b): the same streams into a texture of the test's
+	@set -e; grep -v '^#' reglog.md5 | while read s f m o; do \
+	  echo "== $$s $$o --zero-copy"; ./vdec-host $(D)/$$s --frames $$f $$o --zero-copy --log zc-$$s.txt; \
+	done
 
 clean:
-	rm -f vdec-host reglog-*.txt vdec-host-reglog.txt
+	rm -f vdec-host reglog-*.txt zc-*.txt vdec-host-reglog.txt

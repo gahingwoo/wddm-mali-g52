@@ -136,6 +136,7 @@ static NTSTATUS APIENTRY MwAddDevice(IN_CONST_PDEVICE_OBJECT Pdo, OUT_PPVOID Con
     a->Pdo = (PDEVICE_OBJECT)Pdo;
     ExInitializeFastMutex(&a->MmuLock);
     ExInitializeFastMutex(&a->UmdLock);
+    MwVdecInit(a);
     a->Gpu.Log = MwLogHook;
     a->Gpu.LogOwner = a;
     MwCommandInit(a);
@@ -873,6 +874,9 @@ static NTSTATUS APIENTRY MwStartDevice(IN_CONST_PVOID Context, IN_PDXGK_START_IN
     *Sources = MW_RENDER_ONLY ? 0 : (a->Hdmi.Extend ? 2 : 1);
     *Children = MW_RENDER_ONLY ? 0 : a->Hdmi.Children;
     MwPcwAttach(a);
+    /* zero-copy decode: the callback vdpu383.sys calls (vdecexport.c) */
+    if (a->GpuUp)
+        MwVdecStart(a);
     MwLog(a, L"Started", 1);
     return STATUS_SUCCESS;
 }
@@ -937,6 +941,8 @@ void MwAdapterStop(MW_ADAPTER *A)
     if (A->Stopped)
         return;
     A->Stopped = TRUE;
+    /* The video decoder lets go of every exported page (vdecexport.c). */
+    MwVdecStop(A);
     /* Before StopGpu unmaps the TSADC and the CRU page (pcw.c). */
     MwPcwDetach(A);
     MwCommandStop(A);
@@ -974,6 +980,7 @@ static NTSTATUS APIENTRY MwRemoveDevice(IN_CONST_PVOID Context)
     MwPcwDetach(a);
     MwBc("RemoveDevice: %hs", a->Stopped ? "already stopped" : "not stopped, stopping the threads and timers first");
     if (!a->Stopped) {
+        MwVdecStop(a);
         MwCommandStop(a);
         MwHpdStop(a);
         MwBacklightStop(a);
@@ -1205,7 +1212,8 @@ static NTSTATUS UmdAdapterInfo(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *In
     if (u.Video)
         u.Video |= (MwSetting(A, L"UmdVideoCodecs", 0) & 0xFF) << 8 |
                    (MwSetting(A, L"UmdAv1Synth", 0) & 1) << 16 |
-                   (MwSetting(A, L"UmdVp9Mpp", 0) & 3) << 18;
+                   (MwSetting(A, L"UmdVp9Mpp", 0) & 3) << 18 |
+                   (MwSetting(A, L"UmdVideoZeroCopy", 1) ? 0 : MW_UMD_VIDEO_NO_ZERO_COPY);
     u.DecodeNode = MW_UMD_NO_NODE;      /* no decode engine yet (U5) */
     u.VirtualMode = 0;                  /* WDDM 1.3, physical (WDDM2.md P2 sets it) */
     u.KmdBuild = MW_BUILD;
@@ -1760,6 +1768,10 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_ALLOC_INFO_DATA))
             return STATUS_INVALID_PARAMETER;
         return MwEscapeAllocInfo(a, Esc, (MW_ESCAPE_ALLOC_INFO_DATA *)Esc->pPrivateDriverData);
+    case MW_ESCAPE_VDEC_EXPORT:
+        if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_VDEC_EXPORT_DATA))
+            return STATUS_INVALID_PARAMETER;
+        return MwEscapeVdecExport(a, Esc, (MW_ESCAPE_VDEC_EXPORT_DATA *)Esc->pPrivateDriverData);
     case MW_ESCAPE_GPU_INFO:
         if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_GPU_INFO_DATA))
             return STATUS_INVALID_PARAMETER;

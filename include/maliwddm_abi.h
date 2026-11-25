@@ -57,6 +57,7 @@ typedef struct _MW_COMMAND {
 #define MW_ESCAPE_STATS         3
 #define MW_ESCAPE_SCANOUT       4
 #define MW_ESCAPE_WDDM          8
+#define MW_ESCAPE_VDEC_EXPORT   9
 
 /* The WDDM version the KMD reported at this start (DXGK_DRIVERCAPS), and
  * what that asks of the UMD. A KMD that does not know the code refuses it:
@@ -91,6 +92,24 @@ typedef struct _MW_ESCAPE_ALLOC_INFO_DATA {
     mw_u64 GpuVa;                       /* out */
     mw_u64 Size;                        /* out */
 } MW_ESCAPE_ALLOC_INFO_DATA;
+
+/* Zero-copy decode (docs/VIDEO-DECODE.md, V3b): the allocation's pages for
+ * the VDPU383, which writes the picture into them through its own IOMMU.
+ * The KMD returns a token naming the export, for the calling process only;
+ * the process gives it to vdpu383.sys (IOCTL_VDPU383_IMPORT), which gets
+ * the pages from the KMD kernel to kernel (video/vdpu383/vdpu383_import.h).
+ * The same token comes back while the export lasts; the KMD ends it when
+ * the pages stop being the allocation's (eviction, destruction), after
+ * vdpu383.sys has let go of them. Refused (STATUS_NOT_SUPPORTED) unless
+ * UmdVideo and UmdVideoZeroCopy are on, and for an allocation that is not
+ * resident. */
+typedef struct _MW_ESCAPE_VDEC_EXPORT_DATA {
+    mw_u32 Code;                        /* MW_ESCAPE_VDEC_EXPORT */
+    mw_u32 hAllocation;                 /* in: D3DKMT allocation handle */
+    mw_u64 Token;                       /* out */
+    mw_u32 Pages;                       /* out: 4 KiB pages, the whole allocation */
+    mw_u32 Reserved;
+} MW_ESCAPE_VDEC_EXPORT_DATA;
 
 /* GET_PARAM's values for the UMD, by Panfrost parameter number. */
 #define MW_GPU_PARAMS           45
@@ -204,12 +223,15 @@ typedef struct _MW_UMD_ADAPTER_INFO {
  * profile 0, 3 AV1 Main; 0 or absent: all four); UmdAv1Synth, how AV1
  * tiles are wrapped for the decoder (0 a tile group OBU, 1 a frame OBU);
  * UmdVp9Mpp, VP9 frame context handling (0 the specification's, 1-3
- * MPP's, V383_VP9_OPT_*). A UMD that predates them offers no video at
- * all when any is set. */
+ * MPP's, V383_VP9_OPT_*); UmdVideoZeroCopy 0, MW_UMD_VIDEO_NO_ZERO_COPY.
+ * A UMD that predates them offers no video at all when any is set. */
 #define MW_UMD_VIDEO_LEVEL(v)       ((v) & 0xFFu)
 #define MW_UMD_VIDEO_CODECS(v)      (((v) >> 8) & 0xFFu)
 #define MW_UMD_VIDEO_AV1_SYNTH(v)   (((v) >> 16) & 1u)
 #define MW_UMD_VIDEO_VP9_MPP(v)     (((v) >> 18) & 3u)
+/* UmdVideoZeroCopy 0 (default 1): the decoder's pictures are copied into
+ * the application's texture by the CPU, as before zero copy (V3b). */
+#define MW_UMD_VIDEO_NO_ZERO_COPY   (1u << 20)
 
 /* MW_UMD_ADAPTER_INFO.Redirect. The files C:\mali\redirect and
  * C:\mali\noredirect still win over it in the UMD. */

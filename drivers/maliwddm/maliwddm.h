@@ -72,6 +72,11 @@ typedef struct _MW_ALLOCATION {
      * and whether the allocation is counted as resident. */
     ULONG MemSlot;
     BOOLEAN MemResident;
+    /* The pages MAP_APERTURE_SEGMENT mapped from Mdl (all of them, or the
+     * allocation is not exported), and the zero-copy export of the
+     * allocation to the video decoder (vdecexport.c), under VdecLock. */
+    ULONG MdlPages;
+    struct _MW_VDEC_EXPORT *Vdec;
 } MW_ALLOCATION;
 
 /* One process's GPU memory (memory.c). Pid 0 is a free entry. */
@@ -690,6 +695,20 @@ struct _MW_ADAPTER {
 
     /* HDMI hot-plug, all of it behind HdmiHpd (hdmi.c, hpd.c). */
     MW_HDMI Hdmi;
+
+    /* Zero-copy decode (vdecexport.c): allocations exported to vdpu383.sys.
+     * VdecOn while the callback object is registered (UmdVideo and
+     * UmdVideoZeroCopy on). VdecLock guards the export list and each
+     * allocation's Vdec; VdecRevoke (an event used as a lock) is held while
+     * an importer's revoke routine runs and by a release, never together
+     * with anything else but VdecLock inside it. */
+    BOOLEAN VdecOn;
+    FAST_MUTEX VdecLock;
+    KEVENT VdecRevoke;
+    LIST_ENTRY VdecExports;
+    PVOID VdecCallback, VdecRegistration;
+    volatile LONG64 VdecSeq;
+    ULONG VdecExportsMade, VdecImports, VdecRevokes, VdecRefused;
 };
 
 /* The picture's size in the framebuffer: the firmware's, unless the window
@@ -825,6 +844,12 @@ void MwTdrLogQueue(MW_ADAPTER *A);
 #define MW_CLK_PENDING 0x80000000u
 extern PDRIVER_OBJECT MwDriverObject;
 void MwSetSetting(MW_ADAPTER *A, PCWSTR Name, ULONG Value);
+/* vdecexport.c */
+void MwVdecInit(MW_ADAPTER *A);
+void MwVdecStart(MW_ADAPTER *A);
+void MwVdecStop(MW_ADAPTER *A);
+void MwVdecGone(MW_ADAPTER *A, MW_ALLOCATION *Alloc);
+NTSTATUS MwEscapeVdecExport(MW_ADAPTER *A, const DXGKARG_ESCAPE *Esc, MW_ESCAPE_VDEC_EXPORT_DATA *D);
 void MwScanStart(MW_ADAPTER *A);
 void MwScanStop(MW_ADAPTER *A);
 void MwScanToFb(MW_ADAPTER *A);
