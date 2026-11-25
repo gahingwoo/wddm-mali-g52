@@ -199,7 +199,7 @@ jobs:
           Get-ChildItem C:\llvm\lib\cmake -Recurse -Filter '*.cmake' | ForEach-Object {
             $t = Get-Content -Raw $_.FullName
             $u = [regex]::Replace($t, '[A-Za-z]:/[^;"]*?DIA SDK/lib/arm64/diaguids\.lib', $dia)
-            if ($u -ne $t) { Set-Content -NoNewline $_.FullName $u; Write-Host "DIA SDK path fixed in $($_.Name)" }
+            if ($u -ne $t) { [IO.File]::WriteAllText($_.FullName, $u); Write-Host "DIA SDK path fixed in $($_.Name)" }
           }
           if (-not (Get-ChildItem C:\llvm\lib\clang -Recurse -Filter opencl-c.h)) { throw 'no opencl-c.h in the release' }
           dumpbin /nologo /directives C:\llvm\lib\LLVMSupport.lib | Select-String 'DEFAULTLIB' | Select-Object -Unique -First 6 | ForEach-Object { $_.Line.Trim() }
