@@ -310,6 +310,15 @@ jobs:
               if ($LASTEXITCODE) { throw "patch failed: $($_.Name)" }
             }
           }
+          # LLVM through llvm-config (native.ini names C:\llvm's), not
+          # meson's CMake lookup, which on Windows comes first and took the
+          # runner's LLVM 22.1 although CMAKE_PREFIX_PATH named C:\llvm
+          # (runs 45759617805, 45760352894).
+          $mb = 'mesa\meson.build'
+          $t = [IO.File]::ReadAllText((Resolve-Path $mb))
+          $u = $t.Replace("method : host_machine.system() == 'windows' ? 'auto' : 'config-tool',", "method : 'config-tool',")
+          if ($u -eq $t) { throw "meson.build: the LLVM method line is not there" }
+          [IO.File]::WriteAllText((Resolve-Path $mb), $u)
 
       - name: Configure
         shell: pwsh
