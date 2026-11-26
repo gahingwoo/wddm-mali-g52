@@ -1,0 +1,17 @@
+diff --git a/src/gallium/frontends/d3d10umd/Video.cpp b/src/gallium/frontends/d3d10umd/Video.cpp
+index 8162f67..4d0476c 100644
+--- a/src/gallium/frontends/d3d10umd/Video.cpp
++++ b/src/gallium/frontends/d3d10umd/Video.cpp
+@@ -464,6 +464,12 @@ VideoDestroyVideoDecoder(D3D10DDI_HDEVICE, D3D11_1DDI_HDECODE hDecode)
+                d->profile ? d->profile->name : "?", d->width, d->height, d->frames, d->errors, d->zero_copy,
+                st.pictures, st.errors, st.hw_us_total, st.driver_runs, st.fake ? " (fake)" : "",
+                st.iommu ? " (IOMMU)" : "", st.zero_copy, st.imports, st.import_failures, st.refreshes);
++   /* Why the decoder did not take a texture (vdpu383.sys LastImport* and
++    * maliwddm VdecLast* in their Device Parameters say more). */
++   if (st.import_failures)
++      DebugPrintf("video: last refused import: error %u for %u pages; %u retries (a refused import is asked "
++                  "again every 64th use, with a new export)\n",
++                  st.last_import_error, st.last_import_pages, st.import_retries);
+    DebugPrintf("video: NV12 decoder textures: %u for the decoder to write (%u with shader resource binding), "
+                "%u set up failed; copied into: %u CPU access, %u shared, %u zero copy off; plane textures "
+                "for %u, %u layers read back for them\n",

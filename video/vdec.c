@@ -56,11 +56,12 @@ typedef struct vdec_buf {
 
 /* A texture allocation imported into the decoder (zero copy), for the
  * process: one per export token, whichever decoder uses it. handle 0: the
- * import failed, not tried again for this token. */
+ * import failed; tries counts the uses since, and every g_import_retry-th
+ * asks for the export again (refresh) and imports it. */
 typedef struct vdec_import {
     struct vdec_import *next;
     uint64_t token;
-    unsigned handle;
+    unsigned handle, tries;
     uint32_t dma, size;
     uint8_t *fake;
     vdec_refresh_fn refresh;
@@ -106,6 +107,8 @@ static int g_state;                     /* 0 not tried, 1 available, -1 not */
 static int g_fake;
 static int g_can_import;                /* the driver imports (interface 3, IOMMU on), or the fake */
 static int g_zc_env = -1;               /* D3D10UMD_VDEC_ZEROCOPY: -1 unset, 0 off, 1 on */
+static unsigned g_import_retry = 64;    /* D3D10UMD_VDEC_IMPORT_RETRY */
+static unsigned g_fake_import_fail;     /* D3D10UMD_VDEC_FAKE_IMPORT_FAIL: the fake refuses this many imports */
 static vdec_import *g_imports;
 static uint32_t g_fake_dma = 0x10000000u;
 static vdec_stats g_stats;
@@ -148,8 +151,14 @@ int vdec_available(void)
         g_stats.fake = (unsigned)g_fake;
         {
             const char *zc = getenv("D3D10UMD_VDEC_ZEROCOPY");
+            const char *rt = getenv("D3D10UMD_VDEC_IMPORT_RETRY");
+            const char *ff = getenv("D3D10UMD_VDEC_FAKE_IMPORT_FAIL");
             if (zc && (zc[0] == '0' || zc[0] == '1'))
                 g_zc_env = zc[0] - '0';
+            if (rt && atoi(rt) > 0)
+                g_import_retry = (unsigned)atoi(rt);
+            if (ff && atoi(ff) > 0)
+                g_fake_import_fail = (unsigned)atoi(ff);
         }
         if (g_fake) {
             g_state = 1;
@@ -399,8 +408,55 @@ static int target_fits(const vdec *d, unsigned hor, unsigned ver, unsigned rows_
            t->offset + (uint64_t)t->stride * t->luma_rows * 3 / 2 <= (uint64_t)t->pages * 4096;
 }
 
+/* A new import of token's pages into im (the fake's, or
+ * IOCTL_VDPU383_IMPORT); 1 when made. g_lock held. */
+static int import_try(vdec_import *im, uint64_t token, unsigned pages)
+{
+    g_stats.last_import_pages = pages;
+    if (g_fake) {
+        if (g_fake_import_fail) {
+            g_fake_import_fail--;
+            g_stats.last_import_error = 1168;   /* ERROR_NOT_FOUND, as STATUS_NOT_FOUND comes back */
+            return 0;
+        }
+        im->handle = 1;
+        im->dma = g_fake_dma;
+        im->size = pages * 4096u;
+        g_fake_dma += im->size + 4096;
+        return 1;
+    }
+#ifdef _WIN32
+    {
+        VDPU383_IMPORT_IN in;
+        VDPU383_IMPORT_OUT out;
+        DWORD got = 0;
+
+        memset(&in, 0, sizeof(in));
+        memset(&out, 0, sizeof(out));
+        in.token = token;
+        in.pages = pages;
+        if (DeviceIoControl(g_dev, IOCTL_VDPU383_IMPORT, &in, sizeof(in), &out, sizeof(out), &got, NULL)) {
+            if (got >= sizeof(out) && out.handle) {
+                im->handle = out.handle;
+                im->dma = out.dma;
+                im->size = out.size;
+                return 1;
+            }
+            g_stats.last_import_error = 0xFFFFFFFFu;    /* succeeded with no import */
+        } else {
+            g_stats.last_import_error = (unsigned)GetLastError();
+        }
+    }
+#else
+    (void)token;
+#endif
+    return 0;
+}
+
 /* The import of the target's allocation, made on first use. NULL when the
- * driver refuses it (then not asked again for this token). */
+ * driver refuses it; then asked again every g_import_retry-th use, with
+ * the export asked for again first (maliwddm makes a new one if the old
+ * one ended: the pages went away between the export and the import). */
 static vdec_import *import_get(const vdec_target *t)
 {
     vdec_import *im;
@@ -415,35 +471,31 @@ static vdec_import *import_get(const vdec_target *t)
         im = (vdec_import *)calloc(1, sizeof(*im));
         if (im) {
             im->token = t->token;
-            if (g_fake) {
-                im->handle = 1;
-                im->dma = g_fake_dma;
-                im->size = t->pages * 4096u;
-                g_fake_dma += im->size + 4096;
-            } else {
-#ifdef _WIN32
-                VDPU383_IMPORT_IN in;
-                VDPU383_IMPORT_OUT out;
-                DWORD got = 0;
-                memset(&in, 0, sizeof(in));
-                memset(&out, 0, sizeof(out));
-                in.token = t->token;
-                in.pages = t->pages;
-                if (DeviceIoControl(g_dev, IOCTL_VDPU383_IMPORT, &in, sizeof(in), &out, sizeof(out), &got, NULL) &&
-                    got >= sizeof(out) && out.handle) {
-                    im->handle = out.handle;
-                    im->dma = out.dma;
-                    im->size = out.size;
-                }
-#endif
-            }
-            if (im->handle)
+            if (import_try(im, t->token, t->pages))
                 g_stats.imports++;
             else
                 g_stats.import_failures++;
             im->next = g_imports;
             g_imports = im;
         }
+    } else if (!im->handle && ++im->tries % g_import_retry == 0) {
+        uint64_t token = im->token;
+        unsigned pages = t->pages;
+
+        if (t->refresh) {
+            unsigned p = 0;
+            uint64_t nt = t->refresh(t->refresh_ctx, &p);
+            if (nt && p) {
+                token = nt;
+                pages = p;
+            }
+        }
+        g_stats.import_retries++;
+        im->token = token;      /* the caller's token from now on (refresh) */
+        if (import_try(im, token, pages))
+            g_stats.imports++;
+        else
+            g_stats.import_failures++;
     }
     if (im) {
         im->fake = t->fake_map;
@@ -484,6 +536,9 @@ static void imports_refresh(void)
             if (token != im->token)
                 g_stats.refreshes++;
             im->token = token;
+        } else {
+            g_stats.last_import_error = (unsigned)GetLastError();
+            g_stats.last_import_pages = pages;
         }
     }
     ReleaseSRWLockExclusive(&g_lock);

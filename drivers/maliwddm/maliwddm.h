@@ -709,6 +709,10 @@ struct _MW_ADAPTER {
     PVOID VdecCallback, VdecRegistration;
     volatile LONG64 VdecSeq;
     ULONG VdecExportsMade, VdecImports, VdecRevokes, VdecRefused;
+    /* The last refusal (vdecexport.c VdecNote, MW_VDEC_WHY_*), written to
+     * the log key rate-limited; exports that ended before any import. */
+    ULONG VdecWhy, VdecWhyStatus, VdecWhyPid, VdecWhyExportPid, VdecWhyPages, VdecWhyExportPages;
+    ULONG VdecNotes, VdecEndedUnimported, VdecLastGone;
 };
 
 /* The picture's size in the framebuffer: the firmware's, unless the window
@@ -848,7 +852,11 @@ void MwSetSetting(MW_ADAPTER *A, PCWSTR Name, ULONG Value);
 void MwVdecInit(MW_ADAPTER *A);
 void MwVdecStart(MW_ADAPTER *A);
 void MwVdecStop(MW_ADAPTER *A);
-void MwVdecGone(MW_ADAPTER *A, MW_ALLOCATION *Alloc);
+/* Why the pages go: MW_VDEC_GONE_* (vdecexport.c) */
+#define MW_VDEC_GONE_DESTROY    1
+#define MW_VDEC_GONE_MAP        2
+#define MW_VDEC_GONE_UNMAP      3
+void MwVdecGone(MW_ADAPTER *A, MW_ALLOCATION *Alloc, ULONG Why);
 NTSTATUS MwEscapeVdecExport(MW_ADAPTER *A, const DXGKARG_ESCAPE *Esc, MW_ESCAPE_VDEC_EXPORT_DATA *D);
 void MwScanStart(MW_ADAPTER *A);
 void MwScanStop(MW_ADAPTER *A);
