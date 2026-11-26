@@ -460,6 +460,21 @@ jobs:
           $env:D3D10UMD_VDEC_ZEROCOPY = '0'
           $srvzc0 = Run-Exe 'srvzc0' 'vdectest.exe' "`"$dll`" `"$stream`" --fake --srv"
           Remove-Item Env:D3D10UMD_VDEC_ZEROCOPY
+          # 0085: the plane views are aliases of the texture's memory; the
+          # plane textures copied from it (D3D10UMD_NV12_ALIAS=0) are the
+          # fallback for a driver without resource_alias. Every frame is
+          # compared through the views with the staging read back, luma,
+          # Cb and Cr (the fake decoder's Cb and Cr differ).
+          $env:D3D10UMD_NV12_ALIAS = '0'
+          $srvcopy = Run-Exe 'srvcopy' 'vdectest.exe' "`"$dll`" `"$stream`" --fake --srv"
+          $srvcopylate = Run-Exe 'srvcopylate' 'vdectest.exe' "`"$dll`" `"$stream`" --fake --srv-late"
+          Remove-Item Env:D3D10UMD_NV12_ALIAS
+          # C3: the decoder texture as Chromium 158 makes it (an array,
+          # MiscFlags SHARED, refused without a KMD so made unshared here),
+          # the decoder at the container's size, ANGLE's plane views of
+          # every slice made before decoding; --open is board-only (it needs
+          # a shared texture) and says so.
+          $chrtex = Run-Exe 'chrtex' 'vdectest.exe' "`"$dll`" `"$stream`" --fake --chromium-tex --open"
           # 0081: HEVC Main, VP9 profile 0, AV1 Main through the same path,
           # and the register files the UMD builds from what the runtime
           # handed it (D3D10UMD_VDEC_REGLOG) against vdpu383test
@@ -506,12 +521,13 @@ jobs:
                     Select-String 'video: NV12 decoder textures:' | ForEach-Object { $_.Line })
           Write-Host "===== decoder texture counters"
           $nv12 | ForEach-Object { Write-Host $_ }
-          if (-not ($nv12 -match 'plane textures for [1-9]')) { throw 'no decoder log line with plane textures made for a 0x208 texture' }
+          if (-not ($nv12 -match 'plane views aliasing [1-9]')) { throw 'no decoder log line with plane views aliasing a 0x208 texture (0085)' }
+          if (-not ($nv12 -match 'plane textures for [1-9]')) { throw 'no decoder log line with plane textures made for a 0x208 texture (D3D10UMD_NV12_ALIAS=0)' }
           if (-not ($nv12 -match '[1-9][0-9]* zero copy off')) { throw 'no decoder log line counting a texture with zero copy off' }
           Remove-Item -Recurse -Force C:\mali\log
 
           $t = @{}
-          foreach ($k in 'off', 'noprofiles', 'vp', 'otherprocess', 'decode', 'nodevice', 'srv', 'srvlate', 'srvzc0') { $t[$k] = (Get-Content "vdec-$k.txt" -ErrorAction SilentlyContinue) -join "`n" }
+          foreach ($k in 'off', 'noprofiles', 'vp', 'otherprocess', 'decode', 'nodevice', 'srv', 'srvlate', 'srvzc0', 'srvcopy', 'srvcopylate', 'chrtex') { $t[$k] = (Get-Content "vdec-$k.txt" -ErrorAction SilentlyContinue) -join "`n" }
           if ($off -eq 'hang' -or $off -eq 0) { throw "UmdVideo 0: a video device was created ($off)" }
           if ($t['off'] -match 'ID3D11VideoDevice: yes') { throw 'UmdVideo 0 offered a video device' }
           if ($noprof -ne 3 -or $t['noprofiles'] -notmatch 'ID3D11VideoDevice: yes' -or $t['noprofiles'] -notmatch 'decoder profiles: 0') { throw "UmdVideo 1: expected a video device with no profiles ($noprof)" }
@@ -521,11 +537,16 @@ jobs:
           if ($dec -ne 0 -or $t['decode'] -notmatch 'fake pattern: MATCH' -or $t['decode'] -notmatch 'frames out 12') { throw "decode through ID3D11VideoContext failed ($dec)" }
           if ($vpt -ne 0 -or $t['vp'] -notmatch 'video processor tests: PASS') { throw "video processor or NV12 plane views failed ($vpt)" }
           if ($t['decode'] -notmatch 'through the video processor: MATCH') { throw 'the decoded picture through the video processor did not match' }
-          foreach ($r in @(@{ k = 'srv'; c = $srv }, @{ k = 'srvlate'; c = $srvlate }, @{ k = 'srvzc0'; c = $srvzc0 })) {
+          foreach ($r in @(@{ k = 'srv'; c = $srv }, @{ k = 'srvlate'; c = $srvlate }, @{ k = 'srvzc0'; c = $srvzc0 },
+                           @{ k = 'srvcopy'; c = $srvcopy }, @{ k = 'srvcopylate'; c = $srvcopylate })) {
             $o = $t[$r.k]
             if ($r.c -ne 0 -or $o -notmatch 'BindFlags 0x208' -or $o -notmatch 'fake pattern: MATCH' -or $o -notmatch 'frames out 12' -or $o -notmatch 'through the plane views \([a-z ]+\): MATCH, 12 frames') { throw "0x208 decoder texture with plane views ($($r.k)) failed ($($r.c))" }
           }
           if ($nodev -ne 3 -or $t['nodevice'] -notmatch 'decoder profiles: 0') { throw "without \\.\VDPU383 the profile must not be offered ($nodev)" }
+          $o = $t['chrtex']
+          if ($chrtex -ne 0 -or $o -notmatch 'MiscFlags 0x2: ' -or $o -notmatch 'fake pattern: MATCH' -or
+              $o -notmatch "through the plane views \(made before decoding, Chromium's texture unshared\): MATCH, 12 frames" -or
+              $o -notmatch 'through a second device: not run') { throw "the decoder texture as Chromium makes it, through ANGLE's plane views, failed ($chrtex)" }
           if ($t['decode'] -notmatch 'decoder profiles: 4') { throw 'UmdVideo 2 with the decoder: expected 4 profiles (H.264, HEVC, VP9, AV1)' }
           if ($codecRuns.Count -lt 4) { throw "expected 4 HEVC/VP9/AV1 runs from reglog.md5, got $($codecRuns.Count)" }
           foreach ($r in $codecRuns) {
@@ -644,6 +665,16 @@ jobs:
           # 0081 lists H.264, HEVC, VP9 and AV1; at 11_0 the probe must keep all four.
           if ($t['chromium'] -notmatch 'decoder profiles: 4') { throw 'the Chromium probe at 11_0 lost decoder profiles (want H.264, HEVC, VP9, AV1)' }
           if ($t['chromium'] -match 'blocked by: feature level') { throw 'the Chromium probe is still blocked by the feature level' }
+          # Each codec as D3DVideoDecoder sets it up for 1080p: the config it
+          # takes at the container's size and the decoder made with it
+          # (H.264 with ConfigBitstreamRaw 2), the plane views of a slice.
+          foreach ($c in @(@('H.264', 2), @('HEVC Main', 1), @('VP9 profile 0', 1), @('AV1 Main', 1))) {
+            $sec = ($t['chromium'] -split "(?m)^  (?=\S)") | Where-Object { $_ -like "$($c[0]), 1080p*" }
+            if (-not $sec) { throw "the Chromium probe did not set up $($c[0])" }
+            if ($sec -notmatch "CreateVideoDecoder 1920x1080, ConfigBitstreamRaw $($c[1]): 0x00000000") { throw "Chromium's $($c[0]) decoder at 1920x1080 was not created" }
+            if ($sec -notmatch 'R8G8 \(chroma\) view of slice \d+ \(ANGLE''s EGL image of plane 1\): 0x00000000') { throw "no chroma plane view for $($c[0])" }
+          }
+          if ($t['chromium'] -notmatch "H.264 VLD no FGT\s+Chromium's size probe: up to 4096x2304") { throw 'Chromium would list H.264 at its 1920x1088 default (size probe)' }
           if ($r['panfrost'] -eq 'hang' -or [int]$r['panfrost'] -lt 0 -or [int]$r['panfrost'] -gt 1) { throw "Panfrost on shader model 5: $($r['panfrost'])" }
           if ($t['panfrost'] -notmatch 'feature level 11_0') { throw 'Panfrost: not at 11_0' }
 
