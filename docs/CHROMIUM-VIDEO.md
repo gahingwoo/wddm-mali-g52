@@ -172,7 +172,7 @@ Send back: the vdectest output, `hevc2.png`, the `cdp-media.ps1` outputs,
 
 ## C1: feature level 11_0 for the GPU process (`UmdReportFL11`)
 
-`UmdReportFL11` 1 (GPU0 Device Parameters, default 0, read at every
+`UmdReportFL11` 1 (GPU0 Device Parameters, default 1 since 2026-11-26, 0 turns it off, read at every
 adapter query, so a new GPU process sees a change without a reboot)
 applies only in msedge.exe, chrome.exe or msedgewebview2.exe with
 `--type=gpu-process` on the command line. There:
@@ -277,8 +277,8 @@ Inputs: the current maliwddm package; `fl11test.exe` (Mesa artifact
    its default: software fallback expected unless DirectComposition comes
    up. Do not set `UmdRedirect` 2 in this test.
 
-Undo: delete `UmdReportFL11` and `UmdVideo`; both apply to the next GPU
-process.
+Undo: set `UmdReportFL11` to 0 and delete `UmdVideo`; both apply to the
+next GPU process.
 
 If the desktop freezes: `c1-edge.ps1 -Stop` from SSH; at 2.0
 `reg query <GPU0 Device Parameters>\maliwddm\Probe2000 /v Wd_Recent` and
@@ -287,4 +287,4 @@ If the desktop freezes: `c1-edge.ps1 -Stop` from SSH; at 2.0
 processes exit; a live dump only if its first bytes are `PAGEDU64`. After
 a power cycle, before anything else, save every `Prev_*` value under
 `Probe2000`, `C:\mali\log\msedge.exe-*` and `chrome_debug.log`, then
-delete `UmdReportFL11`.
+set `UmdReportFL11` to 0.
