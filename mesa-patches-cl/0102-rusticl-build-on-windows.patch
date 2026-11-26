@@ -58,20 +58,18 @@ diff --git a/src/gallium/targets/rusticl/meson.build b/src/gallium/targets/rusti
 index 2b214ad..3d3e3db 100644
 --- a/src/gallium/targets/rusticl/meson.build
 +++ b/src/gallium/targets/rusticl/meson.build
-@@ -6,6 +6,12 @@ opencl_version = '1'
+@@ -6,6 +6,10 @@ opencl_version = '1'
  rusticl_ld_args = []
  rusticl_ld_depends = []
  
-+rusticl_vs_module_defs = []
-+if host_machine.system() == 'windows'
-+  # wddm-mali-g52: a DLL exports only what a .def file names.
-+  rusticl_vs_module_defs = files('rusticl.def')
-+endif
++# wddm-mali-g52: a Windows DLL exports only what a .def file names; meson
++# uses vs_module_defs only where there are .def files.
++rusticl_vs_module_defs = 'rusticl.def'
 +
  if with_ld_version_script
    rusticl_ld_args += ['-Wl,--version-script', join_paths(meson.current_source_dir(), 'rusticl.sym')]
    rusticl_ld_depends += files('rusticl.sym')
-@@ -54,6 +60,7 @@ librusticl = shared_library(
+@@ -54,6 +58,7 @@ librusticl = shared_library(
      rusticl_ld_args,
    ],
    link_depends : rusticl_ld_depends,
