@@ -51,7 +51,7 @@ A change needs a full restart. Details in
 
 | Name | Default | Meaning |
 |---|---|---|
-| `UmdVideo` | 0 | 0: off. 1: D3D11.1 interface and a video device with no profiles in mpv, ffmpeg, ffplay, ffprobe, vlc, vdectest, d3dprobe. 2: as 1, with the decoder's profiles when `\\.\VDPU383` opens. 3: as 2 in every process except dwm, logonui, consent. Above 3 counts as 0. |
+| `UmdVideo` | 2 | 0: off. 1: D3D11.1 interface and a video device with no profiles in mpv, ffmpeg, ffplay, ffprobe, vlc, vdectest, d3dprobe. 2: as 1, with the decoder's profiles when `\\.\VDPU383` opens. 3: as 2 in every process except dwm, logonui, consent. Above 3 counts as 0. |
 | `UmdVideoCodecs` | 0 | Profiles offered, bit 0 H.264, 1 HEVC Main, 2 VP9 profile 0, 3 AV1 Main. 0: all four. 1: H.264 only. Read only with `UmdVideo` set. |
 | `UmdAv1Synth` | 0 | AV1 tile wrapping. 0: one OBU_TILE_GROUP. 1: an OBU_FRAME with a 16-byte zero frame header. |
 | `UmdVp9Mpp` | 0 | VP9 frame contexts. 0: as the spec says. 1: reset all four on intra frames (as MPP). 2: write the adapted context (as MPP). 3: both. |

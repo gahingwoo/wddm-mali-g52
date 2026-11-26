@@ -1206,7 +1206,7 @@ static NTSTATUS UmdAdapterInfo(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *In
     u.Ddi = MwSetting(A, L"UmdDdi", MW_UMD_DDI_D3D10_1);   /* 10_1 by default since 2026-11-25 */
     u.FeatureLevel = MwSetting(A, L"UmdFeatureLevel", 0xa000);
     u.Dxgi12 = MwSetting(A, L"UmdDxgi12", 0);
-    u.Video = MwSetting(A, L"UmdVideo", 0) & 0xFF;
+    u.Video = MwSetting(A, L"UmdVideo", 2) & 0xFF;
     /* The decoder's own switches ride above UmdVideo (MW_UMD_VIDEO_*),
      * only when it is on: with UmdVideo 0 the UMD gets 0, as before. */
     if (u.Video)

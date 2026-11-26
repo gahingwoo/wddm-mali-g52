@@ -84,7 +84,7 @@ void MwVdecKmdInit(MW_ADAPTER *A)
 /* StartDevice (MwVdecStart), with the GPU up. */
 void MwVdecKmdStart(MW_ADAPTER *A)
 {
-    A->VdecKmdOn = MwSetting(A, L"UmdVideo", 0) != 0 && MwSetting(A, L"UmdVideoKmd", 1) != 0;
+    A->VdecKmdOn = MwSetting(A, L"UmdVideo", 2) != 0 && MwSetting(A, L"UmdVideoKmd", 1) != 0;
     MwLog(A, L"VdecKmd", A->VdecKmdOn);
 }
 
