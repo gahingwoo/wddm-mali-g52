@@ -473,9 +473,14 @@ jobs:
           $cdb = (Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Debuggers' -Recurse -Filter cdb.exe -ErrorAction SilentlyContinue |
                     Where-Object { $_.FullName -match '\\arm64\\' } | Select-Object -First 1).FullName
           $exe = (Resolve-Path out\cltest.exe).Path
-          # The Khronos loader takes the ICD from OCL_ICD_FILENAMES here; on
-          # the board it finds it through the adapter's OpenCLDriverName.
-          $env:OCL_ICD_FILENAMES = (Resolve-Path out\malicl_arm64.dll).Path
+          # The runner's shell is elevated, and an elevated Khronos loader
+          # ignores OCL_ICD_FILENAMES (run 45767805000), so the ICD goes
+          # into the loader's own list, HKLM\SOFTWARE\Khronos\OpenCL\Vendors.
+          # On the board the loader finds it through the adapter's
+          # OpenCLDriverName.
+          $icd = (Resolve-Path out\malicl_arm64.dll).Path
+          New-Item -Force 'HKLM:\SOFTWARE\Khronos\OpenCL\Vendors' | Out-Null
+          New-ItemProperty -Force -Path 'HKLM:\SOFTWARE\Khronos\OpenCL\Vendors' -Name $icd -PropertyType DWord -Value 0 | Out-Null
           function Run-Cl($tag, $argv, $limit = 900) {
             $p = Start-Process -FilePath $exe -ArgumentList $argv -NoNewWindow -PassThru `
                    -RedirectStandardOutput "$tag.out" -RedirectStandardError "$tag.err" -WorkingDirectory (Resolve-Path out).Path
@@ -503,7 +508,7 @@ jobs:
           # 0. Does the ICD load at all, and what does the loader say about
           # it (run 45766510359: 0 platforms, no message).
           Add-Type -Namespace W -Name K -MemberDefinition '[DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] public static extern System.IntPtr LoadLibraryW(string p); [DllImport("kernel32.dll", CharSet=CharSet.Ansi)] public static extern System.IntPtr GetProcAddress(System.IntPtr m, string n);'
-          $h = [W.K]::LoadLibraryW($env:OCL_ICD_FILENAMES)
+          $h = [W.K]::LoadLibraryW($icd)
           $le = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
           Write-Host "LoadLibrary(malicl_arm64.dll): $h (error $le)"
           if ($h -ne [IntPtr]::Zero) { Write-Host "clIcdGetPlatformIDsKHR at $([W.K]::GetProcAddress($h, 'clIcdGetPlatformIDsKHR'))" }
