@@ -12,13 +12,13 @@
 | [HDMI-HPD.md](HDMI-HPD.md) | HDMI hot-plug, the driver's mode set, HDMI audio, trace values |
 | [DISPLAY-MODES.md](DISPLAY-MODES.md) | Resolutions and refresh rates |
 | [DUAL-DISPLAY.md](DUAL-DISPLAY.md) | Panel and HDMI at once (`HdmiExtend`); board test in [Chinese](DUAL-DISPLAY-TEST.zh.md) |
-| [USBC-DP.md](USBC-DP.md) | DisplayPort over USB-C as a second display (`UsbcDp`, default off; branch `usbc-dp`, CI only) |
+| [USBC-DP.md](USBC-DP.md) | DisplayPort over USB-C as a second display (`UsbcDp`, default off, not board-tested) |
 | [EDGE-CREATEDEVICE.md](EDGE-CREATEDEVICE.md) | Edge and Chrome creating a D3D11 device on the Mali |
 | [EDGE-PRESENT.md](EDGE-PRESENT.md) | Edge and Chrome presenting; the UMD log |
 | [VIDEO-DECODE.md](VIDEO-DECODE.md) | D3D11 video decode on the VDPU383 |
 | [CHROMIUM-VIDEO.md](CHROMIUM-VIDEO.md) | What Chrome and Edge need for hardware decode |
-| [VULKAN.md](VULKAN.md) | Vulkan through panvk: ICD registration, the board test (branch `vulkan-panvk`, CI only) |
-| [OPENCL.md](OPENCL.md) | OpenCL through rusticl on Panfrost: the ICD, the board test (branch `opencl-rusticl`, CI only) |
+| [VULKAN.md](VULKAN.md) | Vulkan through panvk: ICD registration, setting it up, board results |
+| [OPENCL.md](OPENCL.md) | OpenCL through rusticl on Panfrost: the ICD, board results |
 | [FEASIBILITY-D3D11-WDDM2.md](FEASIBILITY-D3D11-WDDM2.md) | Superseded study, conclusions only |
 | [history.md](history.md) | How it got here, a few lines per topic |
 | [results/](results/README.md) | Board results, one folder per milestone |

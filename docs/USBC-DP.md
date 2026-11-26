@@ -2,7 +2,7 @@
 
 [English](USBC-DP.md) | [简体中文](USBC-DP.zh-CN.md)
 
-Branch `usbc-dp`, with edk2-rk3576 branch `usbc-dp`. The RK3576's DisplayPort
+On `main` since 2026-11-26, in this repo and in edk2-rk3576. The RK3576's DisplayPort
 controller drives a monitor on the USB-C port (DisplayPort Alt Mode) as a
 second display next to HDMI, under Windows 11 23H2. Both halves are off by
 default. **Nothing here has run on a board.**
@@ -196,12 +196,12 @@ HDMI output; a serial console.
 
 Set-up, in this order:
 
-1. Firmware: the `tspi3m-firmware` (or `cm5io-firmware`) artifact of
-   gahingwoo/edk2-rk3576 PR #10 (`usbc-dp`). Flash only the firmware
-   range so Windows and the UEFI variables survive.
+1. Firmware: edk2-rk3576 from `main` (the `tspi3m-firmware` or
+   `cm5io-firmware` CI artifact). Flash only the firmware range so
+   Windows and the UEFI variables survive.
 2. In setup, RK3576 settings: "USB-C DisplayPort (experimental)" Enabled.
    The USB-C monitor must be plugged in before power-on (no hot-plug).
-3. Driver: the `wddm-mali-g52-driver-arm64` artifact of this branch's PR,
+3. Driver: the `wddm-mali-g52-driver-arm64` artifact from `main`,
    installed as usual. Then:
 
    ```

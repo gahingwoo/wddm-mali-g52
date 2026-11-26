@@ -331,7 +331,9 @@ normal maliwddm package plus `malivk_arm64.dll`, `malivk.json` and
 3. `vkprobe.exe --window 10`: a window cycling colours for ten seconds,
    then the frame rate.
 4. Through the real loader. Windows does not ship `vulkan-1.dll`, so
-   install the ARM64 Vulkan Runtime (or SDK) from LunarG first. Then set
+   install the LunarG Vulkan SDK for ARM64 first
+   (`vulkansdk-windows-ARM64-<version>.exe`, about 537 MB; LunarG has no
+   runtime-only installer for ARM64). Then set
    the variable for every program and sign out and back in:
 
    ```

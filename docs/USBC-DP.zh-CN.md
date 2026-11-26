@@ -2,7 +2,7 @@
 
 [English](USBC-DP.md) | 简体中文
 
-分支 `usbc-dp`，配合 edk2-rk3576 的 `usbc-dp` 分支。RK3576 的 DisplayPort 控制器通过 USB-C 口（DisplayPort Alt Mode）驱动一台显示器，在 Windows 11 23H2 下作为 HDMI 旁边的第二块屏。两边默认都关闭。**都还没有在板子上跑过。**
+2026-11-26 起在本仓库和 edk2-rk3576 的 `main` 上。RK3576 的 DisplayPort 控制器通过 USB-C 口（DisplayPort Alt Mode）驱动一台显示器，在 Windows 11 23H2 下作为 HDMI 旁边的第二块屏。两边默认都关闭。**都还没有在板子上跑过。**
 
 代码：`drivers/maliwddm/dp_calc.h`（算术部分，由 `tests/dp-host` 检查）、`dp.c`（硬件操作）、`hpd.c`（设置里的 `UsbcDp`、子设备、VidPN、`DpDualCommit`、`DpPoll`）、`scanout.c`（把 DP 的帧缓冲加进 VOP2 IOMMU）。固件部分见 edk2-rk3576 的 `docs/usbc-dp.md`。
 
@@ -132,7 +132,7 @@ DW DP 控制器 DP0 0x27E40000 (PD_VO1) <-- VOP2 VP1 (DP0_IF_CTRL 0x18C)
 
 ## 板上测试计划
 
-需要：一块泰山派 3M 或 CM5-IO，HDMI 接一台显示器；USB-C 上依次接第二台显示器：(1) USB-C 转 HDMI 或 DP 的转接线，(2) 一台带 USB-C 输入、不给对方充电的显示器，(3) 一个带 DP 或 HDMI 输出的扩展坞；串口。固件和驱动用 `usbc-dp` 分支的 CI 产物；打开固件选项，`UsbcDp` 设为 1，重启。
+需要：一块泰山派 3M 或 CM5-IO，HDMI 接一台显示器；USB-C 上依次接第二台显示器：(1) USB-C 转 HDMI 或 DP 的转接线，(2) 一台带 USB-C 输入、不给对方充电的显示器，(3) 一个带 DP 或 HDMI 输出的扩展坞；串口。固件和驱动用 `main` 的 CI 产物；打开固件选项，`UsbcDp` 设为 1，重启。
 
 1. **只测固件**（选项开，驱动设置为 0），每种对端设备、两个插入方向，各至少 3 次：串口显示 `DP alt mode: configured`，`pin D`（扩展坞）或 `pin C`（转接头），`UsbDpPhy DP: PD_VO1 on, lanes 0x..`。扩展坞上的 USB3 仍然是 SuperSpeed（设备管理器）。不接对端、以及接 USB 硬盘时，启动时间不变。
 2. **驱动**：`Dp_On` 为 1，`Dp_Caps0` 合理，`Dp_Modes` 大于 2，Windows 显示两块屏；扩展能用；在 DP 屏上分别设 1920x1080、2560x1440、1280x720；每次 `Dp_TrainStep` 为 4，`Dp_GenInt` 第 6 位为 0。

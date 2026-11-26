@@ -29,20 +29,20 @@ What is in this folder
 
 Where it has run
 
-  The driver has only been run on the two boards named in README.md, the
-  ArmSoM CM5-IO and the LCKFB TaishanPi 3M, under Windows 11 23H2, with
+  The LCKFB TaishanPi 3M and the Radxa ROCK 4D (1920x1080 at 60 Hz on
+  HDMI), and earlier the ArmSoM CM5-IO, under Windows 11 23H2, with
   edk2-rk3576 firmware (which powers the GPU and describes it in ACPI as
   ACPI\RKCP7402). Without that firmware there is no device for the INF to
-  bind. This package form, with the UMD installed by the INF instead of by
-  hand, is newer than those runs.
+  bind.
 
 Requirements
 
   - Windows 11 23H2 or older on ARM64. 24H2 does not run on the RK3576.
   - Test signing on. Secure Boot has to be off for this.
-  - VCRUNTIME140.dll for ARM64 in System32. The UMD imports it and this
-    package does not install it; the Microsoft Visual C++ 2015-2022
-    Redistributable (ARM64) does.
+  - No Visual C++ Redistributable: every UMD has the C runtime linked
+    in. (Packages built before 2026-11-26 needed the ARM64 one; without
+    it a fresh Windows showed an HDMI signal but a black screen, dwm.exe
+    restarting with 0x8898008d. Install a newer package.)
 
 Install, from an administrator command prompt in this folder
 
