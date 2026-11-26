@@ -82,7 +82,7 @@ jobs:
           path: libclc/
 
   rusticl:
-    name: rusticl + Panfrost + softpipe (ARM64)
+    name: rusticl + Panfrost (ARM64)
     needs: linux
     runs-on: windows-11-arm
     timeout-minutes: 300
@@ -513,13 +513,11 @@ jobs:
           Write-Host "LoadLibrary(malicl_arm64.dll): $h (error $le)"
           if ($h -ne [IntPtr]::Zero) { Write-Host "clIcdGetPlatformIDsKHR at $([W.K]::GetProcAddress($h, 'clIcdGetPlatformIDsKHR'))" }
           $env:OCL_ICD_ENABLE_TRACE = '1'
-          $env:RUSTICL_ENABLE = 'swrast'
-          $env:RUSTICL_DEBUG = 'program'
           $p = Start-Process -FilePath $exe -ArgumentList 'list' -NoNewWindow -PassThru -Wait `
                  -RedirectStandardOutput trace.out -RedirectStandardError trace.err -WorkingDirectory (Resolve-Path out).Path
           Write-Host "== trace (cltest list, OCL_ICD_ENABLE_TRACE=1): exit code $($p.ExitCode)"
           Get-Content trace.out, trace.err -ErrorAction SilentlyContinue | Select-Object -First 80 | Out-Host
-          Remove-Item Env:OCL_ICD_ENABLE_TRACE, Env:RUSTICL_ENABLE, Env:RUSTICL_DEBUG
+          Remove-Item Env:OCL_ICD_ENABLE_TRACE
 
           # 1. As on a machine with no Mali, or with OpenCL unused: the
           # platform is there, Panfrost finds no adapter, no device, no
@@ -529,16 +527,10 @@ jobs:
           if (-not (Select-String -Path none.out -Pattern 'rusticl' -Quiet)) { $fails += 'the rusticl platform is not listed' }
           if (-not (Select-String -Path none.out -Pattern '^\s+devices: 0' -Quiet)) { $fails += 'a device was listed with no Mali' }
 
-          # 2. rusticl on softpipe (RUSTICL_ENABLE=swrast): the frontend,
-          # the OpenCL C compiler, the kernels' results.
-          $env:RUSTICL_ENABLE = 'swrast'
-          $c = Run-Cl 'soft-list' 'list'
-          if ($c -ne 0) { $fails += "list on softpipe ($c)" }
-          $c = Run-Cl 'soft-vecadd' 'vecadd 65536'
-          if ($c -ne 0) { $fails += "vecadd on softpipe ($c)" }
-          $c = Run-Cl 'soft-sgemm' 'sgemm 64 1'
-          if ($c -ne 0) { $fails += "sgemm on softpipe ($c)" }
-          Remove-Item Env:RUSTICL_ENABLE
+          # 2. No softpipe run: rusticl refuses a gallium driver without
+          # compute state queries and global bindings, which softpipe lacks
+          # ("Context missing features", run 45768728007). Kernel results
+          # are only checked on the board.
 
           # 3. Panfrost on the shim's in-process stand-in for the kernel
           # driver (MALIKM_FAKE=1), with the default RUSTICL_ENABLE: the
@@ -563,10 +555,10 @@ jobs:
           Remove-Item Env:MALIKM_FAKE, Env:MALIKM_OPENCL
 
           if (Test-Path out\clinfo.exe) {
-            $env:RUSTICL_ENABLE = 'swrast'
-            & out\clinfo.exe 2>&1 | Select-Object -First 120 | Out-File clinfo-softpipe.txt
-            Get-Content clinfo-softpipe.txt | Out-Host
-            Remove-Item Env:RUSTICL_ENABLE
+            $env:MALIKM_FAKE = '1'
+            & out\clinfo.exe 2>&1 | Select-Object -First 200 | Out-File clinfo-fake.txt
+            Get-Content clinfo-fake.txt | Out-Host
+            Remove-Item Env:MALIKM_FAKE
           }
           if ($fails.Count) { throw ("failed: " + ($fails -join '; ')) }
 
@@ -580,7 +572,7 @@ jobs:
             trace.*
             *-hang.txt
             *-crash.txt
-            clinfo-softpipe.txt
+            clinfo-fake.txt
             build.log
             build/meson-logs/meson-log.txt
             build/src/gallium/frontends/rusticl/*.rs

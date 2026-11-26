@@ -230,6 +230,19 @@ build(cl_context ctx, cl_device_id dev, const char *src, cl_program *out)
    return 0;
 }
 
+/* A queue with profiling when the device has it; without, the times come
+ * from the host clock (wall) and the events report -1. */
+static cl_command_queue
+make_queue(cl_context ctx, cl_device_id dev, cl_int *e)
+{
+   cl_command_queue q = clCreateCommandQueue(ctx, dev, CL_QUEUE_PROFILING_ENABLE, e);
+   if (*e == CL_INVALID_QUEUE_PROPERTIES) {
+      printf("no profiling queue on this device: timing by the host clock\n");
+      q = clCreateCommandQueue(ctx, dev, 0, e);
+   }
+   return q;
+}
+
 static double
 event_ms(cl_event ev)
 {
@@ -262,7 +275,7 @@ cmd_vecadd(size_t n)
    cl_int e;
    cl_context ctx = clCreateContext(NULL, 1, &dev, NULL, NULL, &e);
    CHECK(e);
-   cl_command_queue q = clCreateCommandQueue(ctx, dev, CL_QUEUE_PROFILING_ENABLE, &e);
+   cl_command_queue q = make_queue(ctx, dev, &e);
    CHECK(e);
    cl_program p;
    if ((r = build(ctx, dev, vecadd_src, &p)))
@@ -296,7 +309,7 @@ cmd_vecadd(size_t n)
    CHECK(clEnqueueReadBuffer(q, bc, CL_TRUE, 0, n * sizeof(float), c, 0, NULL, NULL));
    double gpu = event_ms(ev);
    printf("vecadd n=%zu: kernel %.3f ms (events), %.3f ms (wall, enqueue to finish), %.2f GB/s\n",
-          n, gpu, wall, gpu > 0 ? 3.0 * n * sizeof(float) / (gpu * 1e6) : 0.0);
+          n, gpu, wall, 3.0 * n * sizeof(float) / ((gpu > 0 ? gpu : wall) * 1e6));
 
    size_t bad = 0;
    if (opt_verify) {
@@ -373,7 +386,7 @@ cmd_sgemm(size_t n, int iters)
    cl_int e;
    cl_context ctx = clCreateContext(NULL, 1, &dev, NULL, NULL, &e);
    CHECK(e);
-   cl_command_queue q = clCreateCommandQueue(ctx, dev, CL_QUEUE_PROFILING_ENABLE, &e);
+   cl_command_queue q = make_queue(ctx, dev, &e);
    CHECK(e);
    cl_program p;
    if ((r = build(ctx, dev, sgemm_src, &p)))
@@ -429,7 +442,7 @@ cmd_sgemm(size_t n, int iters)
       CHECK(clEnqueueReadBuffer(q, bC, CL_TRUE, 0, nn * sizeof(float), C, 0, NULL, NULL));
       double flop = 2.0 * (double)n * n * n;
       printf("%s n=%zu: best %.3f ms, mean %.3f ms (events), %.3f ms (wall), %.2f GFLOP/s (best)\n",
-             names[v], n, best, total / iters, wall, best > 0 ? flop / (best * 1e6) : 0.0);
+             names[v], n, best, total / iters, wall, flop / ((best > 0 ? best : wall) * 1e6));
       if (opt_verify) {
          size_t bad = 0;
          double maxerr = 0.0;
