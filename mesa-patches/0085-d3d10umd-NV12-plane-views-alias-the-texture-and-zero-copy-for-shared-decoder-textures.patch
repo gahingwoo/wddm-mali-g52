@@ -1,0 +1,696 @@
+diff --git a/src/gallium/drivers/panfrost/pan_resource.c b/src/gallium/drivers/panfrost/pan_resource.c
+index 394ba09..650becc 100644
+--- a/src/gallium/drivers/panfrost/pan_resource.c
++++ b/src/gallium/drivers/panfrost/pan_resource.c
+@@ -458,6 +458,85 @@ panfrost_resource_from_handle(struct pipe_screen *pscreen,
+    return prsc;
+ }
+ 
++/*
++ * pipe_screen::resource_alias (d3d10umd's NV12 plane views): a linear
++ * texture on the parent's BO, starting at row y_rows of each of the
++ * parent's layers, with the parent's row pitch and layer stride. The
++ * parent's BO is marked shared and its modifier fixed, so neither resource
++ * ever swaps the BO for another or converts it while the other still
++ * points at it.
++ */
++static struct pipe_resource *
++panfrost_resource_alias(struct pipe_screen *pscreen, struct pipe_resource *parent,
++                        const struct pipe_resource *templat, unsigned y_rows)
++{
++   struct panfrost_resource *p = pan_resource(parent);
++   const struct pan_image_layout *pl = &p->plane.layout;
++   struct panfrost_resource *rsc;
++   struct pipe_resource *prsc;
++
++   if (!p->bo || parent->target == PIPE_BUFFER || parent->last_level || templat->last_level ||
++       p->modifier != DRM_FORMAT_MOD_LINEAR || p->image.props.modifier != DRM_FORMAT_MOD_LINEAR ||
++       p->shadow_image || p->separate_stencil || parent->nr_samples > 1 ||
++       templat->nr_samples > 1 || util_format_get_num_planes(parent->format) != 1 ||
++       util_format_get_num_planes(templat->format) != 1 ||
++       templat->array_size != parent->array_size || y_rows + templat->height0 > parent->height0 ||
++       (templat->target != PIPE_TEXTURE_2D && templat->target != PIPE_TEXTURE_2D_ARRAY))
++      return NULL;
++
++   rsc = CALLOC_STRUCT(panfrost_resource);
++   if (!rsc)
++      return NULL;
++   prsc = &rsc->base;
++   *prsc = *templat;
++   pipe_reference_init(&prsc->reference, 1);
++   util_range_init(&rsc->valid_buffer_range);
++   prsc->screen = pscreen;
++
++   const uint32_t pitch = pl->slices[0].tiled_or_linear.row_stride_B;
++   struct pan_image_layout_constraints explicit_layout = {
++      .offset_B = pl->slices[0].offset_B + (uint64_t)y_rows * pitch,
++      .wsi_row_pitch_B = pitch,
++      .strict = true,
++   };
++   /* One layer with the explicit layout, then the parent's layers. */
++   struct pan_image_props iprops = {
++      .modifier = DRM_FORMAT_MOD_LINEAR,
++      .format = templat->format,
++      .dim = MALI_TEXTURE_DIMENSION_2D,
++      .extent_px = {
++         .width = templat->width0,
++         .height = templat->height0,
++         .depth = 1,
++      },
++      .array_size = 1,
++      .nr_samples = 1,
++      .nr_slices = 1,
++   };
++
++   rsc->modifier = DRM_FORMAT_MOD_LINEAR;
++   if (!panfrost_resource_init_image(pscreen, rsc, &iprops, 0, &explicit_layout)) {
++      panfrost_resource_destroy(pscreen, prsc);
++      return NULL;
++   }
++   rsc->image.props.array_size = templat->array_size;
++   rsc->plane.layout.array_stride_B = pl->array_stride_B;
++   rsc->plane.layout.data_size_B =
++      pl->array_stride_B * (templat->array_size - 1) + rsc->plane.layout.slices[0].size_B;
++
++   p->bo->flags |= PAN_BO_SHARED;
++   p->modifier_constant = true;
++   panfrost_bo_reference(p->bo);
++   rsc->bo = p->bo;
++   rsc->owns_label = false;
++   pan_crc_state_set_ptr(&rsc->crc_state, &rsc->bo->ptr);
++   rsc->plane.base = rsc->bo->ptr.gpu;
++   rsc->modifier_constant = true;
++   BITSET_SET(rsc->valid.data, 0);
++   panfrost_resource_set_damage_region(pscreen, prsc, 0, NULL);
++   return prsc;
++}
++
+ static void
+ panfrost_set_resource_label(UNUSED struct pipe_screen *pscreen,
+                             struct pipe_resource *presource,
+@@ -2629,6 +2708,7 @@ panfrost_resource_screen_init(struct pipe_screen *pscreen)
+    pscreen->resource_destroy = u_transfer_helper_resource_destroy;
+    pscreen->resource_from_handle = panfrost_resource_from_handle;
+    pscreen->resource_get_handle = panfrost_resource_get_handle;
++   pscreen->resource_alias = panfrost_resource_alias;
+    pscreen->set_resource_label = panfrost_set_resource_label;
+    pscreen->resource_get_param = panfrost_resource_get_param;
+    pscreen->transfer_helper = u_transfer_helper_create(
+diff --git a/src/gallium/drivers/softpipe/sp_state_derived.c b/src/gallium/drivers/softpipe/sp_state_derived.c
+index 11f8b4d..0b67a32 100644
+--- a/src/gallium/drivers/softpipe/sp_state_derived.c
++++ b/src/gallium/drivers/softpipe/sp_state_derived.c
+@@ -317,12 +317,12 @@ update_tgsi_samplers( struct softpipe_context *softpipe )
+          struct softpipe_tex_tile_cache *tc = softpipe->tex_cache[sh][i];
+          if (tc && tc->texture) {
+             struct softpipe_resource *spt = softpipe_resource(tc->texture);
+-            if (spt->timestamp != tc->timestamp) {
++            if (softpipe_resource_timestamp(spt) != tc->timestamp) {
+                sp_tex_tile_cache_validate_texture( tc );
+                /*
+                  _debug_printf("INV %d %d\n", tc->timestamp, spt->timestamp);
+                */
+-               tc->timestamp = spt->timestamp;
++               tc->timestamp = softpipe_resource_timestamp(spt);
+             }
+          }
+       }
+diff --git a/src/gallium/drivers/softpipe/sp_texture.c b/src/gallium/drivers/softpipe/sp_texture.c
+index dafb4ee..a17413f 100644
+--- a/src/gallium/drivers/softpipe/sp_texture.c
++++ b/src/gallium/drivers/softpipe/sp_texture.c
+@@ -211,6 +211,7 @@ softpipe_resource_destroy(struct pipe_screen *pscreen,
+       /* regular texture */
+       align_free(spr->data);
+    }
++   pipe_resource_reference(&spr->alias_of, NULL);
+ 
+    FREE(spr);
+ }
+@@ -250,6 +251,36 @@ softpipe_resource_from_handle(struct pipe_screen *screen,
+ }
+ 
+ 
++/* pipe_screen::resource_alias: the same memory, another format and size. */
++static struct pipe_resource *
++softpipe_resource_alias(struct pipe_screen *screen, struct pipe_resource *parent,
++                        const struct pipe_resource *templat, unsigned y_rows)
++{
++   struct softpipe_resource *p = softpipe_resource(parent);
++   struct softpipe_resource *spr;
++   const unsigned row = util_format_get_stride(templat->format, templat->width0);
++
++   if (p->dt || !p->data || parent->target == PIPE_BUFFER || parent->last_level ||
++       templat->last_level || templat->array_size != parent->array_size ||
++       util_format_is_compressed(templat->format) || row > p->stride[0] ||
++       y_rows + templat->height0 > parent->height0)
++      return NULL;
++   spr = CALLOC_STRUCT(softpipe_resource);
++   if (!spr)
++      return NULL;
++   spr->base = *templat;
++   pipe_reference_init(&spr->base.reference, 1);
++   spr->base.screen = screen;
++   spr->stride[0] = p->stride[0];
++   spr->img_stride[0] = p->img_stride[0];
++   spr->level_offset[0] = p->level_offset[0] + (unsigned long)y_rows * p->stride[0];
++   spr->data = p->data;
++   spr->userBuffer = true;
++   pipe_resource_reference(&spr->alias_of, parent);
++   return &spr->base;
++}
++
++
+ static bool
+ softpipe_resource_get_handle(struct pipe_screen *screen,
+                              struct pipe_context *ctx,
+@@ -474,5 +505,6 @@ softpipe_init_screen_texture_funcs(struct pipe_screen *screen)
+    screen->resource_destroy = softpipe_resource_destroy;
+    screen->resource_from_handle = softpipe_resource_from_handle;
+    screen->resource_get_handle = softpipe_resource_get_handle;
++   screen->resource_alias = softpipe_resource_alias;
+    screen->can_create_resource = softpipe_can_create_resource;
+ }
+diff --git a/src/gallium/drivers/softpipe/sp_texture.h b/src/gallium/drivers/softpipe/sp_texture.h
+index 18870df..cafe7ff 100644
+--- a/src/gallium/drivers/softpipe/sp_texture.h
++++ b/src/gallium/drivers/softpipe/sp_texture.h
+@@ -66,8 +66,21 @@ struct softpipe_resource
+    bool userBuffer;
+ 
+    unsigned timestamp;
++
++   /* resource_alias: the resource whose storage this one is part of
++    * (referenced; data is its data), NULL otherwise. */
++   struct pipe_resource *alias_of;
+ };
+ 
++/* The timestamp the texture caches compare: an alias also changes when
++ * the resource it is part of was written. */
++static inline unsigned
++softpipe_resource_timestamp(const struct softpipe_resource *spr)
++{
++   return spr->timestamp +
++          (spr->alias_of ? ((const struct softpipe_resource *)spr->alias_of)->timestamp : 0);
++}
++
+ 
+ /**
+  * Subclass of pipe_transfer.
+diff --git a/src/gallium/frontends/d3d10umd/Resource.cpp b/src/gallium/frontends/d3d10umd/Resource.cpp
+index 658c9db..d9610a8 100644
+--- a/src/gallium/frontends/d3d10umd/Resource.cpp
++++ b/src/gallium/frontends/d3d10umd/Resource.cpp
+@@ -552,8 +552,10 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+    }
+ 
+    /* Zero copy: the decoder writes rows, so the texture is linear (and
+-    * stays so: the export below fixes the modifier). */
+-   if (nv12_zc)
++    * stays so: the export below fixes the modifier). With shader resource
++    * binding it is linear too, so that its plane views can be aliases of
++    * its memory (VideoNv12CreatePlanes). */
++   if (nv12_zc || (nv12 && (pCreateResource->BindFlags & D3D10_DDI_BIND_SHADER_RESOURCE)))
+       templat.bind |= PIPE_BIND_LINEAR;
+ 
+    /*
+@@ -687,7 +689,7 @@ CreateResource(D3D10DDI_HDEVICE hDevice,                                // IN
+    if (nv12_zc) {
+       Nv12ZeroCopySetup(CastDevice(hDevice), pipe, pResource);
+       if (!pResource->nv12_zc)
+-         VideoNv12ZeroCopySetupFailed(pCreateResource->BindFlags);
++         VideoNv12ZeroCopySetupFailed(pCreateResource->BindFlags, pCreateResource->MiscFlags);
+    }
+ 
+    /* The plane textures of shader resource views come with the first view
+@@ -881,6 +883,14 @@ OpenResource(D3D10DDI_HDEVICE hDevice,                            // IN
+    pResource->Format = (DXGI_FORMAT)desc.DxgiFormat;
+    pResource->MipLevels = desc.MipLevels;
+    pResource->buffer = templat.target == PIPE_BUFFER;
++   /* An NV12 texture another device made (CreateResource: one R8 texture,
++    * the chroma rows below the luma): its plane views here alias the same
++    * memory, so they see what the decoder writes into the creator's. */
++   if (pResource->Format == DXGI_FORMAT_NV12 && templat.format == PIPE_FORMAT_R8_UNORM &&
++       desc.Height % 3 == 0) {
++      pResource->nv12 = true;
++      pResource->nv12_luma_height = desc.Height / 3 * 2;
++   }
+ 
+    /* The same pipe_resource as the creator's, on the allocation the runtime
+     * opened for this device instead of a new one. */
+@@ -1293,6 +1303,8 @@ ResourceCopy(D3D10DDI_HDEVICE hDevice,          // IN
+          box.height = u_minify(dst_resource->height0, level);
+          box.depth  = u_minify(dst_resource->depth0,  level);
+ 
++         if (pDstResource->nv12)
++            VideoNv12BeforeWrite(pipe, pDstResource, layer);
+ 	 if (compatible) {
+             pipe->resource_copy_region(pipe,
+                                        dst_resource, level,
+@@ -1374,6 +1386,8 @@ ResourceCopyRegion(D3D10DDI_HDEVICE hDevice,                // IN
+ 
+    /* NV12 with a source box: the box is in luma rows; the chroma rows of
+     * the same area are half as many, below the luma (CreateResource). */
++   if (pDstResource->nv12)
++      VideoNv12BeforeWrite(pipe, pDstResource, DstZ + dst_layer);
+    if (pSrcResource->nv12 && pDstResource->nv12 && pSrcBox) {
+       struct pipe_box uv = src_box;
+       uv.y = pSrcResource->nv12_luma_height + src_box.y / 2;
+@@ -1575,6 +1589,8 @@ ResourceUpdateSubResourceUP(D3D10DDI_HDEVICE hDevice,                // IN
+                               &box,
+                               &transfer);
+    } else {
++      if (pDstResource->nv12)
++         VideoNv12BeforeWrite(pipe, pDstResource, box.z);
+       map = pipe->texture_map(pipe,
+                               dst_resource,
+                               level,
+diff --git a/src/gallium/frontends/d3d10umd/Shader.cpp b/src/gallium/frontends/d3d10umd/Shader.cpp
+index c923b6b..da9f93b 100644
+--- a/src/gallium/frontends/d3d10umd/Shader.cpp
++++ b/src/gallium/frontends/d3d10umd/Shader.cpp
+@@ -1410,8 +1410,8 @@ CreateShaderResourceView1(
+    format = FormatTranslate(pCreateSRView->Format, false);
+ 
+    /* NV12: R8_UNORM is the luma plane, R8G8_UNORM the chroma plane, each
+-    * a texture of its own, made at the texture's first view
+-    * (Resource::nv12_plane, VideoProcessor.cpp). */
++    * a texture made at the texture's first view, an alias of the texture's
++    * memory where the driver can (Resource::nv12_plane, VideoProcessor.cpp). */
+    Resource *pNv12 = CastResource(pCreateSRView->hDrvResource);
+    if (pNv12 && pNv12->nv12) {
+       int plane = pCreateSRView->Format == DXGI_FORMAT_R8_UNORM     ? 0
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index 6ca192b..3ed4937 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -362,6 +362,9 @@ struct Resource
+     * them or a write of a part of them. nv12_stale_count of them, on the
+     * device nv12_device. */
+    struct pipe_resource *nv12_plane[2];
++   /* The planes are aliases of the texture's memory (resource_alias):
++    * nothing to keep in step, nv12_stale stays NULL. */
++   bool nv12_alias;
+    uint8_t *nv12_stale;
+    unsigned nv12_stale_count;
+    struct Device *nv12_device;
+diff --git a/src/gallium/frontends/d3d10umd/Video.cpp b/src/gallium/frontends/d3d10umd/Video.cpp
+index 4d0476c..36fd61c 100644
+--- a/src/gallium/frontends/d3d10umd/Video.cpp
++++ b/src/gallium/frontends/d3d10umd/Video.cpp
+@@ -21,10 +21,11 @@
+  * (MW_ESCAPE_VDEC_EXPORT) and vdpu383.sys imports the pages into the
+  * decoder's IOMMU (video/vdec.c). The VDPU383 then writes the picture into
+  * the texture and nothing is copied; before it does, the GPU's work on the
+- * texture is waited for (its shader resource views see plane textures,
+- * read back from it before a draw uses them, VideoProcessor.cpp). Where
+- * that cannot be had (another driver, a texture with CPU access or
+- * shared, an older vdpu383.sys, UmdVideoZeroCopy 0), V3a: the picture is
++ * texture is waited for (its shader resource views alias it, or are plane
++ * textures read back from it before a draw uses them, VideoProcessor.cpp).
++ * Where that cannot be had (another driver, a texture with CPU access, an
++ * older vdpu383.sys, UmdVideoZeroCopy 0, a shared texture with
++ * C:\mali\vdec-shared-copy), V3a: the picture is
+  * decoded into a surface of the decoder's own (one per DXVA surface
+  * index, references read from there) and copied into the application's
+  * texture at the end of the frame.
+@@ -109,7 +110,7 @@ static bool g_video_zero_copy = true;
+  * USAGE_DEFAULT, shared, zero copy off (UmdVideoZeroCopy 0,
+  * D3D10UMD_VDEC_ZEROCOPY=0, no import in vdpu383.sys). */
+ #define VIDEO_DDI_BIND_DECODER 0x200u   /* D3D11_DDI_BIND_DECODER */
+-static unsigned g_zc_made, g_zc_made_srv, g_zc_failed, g_zc_cpu, g_zc_shared, g_zc_off;
++static unsigned g_zc_made, g_zc_made_srv, g_zc_failed, g_zc_failed_shared, g_zc_cpu, g_zc_shared, g_zc_off;
+ 
+ unsigned
+ VideoEffective(unsigned setting)
+@@ -454,10 +455,10 @@ VideoDestroyVideoDecoder(D3D10DDI_HDEVICE, D3D11_1DDI_HDECODE hDecode)
+ {
+    VideoDecoder *d = CastDecoder(hDecode);
+    vdec_stats st;
+-   unsigned planes, plane_reads;
++   unsigned planes, plane_reads, plane_aliases;
+ 
+    vdec_get_stats(&st);
+-   VideoNv12PlaneStats(&planes, &plane_reads);
++   VideoNv12PlaneStats(&planes, &plane_reads, &plane_aliases);
+    DebugPrintf("video: %s decoder %ux%u destroyed after %u frames, %u errors, %u into the texture; "
+                "process total %u pictures, %u errors, %u us in the decoder, driver runs %u%s%s; "
+                "zero copy %u pictures, %u textures imported, %u refused, %u refreshed\n",
+@@ -471,9 +472,10 @@ VideoDestroyVideoDecoder(D3D10DDI_HDEVICE, D3D11_1DDI_HDECODE hDecode)
+                   "again every 64th use, with a new export)\n",
+                   st.last_import_error, st.last_import_pages, st.import_retries);
+    DebugPrintf("video: NV12 decoder textures: %u for the decoder to write (%u with shader resource binding), "
+-               "%u set up failed; copied into: %u CPU access, %u shared, %u zero copy off; plane textures "
+-               "for %u, %u layers read back for them\n",
+-               g_zc_made, g_zc_made_srv, g_zc_failed, g_zc_cpu, g_zc_shared, g_zc_off, planes, plane_reads);
++               "%u set up failed (%u of them shared); copied into: %u CPU access, %u shared, %u zero copy off; "
++               "plane views aliasing %u, plane textures for %u, %u layers read back for them\n",
++               g_zc_made, g_zc_made_srv, g_zc_failed, g_zc_failed_shared, g_zc_cpu, g_zc_shared, g_zc_off,
++               plane_aliases, planes, plane_reads);
+    vdec_destroy(d->dec);
+    free(d->bitstream);
+    free(d->tiles);
+@@ -669,6 +671,7 @@ CopyToTarget(Device *pDevice, VideoOutputView *v, const vdec_picture *pic)
+       return false;
+    w = MIN2(r->resource->width0, pic->stride);
+    h = MIN2(r->nv12_luma_height, pic->luma_rows);
++   VideoNv12BeforeWrite(pipe, r, v->slice);
+    u_box_3d(0, 0, v->slice, w, h, 1, &box);
+    pipe->texture_subdata(pipe, r->resource, 0, PIPE_MAP_WRITE, &box, pic->data, pic->stride, 0);
+    u_box_3d(0, r->nv12_luma_height, v->slice, w, h / 2, 1, &box);
+@@ -685,12 +688,17 @@ CopyToTarget(Device *pDevice, VideoOutputView *v, const vdec_picture *pic)
+ bool
+ VideoNv12ZeroCopyWanted(Device *pDevice, UINT BindFlags, UINT Usage, UINT MiscFlags, UINT MapFlags)
+ {
+-   /* A decoder output no one but the GPU and the decoder touch: no CPU
+-    * access, not shared with another process. Shader resource views are
+-    * views of plane textures read back from it when used
+-    * (VideoProcessor.cpp), so they do not stand in the way. */
++   /* A decoder output with no CPU access. Shader resource views alias it
++    * or are plane textures read back from it when used
++    * (VideoProcessor.cpp), so they do not stand in the way. Shared is
++    * fine: Chromium's decoder texture is (MiscFlags SHARED, or SHARED |
++    * SHARED_NTHANDLE), the allocation is the runtime's, and a device that
++    * opens it reads the same pages; maliwddm refuses the export of a
++    * shared allocation another process exported first. The file
++    * C:\mali\vdec-shared-copy brings back the copy for shared textures. */
+    const bool decoder = (BindFlags & VIDEO_DDI_BIND_DECODER) != 0;
+    const bool srv = (BindFlags & D3D10_DDI_BIND_SHADER_RESOURCE) != 0;
++   static int shared_copy = -1;
+ 
+    if (pDevice->video < 2)
+       return false;
+@@ -698,7 +706,12 @@ VideoNv12ZeroCopyWanted(Device *pDevice, UINT BindFlags, UINT Usage, UINT MiscFl
+       g_zc_cpu += decoder;
+       return false;
+    }
+-   if (MiscFlags & D3D10_DDI_RESOURCE_MISC_SHARED) {
++   if (shared_copy < 0) {
++      shared_copy = GetFileAttributesA("C:\\mali\\vdec-shared-copy") != INVALID_FILE_ATTRIBUTES;
++      if (shared_copy)
++         DebugPrintf("video: C:\\mali\\vdec-shared-copy: shared decoder textures are copied into\n");
++   }
++   if ((MiscFlags & D3D10_DDI_RESOURCE_MISC_SHARED) && shared_copy) {
+       g_zc_shared += decoder;
+       return false;
+    }
+@@ -714,10 +727,11 @@ VideoNv12ZeroCopyWanted(Device *pDevice, UINT BindFlags, UINT Usage, UINT MiscFl
+ }
+ 
+ void
+-VideoNv12ZeroCopySetupFailed(UINT BindFlags)
++VideoNv12ZeroCopySetupFailed(UINT BindFlags, UINT MiscFlags)
+ {
+    if (BindFlags & VIDEO_DDI_BIND_DECODER) {
+       g_zc_failed++;
++      g_zc_failed_shared += (MiscFlags & D3D10_DDI_RESOURCE_MISC_SHARED) != 0;
+       g_zc_made--;
+       g_zc_made_srv -= (BindFlags & D3D10_DDI_BIND_SHADER_RESOURCE) != 0;
+    }
+@@ -797,6 +811,9 @@ ZeroCopyWaitGpu(struct pipe_context *pipe, VideoOutputView *v)
+    u_box_3d(0, 0, v->slice, 1, 1, 1, &box);
+    if (pipe->texture_map(pipe, v->resource->resource, 0, PIPE_MAP_WRITE, &box, &transfer) && transfer)
+       pipe->texture_unmap(pipe, transfer);
++   /* And the reads of its plane views, which the driver counts as reads
++    * of other resources. */
++   VideoNv12BeforeWrite(pipe, v->resource, v->slice);
+ }
+ 
+ /* The frame's bytes: up to where the slice control says the data ends
+diff --git a/src/gallium/frontends/d3d10umd/Video.h b/src/gallium/frontends/d3d10umd/Video.h
+index 71d9a7a..6a2262b 100644
+--- a/src/gallium/frontends/d3d10umd/Video.h
++++ b/src/gallium/frontends/d3d10umd/Video.h
+@@ -29,6 +29,6 @@ bool VideoNv12ZeroCopyWanted(struct Device *pDevice, UINT BindFlags, UINT Usage,
+                              UINT MapFlags);
+ void VideoNv12ZeroCopyForget(struct Resource *pResource);
+ /* Resource.cpp could not set such a texture up (it is copied into). */
+-void VideoNv12ZeroCopySetupFailed(UINT BindFlags);
++void VideoNv12ZeroCopySetupFailed(UINT BindFlags, UINT MiscFlags);
+ 
+ #endif /* VIDEO_H */
+diff --git a/src/gallium/frontends/d3d10umd/VideoProcessor.cpp b/src/gallium/frontends/d3d10umd/VideoProcessor.cpp
+index 7f140a6..123d038 100644
+--- a/src/gallium/frontends/d3d10umd/VideoProcessor.cpp
++++ b/src/gallium/frontends/d3d10umd/VideoProcessor.cpp
+@@ -41,6 +41,7 @@
+ #include "util/u_surface.h"
+ 
+ #include <math.h>
++#include <stdlib.h>
+ #include <stdio.h>
+ #include <string.h>
+ 
+@@ -881,32 +882,85 @@ VideoVideoProcessorBlt(D3D10DDI_HDEVICE hDevice, D3D11_1DDI_HVIDEOPROCESSOR hVp,
+ /* ---------------------------------------------------- NV12 plane views */
+ 
+ /*
+- * An NV12 texture gets two more textures at its first shader resource view,
+- * the planes as D3D11 hands them to shaders: R8_UNORM width x height
+- * (plane 0) and R8G8_UNORM width/2 x height/2 (plane 1). A shader resource
+- * view of the NV12 texture as R8_UNORM is a view of plane 0, as R8G8_UNORM
+- * of plane 1 (Shader.cpp). The NV12 texture itself stays what it is, the
+- * one that is decoded into, mapped and copied; the planes follow it:
++ * A shader resource view of an NV12 texture as R8_UNORM is a view of plane
++ * 0 (width x height), as R8G8_UNORM of plane 1 (width/2 x height/2), as
++ * D3D11 hands them to shaders (Shader.cpp). The NV12 texture is one R8
++ * texture, luma rows then chroma rows (Resource.cpp), so the planes are
++ * two textures made at the texture's first view:
+  *
+- *    a decoded picture    copied: written into both (Video.cpp, CopyToTarget)
+- *                         decoded into the texture (zero copy): the layer
+- *                         marked stale, read back from the texture before a
+- *                         draw that has a view of it bound (VideoNv12BeforeDraw)
+- *    a copy, an update    planes copied from the source's planes, or read
+- *                         back from the texture (VideoNv12Refresh)
++ *    aliases    (the driver's resource_alias, Mesa patch 0085; the texture
++ *               is linear) R8 and R8G8 textures over the texture's own
++ *               memory, the chroma one starting at its first chroma row.
++ *               Every write to the texture (a copied or a zero-copy decode,
++ *               a copy, an update), in this device or in another that
++ *               opened it, is in the planes as it happens: nothing is
++ *               copied or refreshed. A write first waits for the GPU's
++ *               reads of the planes (VideoNv12BeforeWrite).
++ *    copies     (no alias) two textures of their own the planes are kept
++ *               in step with:
++ *                 a decoded picture   copied: written into both
++ *                                     (Video.cpp, CopyToTarget)
++ *                                     decoded into the texture (zero
++ *                                     copy): the layer marked stale, read
++ *                                     back from the texture before a draw
++ *                                     that has a view of it bound
++ *                                     (VideoNv12BeforeDraw)
++ *                 a copy, an update   planes copied from the source's
++ *                                     planes, or read back from the
++ *                                     texture (VideoNv12Refresh)
++ *               They are linear: Panfrost would make them AFBC, and a
++ *               CPU write of one layer of an AFBC texture reads the layer
++ *               back on the GPU first.
+  *
+  * Made at the first view, not with the texture: FFmpeg asks for
+  * BIND_SHADER_RESOURCE on its decoder textures whatever it does with them,
+- * and a transcode never makes a view. Those planes would be two more
+- * textures and a copy of every picture for nothing.
++ * and a transcode never makes a view.
+  */
+-static unsigned g_plane_textures, g_plane_refreshes;
++static unsigned g_plane_textures, g_plane_refreshes, g_plane_aliases;
+ 
+ void
+-VideoNv12PlaneStats(unsigned *textures, unsigned *refreshes)
++VideoNv12PlaneStats(unsigned *textures, unsigned *refreshes, unsigned *aliases)
+ {
+    *textures = g_plane_textures;
+    *refreshes = g_plane_refreshes;
++   *aliases = g_plane_aliases;
++}
++
++static bool
++CreateAliases(struct pipe_screen *screen, Resource *r)
++{
++   struct pipe_resource *tex = r->resource;
++   struct pipe_resource t;
++   /* D3D10UMD_NV12_ALIAS=0: the plane textures, for tests of that path. */
++   static int off = -1;
++
++   if (off < 0) {
++      const char *e = getenv("D3D10UMD_NV12_ALIAS");
++      off = e && e[0] == '0';
++   }
++   if (off || !screen->resource_alias || tex->last_level || (r->nv12_luma_height & 1) || (tex->width0 & 1))
++      return false;
++   memset(&t, 0, sizeof t);
++   t.target = tex->target;
++   t.width0 = tex->width0;
++   t.height0 = r->nv12_luma_height;
++   t.depth0 = 1;
++   t.array_size = tex->array_size;
++   t.usage = PIPE_USAGE_DEFAULT;
++   t.bind = PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_LINEAR;
++   t.format = PIPE_FORMAT_R8_UNORM;
++   r->nv12_plane[0] = screen->resource_alias(screen, tex, &t, 0);
++   t.width0 = tex->width0 / 2;
++   t.height0 = r->nv12_luma_height / 2;
++   t.format = PIPE_FORMAT_R8G8_UNORM;
++   r->nv12_plane[1] = r->nv12_plane[0] ? screen->resource_alias(screen, tex, &t, r->nv12_luma_height)
++                                        : NULL;
++   if (!r->nv12_plane[1]) {
++      pipe_resource_reference(&r->nv12_plane[0], NULL);
++      return false;
++   }
++   r->nv12_alias = true;
++   return true;
+ }
+ 
+ bool
+@@ -920,6 +974,15 @@ VideoNv12CreatePlanes(Device *pDevice, Resource *r)
+       return true;
+    if (!tex)
+       return false;
++   if (CreateAliases(screen, r)) {
++      r->nv12_device = pDevice;
++      g_plane_aliases++;
++      DebugPrintf("video: NV12 %ux%u x%u: its shader resource views alias it (R8 and R8G8 over its "
++                  "memory)%s%s\n", tex->width0, r->nv12_luma_height, tex->array_size,
++                  r->nv12_zc ? ", the decoder writes the texture" : "",
++                  r->shared_allocation ? ", shared" : "");
++      return true;
++   }
+    memset(&t, 0, sizeof t);
+    t.target = tex->target;
+    t.width0 = tex->width0;
+@@ -927,7 +990,7 @@ VideoNv12CreatePlanes(Device *pDevice, Resource *r)
+    t.depth0 = 1;
+    t.array_size = tex->array_size;
+    t.usage = PIPE_USAGE_DEFAULT;
+-   t.bind = PIPE_BIND_SAMPLER_VIEW;
++   t.bind = PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_LINEAR;
+    t.format = PIPE_FORMAT_R8_UNORM;
+    r->nv12_plane[0] = screen->resource_create(screen, &t);
+    t.width0 = tex->width0 / 2;
+@@ -944,7 +1007,8 @@ VideoNv12CreatePlanes(Device *pDevice, Resource *r)
+    for (unsigned l = 0; l < tex->array_size; l++)
+       VideoNv12MarkStale(r, l);
+    g_plane_textures++;
+-   DebugPrintf("video: NV12 %ux%u x%u: plane textures for its shader resource views%s\n", tex->width0,
++   DebugPrintf("video: NV12 %ux%u x%u: plane textures for its shader resource views, copied from it "
++               "(the texture cannot be aliased)%s\n", tex->width0,
+                r->nv12_luma_height, tex->array_size, r->nv12_zc ? " (the decoder writes the texture)" : "");
+    return true;
+ }
+@@ -956,6 +1020,7 @@ VideoNv12DestroyPlanes(Resource *r)
+       r->nv12_device->nv12_stale -= r->nv12_stale_count;
+    r->nv12_stale_count = 0;
+    r->nv12_device = NULL;
++   r->nv12_alias = false;
+    free(r->nv12_stale);
+    r->nv12_stale = NULL;
+    pipe_resource_reference(&r->nv12_plane[0], NULL);
+@@ -988,7 +1053,7 @@ VideoNv12WritePlanes(struct pipe_context *pipe, Resource *r, unsigned layer, con
+ {
+    struct pipe_box box;
+ 
+-   if (!r->nv12_plane[0])
++   if (!r->nv12_plane[0] || r->nv12_alias)
+       return;
+    width = MIN2(width, r->nv12_plane[0]->width0) & ~1u;
+    rows = MIN2(rows, r->nv12_luma_height) & ~1u;
+@@ -1008,7 +1073,7 @@ VideoNv12Refresh(struct pipe_context *pipe, Resource *r, unsigned layer)
+    struct pipe_transfer *xfer;
+    struct pipe_resource *tex = r->resource;
+ 
+-   if (!r->nv12_plane[0] || !tex)
++   if (!r->nv12_plane[0] || !tex || r->nv12_alias)
+       return;
+    const uint8_t *map = (const uint8_t *)pipe_texture_map(pipe, tex, 0, layer, PIPE_MAP_READ, 0, 0,
+                                                           tex->width0, tex->height0, &xfer);
+@@ -1047,6 +1112,25 @@ VideoNv12BeforeDraw(Device *pDevice)
+       }
+ }
+ 
++/* Before the texture's layer is written (a copied or zero-copy decode, a
++ * copy, an update): the GPU's reads of the plane aliases are done. The
++ * driver tracks them as reads of the aliases, not of the texture, so a
++ * synchronised write map of each (1x1) submits and waits for them. */
++void
++VideoNv12BeforeWrite(struct pipe_context *pipe, Resource *r, unsigned layer)
++{
++   if (!r->nv12_alias)
++      return;
++   for (unsigned i = 0; i < 2; i++) {
++      struct pipe_transfer *xfer = NULL;
++      struct pipe_box box;
++
++      u_box_3d(0, 0, MIN2(layer, r->nv12_plane[i]->array_size - 1), 1, 1, 1, &box);
++      if (pipe->texture_map(pipe, r->nv12_plane[i], 0, PIPE_MAP_WRITE, &box, &xfer) && xfer)
++         pipe->texture_unmap(pipe, xfer);
++   }
++}
++
+ /* After a copy into dst's layer: the planes copied from src's when it has
+  * them, else read back. Boxes in luma texels. */
+ void
+@@ -1055,6 +1139,13 @@ VideoNv12AfterCopy(struct pipe_context *pipe, Resource *dst, unsigned dst_layer,
+ {
+    if (!dst->nv12_plane[0])
+       return;
++   /* Aliases have the copy already; one made on the GPU goes out now, so
++    * the batches that sample the planes, which the driver does not know
++    * read the texture, cannot run before it. */
++   if (dst->nv12_alias) {
++      pipe->flush(pipe, NULL, 0);
++      return;
++   }
+    /* A part of a stale layer: all of it from the texture. */
+    if (dst->nv12_stale && dst_layer < dst->resource->array_size && dst->nv12_stale[dst_layer]) {
+       VideoNv12Refresh(pipe, dst, dst_layer);
+diff --git a/src/gallium/frontends/d3d10umd/VideoProcessor.h b/src/gallium/frontends/d3d10umd/VideoProcessor.h
+index 9951aee..9de3664 100644
+--- a/src/gallium/frontends/d3d10umd/VideoProcessor.h
++++ b/src/gallium/frontends/d3d10umd/VideoProcessor.h
+@@ -26,13 +26,16 @@ UINT VideoFormatSupport(struct Device *pDevice, DXGI_FORMAT format);
+ void VideoDeviceDestroy(struct Device *pDevice);
+ 
+ /* NV12 plane textures (shader resource views): Resource::nv12_plane, made
+- * at the first view. MarkStale: the texture's layer changed behind the
+- * planes; BeforeDraw brings the bound views' layers up to date. */
++ * at the first view, aliases of the texture where the driver can
++ * (nv12_alias), else copies. MarkStale: the texture's layer changed behind
++ * the copies; BeforeDraw brings the bound views' layers up to date;
++ * BeforeWrite: the GPU's reads of the aliases are done. */
+ bool VideoNv12CreatePlanes(struct Device *pDevice, struct Resource *r);
+ void VideoNv12DestroyPlanes(struct Resource *r);
+ void VideoNv12MarkStale(struct Resource *r, unsigned layer);
+ void VideoNv12BeforeDraw(struct Device *pDevice);
+-void VideoNv12PlaneStats(unsigned *textures, unsigned *refreshes);
++void VideoNv12PlaneStats(unsigned *textures, unsigned *refreshes, unsigned *aliases);
++void VideoNv12BeforeWrite(struct pipe_context *pipe, struct Resource *r, unsigned layer);
+ void VideoNv12WritePlanes(struct pipe_context *pipe, struct Resource *r, unsigned layer,
+                           const uint8_t *luma, const uint8_t *chroma, unsigned stride,
+                           unsigned width, unsigned rows);
+diff --git a/src/gallium/include/pipe/p_screen.h b/src/gallium/include/pipe/p_screen.h
+index f17ea21..aa98e45 100644
+--- a/src/gallium/include/pipe/p_screen.h
++++ b/src/gallium/include/pipe/p_screen.h
+@@ -278,6 +278,21 @@ struct pipe_screen {
+                                                        const struct pipe_resource *t,
+                                                        void *user_memory);
+ 
++   /**
++    * A resource whose storage is part of another's: level 0 of every layer
++    * of the linear, single-level texture parent, starting at row y_rows of
++    * each layer, rows as far apart as the parent's and layers as the
++    * parent's. t gives the format, size and target, which may differ from
++    * the parent's as long as each row fits in the parent's row pitch (the
++    * NV12 planes as R8 and R8G8 textures over one R8 texture, d3d10umd).
++    * Writes to either are seen by the other. NULL when the parent is not
++    * linear or the driver cannot. Optional.
++    */
++   struct pipe_resource * (*resource_alias)(struct pipe_screen *,
++                                            struct pipe_resource *parent,
++                                            const struct pipe_resource *t,
++                                            unsigned y_rows);
++
+    /**
+     * Unlike pipe_resource::bind, which describes what gallium frontends want,
+     * resources can have much greater capabilities in practice, often implied

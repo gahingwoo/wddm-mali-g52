@@ -76,7 +76,7 @@ UMD environment variables, for tests:
 | VP9 profile 0 | `463707f8-a1d0-4585-876d-83aa6d60b89e` | 1 | board: matches software decode; 215 vectors checked off the board |
 | AV1 Main, 8 bit | `b8be4ccb-cf53-46ba-8d59-d6b8a6da5d2a` | 1 | reference slot bug fixed (section 9), not rerun on the board; 21 streams checked off the board |
 | 10 bit (HEVC Main 10, VP9 profile 2, AV1 10 bit) | | | not offered |
-| V4 video processor and plane views | | | CI on softpipe only |
+| V4 video processor and plane views | | | CI on softpipe only; Edge 2026-11-26 showed wrong chroma through the plane views (CHROMIUM-VIDEO.md, C3) |
 
 The board results are from FFmpeg on the TaishanPi 3M, 2026-11-25.
 Profiles are listed in the table's order, NV12 output only, up to
@@ -230,7 +230,7 @@ vdpu383.sys with interface version 3 (woa-rk3576 `vdpu383-import`;
 (interface 2) the UMD sees no imports and copies. CI only.
 
 How it works: a decoder output texture (NV12, default usage, no CPU
-access, not shared; `BIND_SHADER_RESOURCE` is fine) is made linear and its BO
+access; shared is fine, Chromium's is; `BIND_SHADER_RESOURCE` is fine) is made linear and its BO
 marked in the shim (`malikm_vdec_mark`) so Panfrost never replaces or
 caches it. At the first decode the UMD asks maliwddm to export it
 (`MW_ESCAPE_VDEC_EXPORT`, `drivers/maliwddm/vdecexport.c`): maliwddm
@@ -247,22 +247,23 @@ them in the decoder's IOMMU, once per texture until `vdec_forget`.
 - Coherency: before a decode the UMD maps the slice for writing (1x1), so
   Panfrost waits for batches using it; GPU jobs that sample it start with
   an L2 clean and invalidate; the CPU view is uncached.
-- Shader resource views: the R8 and R8G8 views see two plane textures,
-  made at the texture's first view, not with the texture (FFmpeg sets
-  `BIND_SHADER_RESOURCE` on its decoder array and a transcode never makes
-  a view). A slice the decoder wrote is marked stale and read back into
-  the planes by the CPU before a draw that has a view of it bound (also
-  before a copy from the planes). That read is of the uncached texture,
-  so mpv `d3d11va` and Chromium still pay about the copy path's CPU per
-  shown picture; a GPU copy into the planes is not done yet. Panfrost
-  keeps the texture linear: `PIPE_BIND_LINEAR` rules out AFBC, AFRC and
-  tiling, a linear resource is `modifier_constant`, and
-  `pan_legalize_format` only converts AFBC, AFRC and MTK-tiled ones.
+- Shader resource views (Mesa 0085): the R8 and R8G8 views see two
+  textures made at the texture's first view, aliases of its own memory
+  (R8 from row 0, R8G8 from the first chroma row, the texture's pitch and
+  slices), so what the decoder writes is in the views with nothing copied.
+  A write to the texture first waits for the GPU's reads through them.
+  Where the driver cannot alias (`D3D10UMD_NV12_ALIAS=0`), they are linear
+  copies: a slice the decoder wrote is read back into them by the CPU
+  before a draw that has a view of it bound. Panfrost keeps the texture
+  linear: `PIPE_BIND_LINEAR` rules out AFBC, AFRC and tiling, a linear
+  resource is `modifier_constant`, and `pan_legalize_format` only converts
+  AFBC, AFRC and MTK-tiled ones.
 - Eviction: maliwddm calls vdpu383.sys's revoke routine before VidMm
   unmaps or destroys the allocation. A decode naming a revoked import is
   refused (`VDPU383_RUN_REVOKED`) and vdec re-exports and runs again.
-- Falls back to the copy path for: shared textures or textures with CPU
-  access, layouts outside the conditions, textures
+- Falls back to the copy path for: textures with CPU access, shared
+  textures with `C:\mali\vdec-shared-copy`, layouts outside the
+  conditions (Chromium's 1080-row HEVC, VP9 and AV1 textures), textures
   made before the decoder could import, a refused export or import (both
   asked again every 64th use; a refused import with a new export first),
   interface 2, `UmdVideoZeroCopy` 0,

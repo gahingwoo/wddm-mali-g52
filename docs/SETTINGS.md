@@ -150,6 +150,8 @@ variables are not read.
 | `D3D10UMD_VDEC_FAKE=1` | Build the decoder's register file and write a known pattern instead of decoding. |
 | `D3D10UMD_VDEC_REGLOG=<file>` | Log every register file built. |
 | `D3D10UMD_VDEC_ZEROCOPY=0` | Force the video copy path. |
+| `D3D10UMD_NV12_ALIAS=0` | NV12 plane views are copies of the texture, not aliases of it. |
+| `C:\mali\vdec-shared-copy` | Shared decoder textures (Chromium's) are copied into, not decoded into. |
 | `MALIKM_FAKE=1` | No device: the shim answers every call itself ([M3.md](M3.md)). 2 also logs each call. |
 | `MALIKM_TRACE=1` | The shim logs every driver call. |
 | `C:\mali\log` | The UMD log directory ([EDGE-PRESENT.md](EDGE-PRESENT.md#umd-log)); a file named `off` in it stops new logs. |

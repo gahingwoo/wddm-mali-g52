@@ -182,10 +182,12 @@ void vdec_h264_destroy(vdec *d);
 void vdec_get_stats(vdec_stats *s);
 
 /* The pattern the fake decoder writes: every luma byte of a picture is
- * (StatusReportFeedbackNumber & 0xFF), every chroma byte 0x80 ^ the
- * picture's surface index. */
+ * (StatusReportFeedbackNumber & 0xFF), every Cb byte 0x80 ^ the picture's
+ * surface index, every Cr byte 0x40 ^ that index. Cb and Cr differ, so a
+ * reader that swaps or drops one of them is caught. */
 static inline uint8_t vdec_fake_luma(unsigned status_report) { return (uint8_t)status_report; }
 static inline uint8_t vdec_fake_chroma(unsigned index) { return (uint8_t)(0x80 ^ index); }
+static inline uint8_t vdec_fake_chroma_v(unsigned index) { return (uint8_t)(0x40 ^ index); }
 
 #ifdef __cplusplus
 }

@@ -160,7 +160,8 @@ static void check_output(int slot, unsigned w, unsigned h)
             bad += p->data[(size_t)y * p->stride + x] != vdec_fake_luma(status_of[slot]);
     for (y = 0; y < (h + 1) / 2; y++)
         for (x = 0; x < (w + 1) / 2 * 2; x++)
-            bad += p->data[(size_t)(p->luma_rows + y) * p->stride + x] != vdec_fake_chroma((unsigned)slot);
+            bad += p->data[(size_t)(p->luma_rows + y) * p->stride + x] !=
+                   ((x & 1) ? vdec_fake_chroma_v((unsigned)slot) : vdec_fake_chroma((unsigned)slot));
     CHECK(bad == 0);
     outputs++;
 }
