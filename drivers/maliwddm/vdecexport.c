@@ -51,6 +51,51 @@ typedef struct _MW_VDEC_EXPORT {
 
 static CALLBACK_FUNCTION VdecCallback;
 
+/*
+ * Why an export or an import was refused, for a board with no debugger:
+ * VdecWhy and the values below in the log key (MwLog), for the first 16
+ * refusals and every 64th after, and at stop. docs/VIDEO-DECODE.md.
+ */
+#define MW_VDEC_WHY_OFF             0x01    /* export: zero copy not on at the adapter's start */
+#define MW_VDEC_WHY_HANDLE          0x02    /* export: the allocation handle is not resolved */
+#define MW_VDEC_WHY_NOMEM           0x03    /* export: no pool */
+#define MW_VDEC_WHY_NOT_RESIDENT    0x04    /* export: not mapped, or not all of it (Pages, MdlPages) */
+#define MW_VDEC_WHY_OTHER_PROCESS   0x05    /* export: another process exported this allocation */
+#define MW_VDEC_WHY_BAD_REQUEST     0x11    /* import: version (Pid) or size (ExportPid) differ */
+#define MW_VDEC_WHY_NO_PFNS         0x12    /* import: no PFN array or no revoke routine */
+#define MW_VDEC_WHY_NO_EXPORT       0x13    /* import: no export with this token (it ended, VdecLastGone) */
+#define MW_VDEC_WHY_PID             0x14    /* import: the token is another process's (Pid, ExportPid) */
+#define MW_VDEC_WHY_IMPORTED        0x15    /* import: imported already by another import */
+#define MW_VDEC_WHY_TOO_SMALL       0x16    /* import: MaxPages (Pages) under the export's (ExportPages) */
+
+/* PASSIVE_LEVEL, no lock held. */
+static void VdecNote(MW_ADAPTER *A, ULONG Why, NTSTATUS St, ULONG Pid, ULONG ExportPid, ULONG Pages,
+                     ULONG ExportPages)
+{
+    ULONG n;
+
+    A->VdecWhy = Why;
+    A->VdecWhyStatus = (ULONG)St;
+    A->VdecWhyPid = Pid;
+    A->VdecWhyExportPid = ExportPid;
+    A->VdecWhyPages = Pages;
+    A->VdecWhyExportPages = ExportPages;
+    n = (ULONG)InterlockedIncrement((volatile LONG *)&A->VdecNotes);
+    if (n > 16 && n % 64)
+        return;
+    MwLog(A, L"VdecLastWhy", Why);
+    MwLog(A, L"VdecLastStatus", (ULONG)St);
+    MwLog(A, L"VdecLastPid", Pid);
+    MwLog(A, L"VdecLastExportPid", ExportPid);
+    MwLog(A, L"VdecLastPages", Pages);
+    MwLog(A, L"VdecLastExportPages", ExportPages);
+    MwLog(A, L"VdecLastGone", A->VdecLastGone);
+    MwLog(A, L"VdecEndedUnimported", A->VdecEndedUnimported);
+    MwLog(A, L"VdecExportsMade", A->VdecExportsMade);
+    MwLog(A, L"VdecImports", A->VdecImports);
+    MwLog(A, L"VdecRefused", A->VdecRefused);
+}
+
 void MwVdecInit(MW_ADAPTER *A)
 {
     ExInitializeFastMutex(&A->VdecLock);
@@ -125,9 +170,10 @@ static void EndExport(MW_ADAPTER *A, MW_VDEC_EXPORT *E)
  * after the MmuLock section of an unmap or a map, and before destruction;
  * VidMm keeps the old pages until the paging operation returns, so the
  * decoder lets go of them in time). PASSIVE_LEVEL, no lock held. */
-void MwVdecGone(MW_ADAPTER *A, MW_ALLOCATION *Alloc)
+void MwVdecGone(MW_ADAPTER *A, MW_ALLOCATION *Alloc, ULONG Why)
 {
     MW_VDEC_EXPORT *e;
+    BOOLEAN unimported = FALSE;
 
     if (!A->VdecOn || Alloc == NULL || Alloc->Vdec == NULL)
         return;
@@ -139,9 +185,22 @@ void MwVdecGone(MW_ADAPTER *A, MW_ALLOCATION *Alloc)
         Alloc->Vdec = NULL;
     }
     ExReleaseFastMutex(&A->VdecLock);
-    if (e != NULL)
+    if (e != NULL) {
+        /* MW_VDEC_GONE_*, and 0x100 when an import had the pages */
+        A->VdecLastGone = Why | (e->Revoke != NULL ? 0x100 : 0);
+        unimported = e->Revoke == NULL;
         EndExport(A, e);
+    }
     RevokeUnlock(A);
+    /* an export that ended before vdpu383.sys took it: an import with its
+     * token is refused (MW_VDEC_WHY_NO_EXPORT) */
+    if (unimported) {
+        ULONG n = (ULONG)InterlockedIncrement((volatile LONG *)&A->VdecEndedUnimported);
+        if (n <= 16 || n % 64 == 0) {
+            MwLog(A, L"VdecEndedUnimported", n);
+            MwLog(A, L"VdecLastGone", A->VdecLastGone);
+        }
+    }
 }
 
 /* StopDevice, RemoveDevice: every export ends (the importers let go of the
@@ -154,6 +213,9 @@ void MwVdecStop(MW_ADAPTER *A)
     MwLog(A, L"VdecImports", A->VdecImports);
     MwLog(A, L"VdecRevokes", A->VdecRevokes);
     MwLog(A, L"VdecRefused", A->VdecRefused);
+    MwLog(A, L"VdecEndedUnimported", A->VdecEndedUnimported);
+    if (A->VdecNotes != 0)
+        MwLog(A, L"VdecLastWhy", A->VdecWhy);
     for (;;) {
         MW_VDEC_EXPORT *e = NULL;
 
@@ -202,23 +264,41 @@ static VOID VdecCallback(PVOID Context, PVOID Argument1, PVOID Argument2)
     ULONG op = (ULONG)(ULONG_PTR)Argument2;
     MW_VDEC_EXPORT *e;
 
-    if (r == NULL || r->Version != VDPU383_IMPORT_VERSION || r->Size < sizeof(*r))
+    if (r == NULL)
         return;
+    if (r->Version != VDPU383_IMPORT_VERSION || r->Size < sizeof(*r)) {
+        InterlockedIncrement((volatile LONG *)&a->VdecRefused);
+        VdecNote(a, MW_VDEC_WHY_BAD_REQUEST, STATUS_REVISION_MISMATCH, r->Version, r->Size, 0, (ULONG)sizeof(*r));
+        return;
+    }
     if (op == VDPU383_IMPORT_OP_IMPORT) {
         NTSTATUS st = STATUS_NOT_FOUND;
+        ULONG why = 0, exportPid = 0, exportPages = 0;
 
         if (r->Pfns == NULL || r->Revoke == NULL) {
             r->Status = STATUS_INVALID_PARAMETER;
+            InterlockedIncrement((volatile LONG *)&a->VdecRefused);
+            VdecNote(a, MW_VDEC_WHY_NO_PFNS, r->Status, (ULONG)(ULONG_PTR)r->ProcessId, 0, r->MaxPages, 0);
             return;
         }
         ExAcquireFastMutex(&a->VdecLock);
         e = FindExport(a, r->Token);
-        if (e == NULL || e->Pid != r->ProcessId) {
+        if (e != NULL) {
+            exportPid = (ULONG)(ULONG_PTR)e->Pid;
+            exportPages = e->Pages;
+        }
+        if (e == NULL) {
+            st = STATUS_NOT_FOUND;              /* no such export (any more) */
+            why = MW_VDEC_WHY_NO_EXPORT;
+        } else if (e->Pid != r->ProcessId) {
             st = STATUS_NOT_FOUND;              /* not this process's token */
+            why = MW_VDEC_WHY_PID;
         } else if (e->Revoke != NULL && e->Cookie != r->Cookie) {
             st = STATUS_SHARING_VIOLATION;      /* imported already, by another import */
+            why = MW_VDEC_WHY_IMPORTED;
         } else if (r->MaxPages < e->Pages) {
             st = STATUS_BUFFER_TOO_SMALL;
+            why = MW_VDEC_WHY_TOO_SMALL;
         } else {
             RtlCopyMemory(r->Pfns, e->Pfns, (SIZE_T)e->Pages * sizeof(PFN_NUMBER));
             r->Pages = e->Pages;
@@ -228,11 +308,14 @@ static VOID VdecCallback(PVOID Context, PVOID Argument1, PVOID Argument2)
             st = STATUS_SUCCESS;
         }
         ExReleaseFastMutex(&a->VdecLock);
-        if (NT_SUCCESS(st))
-            InterlockedIncrement((volatile LONG *)&a->VdecImports);
-        else
-            InterlockedIncrement((volatile LONG *)&a->VdecRefused);
         r->Status = st;
+        if (NT_SUCCESS(st)) {
+            if (InterlockedIncrement((volatile LONG *)&a->VdecImports) <= 4)
+                MwLog(a, L"VdecImports", a->VdecImports);
+        } else {
+            InterlockedIncrement((volatile LONG *)&a->VdecRefused);
+            VdecNote(a, why, st, (ULONG)(ULONG_PTR)r->ProcessId, exportPid, r->MaxPages, exportPages);
+        }
     } else if (op == VDPU383_IMPORT_OP_RELEASE) {
         /* After a revoke in progress (which holds VdecRevoke) is over. */
         RevokeLock(a);
@@ -256,25 +339,38 @@ NTSTATUS MwEscapeVdecExport(MW_ADAPTER *A, const DXGKARG_ESCAPE *Esc, MW_ESCAPE_
     MW_VDEC_EXPORT *e, *n;
     HANDLE pid = PsGetCurrentProcessId();
     NTSTATUS st = STATUS_SUCCESS;
+    ULONG why = 0, otherPid = 0, mdlPages = 0;
+    BOOLEAN made = FALSE;
 
     D->Token = 0;
     D->Pages = 0;
-    if (!A->VdecOn)
+    if (!A->VdecOn) {
+        if (InterlockedIncrement((volatile LONG *)&A->VdecRefused) <= 4)
+            MwLog(A, L"VdecLastWhy", MW_VDEC_WHY_OFF);
         return STATUS_NOT_SUPPORTED;
+    }
     if (Esc->hDevice == NULL)
         return STATUS_INVALID_PARAMETER;
     alloc = MwAllocFromHandle(A, (D3DKMT_HANDLE)D->hAllocation);
-    if (alloc == NULL)
+    if (alloc == NULL) {
+        InterlockedIncrement((volatile LONG *)&A->VdecRefused);
+        VdecNote(A, MW_VDEC_WHY_HANDLE, STATUS_INVALID_HANDLE, (ULONG)(ULONG_PTR)pid, 0, 0, 0);
         return STATUS_INVALID_HANDLE;
+    }
 
     /* Made outside the locks; thrown away if the allocation has an export
      * already. */
     n = (MW_VDEC_EXPORT *)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(*n), MW_TAG);
-    if (n == NULL)
-        return STATUS_NO_MEMORY;
-    n->Pfns = (PPFN_NUMBER)ExAllocatePool2(POOL_FLAG_NON_PAGED, (SIZE_T)alloc->Pages * sizeof(PFN_NUMBER), MW_TAG);
-    if (n->Pfns == NULL) {
-        FreeExport(n);
+    if (n != NULL) {
+        n->Pfns = (PPFN_NUMBER)ExAllocatePool2(POOL_FLAG_NON_PAGED, (SIZE_T)alloc->Pages * sizeof(PFN_NUMBER), MW_TAG);
+        if (n->Pfns == NULL) {
+            FreeExport(n);
+            n = NULL;
+        }
+    }
+    if (n == NULL) {
+        InterlockedIncrement((volatile LONG *)&A->VdecRefused);
+        VdecNote(A, MW_VDEC_WHY_NOMEM, STATUS_NO_MEMORY, (ULONG)(ULONG_PTR)pid, 0, alloc->Pages, 0);
         return STATUS_NO_MEMORY;
     }
 
@@ -288,12 +384,16 @@ NTSTATUS MwEscapeVdecExport(MW_ADAPTER *A, const DXGKARG_ESCAPE *Esc, MW_ESCAPE_
     ExAcquireFastMutex(&A->MmuLock);
     if (!alloc->Mapped || alloc->Mdl == NULL || alloc->MdlPages != alloc->Pages) {
         st = STATUS_NOT_SUPPORTED;              /* not resident, or not all of it */
+        why = MW_VDEC_WHY_NOT_RESIDENT;
+        mdlPages = alloc->Mapped ? alloc->MdlPages : 0;
         goto out;
     }
     ExAcquireFastMutex(&A->VdecLock);
     e = alloc->Vdec;
     if (e != NULL && e->Pid != pid) {
         st = STATUS_ACCESS_DENIED;              /* another process's export of a shared allocation */
+        why = MW_VDEC_WHY_OTHER_PROCESS;
+        otherPid = (ULONG)(ULONG_PTR)e->Pid;
     } else if (e == NULL) {
         LARGE_INTEGER t = KeQueryPerformanceCounter(NULL);
 
@@ -309,7 +409,7 @@ NTSTATUS MwEscapeVdecExport(MW_ADAPTER *A, const DXGKARG_ESCAPE *Esc, MW_ESCAPE_
         alloc->Vdec = n;
         e = n;
         n = NULL;
-        A->VdecExportsMade++;
+        made = ++A->VdecExportsMade <= 4;
     }
     if (NT_SUCCESS(st)) {
         D->Token = e->Token;
@@ -318,9 +418,16 @@ NTSTATUS MwEscapeVdecExport(MW_ADAPTER *A, const DXGKARG_ESCAPE *Esc, MW_ESCAPE_
     ExReleaseFastMutex(&A->VdecLock);
 out:
     ExReleaseFastMutex(&A->MmuLock);
-    if (!NT_SUCCESS(st))
-        InterlockedIncrement((volatile LONG *)&A->VdecRefused);
     if (n != NULL)
         FreeExport(n);
+    if (!NT_SUCCESS(st)) {
+        InterlockedIncrement((volatile LONG *)&A->VdecRefused);
+        /* not resident: Pages the allocation's, ExportPages what is mapped */
+        VdecNote(A, why, st, (ULONG)(ULONG_PTR)pid, otherPid, alloc->Pages, mdlPages);
+    } else if (made) {
+        MwLog(A, L"VdecExportsMade", A->VdecExportsMade);
+        MwLog(A, L"VdecExportPid", (ULONG)(ULONG_PTR)pid);
+        MwLog(A, L"VdecExportPages", D->Pages);
+    }
     return st;
 }

@@ -308,7 +308,7 @@ static NTSTATUS NewAllocation(MW_ADAPTER *A, const MW_ALLOCATION_INFO *In, DXGK_
 static void FreeAllocation(MW_ADAPTER *A, MW_ALLOCATION *Alloc)
 {
     /* the video decoder lets go of its pages first (vdecexport.c) */
-    MwVdecGone(A, Alloc);
+    MwVdecGone(A, Alloc, MW_VDEC_GONE_DESTROY);
     MemDestroyed(A, Alloc);
     MwCopyForget(A, Alloc, TRUE);
     ExAcquireFastMutex(&A->MmuLock);
@@ -554,7 +554,7 @@ static NTSTATUS BuildPaging1x(MW_ADAPTER *a, DXGKARG_BUILDPAGINGBUFFER *Arg)
             MwScanMap(a, alloc, pfn, pages);
         ExReleaseFastMutex(&a->MmuLock);
         /* an export of the pages it had before ends (vdecexport.c) */
-        MwVdecGone(a, alloc);
+        MwVdecGone(a, alloc, MW_VDEC_GONE_MAP);
         a->Maps++;
         InterlockedAdd64(&a->MapPages, pages);
         if (!NT_SUCCESS(st))
@@ -579,7 +579,7 @@ static NTSTATUS BuildPaging1x(MW_ADAPTER *a, DXGKARG_BUILDPAGINGBUFFER *Arg)
         ExReleaseFastMutex(&a->MmuLock);
         /* VidMm keeps the pages until this returns: the video decoder lets
          * go of them now (vdecexport.c) */
-        MwVdecGone(a, alloc);
+        MwVdecGone(a, alloc, MW_VDEC_GONE_UNMAP);
         MwCopyForget(a, alloc, FALSE);
         return STATUS_SUCCESS;
     }

@@ -100,6 +100,9 @@ typedef struct vdec_stats {
     unsigned import_failures;
     unsigned refreshes;         /* imports refreshed after the display driver took the pages back */
     unsigned can_import;        /* 1: the driver imports (interface 3, IOMMU on) or the fake */
+    unsigned import_retries;    /* refused imports asked again (every 64th use, D3D10UMD_VDEC_IMPORT_RETRY) */
+    unsigned last_import_error; /* GetLastError() of the last refused import (1168 STATUS_NOT_FOUND, ...) */
+    unsigned last_import_pages; /* the pages it asked for */
 } vdec_stats;
 
 /*

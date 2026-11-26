@@ -263,8 +263,9 @@ them in the decoder's IOMMU, once per texture until `vdec_forget`.
   refused (`VDPU383_RUN_REVOKED`) and vdec re-exports and runs again.
 - Falls back to the copy path for: shared textures or textures with CPU
   access, layouts outside the conditions, textures
-  made before the decoder could import, a refused export (retried every
-  64 frames) or import, interface 2, `UmdVideoZeroCopy` 0,
+  made before the decoder could import, a refused export or import (both
+  asked again every 64th use; a refused import with a new export first),
+  interface 2, `UmdVideoZeroCopy` 0,
   `D3D10UMD_VDEC_ZEROCOPY=0`. A single frame that does not fit is decoded
   into the decoder's own surface and copied.
 
@@ -289,6 +290,25 @@ powershell -ExecutionPolicy Bypass -File vdec-bench.ps1 -Clips D:\clips -Ffmpeg 
 The decoder's last UMD log line, `video: NV12 decoder textures:`, says
 what became of the process's decoder textures (for the decoder, with
 shader resource binding, setup failed, copied and why, plane textures).
+
+A refused import: the UMD log line `video: last refused import: error E
+for P pages` (E is the Win32 error: 1168 not found, 87 invalid
+parameter, 1450 no resources), then:
+
+- `vdpu383test info`, line `last failed import`; or the values
+  `LastImportStage`, `LastImportStatus`, `LastImportPages`,
+  `LastImportExporterStatus`, `LastImportExporterPages`, `LastImportPid`
+  under `ACPI\RKCP0383\0\Device Parameters`. Stage: 1 parameters, 2 no
+  memory, 3 unknown handle, 4 no IO addresses, 5 no exporter, 6 exporter
+  refused, 7 page count differs, 8 IOMMU entries.
+- maliwddm, `ACPI\RKCP7402\0\Device Parameters\maliwddm`: `VdecLastWhy`
+  (0x13 no export with that token, 0x14 another process's token, 0x15
+  imported already, 0x16 too few pages, 0x04 export refused: not
+  resident), `VdecLastStatus`, `VdecLastPid`, `VdecLastExportPid`,
+  `VdecLastPages`, `VdecLastExportPages`; `VdecEndedUnimported` and
+  `VdecLastGone` (1 destroyed, 2 mapped again, 3 unmapped; +0x100 when
+  imported) count exports that ended before the decoder took them;
+  `VdecExportPid`, `VdecExportPages` for the first exports.
 
 Pass: every clip MATCH; `gpu` at 300 fps or more per codec with user
 time a small part of the wall time; decode count up by the frames

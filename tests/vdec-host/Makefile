@@ -25,6 +25,11 @@ run: vdec-host
 	@set -e; grep -v '^#' reglog.md5 | while read s f m o; do \
 	  echo "== $$s $$o --zero-copy"; ./vdec-host $(D)/$$s --frames $$f $$o --zero-copy --log zc-$$s.txt; \
 	done
+	@# a refused import asked again later, with a new export (video/vdec.c import_get)
+	@set -e; grep -v '^#' reglog.md5 | while read s f m o; do \
+	  echo "== $$s $$o --zero-copy --import-fail 1"; \
+	  ./vdec-host $(D)/$$s --frames $$f $$o --zero-copy --import-fail 1 --log zf-$$s.txt; \
+	done
 
 clean:
-	rm -f vdec-host reglog-*.txt zc-*.txt vdec-host-reglog.txt
+	rm -f vdec-host reglog-*.txt zc-*.txt zf-*.txt vdec-host-reglog.txt

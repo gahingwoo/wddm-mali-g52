@@ -10,6 +10,7 @@
  * (vdpu383test-reglog.patch, README.md). `make run`.
  *
  *   vdec-host STREAM [--frames N] [--reglog-md5 MD5] [--av1-synth 0|1] [--log FILE] [--zero-copy]
+ *             [--import-fail N]
  *
  * --zero-copy: every picture but every fourth is given a target, a slice of
  * one "texture array" of this test's (zero copy, vdec_set_target), laid out
@@ -17,6 +18,10 @@
  * the slice, the others (decoded into surfaces of the decoder's own and
  * copied by the caller) where vdec_picture says, and every address the
  * decoder is given in a buffer of the backend or the texture.
+ *
+ * --import-fail N (with --zero-copy): the fake refuses the first N imports
+ * and a refused one is asked again every 4th use (D3D10UMD_VDEC_IMPORT_RETRY),
+ * each time with a new export token from the target's refresh callback.
  *
  * The codec is told from the stream as vdpu383test does (IVF fourcc, then
  * the first NAL unit).
@@ -52,8 +57,19 @@ static int zero_copy;
 static uint8_t *tex;
 static unsigned tex_stride, tex_rows, tex_pages, zc_given, zc_in;
 static size_t tex_layer;
+/* the export token of the texture, a new one at each refresh */
+static uint64_t tex_token = 0x5a5a0001ull;
+static unsigned import_fail, refresh_calls;
 
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
+
+static uint64_t tex_refresh(void *ctx, unsigned *pages)
+{
+    CHECK(ctx == &tex_token);
+    refresh_calls++;
+    *pages = tex_pages;
+    return ++tex_token;
+}
 
 static unsigned align_to(unsigned v, unsigned a)
 {
@@ -78,8 +94,10 @@ static void give_target(unsigned slot, unsigned decode_index, unsigned w, unsign
     if (decode_index % 4 == 3 || slot >= TEX_SLICES)
         return;
     memset(&t, 0, sizeof(t));
-    t.token = 0x5a5a0001ull;
+    t.token = tex_token;
     t.pages = tex_pages;
+    t.refresh = tex_refresh;
+    t.refresh_ctx = &tex_token;
     t.offset = slot * tex_layer;
     t.stride = tex_stride;
     t.luma_rows = tex_rows;
@@ -319,6 +337,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--av1-synth") && i + 1 < argc) opts.av1_synth = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--log") && i + 1 < argc) log = argv[++i];
         else if (!strcmp(argv[i], "--zero-copy")) zero_copy = 1;
+        else if (!strcmp(argv[i], "--import-fail") && i + 1 < argc) import_fail = (unsigned)atoi(argv[++i]);
         else if (!path) path = argv[i];
         else {
             printf("unknown argument %s\n", argv[i]);
@@ -335,6 +354,12 @@ int main(int argc, char **argv)
     av1_slots_check();
     remove(log);
     setenv("D3D10UMD_VDEC_FAKE", "1", 1);
+    if (import_fail) {
+        char v[16];
+        snprintf(v, sizeof v, "%u", import_fail);
+        setenv("D3D10UMD_VDEC_FAKE_IMPORT_FAIL", v, 1);
+        setenv("D3D10UMD_VDEC_IMPORT_RETRY", "4", 1);
+    }
     setenv("D3D10UMD_VDEC_REGLOG", log, 1);
     CHECK(vdec_available());
 
@@ -391,7 +416,21 @@ int main(int argc, char **argv)
         /* every target taken, the rest copied; one import for the array */
         printf("zero copy: %u of %u pictures given a texture, %u decoded into it, %u imports\n", zc_given,
                pictures, zc_in, st.imports);
-        CHECK(zc_given > 0 && zc_in == zc_given && st.zero_copy == zc_in && st.imports == 1);
+        if (!import_fail) {
+            CHECK(zc_given > 0 && zc_in == zc_given && st.zero_copy == zc_in && st.imports == 1);
+            CHECK(st.import_failures == 0 && st.import_retries == 0 && refresh_calls == 0);
+        } else {
+            /* refused at the first use and at every 4th after, N times; the
+             * retry after the last refusal imports, with a new token each time */
+            unsigned missed = 1 + 4 * (import_fail - 1) + 3;
+            printf("import refused %u times: %u retries, %u refreshes, %u pictures copied, last error %u "
+                   "for %u pages\n", st.import_failures, st.import_retries, refresh_calls, zc_given - zc_in,
+                   st.last_import_error, st.last_import_pages);
+            CHECK(zc_given > missed && zc_in == zc_given - missed && st.zero_copy == zc_in);
+            CHECK(st.imports == 1 && st.import_failures == import_fail && st.import_retries == import_fail);
+            CHECK(refresh_calls == import_fail && tex_token == 0x5a5a0001ull + import_fail);
+            CHECK(st.last_import_error == 1168 && st.last_import_pages == tex_pages);
+        }
     }
     CHECK(pictures > 0 && outputs > 0);
     if (want_frames)
@@ -417,7 +456,7 @@ int main(int argc, char **argv)
         CHECK(vdec_hevc_decode(dec, &hp, NULL, data, 16, &out, err, sizeof err) == -1);
     }
     vdec_destroy(dec);
-    vdec_forget(0x5a5a0001ull);
+    vdec_forget(tex_token);
     free(tex);
     free(data);
 
