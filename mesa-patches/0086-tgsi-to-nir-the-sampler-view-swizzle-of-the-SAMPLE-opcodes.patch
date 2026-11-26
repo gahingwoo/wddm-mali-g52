@@ -1,0 +1,29 @@
+diff --git a/src/gallium/auxiliary/nir/tgsi_to_nir.c b/src/gallium/auxiliary/nir/tgsi_to_nir.c
+index 4cfceed..89fdb95 100644
+--- a/src/gallium/auxiliary/nir/tgsi_to_nir.c
++++ b/src/gallium/auxiliary/nir/tgsi_to_nir.c
+@@ -1645,9 +1645,21 @@ ttn_sample(struct ttn_compile *c, nir_def **src)
+    nir_builder_instr_insert(b, &instr->instr);
+ 
+    /* A comparison returns one value; Direct3D reads it from any component. */
+-   if (instr->def.num_components == 1)
+-      return nir_replicate(b, &instr->def, 4);
+-   return nir_pad_vector_imm_int(b, &instr->def, 0, 4);
++   nir_def *res = instr->def.num_components == 1 ? nir_replicate(b, &instr->def, 4)
++                                                 : nir_pad_vector_imm_int(b, &instr->def, 0, 4);
++
++   /* The swizzle of the sampler view operand selects the components of
++    * the result (Direct3D's resource operand swizzle: sample r1.yz, ...,
++    * t1.xxyx writes texel.x to y and texel.y to z). fxc folds the
++    * swizzles of a texture read into it; tgsi_exec applies it, this did
++    * not, so Chromium's R8G8 chroma came back as (texel.y, 0). */
++   const struct tgsi_src_register *sv = &tgsi_inst->Src[1].Register;
++   if (sv->SwizzleX != TGSI_SWIZZLE_X || sv->SwizzleY != TGSI_SWIZZLE_Y ||
++       sv->SwizzleZ != TGSI_SWIZZLE_Z || sv->SwizzleW != TGSI_SWIZZLE_W) {
++      unsigned swz[4] = { sv->SwizzleX, sv->SwizzleY, sv->SwizzleZ, sv->SwizzleW };
++      res = nir_swizzle(b, res, swz, 4);
++   }
++   return res;
+ }
+ 
+ /* TGSI_OPCODE_TXQ is actually two distinct operations:

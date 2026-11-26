@@ -411,7 +411,7 @@ jobs:
           $dll = (Resolve-Path out\libgallium_d3d10.dll).Path
           New-Item -ItemType Directory -Force vt | Out-Null
           cl /nologo /W3 /O2 /EHsc /MD /Itools\windows\vdectest tools\windows\vdectest\vdectest.cpp `
-             tools\windows\vdectest\vptest.cpp tools\windows\vdectest\chromeprobe.cpp `
+             tools\windows\vdectest\vptest.cpp tools\windows\vdectest\chromeprobe.cpp tools\windows\vdectest\mfprobe.cpp `
              tools\windows\vdectest\codecs.cpp tools\windows\vdectest\h264parse.c `
              tools\windows\vdectest\hevcparse.c tools\windows\vdectest\vp9parse.c `
              tools\windows\vdectest\av1parse.c `
@@ -638,6 +638,9 @@ jobs:
           $env:D3D10UMD_UMDVIDEO = '2'
           $env:D3D10UMD_VDEC_FAKE = '1'
           $r['chromium'] = Run-Fl 'chromium' 'chrome.exe' "`"$dll`" --chromium --fl11 --type=gpu-process"
+          # Media Foundation's H.264 decoder on the same device (Edge's
+          # MediaFoundationVideoDecoder path): printed, not checked.
+          $r['mf'] = Run-Fl 'mf' 'chrome.exe' "`"$dll`" --mf --fl11 --type=gpu-process"
           Remove-Item Env:D3D10UMD_VDEC_FAKE, Env:D3D10UMD_UMDVIDEO
 
           # The same SM5 shaders through Panfrost on the emulated G52: the
@@ -651,7 +654,7 @@ jobs:
           Get-ChildItem C:\mali\log | ForEach-Object {
             Copy-Item $_.FullName "fl-umdlog-$($_.Name)"
             Write-Host "===== UMD log $($_.Name)"
-            Get-Content $_.FullName | Select-String 'UmdReportFL11|pipeline level|3D pipeline|shader:|ddi-error|not carried out|XXX|GetCaps|QueryAdapterInfo: type|CalcPrivateDeviceSize|GetSupportedVersions|CreateDevice|CloseAdapter' | Select-Object -First 60 | ForEach-Object { $_.Line }
+            Get-Content $_.FullName | Select-String 'video:|UmdReportFL11|pipeline level|3D pipeline|shader:|ddi-error|not carried out|XXX|GetCaps|QueryAdapterInfo: type|CalcPrivateDeviceSize|GetSupportedVersions|CreateDevice|CloseAdapter' | Select-Object -First 60 | ForEach-Object { $_.Line }
           }
           Remove-Item -Recurse -Force C:\mali\log
 

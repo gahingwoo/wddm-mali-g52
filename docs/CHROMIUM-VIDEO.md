@@ -48,7 +48,7 @@ From Chromium `media/gpu/windows` (shared by Chrome and Edge):
 | C0 | the facts above and the probe (`vdectest --chromium`, `chromeprobe.cpp`) | done |
 | C1 | feature level 11_0 for Chromium's GPU process only (`UmdReportFL11`, Mesa 0080, `fl11test`) | CI only |
 | C2 | decoding in the GPU process: V3a with vdpu383.sys `UserAccess` 2 on a test board; for real, decode work through maliwddm | V3a written; maliwddm path not started |
-| C3 | shared NV12: plane views aliasing the texture, so a texture opened from the handle and the decoder see the same pixels; zero copy for shared decoder textures | written (Mesa 0085), CI only |
+| C3 | shared NV12: plane views aliasing the texture, zero copy for shared decoder textures (0085); the resource swizzle of texture reads (0086) | 0085 on the board: real time; colours (0086) CI only |
 | C4 | H.264 in Edge on the board (`edge://media-internals` says D3D11VideoDecoder) | needs C1, C2, C3 |
 | C5 | VP9 profile 0 for YouTube | in the UMD (VIDEO-DECODE.md) |
 | C6 | HEVC Main, AV1 Main, P010 for 10 bit | HEVC and AV1 8 bit in the UMD; no P010 |
@@ -70,12 +70,17 @@ on the VDPU383 (HEVC proves it: Edge has no software HEVC).
 
 **Wrong colours.** The bars screenshot fits one model exactly: the shader
 got the Cr byte as Cb and 0 as Cr (grey turns teal, red blue, yellow
-cyan, green stays green). So the R8G8 view returned (second byte, 0).
-Definite: the texture is `SHARED`, so zero copy refused it, and each
-picture was copied into the texture and again into two plane textures,
-which Panfrost made AFBC. Suspected, not proven off the board: Panfrost's
-AFBC R8G8 path (the staging blit into it, or sampling it) loses the
-green channel. Mesa 0085 takes AFBC and the copies out of the path:
+cyan, green stays green). The second run (0085, below) showed the same on
+both of Edge's paths (HEVC through MediaFoundationVideoDecoder, VP9 and
+AV1 through D3D11VideoDecoder), so it was in the shader, not the texture.
+Cause (Mesa 0086): fxc folds the component selection of a texture read
+into the resource operand's swizzle (`sample r1.yz, ..., t1.xxyx`), and
+tgsi_to_nir ignored that swizzle, so `r1.yz` got texel `.yz` = (Cr, 0)
+instead of `.xy`. softpipe runs the TGSI itself and applies it, which is
+why CI never saw it; vdectest's plane view shader now reads chroma
+swizzled, so `vdectest hw ... --srv` catches it on the board.
+
+Mesa 0085 also changes the texture path:
 
 - The plane views are aliases: R8 and R8G8 textures over the NV12
   texture's own memory (new `pipe_screen::resource_alias`, Panfrost and
@@ -87,24 +92,30 @@ green channel. Mesa 0085 takes AFBC and the copies out of the path:
 - A write to the texture (decode, copy, update) first waits for the GPU's
   reads through the aliases.
 
-**Slow playback** (1.5 to 2.4 s of video in 4 s). Per picture on the GPU
-thread: the copy of 3.1 MB from the decoder's write-combined surface (15
-to 20 ms measured with FFmpeg), a second read of it for the plane
-textures, and Panfrost's write of one layer of an AFBC array (read the
-layer back on the GPU, wait, write, blit back) twice. Now: no plane copy,
-and shared decoder textures get zero copy (`C:\mali\vdec-shared-copy`
-restores the copy). Zero copy needs rows that are a multiple of 16 (H.264,
-HEVC) or 64 (VP9, AV1): Chromium's H.264 texture (1088 rows) qualifies,
-its HEVC, VP9 and AV1 textures (1080 rows) do not and keep the one copy.
+**Slow playback** (1.5 to 2.4 s of video in 4 s), fixed by 0085: HEVC,
+VP9 and AV1 1080p30 now play at about 29 to 30 fps with 3 to 5 dropped
+frames in 15 s. Before, each picture was copied from the decoder's
+write-combined surface (15 to 20 ms), read again for two plane textures
+and uploaded into one layer of each (AFBC: read back on the GPU, wait,
+write, blit back). Now there is no plane copy, and shared decoder
+textures get zero copy (`C:\mali\vdec-shared-copy` restores the copy).
+Zero copy needs rows that are a multiple of 16 (H.264, HEVC) or 64 (VP9,
+AV1): Chromium's H.264 texture (1088 rows) qualifies, its HEVC, VP9 and
+AV1 textures (1080 rows) do not and keep the one copy (the VP9 log:
+`0 into the texture`, as expected).
 
-**H.264 fails at once** ("Format error", readyState 0, no decode). Not
-explained yet. Off the board nothing in the UMD's answers stops Chromium:
+**H.264 fails at once** ("Format error", readyState 0, no decode; the
+second run: "no supported source was found", no decoder line in the media
+log at all, `canPlayType` "probably"). Not explained yet. Off the board nothing in the UMD's answers stops Chromium:
 the probe sets H.264 up as Chromium does and the decoder is created, and
 Chromium's size probe lists it up to 4096x2304 (Chromium's fixed
 1920x1088 entry would mean it never found our H.264 GUID). readyState 0
 means the pipeline failed to start: the demuxer or a decoder's
 initialisation, the audio decoder included. `tools/windows/cdp-media.ps1`
-prints the media log that says which.
+prints the media log that says which. Edge used Media Foundation for
+HEVC; if it does for H.264, `vdectest hw --mf` shows whether Media
+Foundation's H.264 decoder takes this device (`MFT_MESSAGE_SET_D3D_MANAGER`,
+1080p H.264 in, NV12 out).
 
 **`UserAccess` 2.** Nothing here removes it: with zero copy too, the GPU
 process opens `\\.\VDPU383` and runs every decode itself. Only C2's real
@@ -113,6 +124,9 @@ vdpu383.sys pages kernel to kernel, `\Callback\MaliwddmVdecExport`),
 would.
 
 ### C3 board test
+
+The Edge GPU process runs at low integrity: for its UMD log,
+`icacls C:\mali\log /setintegritylevel (OI)(CI)low` first.
 
 Inputs: this branch's maliwddm package and `vdectest-arm64`; vdpu383.sys
 with imports (`vdpu383test info` prints an `imports` line); the clips in
@@ -133,6 +147,9 @@ Registry as on 2026-11-26 (`UmdVideo` 2, `UmdReportFL11` 1, `UserAccess`
      and `video: NV12 decoder textures: N for the decoder to write`.
    - The same with `set D3D10UMD_NV12_ALIAS=0` (linear copies). A
      MISMATCH here but not above points at the copies.
+   - `vdectest hw --mf --fl11` as `msedge.exe --type=gpu-process` (copy
+     vdectest.exe to `C:\mali\fake\msedge.exe`) and as itself: the
+     Media Foundation lines and the UMD log's `video:` lines.
 2. Colours: `edgehw.cmd` from a scheduled task (`/IT`, the desktop user),
    then `cdp2.ps1 -Match play.html -ExprFile hevc.js` and
    `cdpcall.ps1 -Match play.html -Method Page.captureScreenshot -OutFile hevc2.png`.

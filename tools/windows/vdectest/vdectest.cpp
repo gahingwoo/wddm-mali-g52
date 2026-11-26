@@ -12,6 +12,8 @@
  *   --fake             the UMD runs with D3D10UMD_VDEC_FAKE=1: check its pattern instead
  *   --chromium         what Chromium's D3D11VideoDecoder asks of the device, step by step
  *                      (chromeprobe.cpp); exit 0 when all of it is there, 4 otherwise
+ *   --mf               Media Foundation's H.264 decoder on this device (mfprobe.cpp):
+ *                      the device manager, 1080p H.264 in, NV12 out; exit 0 or 4
  *   --fl11             ask for feature level 11_0 first (with UmdReportFL11, as msedge.exe
  *                      --type=gpu-process: what ANGLE gets in the Chromium GPU process)
  *   --type=...         ignored (the argument Chromium's child processes have)
@@ -74,6 +76,7 @@ extern "C" {
 }
 #include "vptest.h"
 #include "chromeprobe.h"
+#include "mfprobe.h"
 #include "codecs.h"
 
 #include "../../../video/vdpu383/vdpu383_ioctl.h"
@@ -621,7 +624,7 @@ main(int argc, char **argv)
    Test t;
    const char *stream = NULL, *ref = NULL, *outp = NULL;
    unsigned max_pictures = 0, runs0 = 0, runs1 = 0;
-   int probe_only = 0, have_runs, rc, chromium = 0;
+   int probe_only = 0, have_runs, rc, chromium = 0, mf = 0;
 
    memset(&t, 0, sizeof t);
    if (argc < 3) {
@@ -638,6 +641,7 @@ main(int argc, char **argv)
       else if (!strcmp(argv[i], "--nthandle")) t.nthandle = 1;
       else if (!strcmp(argv[i], "--open")) t.open = 1;
       else if (!strcmp(argv[i], "--chromium")) chromium = 1;
+      else if (!strcmp(argv[i], "--mf")) mf = 1;
       else if (!strcmp(argv[i], "--fl11")) g_fl11 = 1;
       else if (!strncmp(argv[i], "--type=", 7)) { /* as Chromium's child processes have; ignored */ }
       else if (!strcmp(argv[i], "--ref") && i + 1 < argc) ref = argv[++i];
@@ -664,6 +668,8 @@ main(int argc, char **argv)
    rc = probe(&t);
    if (chromium)
       return chrome_probe(t.dev, t.ctx);
+   if (mf)
+      return mf_probe(t.dev);
    if (t.vp && t.vdev && !stream && !probe_only)
       return vp_run_tests(t.dev, t.ctx, t.vdev, t.vctx);
    if (probe_only || rc)

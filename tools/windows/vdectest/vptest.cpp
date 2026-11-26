@@ -661,13 +661,19 @@ done:
  * slice: the runtime refuses more for NV12), as Chromium and mpv sample a
  * decoded picture; read through them by a pixel shader (Load at the view's
  * slice a constant buffer names, 0). */
+/* The chroma is read swizzled (.yx, then put back): fxc folds that into
+ * the resource operand's swizzle, which Chromium's shaders also have
+ * (sample r1.yz, ..., t1.xxyx) and which tgsi_to_nir ignored before Mesa
+ * 0086: on Panfrost Cb and Cr come out swapped without it. softpipe runs
+ * TGSI and always applied it. */
 static const char ps_array_src[] =
    "Texture2DArray<float> ty : register(t0);\n"
    "Texture2DArray<float2> tc : register(t1);\n"
    "cbuffer c : register(b0) { uint slice; };\n"
    "float4 main(float4 pos : SV_Position) : SV_Target {\n"
    "   int2 p = int2(pos.xy);\n"
-   "   return float4(ty.Load(int4(p, slice, 0)), tc.Load(int4(p / 2, slice, 0)), 1);\n"
+   "   float2 c = tc.Load(int4(p / 2, slice, 0)).yx;\n"
+   "   return float4(ty.Load(int4(p, slice, 0)), c.y, c.x, 1);\n"
    "}\n";
 
 int
