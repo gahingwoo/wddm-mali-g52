@@ -27,6 +27,7 @@
 #pragma comment(lib, "mfplat.lib")
 #pragma comment(lib, "mfuuid.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "wmcodecdspuuid.lib")
 
 static HRESULT
 set_type(IMFTransform *mft, bool input, const GUID &sub, UINT w, UINT h, DWORD index, HRESULT *got)
