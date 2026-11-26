@@ -10,7 +10,7 @@
  * (vdpu383test-reglog.patch, README.md). `make run`.
  *
  *   vdec-host STREAM [--frames N] [--reglog-md5 MD5] [--av1-synth 0|1] [--log FILE] [--zero-copy]
- *             [--import-fail N]
+ *             [--import-fail N] [--tex-rows-align N] [--kmd [--revoke-at N]]
  *
  * --zero-copy: every picture but every fourth is given a target, a slice of
  * one "texture array" of this test's (zero copy, vdec_set_target), laid out
@@ -22,6 +22,22 @@
  * --import-fail N (with --zero-copy): the fake refuses the first N imports
  * and a refused one is asked again every 4th use (D3D10UMD_VDEC_IMPORT_RETRY),
  * each time with a new export token from the target's refresh callback.
+ *
+ * --tex-rows-align N (with --zero-copy): the texture has exactly the
+ * picture's rows rounded up to N (Chromium's 1080-row textures with 8):
+ * H.264, HEVC and AV1 must still decode into it, VP9 (64-row superblocks)
+ * only when that is a multiple of 64.
+ *
+ * --kmd: every call goes through maliwddm's escape (video/vdec_kmd.h) to a
+ * session of vdpu383.sys, both faked (fakekmd.c) with the drivers' own
+ * checks: the register log must be the same, every decode accepted. Then,
+ * by escapes of their own: an address outside the process's buffers, the
+ * same with VDPU383_RUN_NO_ADDR_CHECK, another process naming its buffers,
+ * freeing them, importing its export, calls a session may not make, and
+ * the process's exit; each must be refused. --revoke-at N (with
+ * --zero-copy): after N pictures given a texture the display driver takes
+ * its pages back; the next decode must be refused as revoked, refreshed
+ * with a new export, and run.
  *
  * The codec is told from the stream as vdpu383test does (IVF fourcc, then
  * the first NAL unit).
@@ -41,6 +57,7 @@
 #include "../../tools/windows/vdectest/md5.h"
 #include "../../video/vdec.h"
 #include "../../video/vdpu383/lib/vdpu383_av1.h"
+#include "fakekmd.h"
 
 #define MAX_SLOTS 128
 
@@ -60,6 +77,10 @@ static size_t tex_layer;
 /* the export token of the texture, a new one at each refresh */
 static uint64_t tex_token = 0x5a5a0001ull;
 static unsigned import_fail, refresh_calls;
+static unsigned tex_rows_align, revoke_at, revoked;
+/* --kmd: the decoding process, and another one */
+static int kmd;
+static fk_process proc_a = { 100, 1 }, proc_b = { 200, 1 };
 
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
 
@@ -68,6 +89,9 @@ static uint64_t tex_refresh(void *ctx, unsigned *pages)
     CHECK(ctx == &tex_token);
     refresh_calls++;
     *pages = tex_pages;
+    /* the display driver exports the allocation again (its new pages) */
+    if (kmd)
+        return tex_token = fk_export(&proc_a, tex_pages, tex);
     return ++tex_token;
 }
 
@@ -86,13 +110,20 @@ static void give_target(unsigned slot, unsigned decode_index, unsigned w, unsign
         return;
     if (!tex) {
         tex_stride = align_to(w, 64);
-        tex_rows = align_to(h, 64) + 64;
+        tex_rows = tex_rows_align ? align_to(h, tex_rows_align) : align_to(h, 64) + 64;
         tex_layer = align_to(tex_stride * tex_rows * 3 / 2, 4096);
         tex_pages = (unsigned)(tex_layer * TEX_SLICES / 4096);
         tex = calloc(TEX_SLICES, tex_layer);
+        if (kmd)
+            tex_token = fk_export(&proc_a, tex_pages, tex);
     }
     if (decode_index % 4 == 3 || slot >= TEX_SLICES)
         return;
+    /* eviction: the pages go while the decoder has them imported */
+    if (revoke_at && zc_given == revoke_at && !revoked) {
+        fk_gone(tex_token);
+        revoked = 1;
+    }
     memset(&t, 0, sizeof(t));
     t.token = tex_token;
     t.pages = tex_pages;
@@ -299,6 +330,136 @@ static void av1_slots_check(void)
         CHECK(h.ref_frame_idx[i] == ref[i]);
 }
 
+/* ------------------------------------------------- --kmd: refusals */
+
+/* One escape of process p, as vdec.c makes it; the escape's status. */
+static long escape(fk_process *p, int with_device, unsigned ioctl, const void *in, unsigned in_size,
+                   unsigned out_size, VDEC_KMD_CALL *c)
+{
+    memset(c, 0, sizeof(*c));
+    c->Code = MW_ESCAPE_VDEC_CALL;
+    c->Version = VDEC_KMD_VERSION;
+    c->Ioctl = ioctl;
+    c->InSize = in_size;
+    c->OutSize = out_size;
+    if (in_size)
+        memcpy(c->Data, in, in_size);
+    return fk_escape(p, with_device, c, sizeof(*c));
+}
+
+static unsigned run_result(fk_process *p, const VDPU383_RUN_IN *in, unsigned *bad)
+{
+    static VDEC_KMD_CALL c;
+    const VDPU383_RUN_OUT *o = (const VDPU383_RUN_OUT *)(const void *)c.Data;
+
+    if (escape(p, 1, IOCTL_VDPU383_RUN, in, sizeof(*in), sizeof(VDPU383_RUN_OUT), &c) != 0 || c.Status != 0)
+        return 0xFFFFFFFFu;
+    *bad = o->bad_reg;
+    return o->result;
+}
+
+static void kmd_attacks(void)
+{
+    static VDPU383_RUN_IN in;
+    static VDEC_KMD_CALL c;
+    VDPU383_FREE_IN fr;
+    VDPU383_IMPORT_IN im;
+    uint32_t dma = 0, size = 0;
+    unsigned handle = 0, bad = 0, r;
+    uint64_t tok_a;
+    uint8_t mem[4 * 4096];
+    fk_counters k0, k1;
+
+    /* a buffer of the process (the decoder's, still allocated: a new one) */
+    {
+        VDPU383_ALLOC_IN a = { 64 << 10 };
+        const VDPU383_ALLOC_OUT *o = (const VDPU383_ALLOC_OUT *)(const void *)c.Data;
+        CHECK(escape(&proc_a, 1, IOCTL_VDPU383_ALLOC, &a, sizeof(a), sizeof(VDPU383_ALLOC_OUT), &c) == 0 &&
+              c.Status == 0 && o->handle);
+        CHECK(fk_any_buffer(&proc_a, &dma, &size, &handle));
+    }
+    fk_get(&k0);
+
+    memset(&in, 0, sizeof(in));
+    in.regs[128] = dma;
+    in.write_mask[128 / 32] |= 1u << (128 % 32);
+    in.regs[168] = dma + 4096;
+    in.write_mask[168 / 32] |= 1u << (168 % 32);
+    in.flags = VDPU383_RUN_RESET_ON_ERROR;
+    r = run_result(&proc_a, &in, &bad);
+    printf("kmd: a decode into the process's own buffer: result %u\n", r);
+    CHECK(r == VDPU383_RUN_OK);
+
+    in.regs[168] = dma + size;          /* just past it */
+    r = run_result(&proc_a, &in, &bad);
+    printf("kmd: an address outside its buffers: result %u, register %u\n", r, bad);
+    CHECK(r == VDPU383_RUN_BAD_ADDRESS && bad == 168);
+    in.flags |= VDPU383_RUN_NO_ADDR_CHECK;
+    r = run_result(&proc_a, &in, &bad);
+    printf("kmd: the same with VDPU383_RUN_NO_ADDR_CHECK: result %u\n", r);
+    CHECK(r == VDPU383_RUN_BAD_ADDRESS && bad == 168);
+    in.flags = VDPU383_RUN_RESET_ON_ERROR;
+    in.regs[168] = dma + 4096;
+
+    /* another process */
+    r = run_result(&proc_b, &in, &bad);
+    printf("kmd: another process naming its buffers: result %u, register %u\n", r, bad);
+    CHECK(r == VDPU383_RUN_BAD_ADDRESS && bad == 128);
+    fr.handle = handle;
+    CHECK(escape(&proc_b, 1, IOCTL_VDPU383_FREE, &fr, sizeof(fr), 0, &c) == 0 && c.Status == (int)0xC0000008);
+    printf("kmd: another process freeing its buffer: status 0x%08x\n", (unsigned)c.Status);
+    tok_a = fk_export(&proc_a, 4, mem);
+    memset(&im, 0, sizeof(im));
+    im.token = tok_a;
+    im.pages = 4;
+    CHECK(escape(&proc_b, 1, IOCTL_VDPU383_IMPORT, &im, sizeof(im), sizeof(VDPU383_IMPORT_OUT), &c) == 0 &&
+          c.Status == (int)0xC0000225);
+    printf("kmd: another process importing its export: status 0x%08x\n", (unsigned)c.Status);
+    CHECK(escape(&proc_a, 1, IOCTL_VDPU383_IMPORT, &im, sizeof(im), sizeof(VDPU383_IMPORT_OUT), &c) == 0 &&
+          c.Status == 0);
+    printf("kmd: the process importing its own export: status 0x%08x\n", (unsigned)c.Status);
+    r = run_result(&proc_a, &in, &bad);
+    CHECK(r == VDPU383_RUN_OK);
+    in.regs[168] = ((const VDPU383_IMPORT_OUT *)(const void *)c.Data)->dma;
+    r = run_result(&proc_a, &in, &bad);
+    CHECK(r == VDPU383_RUN_OK);
+    fk_gone(tok_a);                     /* destroyed */
+    r = run_result(&proc_a, &in, &bad);
+    printf("kmd: decoding into an import after its allocation went: result %u\n", r);
+    CHECK(r == VDPU383_RUN_REVOKED && bad == 168);
+    in.regs[168] = dma + 4096;
+
+    /* calls and shapes a session may not have */
+    CHECK(escape(&proc_a, 1, IOCTL_VDPU383_WRITE_REGS, &in, 16, 0, &c) == (long)0xC0000022);
+    CHECK(escape(&proc_a, 1, IOCTL_VDPU383_WARMUP, NULL, 0, sizeof(VDPU383_WARMUP_RESULT), &c) == (long)0xC0000022);
+    CHECK(escape(&proc_a, 1, IOCTL_VDPU383_RESET, NULL, 0, 4, &c) == (long)0xC0000022);
+    CHECK(escape(&proc_a, 1, IOCTL_VDPU383_READ_REGS, &in, 8, 4, &c) == (long)0xC0000022);
+    CHECK(escape(&proc_a, 1, IOCTL_VDPU383_RUN, &in, sizeof(in) - 4, sizeof(VDPU383_RUN_OUT), &c) ==
+          (long)0xC000000D);
+    CHECK(escape(&proc_a, 0, IOCTL_VDPU383_RUN, &in, sizeof(in), sizeof(VDPU383_RUN_OUT), &c) == (long)0xC000000D);
+    memset(&c, 0, sizeof(c));
+    c.Code = MW_ESCAPE_VDEC_CALL;
+    c.Version = 2;
+    c.Ioctl = IOCTL_VDPU383_GET_INFO;
+    c.OutSize = sizeof(VDPU383_INFO);
+    CHECK(fk_escape(&proc_a, 1, &c, sizeof(c)) == (long)0xC000000D);
+    CHECK(fk_escape(&proc_a, 1, &c, sizeof(c) - 8) == (long)0xC000000D);
+    printf("kmd: register access, warm-up, reset, wrong sizes, no device, another version, short escape: refused\n");
+
+    /* what a process is told */
+    CHECK(escape(&proc_a, 1, IOCTL_VDPU383_GET_INFO, NULL, 0, sizeof(VDPU383_INFO), &c) == 0 && c.Status == 0 &&
+          ((const VDPU383_INFO *)(const void *)c.Data)->iommu_dt_dma == 0 &&
+          ((const VDPU383_INFO *)(const void *)c.Data)->interface_version >= 4);
+
+    /* the process exits */
+    fk_exit(&proc_a);
+    r = run_result(&proc_b, &in, &bad);
+    printf("kmd: another process naming them after the process exited: result %u\n", r);
+    CHECK(r == VDPU383_RUN_BAD_ADDRESS);
+    fk_get(&k1);
+    CHECK(k1.imports_live == 0 && k1.refused_runs == k0.refused_runs + 4 && k1.revoked_runs == k0.revoked_runs + 1);
+}
+
 /* ----------------------------------------------------------------- main */
 
 static uint8_t *read_file(const char *path, size_t *len)
@@ -330,7 +491,7 @@ int main(int argc, char **argv)
     size_t n, loglen;
     vdec_stats st;
     char hex[33];
-    int i, rc = 0;
+    int i, rc = 0, zc_none = 0;
 
     for (i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--frames") && i + 1 < argc) want_frames = (unsigned)atoi(argv[++i]);
@@ -339,6 +500,9 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--log") && i + 1 < argc) log = argv[++i];
         else if (!strcmp(argv[i], "--zero-copy")) zero_copy = 1;
         else if (!strcmp(argv[i], "--import-fail") && i + 1 < argc) import_fail = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--tex-rows-align") && i + 1 < argc) tex_rows_align = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--kmd")) kmd = 1;
+        else if (!strcmp(argv[i], "--revoke-at") && i + 1 < argc) revoke_at = (unsigned)atoi(argv[++i]);
         else if (!path) path = argv[i];
         else {
             printf("unknown argument %s\n", argv[i]);
@@ -362,6 +526,8 @@ int main(int argc, char **argv)
         setenv("D3D10UMD_VDEC_IMPORT_RETRY", "4", 1);
     }
     setenv("D3D10UMD_VDEC_REGLOG", log, 1);
+    if (kmd)
+        vdec_set_escape(fk_escape, &proc_a);
     CHECK(vdec_available());
 
     codec = av1_probe(data, n) ? VDEC_CODEC_AV1 : vp9_probe(data, n) ? VDEC_CODEC_VP9 :
@@ -413,13 +579,31 @@ int main(int argc, char **argv)
     vdec_get_stats(&st);
     CHECK(st.fake == 1);
     CHECK(st.pictures == pictures && st.errors == 0);
-    if (zero_copy) {
+    CHECK(st.path == (kmd ? VDEC_PATH_KMD : VDEC_PATH_MEM));
+    if (kmd) {
+        fk_counters k;
+        fk_get(&k);
+        printf("kmd: %u escapes made, %u calls, %u decodes, %u refused, %u revoked, session runs %u\n",
+               st.kmd_calls, k.calls, k.runs, k.refused_runs, k.revoked_runs, st.session_runs);
+        CHECK(st.kmd_calls > 0 && k.runs == pictures && k.refused_runs == 0 && k.refused_escapes == 0);
+        CHECK(k.revoked_runs == (revoke_at ? 1u : 0u) && st.session_runs == k.runs);
+        if (revoke_at)
+            CHECK(revoked && st.refreshes == 1 && refresh_calls == 1);
+    }
+    /* VP9 writes 64-row superblocks: a texture with rows not a multiple of
+     * 64 is not decoded into */
+    zc_none = zero_copy && tex_rows_align && codec == VDEC_CODEC_VP9 && tex_rows % 64;
+    if (zc_none) {
+        printf("zero copy: %u of %u pictures given a %u-row texture, %u decoded into it (VP9: none expected)\n",
+               zc_given, pictures, tex_rows, zc_in);
+        CHECK(zc_in == 0 && st.imports == 0);
+    } else if (zero_copy) {
         /* every target taken, the rest copied; one import for the array */
         printf("zero copy: %u of %u pictures given a texture, %u decoded into it, %u imports\n", zc_given,
                pictures, zc_in, st.imports);
         if (!import_fail) {
             CHECK(zc_given > 0 && zc_in == zc_given && st.zero_copy == zc_in && st.imports == 1);
-            CHECK(st.import_failures == 0 && st.import_retries == 0 && refresh_calls == 0);
+            CHECK(st.import_failures == 0 && st.import_retries == 0 && refresh_calls == (revoke_at ? 1u : 0u));
         } else {
             /* refused at the first use and at every 4th after, N times; the
              * retry after the last refusal imports, with a new token each time */
@@ -458,6 +642,12 @@ int main(int argc, char **argv)
     }
     vdec_destroy(dec);
     vdec_forget(tex_token);
+    if (kmd) {
+        fk_counters k;
+        fk_get(&k);
+        CHECK(k.imports_live == 0);     /* the texture's import let go */
+        kmd_attacks();
+    }
     free(tex);
     free(data);
 
@@ -486,7 +676,7 @@ int main(int argc, char **argv)
             *nl = '\n';
             line = nl + 1;
         }
-        CHECK(raw == 0 && texs > 0);
+        CHECK(raw == 0 && (texs > 0 || zc_none));
     }
     if (logdata) {
         Md5 m;
