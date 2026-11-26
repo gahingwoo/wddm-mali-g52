@@ -24,8 +24,7 @@ on:
       - 'include/**'
       - 'video/**'
       - 'tools/windows/cltest/**'
-      - 'ci/meson-rust-dedup.py'
-      - 'ci/bindgen-unsigned-enums.py'
+      - '.github/opencl/**'
   workflow_dispatch:
 
 permissions:
@@ -103,9 +102,9 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          # meson pinned: ci\meson-rust-dedup.py edits this version's backend.
+          # meson pinned: .github\opencl\meson-rust-dedup.py edits this version's backend.
           python -m pip install meson==1.12.1 ninja mako pyyaml packaging
-          python ci\meson-rust-dedup.py
+          python .github\opencl\meson-rust-dedup.py
           if ($LASTEXITCODE) { throw 'meson patch failed' }
           $u = 'https://github.com/lexxmark/winflexbison/releases/download/v2.5.25/win_flex_bison-2.5.25.zip'
           Invoke-WebRequest $u -OutFile wfb.zip
@@ -374,9 +373,9 @@ jobs:
           # (b_vscrt=mt), which the LLVM release's libraries use, and Rust's
           # standard library linked the same way (+crt-static).
           $cc = (Join-Path $env:VCINSTALLDIR 'Tools\Llvm\ARM64\bin\clang-cl.exe') -replace '\\', '/'
-          # bindgen through ci\bindgen-unsigned-enums.py: C enums typed as
+          # bindgen through .github\opencl\bindgen-unsigned-enums.py: C enums typed as
           # rusticl expects (unsigned when no value is negative).
-          $wrap = "$pwd/ci/bindgen-unsigned-enums.py" -replace '\\', '/'
+          $wrap = "$pwd/.github/opencl/bindgen-unsigned-enums.py" -replace '\\', '/'
           [IO.File]::WriteAllText("$pwd\native.ini", ("[binaries]`nc = '$cc'`ncpp = '$cc'`n" +
             "llvm-config = 'C:/llvm/bin/llvm-config.exe'`nbindgen = ['python', '$wrap']`n" +
             "pkg-config = 'C:/cldeps/bin/pkgconf.exe'`n" +

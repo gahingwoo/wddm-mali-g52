@@ -270,7 +270,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ART: malicl-arm64
         run: |
-          inputs=(.github/workflows/opencl.yml mesa-patches mesa-patches-cl win32-compat include video tools/windows/cltest)
+          inputs=(.github/workflows/opencl.yml .github/opencl mesa-patches mesa-patches-cl win32-compat include video tools/windows/cltest)
           deadline=$(( $(date +%s) + 50 * 60 ))
           while :; do
             : > runs.tsv

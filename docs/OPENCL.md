@@ -19,7 +19,7 @@ kernels. CI results are in [CI](#ci), below.
 ```
 application (ARM64)
   -> OpenCL.dll            Khronos ICD loader, System32 (ours, if none was there)
-  -> malicl_arm64.dll      rusticl + Panfrost + softpipe, in the driver store,
+  -> malicl_arm64.dll      rusticl + Panfrost, in the driver store,
                            named by the adapter's OpenCLDriverName
        OpenCL C -> clang -> LLVM IR -> SPIR-V (SPIRV-LLVM-Translator)
                 -> NIR (libclc linked in) -> Bifrost code (Panfrost's compiler)
@@ -183,8 +183,8 @@ is built (no libdrm), which gives `swrast` (softpipe on a null winsys).
   `HKLM\SOFTWARE\wddm-mali-g52\OpenCL` = 0. Either makes the probe find
   nothing: the rusticl platform is there with no device.
 
-0101 and 0102 are in `mesa-patches-cl/`, which only `opencl.yml`
-applies. The D3D UMD and the GL ICD are built from exactly what they were
+0101 to 0105 are in `mesa-patches-cl/`, which only `opencl.yml`
+applies (after main's `mesa-patches/`, so the numbers never collide). The D3D UMD and the GL ICD are built from exactly what they were
 built from before (mesa.yml is not triggered by this branch).
 
 ## 6. What was built (branch `opencl-rusticl`)
@@ -194,21 +194,36 @@ built from before (mesa.yml is not triggered by this branch).
 | `.github/workflows/opencl.yml` | Linux job: cltest on PoCL (checks the test against a known-good OpenCL), libclc SPIR-V. Windows ARM64 job: the dependencies (cached), Mesa 26.2 with mesa-patches and mesa-patches-cl, `-Dgallium-rusticl=true -Dgallium-drivers=softpipe,panfrost -Dmesa-clc=enabled -Dllvm=enabled -Dshared-llvm=disabled -Dstatic-libclc=all -Db_vscrt=mt`, the ICD's exports and imports checked, the Khronos loader, clinfo and cltest built, tests on the runner. Artifact `malicl-arm64` |
 | `mesa-patches-cl/0101-*` | the pipe-loader backend above |
 | `mesa-patches-cl/0102-*` | rusticl on Windows: libc bindings, `dlsym`, `.def`, log symbols |
+| `mesa-patches-cl/0103-*` | `mesa_clc` writes SPIR-V in binary mode (text mode broke libpan) |
+| `mesa-patches-cl/0104-*`, `0105-*` | `winsys_handle.handle` and the GL export are HANDLEs on Windows (no GL sharing) |
+| `.github/opencl/bindgen-unsigned-enums.py` | bindgen wrapper: C enums typed unsigned as on Linux, which rusticl's Rust assumes (MSVC types them int) |
+| `.github/opencl/meson-rust-dedup.py` | one `-l` per library for rustc, which refuses duplicates with modifiers |
 | `tools/windows/cltest/cltest.c` | `list` (clinfo-like, short), `vecadd [n]`, `sgemm [n] [iters]` (naive and 16x16-tiled kernels, profiling-event timing, GFLOP/s, CPU check with an fp32 tolerance), `all`; `--platform`, `--device`, `--expect`, `--no-verify` |
 | `tools/windows/cltest/cltest.cmd` | the board test plan below, logged to one file |
 | `drivers/maliwddm/maliwddm.inf` | `[opencl]` lines: the ICD in the driver store, `OpenCL.dll` to System32 (no overwrite), `OpenCLDriverName` |
 | `.github/workflows/ci.yml` | job `cl` finds an opencl.yml run of the same inputs, as `umd` does for mesa.yml; the package takes the ICD from it and signs `malicl_arm64.dll` and `OpenCL.dll`, or, with no such run, removes the INF's `[opencl]` lines and is the package it was before. The release zip gets `opencl\cltest.exe`, `clinfo.exe`, `cltest.cmd` |
 
 Tests on the runner (no Mali there): with no device the platform is
-listed with no device and nothing crashes; with `RUSTICL_ENABLE=swrast`
-(softpipe) vecadd and sgemm results are checked against the CPU; with
+listed with no device and nothing crashes; with
 `MALIKM_FAKE=1` the device is the Mali-G52, OpenCL C is compiled to
 Bifrost code and jobs are submitted (results not checked: nothing runs
-them); `MALIKM_OPENCL=0` hides the Mali.
+them); `MALIKM_OPENCL=0` hides the Mali. No CPU-checked run on the
+runner: rusticl refuses softpipe (it lacks compute state queries), so
+kernel results are first checked on the board. The runner's shell is
+elevated, and an elevated Khronos loader ignores `OCL_ICD_FILENAMES`, so
+CI registers the ICD under `HKLM\SOFTWARE\Khronos\OpenCL\Vendors`.
 
 ## CI
 
-(Filled in from the runs below.)
+`opencl.yml` run 45769902509 (2026-11-26, `eed7d6b`), green.
+`malicl_arm64.dll` is 117.6 MB, ARM64, exports `clIcdGetPlatformIDsKHR`,
+`clGetPlatformInfo`, `clGetExtensionFunctionAddress`, and imports only
+Windows DLLs. On the runner: with no Mali, platform `rusticl`, OpenCL 3.1,
+0 devices; with `MALIKM_FAKE=1`, device "Mali-G52 r1 MC3 (Panfrost)",
+OpenCL 3.0, OpenCL C 1.2, and vecadd and both sgemm kernels compile
+(12 to 16 ms) and are submitted. The emulated device has no timestamps,
+so cltest falls back to a queue without profiling and the host clock.
+`MALIKM_OPENCL=0` hides it.
 
 ## Board test plan
 
