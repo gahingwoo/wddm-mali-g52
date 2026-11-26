@@ -292,11 +292,22 @@ jobs:
           [IO.File]::WriteAllText('C:\libclc\lib\pkgconfig\libclc.pc', $pc)
           "PKG_CONFIG_PATH=$p\lib\pkgconfig;$p\share\pkgconfig;C:\libclc\lib\pkgconfig" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "PKG_CONFIG=$p\bin\pkgconf.exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          # pkgconf is installed in C:\cldeps, so it takes C:\cldeps\include
+          # for a system directory and drops -I for it: SPIRV-Tools' headers
+          # were not found (run 45761462682). Keep the flags.
+          "PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "PKG_CONFIG_ALLOW_SYSTEM_LIBS=1" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          $env:PKG_CONFIG_ALLOW_SYSTEM_CFLAGS = '1'
           "LIB=$p\lib;$env:LIB" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           $env:PKG_CONFIG_PATH = "$p\lib\pkgconfig;$p\share\pkgconfig;C:\libclc\lib\pkgconfig"
           & "$p\bin\pkgconf.exe" --modversion LLVMSPIRVLib SPIRV-Tools libclc
           $lx = & "$p\bin\pkgconf.exe" --variable=libexecdir libclc
           Write-Host "libclc libexecdir: $lx"
+          foreach ($m in 'SPIRV-Tools', 'LLVMSPIRVLib') {
+            $cf = & "$p\bin\pkgconf.exe" --cflags $m
+            Write-Host "$m cflags: $cf"
+            if ("$cf" -notmatch '-I') { throw "$m has no -I in its cflags" }
+          }
           if (-not (Test-Path (Join-Path $lx 'spirv64-mesa3d-.spv'))) { throw "no spirv64-mesa3d-.spv in libexecdir '$lx'" }
           if ($LASTEXITCODE) { Get-ChildItem -Recurse $p -Filter *.pc | ForEach-Object { $_.FullName }; throw 'a .pc file is missing' }
           & "$p\bin\bindgen.exe" --version
