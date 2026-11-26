@@ -76,7 +76,7 @@ firmware EDID mode that is not exactly 60 Hz.
 The panel child is reported `D3DKMDT_VOT_INTERNAL` with
 `HpdAwarenessAlwaysConnected` (`MwHpdQueryChildRelations`), which makes it
 the internal display for `DisplaySwitch /internal`. CCD can decide a
-topology in user mode without asking the driver; `tools/windows/ccdtest.exe`
+topology in user mode without asking the driver; `ccdtest.exe` (`tools/windows/ccdtest.c`)
 (in the `m3test-arm64` artifact) lists the CCD paths and calls
 `SetDisplayConfig` with a topology, printing its Win32 error
 (`ccdtest`, `ccdtest validate internal`, `ccdtest internal`).

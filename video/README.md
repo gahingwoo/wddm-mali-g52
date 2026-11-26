@@ -17,7 +17,7 @@ board test are in [docs/VIDEO-DECODE.md](../docs/VIDEO-DECODE.md).
   [woa-rk3576](https://github.com/gahingwoo/woa-rk3576) at c89b79d (AV1
   frame_refs[i].Index read as a slot; interface version 3, imports);
   `vdpu383_ioctl.h` and `vdpu383_check.h` (interface 4, sessions) at
-  41e5de1 (`drivers/video/vdpu383/lib`, `vdpu383_ioctl.h`, `vdpu383_check.h`
+  41e5de1 (woa-rk3576 `drivers/video/vdpu383/lib`, `vdpu383_ioctl.h`, `vdpu383_check.h`
   and `vdpu383_import.h`:
   the driver maps buffers through the decoder's IOMMU by default, and with
   version 3 imports the pages of a maliwddm allocation for zero copy;

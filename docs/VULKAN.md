@@ -23,8 +23,8 @@ What it will be, and what it will not:
   (`panvk_vX_physical_device.c:767`), the conformance version is 0.0.0.0
   for everything but v10, and `panvk_physical_device_init` refuses v6, v7
   and v14 unless `PAN_I_WANT_A_BROKEN_VULKAN_DRIVER` is set
-  (`panvk_physical_device.c:399`). `docs/drivers/panfrost.rst` lists
-  "G31, G52, G76, Bifrost (v7), Vulkan 1.0". `docs/features.txt` has panvk
+  (`panvk_physical_device.c:399`). Mesa's `docs/drivers/panfrost.rst` lists
+  "G31, G52, G76, Bifrost (v7), Vulkan 1.0". Mesa's `docs/features.txt` has panvk
   under Vulkan 1.0 and only `panvk/v10+` under 1.1.
 - **Enough for vulkaninfo, vkcube-class programs and simple compute.** A
   window gets its frames by the WSI's CPU path (section 4): a GPU copy into a

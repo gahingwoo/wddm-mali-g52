@@ -101,7 +101,7 @@ not link that library, so libxml2 is not needed.)
 - Bifrost has no FP64, so `cl_khr_fp64` is absent; OpenCL 3.0 makes it
   optional. Images, local memory, barriers and atomics are there through
   Panfrost's compute support (the same compute jobs GLES 3.1 uses).
-- rusticl itself: OpenCL 3.0 "all DONE" in `docs/features.txt`.
+- rusticl itself: OpenCL 3.0 "all DONE" in Mesa's `docs/features.txt`.
 
 ## 3. How the ICD is found on Windows
 

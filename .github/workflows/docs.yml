@@ -1,0 +1,22 @@
+name: docs
+
+# tools/check-docs: relative links to missing files, repository paths in
+# backticks that do not exist, em and en dashes.  The same script runs in
+# edk2-rk3576, maskrom-studio and woa-rk3576.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    name: Docs drift
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Links, paths and dashes
+        run: python3 tools/check-docs
