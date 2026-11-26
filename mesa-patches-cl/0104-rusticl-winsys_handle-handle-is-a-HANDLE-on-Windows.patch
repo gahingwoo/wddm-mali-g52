@@ -1,0 +1,21 @@
+rusticl: winsys_handle.handle is a HANDLE on Windows
+
+winsys_handle.h declares it HANDLE under _WIN32 and unsigned elsewhere;
+the dma-buf import passes the fd through it (opencl.yml, run 45764658460).
+
+diff --git a/src/gallium/frontends/rusticl/mesa/pipe/screen.rs b/src/gallium/frontends/rusticl/mesa/pipe/screen.rs
+index a5fd731..bf2f174 100644
+--- a/src/gallium/frontends/rusticl/mesa/pipe/screen.rs
++++ b/src/gallium/frontends/rusticl/mesa/pipe/screen.rs
+@@ -369,7 +369,11 @@ impl PipeScreen {
+         let mut tmpl = pipe_resource::default();
+         let mut handle = winsys_handle {
+             type_: WINSYS_HANDLE_TYPE_FD,
++            #[cfg(not(windows))]
+             handle: handle,
++            // winsys_handle.handle is a HANDLE on Windows.
++            #[cfg(windows)]
++            handle: handle as usize as *mut std::ffi::c_void,
+             modifier: modifier,
+             format: format as u64,
+             stride: stride,
