@@ -574,8 +574,13 @@ static int setup_geometry(vdec *d, unsigned w, unsigned h, unsigned key, unsigne
     d->hor = align_up(w, 64);
     d->ver = align_up(h, 16);
     /* Zero copy decided for each stream geometry, from the texture of its
-     * first picture: the surfaces' layout becomes the texture's. */
-    d->zc = target_fits(d, d->hor, d->ver, 16) ? 1 : -1;
+     * first picture: the surfaces' layout becomes the texture's. Rows as
+     * MPP gives the VDPU383 (SLOTS_VER_ALIGN): H.264 16, HEVC 8, so
+     * Chromium's 1080-row HEVC textures fit. */
+    if (d->codec == VDEC_CODEC_HEVC)
+        d->zc = target_fits(d, d->hor, align_up(h, 8), 8) ? 1 : -1;
+    else
+        d->zc = target_fits(d, d->hor, d->ver, 16) ? 1 : -1;
     if (d->zc == 1) {
         d->hor = d->tgt.stride;
         d->ver = d->tgt.luma_rows;
@@ -855,9 +860,15 @@ void vdec_set_target(vdec *d, const vdec_target *t)
  * decided at the first picture, from its texture. */
 static void decide_fixed(vdec *d)
 {
+    /* rows as MPP gives the VDPU383: VP9 64 (hal_vp9d_vdpu383.c), AV1 8
+     * (hal_av1d_vdpu383.c), so Chromium's 1080-row AV1 textures fit and
+     * its VP9 ones do not */
+    int fits = d->codec == VDEC_CODEC_AV1 ? target_fits(d, d->hor, align_up(d->max_h, 8), 8)
+                                          : target_fits(d, d->hor, d->ver, 64);
+
     if (d->zc)
         return;
-    if (!target_fits(d, d->hor, d->ver, 64)) {
+    if (!fits) {
         d->zc = -1;
         return;
     }
