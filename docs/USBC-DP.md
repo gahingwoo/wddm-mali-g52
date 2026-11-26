@@ -192,8 +192,24 @@ the RTC's runtime service has to be settled first.
 Needs: a TaishanPi 3M or CM5-IO with HDMI on a monitor; a second monitor on
 USB-C through, in order, (1) a USB-C to HDMI or DP adapter cable, (2) a
 monitor with a USB-C input that does not charge, (3) a dock with a DP or
-HDMI output; a serial console. Firmware and driver from the `usbc-dp`
-branches' CI; firmware option on, `UsbcDp` 1, reboot.
+HDMI output; a serial console.
+
+Set-up, in this order:
+
+1. Firmware: the `tspi3m-firmware` (or `cm5io-firmware`) artifact of
+   gahingwoo/edk2-rk3576 PR #10 (`usbc-dp`). Flash only the firmware
+   range so Windows and the UEFI variables survive.
+2. In setup, RK3576 settings: "USB-C DisplayPort (experimental)" Enabled.
+   The USB-C monitor must be plugged in before power-on (no hot-plug).
+3. Driver: the `wddm-mali-g52-driver-arm64` artifact of this branch's PR,
+   installed as usual. Then:
+
+   ```
+   reg add "HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP7402\0\Device Parameters" /v UsbcDp /t REG_DWORD /d 1 /f
+   shutdown /r /t 0
+   ```
+
+Back out: `UsbcDp` 0 (or delete it), and the setup option Disabled.
 
 1. **Firmware alone** (option on, driver setting 0), each partner, both
    plug orientations, n >= 3 each: serial shows `DP alt mode: configured`,
