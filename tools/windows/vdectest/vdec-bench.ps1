@@ -175,7 +175,7 @@ foreach ($f in $files) {
     $okHw = $hwm.Md5 -and ($hwm.Md5 -eq $swm.Md5)
     if (-not $okHw -or -not $okSw) { $fail++ }
     $verdicts += ("{0,-12} hw {1} sw {2}{3}  {4}" -f $n, $(if ($hwm.Md5) { $hwm.Md5 } else { 'none (exit ' + $hwm.Exit + ')' }), $swm.Md5,
-                  $(if ($ref) { $(if ($okSw) { ' (= reference)' } else { " (reference $ref: software differs!)" }) } else { '' }),
+                  $(if ($ref) { $(if ($okSw) { ' (= reference)' } else { " (reference ${ref}: software differs!)" }) } else { '' }),
                   $(if ($okHw) { 'MATCH' } else { 'MISMATCH' }))
     Write-Host $verdicts[-1]
 }

@@ -18,7 +18,8 @@ device only on a D3D11.1 device interface, so the UMD has one:
   at feature level 10_x). It is offered only in the processes `UmdVideo`
   names; dwm.exe, LogonUI.exe and consent.exe never get it.
 - The video DDI (Mesa patch 0078 `Video.cpp`), the video processor and
-  NV12 plane views (0079, V4), HEVC, VP9 and AV1 (0081), zero copy (0082).
+  NV12 plane views (0079, V4), HEVC, VP9 and AV1 (0081), zero copy
+  (0082; with shader resource binding, 0083).
 - The backend is `video/vdec.c` ([video/README.md](../video/README.md)),
   using the VDPU383 register builders from woa-rk3576 copied into
   `video/`. The decoder needs firmware device `ACPI\RKCP0383`
@@ -97,8 +98,10 @@ in software.
 - `tools/windows/vdectest/`: drives `ID3D11VideoContext` as FFmpeg's
   d3d11va-copy does and compares every frame with a reference.
   `vdectest hw --probe` lists the device and profiles; `--vp` tests the
-  video processor and plane views (`vptest.cpp`); `--chromium` is the
-  Chromium probe ([CHROMIUM-VIDEO.md](CHROMIUM-VIDEO.md)).
+  video processor and plane views (`vptest.cpp`); `--srv` and
+  `--srv-late` decode into a `0x208` texture with R8/R8G8 views made
+  before or after decoding and read every frame through them;
+  `--chromium` is the Chromium probe ([CHROMIUM-VIDEO.md](CHROMIUM-VIDEO.md)).
   `codec-conformance.ps1 -Kit <kit>` runs a conformance kit;
   `vdec-bench.ps1` measures speed, CPU and correctness per codec.
 - `tests/vdec-host` (ci.yml): every stream in `tests/data` through the
@@ -226,8 +229,8 @@ vdpu383.sys with interface version 3 (woa-rk3576 `vdpu383-import`;
 `vdpu383test info` prints an `imports` line). With an older vdpu383.sys
 (interface 2) the UMD sees no imports and copies. CI only.
 
-How it works: a decoder output texture (NV12, default usage, no shader
-resource views, no CPU access, not shared) is made linear and its BO
+How it works: a decoder output texture (NV12, default usage, no CPU
+access, not shared; `BIND_SHADER_RESOURCE` is fine) is made linear and its BO
 marked in the shim (`malikm_vdec_mark`) so Panfrost never replaces or
 caches it. At the first decode the UMD asks maliwddm to export it
 (`MW_ESCAPE_VDEC_EXPORT`, `drivers/maliwddm/vdecexport.c`): maliwddm
@@ -244,11 +247,22 @@ them in the decoder's IOMMU, once per texture until `vdec_forget`.
 - Coherency: before a decode the UMD maps the slice for writing (1x1), so
   Panfrost waits for batches using it; GPU jobs that sample it start with
   an L2 clean and invalidate; the CPU view is uncached.
+- Shader resource views: the R8 and R8G8 views see two plane textures,
+  made at the texture's first view, not with the texture (FFmpeg sets
+  `BIND_SHADER_RESOURCE` on its decoder array and a transcode never makes
+  a view). A slice the decoder wrote is marked stale and read back into
+  the planes by the CPU before a draw that has a view of it bound (also
+  before a copy from the planes). That read is of the uncached texture,
+  so mpv `d3d11va` and Chromium still pay about the copy path's CPU per
+  shown picture; a GPU copy into the planes is not done yet. Panfrost
+  keeps the texture linear: `PIPE_BIND_LINEAR` rules out AFBC, AFRC and
+  tiling, a linear resource is `modifier_constant`, and
+  `pan_legalize_format` only converts AFBC, AFRC and MTK-tiled ones.
 - Eviction: maliwddm calls vdpu383.sys's revoke routine before VidMm
   unmaps or destroys the allocation. A decode naming a revoked import is
   refused (`VDPU383_RUN_REVOKED`) and vdec re-exports and runs again.
-- Falls back to the copy path for: textures with shader resource views
-  (mpv `d3d11va`, Chromium), layouts outside the conditions, textures
+- Falls back to the copy path for: shared textures or textures with CPU
+  access, layouts outside the conditions, textures
   made before the decoder could import, a refused export (retried every
   64 frames) or import, interface 2, `UmdVideoZeroCopy` 0,
   `D3D10UMD_VDEC_ZEROCOPY=0`. A single frame that does not fit is decoded
@@ -271,6 +285,10 @@ vdpu383test.exe next to the script:
 ```
 powershell -ExecutionPolicy Bypass -File vdec-bench.ps1 -Clips D:\clips -Ffmpeg D:\ffmpeg\bin\ffmpeg.exe
 ```
+
+The decoder's last UMD log line, `video: NV12 decoder textures:`, says
+what became of the process's decoder textures (for the decoder, with
+shader resource binding, setup failed, copied and why, plane textures).
 
 Pass: every clip MATCH; `gpu` at 300 fps or more per codec with user
 time a small part of the wall time; decode count up by the frames

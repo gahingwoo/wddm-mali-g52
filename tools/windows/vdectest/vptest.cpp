@@ -653,3 +653,118 @@ done:
    if (e) e->Release();
    return rc;
 }
+
+/* ------------------------------------------- plane views of the decoder's texture */
+
+/* vdectest --srv / --srv-late: a slice of the decoder's texture array as
+ * an R8_UNORM and an R8G8_UNORM shader resource view (Texture2DArray, one
+ * slice: the runtime refuses more for NV12), as Chromium and mpv sample a
+ * decoded picture; read through them by a pixel shader (Load at the view's
+ * slice a constant buffer names, 0). */
+static const char ps_array_src[] =
+   "Texture2DArray<float> ty : register(t0);\n"
+   "Texture2DArray<float2> tc : register(t1);\n"
+   "cbuffer c : register(b0) { uint slice; };\n"
+   "float4 main(float4 pos : SV_Position) : SV_Target {\n"
+   "   int2 p = int2(pos.xy);\n"
+   "   return float4(ty.Load(int4(p, slice, 0)), tc.Load(int4(p / 2, slice, 0)), 1);\n"
+   "}\n";
+
+int
+vp_make_plane_views(ID3D11Device *dev, ID3D11Texture2D *tex, UINT slice, ID3D11ShaderResourceView *srv[2])
+{
+   for (int i = 0; i < 2; i++) {
+      D3D11_SHADER_RESOURCE_VIEW_DESC d = {};
+      d.Format = i ? DXGI_FORMAT_R8G8_UNORM : DXGI_FORMAT_R8_UNORM;
+      d.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+      d.Texture2DArray.MipLevels = 1;
+      d.Texture2DArray.FirstArraySlice = slice;
+      d.Texture2DArray.ArraySize = 1;
+      HRESULT hr = dev->CreateShaderResourceView(tex, &d, &srv[i]);
+      if (FAILED(hr)) {
+         printf("decoder texture slice %u as %s shader resource view: 0x%08lx\n", slice,
+                i ? "R8G8_UNORM" : "R8_UNORM", (unsigned long)hr);
+         return 1;
+      }
+   }
+   return 0;
+}
+
+int
+vp_check_plane_views(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11ShaderResourceView *srv[2],
+                     UINT slice, UINT tex_w, UINT tex_h, UINT x0, UINT y0, UINT w, UINT h,
+                     uint8_t luma, uint8_t chroma)
+{
+   static ID3D11VertexShader *vs;
+   static ID3D11PixelShader *ps;
+   Vp v = { dev, ctx, NULL, NULL, 0 };
+   ID3D11Texture2D *rt = NULL;
+   ID3D11RenderTargetView *rtv = NULL;
+   ID3D11Buffer *cb = NULL;
+   int rc = 2;
+
+   if (!vs || !ps) {
+      ID3DBlob *vsb = NULL, *psb = NULL, *err = NULL;
+      if (FAILED(D3DCompile(vs_src, sizeof vs_src - 1, "vs", NULL, NULL, "main", "vs_4_0", 0, 0, &vsb, &err)) ||
+          FAILED(D3DCompile(ps_array_src, sizeof ps_array_src - 1, "ps", NULL, NULL, "main", "ps_4_0", 0, 0,
+                            &psb, &err))) {
+         printf("plane views: D3DCompile: %s\n", err ? (const char *)err->GetBufferPointer() : "failed");
+         return 1;
+      }
+      dev->CreateVertexShader(vsb->GetBufferPointer(), vsb->GetBufferSize(), NULL, &vs);
+      dev->CreatePixelShader(psb->GetBufferPointer(), psb->GetBufferSize(), NULL, &ps);
+      vsb->Release();
+      psb->Release();
+      if (!vs || !ps)
+         return 1;
+   }
+   {
+      D3D11_BUFFER_DESC bd = {};
+      UINT data[4] = { slice, 0, 0, 0 };
+      D3D11_SUBRESOURCE_DATA init = { data, 0, 0 };
+      bd.ByteWidth = sizeof data;
+      bd.Usage = D3D11_USAGE_DEFAULT;
+      bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+      if (FAILED(dev->CreateBuffer(&bd, &init, &cb)))
+         return 1;
+   }
+   rt = make_texture(&v, DXGI_FORMAT_R8G8B8A8_UNORM, tex_w, tex_h, D3D11_BIND_RENDER_TARGET,
+                     D3D11_USAGE_DEFAULT, 0);
+   if (!rt || FAILED(dev->CreateRenderTargetView(rt, NULL, &rtv)))
+      goto done;
+   {
+      D3D11_VIEWPORT vpt = { 0, 0, (float)tex_w, (float)tex_h, 0, 1 };
+      ctx->OMSetRenderTargets(1, &rtv, NULL);
+      ctx->RSSetViewports(1, &vpt);
+      ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+      ctx->IASetInputLayout(NULL);
+      ctx->VSSetShader(vs, NULL, 0);
+      ctx->PSSetShader(ps, NULL, 0);
+      ctx->PSSetConstantBuffers(0, 1, &cb);
+      ctx->PSSetShaderResources(0, 2, srv);
+      ctx->Draw(3, 0);
+      ID3D11ShaderResourceView *none[2] = {};
+      ctx->PSSetShaderResources(0, 2, none);
+      ctx->OMSetRenderTargets(0, NULL, NULL);
+   }
+   {
+      uint8_t *px = read_back(&v, rt, tex_w, tex_h, DXGI_FORMAT_R8G8B8A8_UNORM);
+      unsigned bad = 0;
+      for (UINT y = y0; px && y < y0 + h; y++)
+         for (UINT x = x0; x < x0 + w; x++) {
+            const uint8_t *p = px + ((size_t)y * tex_w + x) * 4;
+            if (p[0] != luma || p[1] != chroma || p[2] != chroma) {
+               if (!bad++)
+                  printf("plane views, slice %u at %u,%u: got %u %u %u, want %u %u %u\n", slice, x, y, p[0],
+                         p[1], p[2], luma, chroma, chroma);
+            }
+         }
+      rc = (px && !bad) ? 0 : 2;
+      free(px);
+   }
+done:
+   if (rtv) rtv->Release();
+   if (rt) rt->Release();
+   if (cb) cb->Release();
+   return rc;
+}
