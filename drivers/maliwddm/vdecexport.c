@@ -134,7 +134,7 @@ void MwVdecStart(MW_ADAPTER *A)
     MwVdecKmdStart(A);
     if (A->VdecOn)
         return;
-    if (MwSetting(A, L"UmdVideo", 0) == 0 || MwSetting(A, L"UmdVideoZeroCopy", 1) == 0) {
+    if (MwSetting(A, L"UmdVideo", 2) == 0 || MwSetting(A, L"UmdVideoZeroCopy", 1) == 0) {
         MwLog(A, L"VdecExport", 0);
         return;
     }
