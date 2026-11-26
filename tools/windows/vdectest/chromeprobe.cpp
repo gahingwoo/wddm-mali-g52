@@ -69,12 +69,16 @@ guid_name(const GUID &g)
 }
 
 static const char *g_blocked;
+static char g_blocked_buf[200];
 
+/* The first missing piece; what may be a caller's buffer, so it is kept. */
 static void
 need(bool ok, const char *what)
 {
-   if (!ok && !g_blocked)
-      g_blocked = what;
+   if (!ok && !g_blocked) {
+      snprintf(g_blocked_buf, sizeof g_blocked_buf, "%s", what);
+      g_blocked = g_blocked_buf;
+   }
 }
 
 /* GetResolutionsForGUID: the largest size of Chromium's list with a config. */
