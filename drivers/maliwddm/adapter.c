@@ -1227,10 +1227,12 @@ static NTSTATUS UmdAdapterInfo(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *In
                            MwWddmProbe != 0 ? MW_UMD_REDIRECT_NONE : MW_UMD_REDIRECT_BROWSERS);
     if (u.Redirect > MW_UMD_REDIRECT_ALL)
         u.Redirect = MW_UMD_REDIRECT_NONE;
-    /* UmdReportFL11 (default 0): feature level 11_0 for Chromium's GPU
-     * process only, which its D3D11 video decoder needs (C1 of
-     * docs/CHROMIUM-VIDEO.md). Read at each query like UmdRedirect. */
-    u.ReportFl11 = MwSetting(A, L"UmdReportFL11", 0) == 1 ? 1 : 0;
+    /* UmdReportFL11 (default 1 since 2026-11-26, board-tested with Edge
+     * hardware video): feature level 11_0 for Chromium's GPU process
+     * only, which its D3D11 video decoder needs (C1 of
+     * docs/CHROMIUM-VIDEO.md). 0 turns it off. Read at each query like
+     * UmdRedirect. */
+    u.ReportFl11 = MwSetting(A, L"UmdReportFL11", 1) == 1 ? 1 : 0;
     if (n > sizeof(u))
         n = sizeof(u);
     u.Size = n;
