@@ -32,8 +32,9 @@ milestones ran on the ArmSoM CM5-IO. Switches and defaults:
 | Feature level 11_0 for Chromium's video decoder (`UmdReportFL11`) | board-tested, on by default | [CHROMIUM-VIDEO.md](docs/CHROMIUM-VIDEO.md) |
 | OpenCL (rusticl) | board-tested | [OPENCL.md](docs/OPENCL.md) |
 | Vulkan 1.0 (panvk, not conformant, opt-in) | board-tested, windows at about 6 frames a second | [VULKAN.md](docs/VULKAN.md) |
+| DisplayPort over USB-C as a second display (`UsbcDp`) | off by default, not board-tested | [USBC-DP.md](docs/USBC-DP.md) |
 
-Known limits: one board, and a heavy program makes the whole desktop wait.
+Known limit: a heavy program makes the whole desktop wait.
 All docs: [docs/](docs/README.md).
 
 ## Installing
@@ -42,7 +43,8 @@ Needs Windows 11 23H2 on ARM64, test signing on (Secure Boot off), and
 [edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576) firmware, which
 powers the GPU and describes it in ACPI as `RKCP7402`. CI's
 `wddm-mali-g52-driver-arm64` artifact is the driver package; the steps are
-in [INSTALL.txt](drivers/maliwddm/INSTALL.txt).
+in [INSTALL.txt](drivers/maliwddm/INSTALL.txt). No Visual C++ runtime is
+needed: the user-mode driver has the C runtime linked in.
 
 Everything is built in GitHub CI; there is no local Windows toolchain.
 
