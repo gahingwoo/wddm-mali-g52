@@ -321,7 +321,13 @@ jobs:
           [IO.File]::WriteAllText("$pwd\native.ini", ("[binaries]`nc = '$cc'`ncpp = '$cc'`n" +
             "llvm-config = 'C:/llvm/bin/llvm-config.exe'`nbindgen = 'C:/cldeps/bin/bindgen.exe'`n" +
             "pkg-config = 'C:/cldeps/bin/pkgconf.exe'`n" +
-            "[built-in options]`npkg_config_path = ['C:/cldeps/lib/pkgconfig', 'C:/cldeps/share/pkgconfig', 'C:/libclc/pkgconfig']`n"))
+            "[built-in options]`npkg_config_path = ['C:/cldeps/lib/pkgconfig', 'C:/cldeps/share/pkgconfig', 'C:/libclc/pkgconfig']`n" +
+            "cmake_prefix_path = ['C:/llvm', 'C:/cldeps']`n"))
+          # meson looks LLVM up through CMake on Windows, and without a
+          # prefix it took the runner's own LLVM (22.1, in Program Files),
+          # whose major does not match the translator's (run 45759617805).
+          $env:CMAKE_PREFIX_PATH = 'C:/llvm;C:/cldeps'
+          $env:LLVM_DIR = 'C:/llvm/lib/cmake/llvm'
           Get-Content native.ini
           meson setup build mesa --backend=ninja --native-file native.ini `
             -Dbuildtype=debugoptimized -Db_vscrt=mt '-Drust_args=-Ctarget-feature=+crt-static' `
@@ -340,6 +346,9 @@ jobs:
             -Dzstd=disabled -Dshader-cache=disabled -Dbuild-tests=false `
             "-Dc_args=-DHAVE_FUNC_ATTRIBUTE_PACKED -D_wassert=mali_wassert" "-Dcpp_args=-DHAVE_FUNC_ATTRIBUTE_PACKED -D_wassert=mali_wassert"
           if ($LASTEXITCODE) { if (Test-Path build\meson-logs\meson-log.txt) { Get-Content build\meson-logs\meson-log.txt -Tail 150 }; throw 'meson setup failed' }
+          $v = Select-String -Path build\meson-logs\meson-log.txt -Pattern 'Run-time dependency LLVM .* found: YES (\S+)' | Select-Object -Last 1
+          Write-Host "LLVM: $($v.Line)"
+          if ($v -and $v.Matches[0].Groups[1].Value -notlike "$env:LLVM_VER*") { throw "meson took LLVM $($v.Matches[0].Groups[1].Value), not C:\llvm ($env:LLVM_VER)" }
 
       - name: Build
         timeout-minutes: 150
