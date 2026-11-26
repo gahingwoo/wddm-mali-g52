@@ -58,6 +58,7 @@ typedef struct _MW_COMMAND {
 #define MW_ESCAPE_SCANOUT       4
 #define MW_ESCAPE_WDDM          8
 #define MW_ESCAPE_VDEC_EXPORT   9
+#define MW_ESCAPE_VDEC_CALL     10      /* the decoder's calls through maliwddm: video/vdec_kmd.h */
 
 /* The WDDM version the KMD reported at this start (DXGK_DRIVERCAPS), and
  * what that asks of the UMD. A KMD that does not know the code refuses it:

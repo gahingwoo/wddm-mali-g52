@@ -56,11 +56,14 @@ A change needs a full restart. Details in
 | `UmdAv1Synth` | 0 | AV1 tile wrapping. 0: one OBU_TILE_GROUP. 1: an OBU_FRAME with a 16-byte zero frame header. |
 | `UmdVp9Mpp` | 0 | VP9 frame contexts. 0: as the spec says. 1: reset all four on intra frames (as MPP). 2: write the adapted context (as MPP). 3: both. |
 | `UmdVideoZeroCopy` | 1 | The decoder writes into the application's texture. 0: copy every picture. |
+| `UmdVideoKmd` | 1 | The decoder's calls go through maliwddm ([CHROMIUM-VIDEO.md](CHROMIUM-VIDEO.md), C2): no process opens `\\.\VDPU383`. 0: the UMD opens it itself, which needs vdpu383.sys's `UserAccess`. |
 
 The decoder driver `vdpu383.sys` (woa-rk3576) has its own key,
 `HKLM\SYSTEM\CurrentControlSet\Enum\ACPI\RKCP0383\0\Device Parameters`:
-`UserAccess` 0 (1: desktop processes may open `\\.\VDPU383`; 2: also
-low-integrity and app-container processes, test boards only) and `Iommu` 1.
+`UserAccess` 0 (leave it: players go through maliwddm; 1: desktop processes
+may open `\\.\VDPU383`, 2: also low-integrity and app-container processes,
+both test boards only, with `UmdVideoKmd` 0) and `Iommu` 1 (the maliwddm
+path needs it).
 
 ### Display
 
@@ -150,6 +153,7 @@ variables are not read.
 | `D3D10UMD_VDEC_FAKE=1` | Build the decoder's register file and write a known pattern instead of decoding. |
 | `D3D10UMD_VDEC_REGLOG=<file>` | Log every register file built. |
 | `D3D10UMD_VDEC_ZEROCOPY=0` | Force the video copy path. |
+| `D3D10UMD_VDEC_PATH` | `direct`: open `\\.\VDPU383` and not maliwddm; `kmd`: maliwddm only. Unset: maliwddm, else the device. |
 | `D3D10UMD_NV12_ALIAS=0` | NV12 plane views are copies of the texture, not aliases of it. |
 | `C:\mali\vdec-shared-copy` | Shared decoder textures (Chromium's) are copied into, not decoded into. |
 | `MALIKM_FAKE=1` | No device: the shim answers every call itself ([M3.md](M3.md)). 2 also logs each call. |

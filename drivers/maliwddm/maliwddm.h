@@ -266,6 +266,9 @@ typedef struct _MW_HDMI {
 
 typedef struct _MW_DEVICE {
     MW_ADAPTER *Adapter;
+    /* The video decoder's session for this device (vdecproxy.c), opened at
+     * its first MW_ESCAPE_VDEC_CALL; under the adapter's VdecSessGate. */
+    struct _MW_VDEC_SESSION *Vdec;
 } MW_DEVICE;
 
 typedef struct _MW_CONTEXT {
@@ -713,6 +716,17 @@ struct _MW_ADAPTER {
      * the log key rate-limited; exports that ended before any import. */
     ULONG VdecWhy, VdecWhyStatus, VdecWhyPid, VdecWhyExportPid, VdecWhyPages, VdecWhyExportPages;
     ULONG VdecNotes, VdecEndedUnimported, VdecLastGone;
+
+    /* The decoder's calls through maliwddm (vdecproxy.c, video/vdec_kmd.h):
+     * VdecKmdOn from UmdVideo and UmdVideoKmd at the start; the sessions
+     * of vdpu383.sys, one per device that asked, under VdecSessGate (an
+     * event used as a lock: a session is opened with a Zw call inside). */
+    BOOLEAN VdecKmdOn;
+    KEVENT VdecSessGate;
+    LIST_ENTRY VdecSessions;
+    volatile LONG VdecKmdSessions;
+    ULONG VdecKmdSessionsMade, VdecKmdCalls, VdecKmdRuns, VdecKmdRefused;
+    ULONG VdecKmdLastStatus, VdecKmdLastPid;
 };
 
 /* The picture's size in the framebuffer: the firmware's, unless the window
@@ -858,6 +872,12 @@ void MwVdecStop(MW_ADAPTER *A);
 #define MW_VDEC_GONE_UNMAP      3
 void MwVdecGone(MW_ADAPTER *A, MW_ALLOCATION *Alloc, ULONG Why);
 NTSTATUS MwEscapeVdecExport(MW_ADAPTER *A, const DXGKARG_ESCAPE *Esc, MW_ESCAPE_VDEC_EXPORT_DATA *D);
+/* vdecproxy.c */
+void MwVdecKmdInit(MW_ADAPTER *A);
+void MwVdecKmdStart(MW_ADAPTER *A);
+void MwVdecKmdStop(MW_ADAPTER *A);
+void MwVdecKmdDeviceGone(MW_DEVICE *Dev);
+NTSTATUS MwEscapeVdecCall(MW_ADAPTER *A, const DXGKARG_ESCAPE *Esc);
 void MwScanStart(MW_ADAPTER *A);
 void MwScanStop(MW_ADAPTER *A);
 void MwScanToFb(MW_ADAPTER *A);

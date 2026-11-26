@@ -32,19 +32,23 @@ device only on a D3D11.1 device interface, so the UMD has one:
 
 Who drives the decoder:
 
-- **V3a (copy).** The UMD, in the player's process, opens `\\.\VDPU383`
-  (`IOCTL_VDPU383_ALLOC`, one `IOCTL_VDPU383_RUN` per picture,
+- **V3a (copy).** The UMD, in the player's process, makes vdpu383.sys's
+  calls (`IOCTL_VDPU383_ALLOC`, one `IOCTL_VDPU383_RUN` per picture,
   synchronous). The decoder writes into surfaces of its own and
   `DecoderEndFrame` copies each picture into the application's texture.
-  Opening the device needs vdpu383.sys `UserAccess` 1. Edge's GPU process
-  (low integrity, restricted token) needs `UserAccess` 2, which lets any
-  low-integrity process program the decoder: test boards only.
 - **V3b (zero copy).** The decoder writes straight into the application's
-  texture; section 8. Decoding from sandboxed processes through maliwddm
-  is not started.
+  texture; section 8.
+- **Through maliwddm (C2, default).** Each call is an escape to maliwddm,
+  which makes it in a vdpu383.sys session of its own for the process
+  ([CHROMIUM-VIDEO.md](CHROMIUM-VIDEO.md), C2), so no process opens
+  `\\.\VDPU383` and `UserAccess` stays 0, Edge's sandboxed GPU process
+  included. With `UmdVideoKmd` 0 the UMD opens the device itself, which
+  needs `UserAccess` 1 (2 for Edge: any low-integrity process may then
+  program the decoder, test boards only).
 
-maliwddm.sys only passes the switches to the UMD
-(`MW_UMD_ADAPTER_INFO.Video`) and, for V3b, exports allocations.
+maliwddm.sys passes the switches to the UMD
+(`MW_UMD_ADAPTER_INFO.Video`), exports allocations (V3b) and makes the
+decoder's calls (C2).
 
 ## 2. Settings
 
@@ -56,7 +60,7 @@ consent), `UmdVideoCodecs`, `UmdAv1Synth`, `UmdVp9Mpp`,
 `UmdVideoZeroCopy`. All need a full restart.
 
 vdpu383.sys (`ACPI\RKCP0383\0\Device Parameters`): `UserAccess` 0, 1 or
-2 as above.
+2 as above; 0 with the maliwddm path.
 
 UMD environment variables, for tests:
 
@@ -143,7 +147,7 @@ Delete the replaced packages from the DriverStore afterwards.
 **A, switches off.** Desktop, Edge and `m5test perf` as before;
 `vdectest hw --probe` exits 1 (no video device).
 
-**B, switches on.** `UserAccess` 1 on `RKCP0383\0`, `UmdVideo` 2 on GPU0,
+**B, switches on.** `UmdVideo` 2 on GPU0 (`UserAccess` stays 0),
 `mkdir C:\mali\log`, full restart. As the normal user:
 
 1. `vdectest hw --probe`: `ID3D11VideoDevice: yes`, the profiles with
@@ -197,7 +201,7 @@ Big Buck Bunny 1080p30 H.264,
 ## 7. Board test: HEVC, VP9, AV1
 
 After section 5's install, with vdpu383.sys from woa-rk3576 `main`
-(`Iommu` 1 by default, `UserAccess` 1) and the kits
+(`Iommu` 1 by default) and the kits
 `woa-vdpu383-hevc-2026-11-25`, `woa-vdpu383-vp9-2026-11-25`,
 `woa-vdpu383-av1-2026-11-25` (streams and FFmpeg 6.1.1 references).
 `UmdVideo` 2 (3 for Media Player), `UmdVideoCodecs`, `UmdAv1Synth` and
@@ -241,8 +245,9 @@ which gets the pages from maliwddm kernel to kernel (callback
 them in the decoder's IOMMU, once per texture until `vdec_forget`.
 
 - Layout: the decoder uses the texture's pitch and luma rows. Conditions:
-  pitch a multiple of 64, rows a multiple of 16 (H.264, HEVC) or 64 (VP9,
-  AV1) and at least the copy path's, slice offset 256-aligned. FFmpeg's
+  pitch a multiple of 64, rows a multiple of 16 (H.264), 8 (HEVC, AV1) or
+  64 (VP9), as MPP gives the VDPU383, and at least the picture's rounded
+  up that way, slice offset 256-aligned. FFmpeg's
   1080p textures (1920x1088 H.264 and VP9, 1920x1152 HEVC and AV1) fit.
 - Coherency: before a decode the UMD maps the slice for writing (1x1), so
   Panfrost waits for batches using it; GPU jobs that sample it start with
@@ -281,7 +286,7 @@ software decode took 1.35 s and 2.29 s.
 Board test: firmware with the decoder on, vdpu383.sys from
 `vdpu383-import`, the current maliwddm package, FFmpeg (BtbN winarm64),
 1080p30 clips of each codec. Install as section 5, `UmdVideo` 2,
-`UserAccess` 1, `UmdVideoZeroCopy` absent. As the normal user, with
+`UmdVideoZeroCopy` absent. As the normal user, with
 vdpu383test.exe next to the script:
 
 ```

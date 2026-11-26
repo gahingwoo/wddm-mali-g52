@@ -47,7 +47,7 @@ From Chromium `media/gpu/windows` (shared by Chrome and Edge):
 |---|---|---|
 | C0 | the facts above and the probe (`vdectest --chromium`, `chromeprobe.cpp`) | done |
 | C1 | feature level 11_0 for Chromium's GPU process only (`UmdReportFL11`, Mesa 0080, `fl11test`) | CI only |
-| C2 | decoding in the GPU process: V3a with vdpu383.sys `UserAccess` 2 on a test board; for real, decode work through maliwddm | V3a written; maliwddm path not started |
+| C2 | decoding in the GPU process with vdpu383.sys `UserAccess` 0: every decoder call an escape to maliwddm, made in a vdpu383.sys session (below) | CI only (`c2-decode-via-kmd`); `UserAccess` 2 board-tested 2026-11-26 |
 | C3 | shared NV12: plane views aliasing the texture, zero copy for shared decoder textures (0085); the resource swizzle of texture reads (0086) | 0085 on the board: real time; colours (0086) CI only |
 | C4 | H.264 in Edge on the board (`edge://media-internals` says D3D11VideoDecoder) | needs C1, C2, C3 |
 | C5 | VP9 profile 0 for YouTube | in the UMD (VIDEO-DECODE.md) |
@@ -99,10 +99,12 @@ write-combined surface (15 to 20 ms), read again for two plane textures
 and uploaded into one layer of each (AFBC: read back on the GPU, wait,
 write, blit back). Now there is no plane copy, and shared decoder
 textures get zero copy (`C:\mali\vdec-shared-copy` restores the copy).
-Zero copy needs rows that are a multiple of 16 (H.264, HEVC) or 64 (VP9,
+Zero copy needed rows that are a multiple of 16 (H.264, HEVC) or 64 (VP9,
 AV1): Chromium's H.264 texture (1088 rows) qualifies, its HEVC, VP9 and
-AV1 textures (1080 rows) do not and keep the one copy (the VP9 log:
-`0 into the texture`, as expected).
+AV1 textures (1080 rows) did not and kept the one copy (the VP9 log:
+`0 into the texture`, as expected). Since C2 HEVC and AV1 take rows that
+are a multiple of 8, as MPP gives the VDPU383 (`SLOTS_VER_ALIGN`), so only
+VP9 keeps the copy.
 
 **H.264 fails at once** ("Format error", readyState 0, no decode; the
 second run: "no supported source was found", no decoder line in the media
@@ -117,11 +119,7 @@ HEVC; if it does for H.264, `vdectest hw --mf` shows whether Media
 Foundation's H.264 decoder takes this device (`MFT_MESSAGE_SET_D3D_MANAGER`,
 1080p H.264 in, NV12 out).
 
-**`UserAccess` 2.** Nothing here removes it: with zero copy too, the GPU
-process opens `\\.\VDPU383` and runs every decode itself. Only C2's real
-path, decode work submitted through maliwddm (which already hands
-vdpu383.sys pages kernel to kernel, `\Callback\MaliwddmVdecExport`),
-would.
+**`UserAccess` 2.** C2 below removes it.
 
 ### C3 board test
 
@@ -169,6 +167,77 @@ Registry as on 2026-11-26 (`UmdVideo` 2, `UmdReportFL11` 1, `UserAccess`
 
 Send back: the vdectest output, `hevc2.png`, the `cdp-media.ps1` outputs,
 `C:\mali\log\msedge.exe-*` and `vdectest-*`, `vdpu383test info`.
+
+## C2: decoding through maliwddm
+
+The GPU process (low integrity, restricted token) opens nothing. The UMD's
+backend (`video/vdec.c`) makes a D3D device of its own on the adapter and
+sends each vdpu383.sys call as the private escape `MW_ESCAPE_VDEC_CALL`
+(`video/vdec_kmd.h`). maliwddm (`drivers/maliwddm/vdecproxy.c`) checks it
+(only allocate, free, import, run and information, exact sizes, a decode's
+flags and wait bounded) and makes the call in a session of vdpu383.sys it
+opened from kernel mode for that device. vdpu383.sys (woa-rk3576
+`c2-decode-via-kmd`, interface 4, its README "Sessions"):
+
+- checks every address register against the session's own buffers and
+  imports, and decodes with an IOMMU directory holding only those, so a
+  process cannot reach another's memory even past a buffer's end;
+- imports only tokens maliwddm gave the same process (`MW_ESCAPE_VDEC_EXPORT`
+  checks the allocation is the caller's), and revocation on eviction or
+  destruction is the import machinery's as before;
+- frees the session's buffers and imports when the device goes (also at
+  process exit) or the adapter stops.
+
+The decoder's buffers are mapped into the process as before; nothing else
+changes for the UMD, and the cost is one escape per call (a decode is about
+2.2 ms in the decoder). Defaults: maliwddm path on (`UmdVideoKmd` 1), so
+`UserAccess` can stay 0. Back-out: `UmdVideoKmd` 0 and `UserAccess` 1 or 2
+(the UMD then opens `\\.\VDPU383` as before), or `D3D10UMD_VDEC_PATH=direct`
+for one process. Proof the path is used: `vdectest kmd`, for any user,
+prints maliwddm's counters and vdpu383.sys's (`decodes through them`).
+
+CI: tests/vdec-host `--kmd` runs every test stream through a fake maliwddm
+and vdpu383.sys with the drivers' own checks (same register files), zero
+copy with an eviction, then refuses: an address outside the process's
+buffers (also with `VDPU383_RUN_NO_ADDR_CHECK`), another process's
+buffers, export and free, calls a session may not make, and the process's
+buffers after it exits. woa-rk3576's `vdpu383test --null sessiontest` and
+`--session` runs over its vector lists do the same for the driver.
+
+### C2 board test
+
+Inputs: maliwddm package and `vdectest-arm64` (vdectest.exe, vdec-bench.ps1)
+from `c2-decode-via-kmd`; `woa-drivers-signed-arm64` from woa-rk3576's
+WinPE run of `c2-decode-via-kmd` (vdpu383.sys, vdpu383test.exe); the clips
+of 2026-11-26 (`C:\mali\zc1126`, `C:\mali\edgehw`).
+
+0. Install both as VIDEO-DECODE.md section 5 (stage, `ConfigFlags` 0x20,
+   full restart), check both DriverVers. GPU0: `UmdVideo` 2,
+   `UmdReportFL11` 1, `UmdVideoKmd` absent. RKCP0383: delete `UserAccess`.
+   Full restart.
+1. As the normal user: `vdpu383test info` fails to open the device (no
+   handle for users). `vdectest kmd`: `path: on`, `interface 4`,
+   `UserAccess 0`.
+2. `vdectest hw testsrc-176x144-high.264`: output md5
+   `28b5ac0bb9dbb31571f6692a27b3d31a`, `vdpu383.sys runs: +12`; `vdectest
+   kmd` again: `decodes through them` up by 12.
+3. `vdec-bench.ps1 -Clips C:\mali\zc1126 -Ffmpeg <ffmpeg.exe>` (vdectest.exe
+   next to it): 4 of 4 MATCH, `gpu` fps near 177, 183, 299, 319 (H.264,
+   HEVC, VP9, AV1), `through maliwddm (sessions)` decodes about the frames
+   decoded, imports made and none failed.
+4. Edge as in C3 (`edgehw.cmd`, `--disable-direct-composition`), `vdectest
+   kmd` before and after, `cdp-media.ps1 -Seconds 20` for `t-hevc.mp4`,
+   `t-vp9.webm`, `t-av1.mp4`, `t-h264.mp4`: plays, `D3D11VideoDecoder`,
+   frames near 600; sessions made up by at least 1, decodes through them up
+   by about 600 per clip; maliwddm's `VdecKmdSessionPid` (GPU0 Device
+   Parameters\maliwddm) is the GPU process. UMD log
+   (`C:\mali\log\msedge.exe-*`): HEVC and AV1 textures `for the decoder to
+   write` and imports, VP9 copied.
+5. Back-out: `UmdVideoKmd` 0 with `UserAccess` 2, full restart, step 4
+   plays as on 2026-11-26.
+
+Send back: the outputs, `bench.txt`, the UMD logs, `reg query` of both
+Device Parameters keys (GPU0 with the `maliwddm` subkey, RKCP0383).
 
 ## C1: feature level 11_0 for the GPU process (`UmdReportFL11`)
 

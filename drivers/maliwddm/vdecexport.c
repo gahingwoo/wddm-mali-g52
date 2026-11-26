@@ -98,6 +98,7 @@ static void VdecNote(MW_ADAPTER *A, ULONG Why, NTSTATUS St, ULONG Pid, ULONG Exp
 
 void MwVdecInit(MW_ADAPTER *A)
 {
+    MwVdecKmdInit(A);
     ExInitializeFastMutex(&A->VdecLock);
     KeInitializeEvent(&A->VdecRevoke, SynchronizationEvent, TRUE);
     InitializeListHead(&A->VdecExports);
@@ -129,6 +130,8 @@ void MwVdecStart(MW_ADAPTER *A)
     PCALLBACK_OBJECT cb = NULL;
     NTSTATUS st;
 
+    /* the decoder's calls through maliwddm (vdecproxy.c) */
+    MwVdecKmdStart(A);
     if (A->VdecOn)
         return;
     if (MwSetting(A, L"UmdVideo", 0) == 0 || MwSetting(A, L"UmdVideoZeroCopy", 1) == 0) {
@@ -216,6 +219,9 @@ void MwVdecGone(MW_ADAPTER *A, MW_ALLOCATION *Alloc, ULONG Why)
  * pages), then nobody can call in any more. Safe to repeat. */
 void MwVdecStop(MW_ADAPTER *A)
 {
+    /* first the sessions: vdpu383.sys releases their imports through the
+     * callback, which must still be registered */
+    MwVdecKmdStop(A);
     if (!A->VdecOn)
         return;
     MwLog(A, L"VdecExportsMade", A->VdecExportsMade);

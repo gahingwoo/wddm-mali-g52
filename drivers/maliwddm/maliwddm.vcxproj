@@ -82,6 +82,7 @@
     <ClCompile Include="wddm2x.c" />
     <ClCompile Include="pcw.c" />
     <ClCompile Include="vdecexport.c" />
+    <ClCompile Include="vdecproxy.c" />
     <ClCompile Include="..\common\maligpu.c" />
   </ItemGroup>
 

@@ -35,10 +35,13 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <winioctl.h>
+#include <winternl.h>
+#include <d3dkmthk.h>
 #else
 #define V383_IOCTL_STANDALONE 1
 #endif
 #include "vdpu383/vdpu383_ioctl.h"
+#include "vdec_kmd.h"
 #include "vdpu383/lib/vdpu383_h264.h"
 #include "vdpu383/lib/vdpu383_hevc.h"
 #include "vdpu383/lib/vdpu383_vp9.h"
@@ -104,6 +107,7 @@ struct vdec {
 };
 
 static int g_state;                     /* 0 not tried, 1 available, -1 not */
+static int g_path;                      /* VDEC_PATH_*, how the decoder is reached */
 static int g_fake;
 static int g_can_import;                /* the driver imports (interface 3, IOMMU on), or the fake */
 static int g_zc_env = -1;               /* D3D10UMD_VDEC_ZEROCOPY: -1 unset, 0 off, 1 on */
@@ -113,6 +117,11 @@ static vdec_import *g_imports;
 static uint32_t g_fake_dma = 0x10000000u;
 static vdec_stats g_stats;
 static FILE *g_reglog;
+/* the escape to maliwddm (VDEC_PATH_KMD): D3DKMTEscape on a device of our
+ * own, or a test's (vdec_set_escape) */
+static vdec_escape_fn g_escape;
+static void *g_escape_ctx;
+static int g_escape_test;
 #ifdef _WIN32
 static HANDLE g_dev = INVALID_HANDLE_VALUE;
 static SRWLOCK g_lock = SRWLOCK_INIT;
@@ -137,6 +146,252 @@ static int env_fake(void)
     return v && v[0] == '1';
 }
 
+/* ---------------------------------------------------------- transport */
+
+/*
+ * How the decoder is reached (vdec_stats.path):
+ *
+ *   VDEC_PATH_KMD     through maliwddm (vdec_kmd.h): each call an escape on a
+ *                     D3D device of this process's own, made in a session of
+ *                     vdpu383.sys the KMD opened for that device. The default;
+ *                     no handle to \\.\VDPU383 is needed, so it works in a
+ *                     sandbox (Chromium's GPU process) with UserAccess 0.
+ *   VDEC_PATH_DIRECT  \\.\VDPU383 opened by this process (vdpu383.sys
+ *                     UserAccess 1 or 2): when the KMD path is off (UmdVideoKmd
+ *                     0) or not there (an older maliwddm), or with
+ *                     D3D10UMD_VDEC_PATH=direct.
+ *   VDEC_PATH_MEM     the fake without a KMD: ordinary memory (CI).
+ *
+ * D3D10UMD_VDEC_PATH=kmd allows only the first.
+ */
+void vdec_set_escape(vdec_escape_fn fn, void *ctx)
+{
+    g_escape = fn;
+    g_escape_ctx = ctx;
+    g_escape_test = fn != NULL;
+}
+
+/* An NTSTATUS as the Win32 error DeviceIoControl would have given. */
+static unsigned nt_to_win32(long st)
+{
+    switch ((unsigned long)st) {
+    case 0xC0000225ul: return 1168;     /* STATUS_NOT_FOUND: ERROR_NOT_FOUND */
+    case 0xC000000Dul: return 87;       /* STATUS_INVALID_PARAMETER */
+    case 0xC000009Aul: return 1450;     /* STATUS_INSUFFICIENT_RESOURCES: ERROR_NO_SYSTEM_RESOURCES */
+    case 0xC0000017ul: return 8;        /* STATUS_NO_MEMORY: ERROR_NOT_ENOUGH_MEMORY */
+    case 0xC0000008ul: return 6;        /* STATUS_INVALID_HANDLE */
+    case 0xC0000022ul: return 5;        /* STATUS_ACCESS_DENIED */
+    case 0xC00000BBul: return 50;       /* STATUS_NOT_SUPPORTED */
+    case 0xC0000023ul: return 122;      /* STATUS_BUFFER_TOO_SMALL: ERROR_INSUFFICIENT_BUFFER */
+    case 0xC0000043ul: return 32;       /* STATUS_SHARING_VIOLATION */
+    case 0xC00000CEul: return 1450;     /* STATUS_TOO_MANY_SESSIONS */
+    case 0xC0000184ul: return 1;        /* STATUS_INVALID_DEVICE_STATE */
+    default: return 31;                 /* ERROR_GEN_FAILURE */
+    }
+}
+
+static unsigned g_kmd_calls;
+
+/* One call through maliwddm: 1 on success with *got bytes in out, else 0
+ * and the Win32 error in *error. */
+static int kmd_call(unsigned code, const void *in, unsigned in_size, void *out, unsigned out_size,
+                    unsigned *got, unsigned *error)
+{
+    VDEC_KMD_CALL *c;
+    long st;
+    int ok = 0;
+
+    *got = 0;
+    *error = 31;
+    if (!g_escape || in_size > VDEC_KMD_DATA || out_size > VDEC_KMD_DATA)
+        return 0;
+    c = (VDEC_KMD_CALL *)calloc(1, sizeof(*c));
+    if (!c) {
+        *error = 8;
+        return 0;
+    }
+    c->Code = MW_ESCAPE_VDEC_CALL;
+    c->Version = VDEC_KMD_VERSION;
+    c->Ioctl = code;
+    c->InSize = in_size;
+    c->OutSize = out_size;
+    if (in_size)
+        memcpy(c->Data, in, in_size);
+    g_kmd_calls++;
+    st = g_escape(g_escape_ctx, 1, c, (unsigned)sizeof(*c));
+    if (st < 0)
+        *error = nt_to_win32(st);
+    else if (c->Magic != VDEC_KMD_MAGIC)
+        *error = 31;
+    else if (c->Status < 0)
+        *error = nt_to_win32(c->Status);
+    else {
+        unsigned n = c->Returned < out_size ? c->Returned : out_size;
+        if (n)
+            memcpy(out, c->Data, n);
+        *got = n;
+        *error = 0;
+        ok = 1;
+    }
+    free(c);
+    return ok;
+}
+
+/* maliwddm's counters (VDEC_KMD_PROBE), on any adapter handle: 1 when the
+ * KMD answers and its path is on. */
+static int kmd_probe(VDEC_KMD_COUNTERS *k)
+{
+    VDEC_KMD_CALL *c = (VDEC_KMD_CALL *)calloc(1, sizeof(*c));
+    int ok = 0;
+
+    memset(k, 0, sizeof(*k));
+    if (!c || !g_escape) {
+        free(c);
+        return 0;
+    }
+    c->Code = MW_ESCAPE_VDEC_CALL;
+    c->Version = VDEC_KMD_VERSION;
+    c->Ioctl = VDEC_KMD_PROBE;
+    c->OutSize = (unsigned)sizeof(*k);
+    if (g_escape(g_escape_ctx, 0, c, (unsigned)sizeof(*c)) >= 0 && c->Magic == VDEC_KMD_MAGIC &&
+        c->Returned >= sizeof(*k)) {
+        memcpy(k, c->Data, sizeof(*k));
+        ok = k->On != 0;
+    }
+    free(c);
+    return ok;
+}
+
+#ifdef _WIN32
+/*
+ * D3DKMT for VDEC_PATH_KMD: maliwddm's adapter (the one that answers
+ * VDEC_KMD_PROBE with the path on) and a device of our own on it, made
+ * once and kept for the life of the process: the KMD's session of
+ * vdpu383.sys lives as long as the device, and dxgkrnl destroys it when
+ * the process exits.
+ */
+typedef LONG (APIENTRY *vdec_kmt_fn)(void *);
+static struct {
+    vdec_kmt_fn enum2, create_device, escape, close_adapter;
+    D3DKMT_HANDLE adapter, device;
+} g_kmt;
+
+static vdec_kmt_fn kmt_get(const char *name)
+{
+    HMODULE g = GetModuleHandleA("gdi32.dll");
+
+    if (!g)
+        g = LoadLibraryA("gdi32.dll");
+    return g ? (vdec_kmt_fn)(void *)GetProcAddress(g, name) : NULL;
+}
+
+static long kmt_escape(void *ctx, int with_device, void *data, unsigned size)
+{
+    D3DKMT_ESCAPE e;
+
+    (void)ctx;
+    memset(&e, 0, sizeof(e));
+    e.hAdapter = g_kmt.adapter;
+    e.hDevice = with_device ? g_kmt.device : 0;
+    e.Type = D3DKMT_ESCAPE_DRIVERPRIVATE;
+    e.pPrivateDriverData = data;
+    e.PrivateDriverDataSize = size;
+    return (long)g_kmt.escape(&e);
+}
+
+static int kmt_open(void)
+{
+    D3DKMT_ADAPTERINFO info[16];
+    D3DKMT_ENUMADAPTERS2 en;
+    D3DKMT_CREATEDEVICE cd;
+    D3DKMT_HANDLE chosen = 0;
+    VDEC_KMD_COUNTERS k;
+    ULONG i;
+
+    g_kmt.enum2 = kmt_get("D3DKMTEnumAdapters2");
+    g_kmt.create_device = kmt_get("D3DKMTCreateDevice");
+    g_kmt.escape = kmt_get("D3DKMTEscape");
+    g_kmt.close_adapter = kmt_get("D3DKMTCloseAdapter");
+    if (!g_kmt.enum2 || !g_kmt.create_device || !g_kmt.escape)
+        return 0;
+    memset(&en, 0, sizeof(en));
+    en.NumAdapters = 16;
+    en.pAdapters = info;
+    if (g_kmt.enum2(&en) < 0)
+        return 0;
+    vdec_set_escape(kmt_escape, NULL);
+    g_escape_test = 0;
+    for (i = 0; i < en.NumAdapters; i++) {
+        if (!chosen) {
+            g_kmt.adapter = info[i].hAdapter;
+            if (kmd_probe(&k)) {
+                memset(&cd, 0, sizeof(cd));
+                cd.hAdapter = info[i].hAdapter;
+                if (g_kmt.create_device(&cd) >= 0 && cd.hDevice) {
+                    g_kmt.device = cd.hDevice;
+                    chosen = info[i].hAdapter;
+                    continue;           /* this adapter stays open */
+                }
+            }
+        }
+        if (g_kmt.close_adapter) {
+            D3DKMT_CLOSEADAPTER ca;
+            ca.hAdapter = info[i].hAdapter;
+            (void)g_kmt.close_adapter(&ca);
+        }
+    }
+    g_kmt.adapter = chosen;
+    if (!chosen) {
+        vdec_set_escape(NULL, NULL);
+        return 0;
+    }
+    return 1;
+}
+#endif
+
+/* One vdpu383.sys call, by the path in use: 1 on success. The Win32 error
+ * of a failure in g_last_error. */
+static unsigned g_last_error;
+
+static int dev_call(unsigned code, const void *in, unsigned in_size, void *out, unsigned out_size,
+                    unsigned *got)
+{
+    unsigned n = 0;
+
+    if (g_path == VDEC_PATH_KMD) {
+        int ok = kmd_call(code, in, in_size, out, out_size, &n, &g_last_error);
+        if (got)
+            *got = n;
+        return ok;
+    }
+#ifdef _WIN32
+    if (g_path == VDEC_PATH_DIRECT) {
+        DWORD d = 0;
+        if (!DeviceIoControl(g_dev, code, (void *)in, in_size, out, out_size, &d, NULL)) {
+            g_last_error = (unsigned)GetLastError();
+            return 0;
+        }
+        if (got)
+            *got = (unsigned)d;
+        return 1;
+    }
+#endif
+    (void)in; (void)in_size; (void)out; (void)out_size;
+    g_last_error = 31;
+    return 0;
+}
+
+static void read_info(void)
+{
+    VDPU383_INFO info;
+    unsigned got = 0;
+
+    memset(&info, 0, sizeof(info));
+    if (dev_call(IOCTL_VDPU383_GET_INFO, NULL, 0, &info, sizeof(info), &got) &&
+        got >= offsetof(VDPU383_INFO, iommu) + sizeof(info.iommu))
+        g_can_import = info.interface_version >= 3 && info.iommu;
+}
+
 int vdec_available(void)
 {
 #ifdef _WIN32
@@ -144,6 +399,9 @@ int vdec_available(void)
 #endif
     if (g_state == 0) {
         const char *log = getenv("D3D10UMD_VDEC_REGLOG");
+        const char *path = getenv("D3D10UMD_VDEC_PATH");
+        int want_kmd = !(path && !strcmp(path, "direct"));
+        int want_direct = !(path && !strcmp(path, "kmd"));
 
         if (log && log[0])
             g_reglog = fopen(log, "ab");
@@ -160,26 +418,42 @@ int vdec_available(void)
             if (ff && atoi(ff) > 0)
                 g_fake_import_fail = (unsigned)atoi(ff);
         }
-        if (g_fake) {
+        g_state = -1;
+        if (g_escape_test) {
+            /* a test's KMD (tests/vdec-host): the fake pattern, if asked,
+             * behind every call and check of the real path */
+            VDEC_KMD_COUNTERS k;
+            if (kmd_probe(&k)) {
+                g_path = VDEC_PATH_KMD;
+                g_state = 1;
+                read_info();
+            }
+        } else if (g_fake) {
+            g_path = VDEC_PATH_MEM;
             g_state = 1;
             g_can_import = 1;
         } else {
 #ifdef _WIN32
-            g_dev = CreateFileW(VDPU383_USER_PATH, GENERIC_READ | GENERIC_WRITE, 0, NULL,
-                                OPEN_EXISTING, 0, NULL);
-            g_state = g_dev != INVALID_HANDLE_VALUE ? 1 : -1;
-            if (g_state == 1) {
-                VDPU383_INFO info;
-                DWORD got = 0;
-                memset(&info, 0, sizeof(info));
-                if (DeviceIoControl(g_dev, IOCTL_VDPU383_GET_INFO, NULL, 0, &info, sizeof(info), &got, NULL) &&
-                    got >= offsetof(VDPU383_INFO, iommu) + sizeof(info.iommu))
-                    g_can_import = info.interface_version >= 3 && info.iommu;
+            if (want_kmd && kmt_open()) {
+                g_path = VDEC_PATH_KMD;
+                g_state = 1;
+                read_info();
+            }
+            if (g_state != 1 && want_direct) {
+                g_dev = CreateFileW(VDPU383_USER_PATH, GENERIC_READ | GENERIC_WRITE, 0, NULL,
+                                    OPEN_EXISTING, 0, NULL);
+                if (g_dev != INVALID_HANDLE_VALUE) {
+                    g_path = VDEC_PATH_DIRECT;
+                    g_state = 1;
+                    read_info();
+                }
             }
 #else
-            g_state = -1;
+            (void)want_kmd;
+            (void)want_direct;
 #endif
         }
+        g_stats.path = (unsigned)g_path;
     }
 #ifdef _WIN32
     ReleaseSRWLockExclusive(&g_lock);
@@ -193,7 +467,7 @@ static int buf_alloc(uint32_t size, vdec_buf *b)
 {
     memset(b, 0, sizeof(*b));
     size = align_up(size, 4096);
-    if (g_fake) {
+    if (g_path == VDEC_PATH_MEM) {
         b->cpu = (uint8_t *)calloc(1, size);
         if (!b->cpu)
             return -1;
@@ -203,16 +477,14 @@ static int buf_alloc(uint32_t size, vdec_buf *b)
         g_fake_dma += size + 4096;
         return 0;
     }
-#ifdef _WIN32
     {
         VDPU383_ALLOC_IN in;
         VDPU383_ALLOC_OUT out;
-        DWORD got = 0;
+        unsigned got = 0;
 
         in.size = size;
         memset(&out, 0, sizeof(out));
-        if (!DeviceIoControl(g_dev, IOCTL_VDPU383_ALLOC, &in, sizeof(in), &out, sizeof(out), &got, NULL) ||
-            got < sizeof(out))
+        if (!dev_call(IOCTL_VDPU383_ALLOC, &in, sizeof(in), &out, sizeof(out), &got) || got < sizeof(out))
             return -1;
         b->handle = out.handle;
         b->dma = out.dma;
@@ -222,24 +494,18 @@ static int buf_alloc(uint32_t size, vdec_buf *b)
             g_stats.iommu = 1;
         return 0;
     }
-#else
-    return -1;
-#endif
 }
 
 static void buf_free(vdec_buf *b)
 {
     if (!b->handle)
         return;
-    if (g_fake) {
+    if (g_path == VDEC_PATH_MEM) {
         free(b->cpu);
     } else {
-#ifdef _WIN32
         VDPU383_FREE_IN in;
-        DWORD got = 0;
         in.handle = b->handle;
-        DeviceIoControl(g_dev, IOCTL_VDPU383_FREE, &in, sizeof(in), NULL, 0, &got, NULL);
-#endif
+        (void)dev_call(IOCTL_VDPU383_FREE, &in, sizeof(in), NULL, 0, NULL);
     }
     memset(b, 0, sizeof(*b));
 }
@@ -308,8 +574,13 @@ static int setup_geometry(vdec *d, unsigned w, unsigned h, unsigned key, unsigne
     d->hor = align_up(w, 64);
     d->ver = align_up(h, 16);
     /* Zero copy decided for each stream geometry, from the texture of its
-     * first picture: the surfaces' layout becomes the texture's. */
-    d->zc = target_fits(d, d->hor, d->ver, 16) ? 1 : -1;
+     * first picture: the surfaces' layout becomes the texture's. Rows as
+     * MPP gives the VDPU383 (SLOTS_VER_ALIGN): H.264 16, HEVC 8, so
+     * Chromium's 1080-row HEVC textures fit. */
+    if (d->codec == VDEC_CODEC_HEVC)
+        d->zc = target_fits(d, d->hor, align_up(h, 8), 8) ? 1 : -1;
+    else
+        d->zc = target_fits(d, d->hor, d->ver, 16) ? 1 : -1;
     if (d->zc == 1) {
         d->hor = d->tgt.stride;
         d->ver = d->tgt.luma_rows;
@@ -413,7 +684,7 @@ static int target_fits(const vdec *d, unsigned hor, unsigned ver, unsigned rows_
 static int import_try(vdec_import *im, uint64_t token, unsigned pages)
 {
     g_stats.last_import_pages = pages;
-    if (g_fake) {
+    if (g_path == VDEC_PATH_MEM) {
         if (g_fake_import_fail) {
             g_fake_import_fail--;
             g_stats.last_import_error = 1168;   /* ERROR_NOT_FOUND, as STATUS_NOT_FOUND comes back */
@@ -425,17 +696,16 @@ static int import_try(vdec_import *im, uint64_t token, unsigned pages)
         g_fake_dma += im->size + 4096;
         return 1;
     }
-#ifdef _WIN32
     {
         VDPU383_IMPORT_IN in;
         VDPU383_IMPORT_OUT out;
-        DWORD got = 0;
+        unsigned got = 0;
 
         memset(&in, 0, sizeof(in));
         memset(&out, 0, sizeof(out));
         in.token = token;
         in.pages = pages;
-        if (DeviceIoControl(g_dev, IOCTL_VDPU383_IMPORT, &in, sizeof(in), &out, sizeof(out), &got, NULL)) {
+        if (dev_call(IOCTL_VDPU383_IMPORT, &in, sizeof(in), &out, sizeof(out), &got)) {
             if (got >= sizeof(out) && out.handle) {
                 im->handle = out.handle;
                 im->dma = out.dma;
@@ -444,12 +714,9 @@ static int import_try(vdec_import *im, uint64_t token, unsigned pages)
             }
             g_stats.last_import_error = 0xFFFFFFFFu;    /* succeeded with no import */
         } else {
-            g_stats.last_import_error = (unsigned)GetLastError();
+            g_stats.last_import_error = g_last_error;
         }
     }
-#else
-    (void)token;
-#endif
     return 0;
 }
 
@@ -512,14 +779,17 @@ static vdec_import *import_get(const vdec_target *t)
  * took back gets the allocation's new pages at the same IO addresses. */
 static void imports_refresh(void)
 {
-#ifdef _WIN32
     vdec_import *im;
 
+    if (g_path == VDEC_PATH_MEM)
+        return;
+#ifdef _WIN32
     AcquireSRWLockExclusive(&g_lock);
+#endif
     for (im = g_imports; im; im = im->next) {
         VDPU383_IMPORT_IN in;
         VDPU383_IMPORT_OUT out;
-        DWORD got = 0;
+        unsigned got = 0;
         unsigned pages = 0;
         uint64_t token;
 
@@ -532,15 +802,16 @@ static void imports_refresh(void)
         in.token = token;
         in.pages = pages;
         in.handle = im->handle;
-        if (DeviceIoControl(g_dev, IOCTL_VDPU383_IMPORT, &in, sizeof(in), &out, sizeof(out), &got, NULL)) {
+        if (dev_call(IOCTL_VDPU383_IMPORT, &in, sizeof(in), &out, sizeof(out), &got)) {
             if (token != im->token)
                 g_stats.refreshes++;
             im->token = token;
         } else {
-            g_stats.last_import_error = (unsigned)GetLastError();
+            g_stats.last_import_error = g_last_error;
             g_stats.last_import_pages = pages;
         }
     }
+#ifdef _WIN32
     ReleaseSRWLockExclusive(&g_lock);
 #endif
 }
@@ -562,13 +833,12 @@ void vdec_forget(uint64_t token)
         }
 #ifdef _WIN32
     ReleaseSRWLockExclusive(&g_lock);
-    if (im && im->handle && !g_fake) {
-        VDPU383_FREE_IN in;
-        DWORD got = 0;
-        in.handle = im->handle;
-        DeviceIoControl(g_dev, IOCTL_VDPU383_FREE, &in, sizeof(in), NULL, 0, &got, NULL);
-    }
 #endif
+    if (im && im->handle && g_path != VDEC_PATH_MEM) {
+        VDPU383_FREE_IN in;
+        in.handle = im->handle;
+        (void)dev_call(IOCTL_VDPU383_FREE, &in, sizeof(in), NULL, 0, NULL);
+    }
     free(im);
 }
 
@@ -590,9 +860,15 @@ void vdec_set_target(vdec *d, const vdec_target *t)
  * decided at the first picture, from its texture. */
 static void decide_fixed(vdec *d)
 {
+    /* rows as MPP gives the VDPU383: VP9 64 (hal_vp9d_vdpu383.c), AV1 8
+     * (hal_av1d_vdpu383.c), so Chromium's 1080-row AV1 textures fit and
+     * its VP9 ones do not */
+    int fits = d->codec == VDEC_CODEC_AV1 ? target_fits(d, d->hor, align_up(d->max_h, 8), 8)
+                                          : target_fits(d, d->hor, d->ver, 64);
+
     if (d->zc)
         return;
-    if (!target_fits(d, d->hor, d->ver, 64)) {
+    if (!fits) {
         d->zc = -1;
         return;
     }
@@ -881,15 +1157,10 @@ static int run(vdec *d, const V383_RegFile *rf, char *err, size_t errlen)
     in->timeout_ms = 2000;
     in->flags = VDPU383_RUN_RESET_ON_ERROR;
     memset(out, 0, sizeof(*out));
-#ifdef _WIN32
-    {
-        DWORD got = 0;
-        if (!DeviceIoControl(g_dev, IOCTL_VDPU383_RUN, in, sizeof(*in), out, sizeof(*out), &got, NULL)) {
-            set_err(err, errlen, "IOCTL_VDPU383_RUN failed (%u)", (unsigned)GetLastError(), 0);
-            return -1;
-        }
+    if (!dev_call(IOCTL_VDPU383_RUN, in, sizeof(*in), out, sizeof(*out), NULL)) {
+        set_err(err, errlen, "IOCTL_VDPU383_RUN failed (%u)", g_last_error, 0);
+        return -1;
     }
-#endif
     g_stats.hw_us_total += out->elapsed_us;
     if (out->result == VDPU383_RUN_REVOKED) {
         set_err(err, errlen, "register %u names a texture the display driver took back", out->bad_reg, 0);
@@ -918,17 +1189,7 @@ static int finish(vdec *d, const V383_RegFile *rf, unsigned idx, unsigned status
 
     reglog(d, rf);
     d->pictures++;
-    if (g_fake) {
-        uint8_t *s = d->in_tgt ? d->cur_imp->fake + d->tgt.offset : (uint8_t *)pic;
-        size_t luma = (size_t)d->hor * d->ver;
-        uint8_t *c = s + luma;
-        size_t i;
-        memset(s, vdec_fake_luma(status_report), luma);
-        for (i = 0; i + 1 < luma / 2; i += 2) {
-            c[i] = vdec_fake_chroma(idx);
-            c[i + 1] = vdec_fake_chroma_v(idx);
-        }
-    } else {
+    if (g_path != VDEC_PATH_MEM) {
         int rc = run(d, rf, err, errlen);
         /* A texture's pages were taken back (evicted) since it was
          * imported: the new pages at the same addresses, the same
@@ -939,6 +1200,18 @@ static int finish(vdec *d, const V383_RegFile *rf, unsigned idx, unsigned status
         }
         if (rc)
             return -1;
+    }
+    /* the fake: the pattern, after the KMD (a test's) took the decode */
+    if (g_fake) {
+        uint8_t *s = d->in_tgt ? d->cur_imp->fake + d->tgt.offset : (uint8_t *)pic;
+        size_t luma = (size_t)d->hor * d->ver;
+        uint8_t *c = s + luma;
+        size_t i;
+        memset(s, vdec_fake_luma(status_report), luma);
+        for (i = 0; i + 1 < luma / 2; i += 2) {
+            c[i] = vdec_fake_chroma(idx);
+            c[i + 1] = vdec_fake_chroma_v(idx);
+        }
     }
     g_stats.pictures++;
     if (d->in_tgt)
@@ -1294,16 +1567,17 @@ void vdec_get_stats(vdec_stats *s)
     *s = g_stats;
     s->can_import = (unsigned)g_can_import;
     s->driver_runs = 0;
-#ifdef _WIN32
-    if (g_state == 1 && !g_fake) {
+    s->kmd_calls = g_kmd_calls;
+    if (g_state == 1 && g_path != VDEC_PATH_MEM) {
         VDPU383_INFO info;
-        DWORD got = 0;
+        unsigned got = 0;
         memset(&info, 0, sizeof(info));
-        if (DeviceIoControl(g_dev, IOCTL_VDPU383_GET_INFO, NULL, 0, &info, sizeof(info), &got, NULL)) {
+        if (dev_call(IOCTL_VDPU383_GET_INFO, NULL, 0, &info, sizeof(info), &got)) {
             s->driver_runs = info.runs;
             if (got >= offsetof(VDPU383_INFO, iommu) + sizeof(info.iommu))
                 s->iommu = info.iommu;
+            if (got >= offsetof(VDPU383_INFO, session_runs) + sizeof(info.session_runs))
+                s->session_runs = info.session_runs;
         }
     }
-#endif
 }

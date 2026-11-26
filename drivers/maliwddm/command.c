@@ -139,6 +139,8 @@ NTSTATUS APIENTRY MwCreateDevice(IN_CONST_HANDLE hAdapter, DXGKARG_CREATEDEVICE 
 
 NTSTATUS APIENTRY MwDestroyDevice(IN_CONST_HANDLE hDevice)
 {
+    /* its video decoder session ends: buffers and imports (vdecproxy.c) */
+    MwVdecKmdDeviceGone((MW_DEVICE *)hDevice);
     ExFreePoolWithTag(hDevice, MW_TAG);
     return STATUS_SUCCESS;
 }
