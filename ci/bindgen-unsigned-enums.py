@@ -44,7 +44,7 @@ def negative(body):
 # 1. Bitfield and newtype enums: struct X(pub c_int); impl X { pub const A: X = X(..); }
 for m in list(re.finditer(r'pub struct (\w+)\(pub ' + INT + r'\);', src)):
     name = m.group(1)
-    consts = re.findall(r'pub const \w+: ' + name + r' = ' + name + r'\((-?\d+)\)', src)
+    consts = re.findall(r'pub const \w+: ' + name + r'\s*=\s*' + name + r'\((-?\d+)\)', src)
     if consts and all(not c.startswith('-') for c in consts):
         src = src.replace(m.group(0), 'pub struct %s(pub ::std::os::raw::c_uint);' % name, 1)
         n += 1
@@ -64,7 +64,7 @@ src = re.sub(r'pub mod \w+ \{\s*pub type Type = ' + INT + r';[^}]*\}', fix_mod, 
 # 3. Consts enums: pub type X = c_int; pub const X_A: X = 1;
 for m in list(re.finditer(r'pub type (\w+) = ' + INT + r';', src)):
     name = m.group(1)
-    consts = re.findall(r'pub const \w+: ' + name + r' = (-?\d+);', src)
+    consts = re.findall(r'pub const \w+: ' + name + r'\s*=\s*(-?\d+);', src)
     if consts and all(not c.startswith('-') for c in consts):
         src = src.replace(m.group(0), 'pub type %s = ::std::os::raw::c_uint;' % name, 1)
         n += 1
