@@ -597,7 +597,7 @@ vp_run_tests(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11VideoDevice *vde
 int
 vp_check_decoded(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11VideoDevice *vdev,
                  ID3D11VideoContext *vctx, ID3D11Texture2D *tex, UINT slice, UINT w, UINT h,
-                 uint8_t luma, uint8_t chroma)
+                 uint8_t luma, uint8_t cb, uint8_t cr)
 {
    Vp v = { dev, ctx, vdev, vctx, 0 };
    ID3D11VideoProcessorEnumerator *e = NULL;
@@ -632,7 +632,7 @@ vp_check_decoded(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11VideoDevice 
          goto done;
       uint8_t *px = read_back(&v, out, w, h, DXGI_FORMAT_B8G8R8A8_UNORM);
       float want[3];
-      model_rgb(luma / 255.0f, chroma / 255.0f, chroma / 255.0f, want);
+      model_rgb(luma / 255.0f, cb / 255.0f, cr / 255.0f, want);
       unsigned bad = 0;
       for (UINT i = 0; px && i < w * h; i++) {
          const uint8_t *p = px + (size_t)i * 4;
@@ -693,18 +693,29 @@ vp_make_plane_views(ID3D11Device *dev, ID3D11Texture2D *tex, UINT slice, ID3D11S
 int
 vp_check_plane_views(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11ShaderResourceView *srv[2],
                      UINT slice, UINT tex_w, UINT tex_h, UINT x0, UINT y0, UINT w, UINT h,
-                     uint8_t luma, uint8_t chroma)
+                     const uint8_t *i420)
 {
-   static ID3D11VertexShader *vs;
-   static ID3D11PixelShader *ps;
+   /* The shaders of each device this has run on. */
+   static struct { ID3D11Device *dev; ID3D11VertexShader *vs; ID3D11PixelShader *ps; } cache[4];
+   ID3D11VertexShader *vs = NULL;
+   ID3D11PixelShader *ps = NULL;
    Vp v = { dev, ctx, NULL, NULL, 0 };
    ID3D11Texture2D *rt = NULL;
    ID3D11RenderTargetView *rtv = NULL;
    ID3D11Buffer *cb = NULL;
    int rc = 2;
+   unsigned k;
 
+   for (k = 0; k < 4 && cache[k].dev; k++)
+      if (cache[k].dev == dev) {
+         vs = cache[k].vs;
+         ps = cache[k].ps;
+         break;
+      }
    if (!vs || !ps) {
       ID3DBlob *vsb = NULL, *psb = NULL, *err = NULL;
+      if (k >= 4)
+         return 1;
       if (FAILED(D3DCompile(vs_src, sizeof vs_src - 1, "vs", NULL, NULL, "main", "vs_4_0", 0, 0, &vsb, &err)) ||
           FAILED(D3DCompile(ps_array_src, sizeof ps_array_src - 1, "ps", NULL, NULL, "main", "ps_4_0", 0, 0,
                             &psb, &err))) {
@@ -717,6 +728,9 @@ vp_check_plane_views(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11ShaderRe
       psb->Release();
       if (!vs || !ps)
          return 1;
+      cache[k].dev = dev;
+      cache[k].vs = vs;
+      cache[k].ps = ps;
    }
    {
       D3D11_BUFFER_DESC bd = {};
@@ -749,14 +763,17 @@ vp_check_plane_views(ID3D11Device *dev, ID3D11DeviceContext *ctx, ID3D11ShaderRe
    }
    {
       uint8_t *px = read_back(&v, rt, tex_w, tex_h, DXGI_FORMAT_R8G8B8A8_UNORM);
+      const uint8_t *fu = i420 + (size_t)w * h, *fv = fu + (size_t)(w / 2) * (h / 2);
       unsigned bad = 0;
-      for (UINT y = y0; px && y < y0 + h; y++)
-         for (UINT x = x0; x < x0 + w; x++) {
-            const uint8_t *p = px + ((size_t)y * tex_w + x) * 4;
-            if (p[0] != luma || p[1] != chroma || p[2] != chroma) {
+      for (UINT y = 0; px && y < (h & ~1u); y++)
+         for (UINT x = 0; x < (w & ~1u); x++) {
+            const uint8_t *p = px + ((size_t)(y + y0) * tex_w + x + x0) * 4;
+            const uint8_t wy = i420[(size_t)y * w + x];
+            const uint8_t wu = fu[(size_t)(y / 2) * (w / 2) + x / 2], wv = fv[(size_t)(y / 2) * (w / 2) + x / 2];
+            if (p[0] != wy || p[1] != wu || p[2] != wv) {
                if (!bad++)
-                  printf("plane views, slice %u at %u,%u: got %u %u %u, want %u %u %u\n", slice, x, y, p[0],
-                         p[1], p[2], luma, chroma, chroma);
+                  printf("plane views, slice %u at %u,%u: got Y %u Cb %u Cr %u, want %u %u %u\n", slice,
+                         x + x0, y + y0, p[0], p[1], p[2], wy, wu, wv);
             }
          }
       rc = (px && !bad) ? 0 : 2;

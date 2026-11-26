@@ -38,6 +38,7 @@ extern "C" {
 #include "md5.h"
 }
 #include "codecs.h"
+#include "vptest.h"
 
 static const GUID ProfileH264 =
    { 0x1b81be68, 0xa0c7, 0x11d3, { 0xb9, 0x84, 0x00, 0xc0, 0x4f, 0x2e, 0x73, 0xc5 } };
@@ -299,10 +300,11 @@ output(CTest *t, int slot, unsigned x0, unsigned y0, unsigned w, unsigned h, uns
    if (t->out)
       fwrite(t->frame, 1, fsize, t->out);
    if (t->opt.fake) {
-      uint8_t ly = (uint8_t)t->slot_status[slot], lc = (uint8_t)(0x80 ^ slot);
-      size_t bad = 0, ysz = (size_t)w * h;
+      uint8_t ly = (uint8_t)t->slot_status[slot], lu = vdec_fake_cb((unsigned)slot),
+              lv = vdec_fake_cr((unsigned)slot);
+      size_t bad = 0, ysz = (size_t)w * h, usz = (size_t)cw * ch;
       for (size_t i = 0; i < fsize; i++)
-         if (t->frame[i] != (i < ysz ? ly : lc))
+         if (t->frame[i] != (i < ysz ? ly : i < ysz + usz ? lu : lv))
             bad++;
       if (bad) {
          if (!t->mismatches++)

@@ -23,6 +23,18 @@
  *                      R8G8_UNORM views of each slice made before the first decode;
  *                      every frame is also read through them (with --fake)
  *   --srv-late         the same, the views made at the first frame out, after decodes
+ *   --chromium-tex     H.264: the decoder texture as Chromium 158 makes it here (an array,
+ *                      BIND_DECODER | BIND_SHADER_RESOURCE, MiscFlags SHARED; MiscFlags 0
+ *                      when the runtime refuses a shared texture, as without a KMD in CI),
+ *                      the decoder described at the visible size as Chromium's container
+ *                      size is, R8/R8G8 Texture2DArray views of every slice made before
+ *                      decoding as ANGLE makes them; every frame is read through them and
+ *                      compared with the frame read back through a staging copy
+ *   --nthandle         with --chromium-tex: MiscFlags SHARED | SHARED_NTHANDLE (Chromium's
+ *                      choice when the decoder asks for single textures, or with D3D12)
+ *   --open             with --chromium-tex on a shared texture: also open it in a second
+ *                      device (its NT or legacy handle) and read every frame through plane
+ *                      views made there
  *   -n <pictures>      stop after that many
  *   -o <file.yuv>      write the frames (I420)
  *
@@ -50,8 +62,8 @@
  */
 
 #include <windows.h>
-#include <d3d11.h>
-#include <dxgi.h>
+#include <d3d11_1.h>
+#include <dxgi1_2.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -94,6 +106,15 @@ struct Test {
    int srv_mode;                           /* 1 --srv, 2 --srv-late */
    ID3D11ShaderResourceView *srv[H264_MAX_SLOTS][2];
    unsigned srv_frames, srv_bad, srv_failed;
+   /* --chromium-tex: MiscFlags asked for and got; --open: the texture as a
+    * second device opened it, and its plane views. */
+   int chromium_tex, nthandle, open;
+   UINT misc_asked, misc_got;
+   ID3D11Device *dev2;
+   ID3D11DeviceContext *ctx2;
+   ID3D11Texture2D *tex2;
+   ID3D11ShaderResourceView *srv2[H264_MAX_SLOTS][2];
+   unsigned srv2_frames, srv2_bad, srv2_failed;
    unsigned slot_status[H264_MAX_SLOTS];   /* StatusReportFeedbackNumber last decoded there */
 
    unsigned width, height, crop_l, crop_r, crop_t, crop_b;
@@ -243,6 +264,54 @@ probe(Test *t)
    return found ? 0 : 3;
 }
 
+/* --open: the shared decoder texture in a second device of the same
+ * adapter, as another D3D11 device opens Chromium's: by its NT handle
+ * (SHARED_NTHANDLE) or its legacy handle (SHARED). */
+static const char *g_device_arg;
+
+static int
+open_second(Test *t)
+{
+   Test t2;
+   HANDLE h = NULL;
+   HRESULT hr;
+   int nt = (t->misc_got & D3D11_RESOURCE_MISC_SHARED_NTHANDLE) != 0;
+
+   memset(&t2, 0, sizeof t2);
+   if (FAILED(create_device(g_device_arg, &t2)))
+      return 1;
+   t->dev2 = t2.dev;
+   t->ctx2 = t2.ctx;
+   if (nt) {
+      IDXGIResource1 *r1 = NULL;
+      hr = t->tex->QueryInterface(__uuidof(IDXGIResource1), (void **)&r1);
+      if (SUCCEEDED(hr)) {
+         hr = r1->CreateSharedHandle(NULL, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, NULL, &h);
+         r1->Release();
+      }
+      printf("second device: CreateSharedHandle 0x%08lx\n", (unsigned long)hr);
+      ID3D11Device1 *d1 = NULL;
+      if (SUCCEEDED(hr) && SUCCEEDED(hr = t->dev2->QueryInterface(__uuidof(ID3D11Device1), (void **)&d1))) {
+         hr = d1->OpenSharedResource1(h, __uuidof(ID3D11Texture2D), (void **)&t->tex2);
+         d1->Release();
+      }
+      if (h)
+         CloseHandle(h);
+   } else {
+      IDXGIResource *r = NULL;
+      hr = t->tex->QueryInterface(__uuidof(IDXGIResource), (void **)&r);
+      if (SUCCEEDED(hr)) {
+         hr = r->GetSharedHandle(&h);
+         r->Release();
+      }
+      printf("second device: GetSharedHandle 0x%08lx\n", (unsigned long)hr);
+      if (SUCCEEDED(hr))
+         hr = t->dev2->OpenSharedResource(h, __uuidof(ID3D11Texture2D), (void **)&t->tex2);
+   }
+   printf("second device: the decoder texture opened: 0x%08lx\n", (unsigned long)hr);
+   return FAILED(hr) ? 1 : 0;
+}
+
 static int
 setup_decoder(Test *t, unsigned width, unsigned height)
 {
@@ -257,6 +326,11 @@ setup_decoder(Test *t, unsigned width, unsigned height)
    desc.Guid = ProfileH264;
    desc.SampleWidth = t->tex_w;
    desc.SampleHeight = t->tex_h;
+   if (t->chromium_tex) {
+      /* Chromium: the container's size (1920x1080), not the pictures'. */
+      desc.SampleWidth = width - t->crop_l - t->crop_r;
+      desc.SampleHeight = height - t->crop_t - t->crop_b;
+   }
    desc.OutputFormat = DXGI_FORMAT_NV12;
    hr = t->vdev->GetVideoDecoderConfigCount(&desc, &nc);
    printf("decoder configs for %ux%u: %u (0x%08lx)\n", t->tex_w, t->tex_h, nc, (unsigned long)hr);
@@ -282,16 +356,31 @@ setup_decoder(Test *t, unsigned width, unsigned height)
    td.SampleDesc.Count = 1;
    td.Usage = D3D11_USAGE_DEFAULT;
    td.BindFlags = D3D11_BIND_DECODER | ((t->vp || t->srv_mode) ? D3D11_BIND_SHADER_RESOURCE : 0);
+   td.MiscFlags = t->misc_asked;
    hr = t->dev->CreateTexture2D(&td, NULL, &t->tex);
-   printf("NV12 decoder texture array %ux%u x %u, BindFlags 0x%x: 0x%08lx\n", td.Width, td.Height,
-          td.ArraySize, td.BindFlags, (unsigned long)hr);
+   printf("NV12 decoder texture array %ux%u x %u, BindFlags 0x%x, MiscFlags 0x%x: 0x%08lx\n", td.Width,
+          td.Height, td.ArraySize, td.BindFlags, td.MiscFlags, (unsigned long)hr);
+   if (FAILED(hr) && t->misc_asked) {
+      /* The software runtime with no KMD has no shared allocations (CI). */
+      td.MiscFlags = 0;
+      hr = t->dev->CreateTexture2D(&td, NULL, &t->tex);
+      printf("  shared refused; MiscFlags 0 instead: 0x%08lx\n", (unsigned long)hr);
+   }
    if (FAILED(hr))
+      return 1;
+   t->misc_got = td.MiscFlags;
+   if (t->open && t->misc_got && open_second(t))
       return 1;
    for (UINT i = 0; t->srv_mode == 1 && i < H264_MAX_SLOTS; i++)
       if (vp_make_plane_views(t->dev, t->tex, i, t->srv[i]))
          return 1;
    if (t->srv_mode == 1)
       printf("R8_UNORM and R8G8_UNORM views of the %u slices: made\n", H264_MAX_SLOTS);
+   for (UINT i = 0; t->tex2 && i < H264_MAX_SLOTS; i++)
+      if (vp_make_plane_views(t->dev2, t->tex2, i, t->srv2[i]))
+         return 1;
+   if (t->tex2)
+      printf("R8_UNORM and R8G8_UNORM views of the %u slices in the second device: made\n", H264_MAX_SLOTS);
    td.ArraySize = 1;
    td.Usage = D3D11_USAGE_STAGING;
    td.BindFlags = 0;
@@ -349,6 +438,10 @@ decode_cb(void *ctx, const H264Picture *pic)
    HRESULT hr;
    double t0;
 
+   t->crop_l = pic->crop_left;
+   t->crop_r = pic->crop_right;
+   t->crop_t = pic->crop_top;
+   t->crop_b = pic->crop_bottom;
    if (!t->dec) {
       t->width = pic->width;
       t->height = pic->height;
@@ -357,10 +450,6 @@ decode_cb(void *ctx, const H264Picture *pic)
    }
    if (slot >= H264_MAX_SLOTS)
       return -1;
-   t->crop_l = pic->crop_left;
-   t->crop_r = pic->crop_right;
-   t->crop_t = pic->crop_top;
-   t->crop_b = pic->crop_bottom;
 
    /* The short slice control: where each NAL unit starts (at its start
     * code) and how long it is. */
@@ -472,11 +561,37 @@ output_cb(void *ctx, int slot, unsigned decode_index, int poc)
    if (t->out)
       fwrite(t->frame, 1, fsize, t->out);
 
+   /* Every frame through the plane views, against what the staging copy
+    * read: the luma and both chroma channels at every pixel. */
+   if (t->srv_mode == 2 && !t->srv[slot][0] && vp_make_plane_views(t->dev, t->tex, (UINT)slot, t->srv[slot]))
+      t->srv_failed = 1;
+   if (t->srv[slot][0] && t->srv[slot][1]) {
+      int r = vp_check_plane_views(t->dev, t->ctx, t->srv[slot], 0, t->tex_w, t->tex_h, t->crop_l,
+                                   t->crop_t, w, h, t->frame);
+      t->srv_frames++;
+      if (r == 1)
+         t->srv_failed = 1;
+      else if (r)
+         t->srv_bad++;
+   }
+   if (t->srv2[slot][0] && t->srv2[slot][1]) {
+      /* The decoding device's work is out before the other device reads. */
+      t->ctx->Flush();
+      int r = vp_check_plane_views(t->dev2, t->ctx2, t->srv2[slot], 0, t->tex_w, t->tex_h, t->crop_l,
+                                   t->crop_t, w, h, t->frame);
+      t->srv2_frames++;
+      if (r == 1)
+         t->srv2_failed = 1;
+      else if (r)
+         t->srv2_bad++;
+   }
+
    if (t->fake) {
-      uint8_t ly = (uint8_t)t->slot_status[slot], lc = (uint8_t)(0x80 ^ slot);
-      size_t bad = 0, ysz = (size_t)w * h;
+      uint8_t ly = (uint8_t)t->slot_status[slot], lu = vdec_fake_cb((unsigned)slot),
+              lv = vdec_fake_cr((unsigned)slot);
+      size_t bad = 0, ysz = (size_t)w * h, usz = (size_t)(w / 2) * (h / 2);
       for (size_t i = 0; i < fsize; i++)
-         if (t->frame[i] != (i < ysz ? ly : lc))
+         if (t->frame[i] != (i < ysz ? ly : i < ysz + usz ? lu : lv))
             bad++;
       if (bad) {
          if (!t->mismatches++)
@@ -484,21 +599,10 @@ output_cb(void *ctx, int slot, unsigned decode_index, int poc)
          printf("frame %4u (pic %u, slot %d): %zu bytes not the fake decoder's pattern\n",
                 t->frames_out, decode_index, slot, bad);
       }
-      if (t->srv_mode == 2 && !t->srv[slot][0] && vp_make_plane_views(t->dev, t->tex, (UINT)slot, t->srv[slot]))
-         t->srv_failed = 1;
-      if (t->srv[slot][0] && t->srv[slot][1]) {
-         int r = vp_check_plane_views(t->dev, t->ctx, t->srv[slot], 0, t->tex_w, t->tex_h, t->crop_l,
-                                      t->crop_t, w, h, ly, lc);
-         t->srv_frames++;
-         if (r == 1)
-            t->srv_failed = 1;
-         else if (r)
-            t->srv_bad++;
-      }
       if (t->vp && !t->vp_done) {
          t->vp_done = 1;
          t->vp_rc = vp_check_decoded(t->dev, t->ctx, t->vdev, t->vctx, t->tex, (UINT)slot, t->tex_w,
-                                     t->tex_h, ly, lc);
+                                     t->tex_h, ly, lu, lv);
       }
    } else if (t->ref) {
       size_t off = (size_t)t->frames_out * fsize;
@@ -530,6 +634,9 @@ main(int argc, char **argv)
       else if (!strcmp(argv[i], "--vp")) t.vp = 1;
       else if (!strcmp(argv[i], "--srv")) t.srv_mode = 1;
       else if (!strcmp(argv[i], "--srv-late")) t.srv_mode = 2;
+      else if (!strcmp(argv[i], "--chromium-tex")) t.chromium_tex = 1;
+      else if (!strcmp(argv[i], "--nthandle")) t.nthandle = 1;
+      else if (!strcmp(argv[i], "--open")) t.open = 1;
       else if (!strcmp(argv[i], "--chromium")) chromium = 1;
       else if (!strcmp(argv[i], "--fl11")) g_fl11 = 1;
       else if (!strncmp(argv[i], "--type=", 7)) { /* as Chromium's child processes have; ignored */ }
@@ -543,6 +650,15 @@ main(int argc, char **argv)
       }
    }
 
+   g_device_arg = argv[1];
+   if (t.chromium_tex) {
+      /* What D3DDecoderConfigurator asks for with this UMD's decoder
+       * (ConfigDecoderSpecific bit 14 clear: one array) and no decode swap
+       * chain (--disable-direct-composition): SHARED. */
+      t.srv_mode = 1;
+      t.misc_asked = D3D11_RESOURCE_MISC_SHARED |
+                     (t.nthandle ? D3D11_RESOURCE_MISC_SHARED_NTHANDLE : 0);
+   }
    if (FAILED(create_device(argv[1], &t)))
       return 1;
    rc = probe(&t);
@@ -630,18 +746,25 @@ main(int argc, char **argv)
       printf("decoded picture through the video processor: not run (needs --fake)\n");
    int srv_rc = 0;
    if (t.srv_mode) {
-      if (!t.fake)
-         printf("decoded pictures through the plane views: not run (needs --fake)\n");
-      else
-         printf("decoded pictures through the plane views (%s): %s, %u frames, %u differ\n",
-                t.srv_mode == 1 ? "made before decoding" : "made after decoding",
-                (t.srv_failed || !t.srv_frames) ? "FAILED" : t.srv_bad ? "MISMATCH" : "MATCH", t.srv_frames,
-                t.srv_bad);
-      srv_rc = t.fake && (t.srv_failed || !t.srv_frames || t.srv_bad);
+      printf("decoded pictures through the plane views (%s%s): %s, %u frames, %u differ\n",
+             t.srv_mode == 1 ? "made before decoding" : "made after decoding",
+             t.chromium_tex ? (t.misc_got ? ", Chromium's shared texture" : ", Chromium's texture unshared") : "",
+             (t.srv_failed || !t.srv_frames) ? "FAILED" : t.srv_bad ? "MISMATCH" : "MATCH", t.srv_frames,
+             t.srv_bad);
+      srv_rc = t.srv_failed || !t.srv_frames || t.srv_bad;
       for (UINT j = 0; j < H264_MAX_SLOTS; j++)
          for (int i = 0; i < 2; i++)
             if (t.srv[j][i])
                t.srv[j][i]->Release();
+   }
+   if (t.open && t.misc_got) {
+      printf("decoded pictures through the plane views of the texture opened in a second device: %s, "
+             "%u frames, %u differ\n",
+             (t.srv2_failed || !t.srv2_frames) ? "FAILED" : t.srv2_bad ? "MISMATCH" : "MATCH", t.srv2_frames,
+             t.srv2_bad);
+      srv_rc |= t.srv2_failed || !t.srv2_frames || t.srv2_bad;
+   } else if (t.open) {
+      printf("decoded pictures through a second device: not run (the texture is not shared)\n");
    }
    /* The decoder goes, so the UMD logs its last line (Video.cpp). */
    for (UINT i = 0; i < H264_MAX_SLOTS; i++)

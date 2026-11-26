@@ -921,8 +921,13 @@ static int finish(vdec *d, const V383_RegFile *rf, unsigned idx, unsigned status
     if (g_fake) {
         uint8_t *s = d->in_tgt ? d->cur_imp->fake + d->tgt.offset : (uint8_t *)pic;
         size_t luma = (size_t)d->hor * d->ver;
+        uint8_t *c = s + luma;
+        size_t i;
         memset(s, vdec_fake_luma(status_report), luma);
-        memset(s + luma, vdec_fake_chroma(idx), luma / 2);
+        for (i = 0; i + 1 < luma / 2; i += 2) {
+            c[i] = vdec_fake_chroma(idx);
+            c[i + 1] = vdec_fake_chroma_v(idx);
+        }
     } else {
         int rc = run(d, rf, err, errlen);
         /* A texture's pages were taken back (evicted) since it was
