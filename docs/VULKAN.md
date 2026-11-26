@@ -247,7 +247,7 @@ or to D3D12 games.
 
 ## 8. What was built on `vulkan-panvk`
 
-- `mesa-patches/vulkan/` (applied only by `vulkan.yml`, after the shared
+- `mesa-patches/vulkan/` (applied only by the Vulkan job in `mesa.yml`, after the shared
   series; see section 10 for why not in `mesa-patches/`):
   - building panvk for Windows: the exports from `vulkan_api.def`,
     `vk_drm_syncobj.c` and the libdrm sync provider compiled into it, the
@@ -265,7 +265,7 @@ or to D3D12 games.
   `drmSyncobjQuery2`, `drmSyncobjTimelineSignal`, a minimal `drmDevice`,
   `sched.h`; per-syncobj state behind `malikm_syncobj_state()`; the
   adapter's LUID (`malikm_adapter_luid()`). Default behaviour unchanged.
-- `.github/workflows/vulkan.yml`: the ARM64 build (the GL ICD's
+- `mesa.yml`, job "Vulkan ICD, panvk (ARM64)": the ARM64 build (the GL ICD's
   configuration plus `-Dvulkan-drivers=panfrost`), the manifest, and the
   test tool against the emulated driver.
 - `tools/windows/vkprobe.cpp`: loads the ICD directly, prints what
@@ -308,33 +308,50 @@ escape) answer as the emulated ones do, and the speed of the readback.
 
 ## 9. Board test plan
 
-On the TaishanPi 3M (HDMI, the DSI ribbon is broken), Windows 11 23H2, the
-driver package from this branch's CI:
+TaishanPi 3M on HDMI, Windows 11 23H2. Use the `wddm-mali-g52-driver-arm64`
+artifact of this branch's CI run (the `vulkan-panvk` PR lists it). It is the
+normal maliwddm package plus `malivk_arm64.dll`, `malivk.json` and
+`vkprobe.exe`.
 
-1. Install the package as usual. Check that
-   `HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-...}\000N\VulkanDriverName`
-   names a file that exists in the driver store.
-2. Set `PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1` system-wide (setx /M) and log
-   off and on. Without it panvk refuses the G52 on purpose.
-3. `vkprobe.exe` (no arguments): expect "Mali-G52 r1 MC3" (or as the model
-   table names it), apiVersion 1.0, two memory types, one queue family, and
-   "fill+copy: ok" with the buffer read back as written. This is the first
-   GPU work through panvk; a wrong value or a TDR here is a kernel-interface
+1. Install the package the usual way (INSTALL.txt in the artifact), then
+   reboot. Check the registry entry and the file it names:
+
+   ```
+   reg query "HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}" /s /v VulkanDriverName
+   dir C:\Windows\System32\DriverStore\FileRepository\maliwddm.inf_arm64_*\malivk*
+   ```
+
+2. Run `vkprobe.exe` from the artifact folder. With no argument it loads
+   `malivk_arm64.dll` from beside itself and sets
+   `PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1` for itself. Expect "Mali-G52",
+   apiVersion 1.0, two memory types and one queue family. The fill, copy
+   and 256x256 clear must read back as written. This is the first GPU
+   work through panvk. A wrong value or a TDR here is a kernel-interface
    problem, not a WSI one.
-4. `vkprobe.exe --clear`: a render pass clearing a 256x256 image, copied to
-   a buffer and checked on the CPU.
-5. `vkprobe.exe --window`: a window cycling through colours for ten seconds;
-   the frame rate is printed.
-6. If a Vulkan SDK is at hand: `vulkaninfo --summary` and `vkcube`
-   (ARM64 builds). They go through the real loader and so test the
-   registry entry.
-7. Collect: `C:\mali\` logs, `MALIKM_TRACE=1` output of a failing run,
-   Event Viewer for TDRs (event 4101).
-8. Regression: the desktop, an OpenGL program (FurMark) and a D3D11 one
-   must behave as before. The shim's default paths did not change, but this
-   checks it.
+3. `vkprobe.exe --window 10`: a window cycling colours for ten seconds,
+   then the frame rate.
+4. Through the real loader. Windows does not ship `vulkan-1.dll`, so
+   install the ARM64 Vulkan Runtime (or SDK) from LunarG first. Then set
+   the variable for every program and sign out and back in:
 
-Back-out: install a package from `main`; it has no `VulkanDriverName`.
+   ```
+   setx /M PAN_I_WANT_A_BROKEN_VULKAN_DRIVER 1
+   vkprobe.exe loader
+   vulkaninfo --summary
+   vkcube
+   ```
+
+   `vkprobe.exe loader` must find the same device as step 2. If it finds
+   none, the loader did not take `VulkanDriverName`. In that case, set
+   `VK_DRIVER_FILES` to the `malivk.json` path from step 1 and run it again
+   to tell the registry apart from the ICD.
+5. On failure, collect the vkprobe output, a run with `MALIKM_TRACE=1`,
+   `C:\mali\` logs and System events 4101 (TDR).
+6. Regression: the desktop, FurMark (OpenGL) and a D3D11 program behave as
+   on `main`.
+
+Back out: install a package from `main`, which has no `VulkanDriverName`,
+and `reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v PAN_I_WANT_A_BROKEN_VULKAN_DRIVER /f`.
 
 ## 10. Why this is not on `main`
 
@@ -349,5 +366,5 @@ numbers the OpenCL and video branches take in `mesa-patches/`, and the D3D
 and GL builds never see them.
 
 If the board run is good, merging is: the shim, `mesa-patches/vulkan/`,
-`vulkan.yml`, the tool, and the INF and package changes, with the ICD
+the Vulkan job, the tool, and the INF and package changes, with the ICD
 installed by default only after a second board passes.
