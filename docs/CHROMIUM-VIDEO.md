@@ -46,9 +46,9 @@ From Chromium `media/gpu/windows` (shared by Chrome and Edge):
 | | What | State |
 |---|---|---|
 | C0 | the facts above and the probe (`vdectest --chromium`, `chromeprobe.cpp`) | done |
-| C1 | feature level 11_0 for Chromium's GPU process only (`UmdReportFL11`, Mesa 0080, `fl11test`) | CI only |
-| C2 | decoding in the GPU process with vdpu383.sys `UserAccess` 0: every decoder call an escape to maliwddm, made in a vdpu383.sys session (below) | CI only (`c2-decode-via-kmd`); `UserAccess` 2 board-tested 2026-11-26 |
-| C3 | shared NV12: plane views aliasing the texture, zero copy for shared decoder textures (0085); the resource swizzle of texture reads (0086) | 0085 on the board: real time; colours (0086) CI only |
+| C1 | feature level 11_0 for Chromium's GPU process only (`UmdReportFL11`, Mesa 0080, `fl11test`) | board-tested 2026-11-26, on by default |
+| C2 | decoding in the GPU process with vdpu383.sys `UserAccess` 0: every decoder call an escape to maliwddm, made in a vdpu383.sys session (below) | board-tested 2026-11-26 with `UserAccess` 0, on `main` |
+| C3 | shared NV12: plane views aliasing the texture, zero copy for shared decoder textures (0085); the resource swizzle of texture reads (0086) | board-tested 2026-11-26: H.264, HEVC, VP9 and AV1 in Edge and Chrome in real time with correct colours |
 | C4 | H.264 in Edge on the board (`edge://media-internals` says D3D11VideoDecoder) | needs C1, C2, C3 |
 | C5 | VP9 profile 0 for YouTube | in the UMD (VIDEO-DECODE.md) |
 | C6 | HEVC Main, AV1 Main, P010 for 10 bit | HEVC and AV1 8 bit in the UMD; no P010 |

@@ -1,7 +1,8 @@
 # OpenCL on the Mali-G52: rusticl on Panfrost
 
-Written 2026-11-25, on branch `opencl-rusticl`. CI only, nothing here has
-run on a board yet. The question was whether Mesa's OpenCL frontend,
+Written 2026-11-25, on branch `opencl-rusticl`; on `main` since 2026-11-26.
+Board run on the TaishanPi 3M, 2026-11-26: vecadd over 16M floats at
+8.1 GB/s, tiled SGEMM 1024x1024 at 8.26 GFLOP/s, results correct. The question was whether Mesa's OpenCL frontend,
 rusticl, can give Windows 11 23H2 ARM64 programs OpenCL on the RK3576's
 Mali-G52, on the same Panfrost and kernel driver that already run Direct3D
 and OpenGL.

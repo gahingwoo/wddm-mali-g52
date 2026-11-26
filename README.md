@@ -11,7 +11,7 @@ desktop on the CPU.
 
 ## Status
 
-Tested on the LCKFB TaishanPi 3M under Windows 11 23H2; the early
+Tested on the LCKFB TaishanPi 3M (and since 2026-11-26 the Radxa ROCK 4D, 12 GB) under Windows 11 23H2; the early
 milestones ran on the ArmSoM CM5-IO. Switches and defaults:
 [docs/SETTINGS.md](docs/SETTINGS.md).
 
@@ -27,10 +27,11 @@ milestones ran on the ArmSoM CM5-IO. Switches and defaults:
 | Panel and HDMI as an extended desktop (`HdmiExtend`) | off by default | [DUAL-DISPLAY.md](docs/DUAL-DISPLAY.md) |
 | 702 MHz GPU clock on a 775 mV rail, thermal guard | board-tested | [PERF.md](docs/PERF.md) |
 | GPU temperature and counters in Task Manager | board-tested | [PERFDATA.md](docs/PERFDATA.md) |
-| Edge and Chrome on the GPU | blocked (software fallback) | [EDGE-PRESENT.md](docs/EDGE-PRESENT.md) |
-| Video decode, H.264, HEVC, VP9 (`UmdVideo`) | off by default | [VIDEO-DECODE.md](docs/VIDEO-DECODE.md) |
-| Video decode, AV1; zero copy | CI only | [VIDEO-DECODE.md](docs/VIDEO-DECODE.md) |
-| Feature level 11_0 for Chromium's video decoder (`UmdReportFL11`) | off by default | [CHROMIUM-VIDEO.md](docs/CHROMIUM-VIDEO.md) |
+| Edge and Chrome page rendering on the GPU | blocked (software fallback) | [EDGE-PRESENT.md](docs/EDGE-PRESENT.md) |
+| Video decode, H.264, HEVC, VP9, AV1, zero copy (`UmdVideo`), in Edge, Chrome and mpv | board-tested, on by default | [VIDEO-DECODE.md](docs/VIDEO-DECODE.md), [CHROMIUM-VIDEO.md](docs/CHROMIUM-VIDEO.md) |
+| Feature level 11_0 for Chromium's video decoder (`UmdReportFL11`) | board-tested, on by default | [CHROMIUM-VIDEO.md](docs/CHROMIUM-VIDEO.md) |
+| OpenCL (rusticl) | board-tested | [OPENCL.md](docs/OPENCL.md) |
+| Vulkan 1.0 (panvk, not conformant, opt-in) | board-tested, windows at about 6 frames a second | [VULKAN.md](docs/VULKAN.md) |
 
 Known limits: one board, and a heavy program makes the whole desktop wait.
 All docs: [docs/](docs/README.md).

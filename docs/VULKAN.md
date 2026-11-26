@@ -1,10 +1,10 @@
 # Vulkan on the Mali-G52 under Windows: panvk on maliwddm
 
-Study and plan, 2026-11-25, with the first implementation on branch
-`vulkan-panvk`. Nothing here has run on a board yet. Sources are Mesa
-26.2.0 (the tag the rest of the UMD is built from), read in
-`src/panfrost/vulkan`, `src/vulkan/runtime` and `src/vulkan/wsi`, the
-Vulkan-Loader's `docs/LoaderDriverInterface.md`, and this repository.
+Study and plan, 2026-11-25; merged to `main` 2026-11-26 after a board run
+(section 10). Sources are Mesa 26.2.0 (the tag the rest of the UMD is built
+from), read in `src/panfrost/vulkan`, `src/vulkan/runtime` and
+`src/vulkan/wsi`, the Vulkan-Loader's `docs/LoaderDriverInterface.md`, and
+this repository.
 
 ## 1. The verdict
 
@@ -353,18 +353,19 @@ normal maliwddm package plus `malivk_arm64.dll`, `malivk.json` and
 Back out: install a package from `main`, which has no `VulkanDriverName`,
 and `reg delete "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v PAN_I_WANT_A_BROKEN_VULKAN_DRIVER /f`.
 
-## 10. Why this is not on `main`
+## 10. Board results, 2026-11-26
 
-It needs a board run (section 9) before anyone relies on it, and two parts
-of it are shared: the shim (one source file, linked into the D3D UMD, the
-GL ICD and now the Vulkan ICD) and the INF. The shim's new behaviour is off
-unless the Vulkan driver asks for it, and the new libdrm functions are only
-called by panvk, so the D3D and GL paths should be bit-for-bit what they
-were; CI's existing jobs are the check. The Mesa patches live in their own
-directory, applied only by the Vulkan job, so they cannot collide with the
-numbers the OpenCL and video branches take in `mesa-patches/`, and the D3D
-and GL builds never see them.
+Windows 11 23H2, package from CI run 45785802923 (maliwddm 8.45.21.568).
 
-If the board run is good, merging is: the shim, `mesa-patches/vulkan/`,
-the Vulkan job, the tool, and the INF and package changes, with the ICD
-installed by default only after a second board passes.
+| Check | TaishanPi 3M | ROCK 4D (12 GB) |
+|---|---|---|
+| `vkprobe.exe`: device, sync, fill+copy, 256x256 clear | all correct | not run |
+| `vkprobe.exe --window 10` | 63 frames in 10.09 s (6.2/s) | not run |
+| LunarG SDK 1.4.363.1 loader, `vulkaninfo --summary` | not run (no disk space) | GPU0 panvk, apiVersion 1.0.354 |
+| `vkcube --c 300` | not run | 300 frames in 50.1 s (about 6/s), exit 0 |
+| TDR (event 4101), dwm crashes, D3D (`d3dprobe`) | none, D3D unaffected | none |
+
+The loader finds the ICD through `VulkanDriverName` with no
+`VK_DRIVER_FILES`. Programs still need `PAN_I_WANT_A_BROKEN_VULKAN_DRIVER=1`
+(`setx /M`, then sign out and in). The frame rate is the WSI's CPU path
+(section 4), not the GPU.

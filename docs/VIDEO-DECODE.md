@@ -1,7 +1,8 @@
 # Hardware video decode (D3D11 video in the UMD, VDPU383)
 
-Off by default: with `UmdVideo` absent or 0 every process gets the plain
-D3D10.x driver. Settings: see [SETTINGS.md](SETTINGS.md). Chrome and
+On by default since 2026-11-26 (`UmdVideo` 2, with the firmware's video
+decoder option on); `UmdVideo` 0 gives every process the plain D3D10.x
+driver. Settings: see [SETTINGS.md](SETTINGS.md). Chrome and
 Edge have extra requirements: [CHROMIUM-VIDEO.md](CHROMIUM-VIDEO.md).
 
 ## 1. How it works
