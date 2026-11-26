@@ -162,6 +162,9 @@ void MwScanStart(MW_ADAPTER *A)
     PHYSICAL_ADDRESS lo = {0}, hi, vop;
     ULONG64 fb = (ULONG64)A->Fb.PhysicAddress.QuadPart;
     ULONG64 res = A->Hdmi.ResVa != NULL ? (ULONG64)A->Hdmi.ResPa.QuadPart : 0;
+    /* UsbcDp: DP's own framebuffer, entered the same way (hpd.c MwHpdReserve). */
+    ULONG64 dpr = A->Hdmi.Dp.ResVa != NULL ? (ULONG64)A->Hdmi.Dp.ResPa.QuadPart : 0;
+    SIZE_T dprBytes = A->Hdmi.Dp.ResBytes;
     SIZE_T n;
 
     A->ScanReady = FALSE;
@@ -169,11 +172,14 @@ void MwScanStart(MW_ADAPTER *A)
     A->Win0Cfg = 0x00018001;
     /* HdmiExtend: room for both sources' primaries (DWM keeps three or so
      * per source). Without it the six there always were. */
-    A->ScanSlotCount = A->Hdmi.ExtendSetting && A->Hdmi.Level >= 3 ? MW_SCAN_SLOTS_MAX : MW_SCAN_SLOTS;
+    A->ScanSlotCount = (A->Hdmi.ExtendSetting || A->Hdmi.Dp.Setting) && A->Hdmi.Level >= 3 ? MW_SCAN_SLOTS_MAX
+                                                                                             : MW_SCAN_SLOTS;
     if (A->FbVa == NULL || A->FbSize == 0 || fb < 0x40000000ull || fb + A->FbSize > 0x100000000ull)
         return;
     if (res != 0 && (res < 0x40000000ull || res + A->Hdmi.ResBytes > 0x100000000ull))
         res = 0;
+    if (dpr != 0 && (dpr < 0x40000000ull || dpr + dprBytes > 0x100000000ull))
+        dpr = 0;
     A->ScanSlotBytes = (ULONG)((A->FbSize + SCAN_PT_SPAN - 1) & ~((SIZE_T)SCAN_PT_SPAN - 1));
     /* HdmiHpd level 3 (hpd.c): the driver's own framebuffer is entered at its
      * address like the firmware's, and a slot must hold a primary of its
@@ -183,12 +189,19 @@ void MwScanStart(MW_ADAPTER *A)
         if (r > A->ScanSlotBytes)
             A->ScanSlotBytes = r;
     }
+    if (dpr != 0) {
+        ULONG r = (ULONG)((dprBytes + SCAN_PT_SPAN - 1) & ~((SIZE_T)SCAN_PT_SPAN - 1));
+        if (r > A->ScanSlotBytes)
+            A->ScanSlotBytes = r;
+    }
     if (A->ScanSlotBytes > SCAN_SLOT_MAX)
         return;
     A->ScanTablesTotal = 1 + (ULONG)(((fb + A->FbSize - 1) >> 22) - (fb >> 22) + 1) +
                          A->ScanSlotCount * (A->ScanSlotBytes / SCAN_PT_SPAN);
     if (res != 0)
         A->ScanTablesTotal += (ULONG)(((res + A->Hdmi.ResBytes - 1) >> 22) - (res >> 22) + 1);
+    if (dpr != 0)
+        A->ScanTablesTotal += (ULONG)(((dpr + dprBytes - 1) >> 22) - (dpr >> 22) + 1);
     hi.QuadPart = 0xFFFFFFFFll;
     n = (SIZE_T)SCAN_TABLES * PAGE_SIZE;
     A->ScanTables = MmAllocateContiguousMemorySpecifyCache(n, lo, hi, lo, MmNonCached);
@@ -201,6 +214,9 @@ void MwScanStart(MW_ADAPTER *A)
         if (!Enter(A, (ULONG)p, p))
             goto fail;
     for (ULONG64 p = res; res != 0 && p < res + A->Hdmi.ResBytes; p += PAGE_SIZE)
+        if (!Enter(A, (ULONG)p, p))
+            goto fail;
+    for (ULONG64 p = dpr; dpr != 0 && p < dpr + dprBytes; p += PAGE_SIZE)
         if (!Enter(A, (ULONG)p, p))
             goto fail;
     vop.QuadPart = VOP_PA;
