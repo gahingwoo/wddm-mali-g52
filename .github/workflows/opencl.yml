@@ -283,7 +283,9 @@ jobs:
           # libclc: a .pc for the SPIR-V from the Linux job.
           $pc = "prefix=C:/libclc`nlibexecdir=C:/libclc`n`nName: libclc`nDescription: libclc SPIR-V (Ubuntu libclc-20)`nVersion: 20.1.2`n"
           New-Item -ItemType Directory -Force C:\libclc\pkgconfig | Out-Null
-          Set-Content -Encoding ascii -NoNewline C:\libclc\pkgconfig\libclc.pc $pc
+          # WriteAllText, not Set-Content: on this runner Set-Content had no
+          # -Encoding parameter in this step (run 45567555144).
+          [IO.File]::WriteAllText('C:\libclc\pkgconfig\libclc.pc', $pc)
           "PKG_CONFIG_PATH=$p\lib\pkgconfig;$p\share\pkgconfig;C:\libclc\pkgconfig" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "PKG_CONFIG=$p\bin\pkgconf.exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "LIB=$p\lib;$env:LIB" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
@@ -316,10 +318,10 @@ jobs:
           # (b_vscrt=mt), which the LLVM release's libraries use, and Rust's
           # standard library linked the same way (+crt-static).
           $cc = (Join-Path $env:VCINSTALLDIR 'Tools\Llvm\ARM64\bin\clang-cl.exe') -replace '\\', '/'
-          Set-Content -Encoding ascii native.ini ("[binaries]`nc = '$cc'`ncpp = '$cc'`n" +
+          [IO.File]::WriteAllText("$pwd\native.ini", ("[binaries]`nc = '$cc'`ncpp = '$cc'`n" +
             "llvm-config = 'C:/llvm/bin/llvm-config.exe'`nbindgen = 'C:/cldeps/bin/bindgen.exe'`n" +
             "pkg-config = 'C:/cldeps/bin/pkgconf.exe'`n" +
-            "[built-in options]`npkg_config_path = ['C:/cldeps/lib/pkgconfig', 'C:/cldeps/share/pkgconfig', 'C:/libclc/pkgconfig']`n")
+            "[built-in options]`npkg_config_path = ['C:/cldeps/lib/pkgconfig', 'C:/cldeps/share/pkgconfig', 'C:/libclc/pkgconfig']`n"))
           Get-Content native.ini
           meson setup build mesa --backend=ninja --native-file native.ini `
             -Dbuildtype=debugoptimized -Db_vscrt=mt '-Drust_args=-Ctarget-feature=+crt-static' `
