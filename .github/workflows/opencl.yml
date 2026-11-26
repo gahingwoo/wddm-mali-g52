@@ -25,6 +25,7 @@ on:
       - 'video/**'
       - 'tools/windows/cltest/**'
       - 'ci/meson-rust-dedup.py'
+      - 'ci/bindgen-unsigned-enums.py'
   workflow_dispatch:
 
 permissions:
@@ -373,8 +374,11 @@ jobs:
           # (b_vscrt=mt), which the LLVM release's libraries use, and Rust's
           # standard library linked the same way (+crt-static).
           $cc = (Join-Path $env:VCINSTALLDIR 'Tools\Llvm\ARM64\bin\clang-cl.exe') -replace '\\', '/'
+          # bindgen through ci\bindgen-unsigned-enums.py: C enums typed as
+          # rusticl expects (unsigned when no value is negative).
+          $wrap = "$pwd/ci/bindgen-unsigned-enums.py" -replace '\\', '/'
           [IO.File]::WriteAllText("$pwd\native.ini", ("[binaries]`nc = '$cc'`ncpp = '$cc'`n" +
-            "llvm-config = 'C:/llvm/bin/llvm-config.exe'`nbindgen = 'C:/cldeps/bin/bindgen.exe'`n" +
+            "llvm-config = 'C:/llvm/bin/llvm-config.exe'`nbindgen = ['python', '$wrap']`n" +
             "pkg-config = 'C:/cldeps/bin/pkgconf.exe'`n" +
             "[built-in options]`npkg_config_path = ['C:/cldeps/lib/pkgconfig', 'C:/cldeps/share/pkgconfig', 'C:/libclc/lib/pkgconfig']`n" +
             "cmake_prefix_path = ['C:/llvm', 'C:/cldeps']`n"))
@@ -557,6 +561,7 @@ jobs:
             clinfo-softpipe.txt
             build.log
             build/meson-logs/meson-log.txt
+            build/src/gallium/frontends/rusticl/*.rs
 
       - uses: actions/upload-artifact@v4
         with:
