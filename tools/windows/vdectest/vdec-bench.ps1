@@ -19,15 +19,17 @@
 #
 # Prints fps (frames / wall time), user and kernel CPU seconds and user CPU
 # as a share of wall time, the best of -Runs runs; then the MD5 verdicts,
-# vdpu383.sys's decode counter and import counters (if vdpu383test.exe is
-# next to this script or on PATH; it reads them only, administrator not
-# needed with UserAccess 1), the UMD's zero-copy summary from C:\mali\log
-# when the log is on, and the settings in force. Writes everything into
-# -Out as well (bench.txt, and each FFmpeg run's stderr).
+# vdpu383.sys's decode counter and import counters, and, through maliwddm,
+# how many decodes went through its sessions (vdectest.exe kmd, any user;
+# else vdpu383test.exe info, which needs an administrator or UserAccess),
+# the UMD's zero-copy summary from C:\mali\log when the log is on, and the
+# settings in force. Writes everything into -Out as well (bench.txt, and
+# each FFmpeg run's stderr).
 #
-# Run as the user the player runs as (not elevated), with UmdVideo 2 and
-# vdpu383.sys UserAccess 1. UmdVideoZeroCopy (GPU0 Device Parameters, default
-# 1) 0 gives the copy path of V3a for comparison.
+# Run as the user the player runs as (not elevated), with UmdVideo 2. The
+# decoder goes through maliwddm (UmdVideoKmd, default 1), so vdpu383.sys
+# needs no UserAccess. UmdVideoZeroCopy (GPU0 Device Parameters, default 1)
+# 0 gives the copy path of V3a for comparison.
 #
 # Copyright (c) 2026 Ga Hing Woo <gahing@gahingwoo.com>
 # SPDX-License-Identifier: GPL-2.0-only
@@ -37,7 +39,8 @@ param(
     [string]$Ffmpeg = "ffmpeg.exe",
     [string]$Out = ".\vdec-bench",
     [int]$Runs = 3,
-    [string]$Only = ""
+    [string]$Only = "",
+    [string]$Vdectest = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -122,10 +125,22 @@ if (-not (Test-Path $v383)) {
     $c = Get-Command vdpu383test.exe -ErrorAction SilentlyContinue
     $v383 = if ($c) { $c.Source } else { $null }
 }
+# vdectest.exe kmd: the same counters through maliwddm, for any user.
+if (-not $Vdectest) { $Vdectest = Join-Path $PSScriptRoot "vdectest.exe" }
+if (-not (Test-Path $Vdectest)) { $Vdectest = $null }
 function Decoder-Counters {
-    if (-not $v383) { return $null }
-    try { $t = (& $v383 info 2>&1 | Out-String) } catch { return $null }
+    $t = $null
+    if ($Vdectest) {
+        try { $t = (& $Vdectest kmd 2>&1 | Out-String) } catch { $t = $null }
+        if ($t -notmatch 'runs \d+, timeouts') { $t = $null }
+    }
+    if (-not $t -and $v383) {
+        try { $t = (& $v383 info 2>&1 | Out-String) } catch { $t = $null }
+    }
+    if (-not $t) { return $null }
     $h = @{}
+    $m = [regex]::Match($t, 'sessions:?\s+(\d+) open, (\d+) made, (\d+) decodes through them')
+    if ($m.Success) { $h.SessionRuns = [int]$m.Groups[3].Value; $h.SessionsMade = [int]$m.Groups[2].Value }
     $m = [regex]::Match($t, 'runs (\d+), timeouts (\d+)')
     if ($m.Success) { $h.Runs = [int]$m.Groups[1].Value; $h.Timeouts = [int]$m.Groups[2].Value }
     $m = [regex]::Match($t, 'imports\s+(\d+) made or refreshed, (\d+) taken back by the display driver, (\d+) failed')
@@ -189,6 +204,10 @@ Say "correctness (-hwaccel d3d11va -hwaccel_output_format nv12 -f md5, against s
 foreach ($v in $verdicts) { Say $v }
 if ($before -and $after -and $null -ne $before.Runs) {
     Say ("vdpu383.sys: {0} decodes during the runs, {1} timeouts" -f ($after.Runs - $before.Runs), ($after.Timeouts - $before.Timeouts))
+    if ($null -ne $after.SessionRuns) {
+        Say ("through maliwddm (sessions): {0} decodes, {1} sessions made" -f
+             ($after.SessionRuns - $before.SessionRuns), ($after.SessionsMade - $before.SessionsMade))
+    }
     if ($null -ne $after.Imports) {
         Say ("vdpu383.sys imports: {0} made or refreshed, {1} taken back, {2} failed" -f
              ($after.Imports - $before.Imports), ($after.Revokes - $before.Revokes), ($after.ImportFailures - $before.ImportFailures))

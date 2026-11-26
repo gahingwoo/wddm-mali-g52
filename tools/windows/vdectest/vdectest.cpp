@@ -64,6 +64,8 @@
  */
 
 #include <windows.h>
+#include <winternl.h>
+#include <d3dkmthk.h>
 #include <d3d11_1.h>
 #include <dxgi1_2.h>
 #include <stdio.h>
@@ -80,6 +82,7 @@ extern "C" {
 #include "codecs.h"
 
 #include "../../../video/vdpu383/vdpu383_ioctl.h"
+#include "../../../video/vdec_kmd.h"
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -163,7 +166,111 @@ read_file(const char *path, size_t *len)
    return d;
 }
 
-/* vdpu383.sys's run counter, if this process may open it (UserAccess). */
+/*
+ * maliwddm's decoder path (video/vdec_kmd.h, docs/CHROMIUM-VIDEO.md C2), as
+ * any user may reach it: the adapter that answers VDEC_KMD_PROBE, its
+ * counters, and vdpu383.sys's GET_INFO through a session of a device of
+ * this process's own (made once).
+ */
+typedef LONG (APIENTRY *kmt_fn)(void *);
+static struct {
+   kmt_fn enum2, create_device, escape;
+   D3DKMT_HANDLE adapter, device;
+   int tried;
+} g_kmt;
+
+static NTSTATUS
+kmt_call(int with_device, VDEC_KMD_CALL *c)
+{
+   D3DKMT_ESCAPE e;
+
+   memset(&e, 0, sizeof e);
+   e.hAdapter = g_kmt.adapter;
+   e.hDevice = with_device ? g_kmt.device : 0;
+   e.Type = D3DKMT_ESCAPE_DRIVERPRIVATE;
+   e.pPrivateDriverData = c;
+   e.PrivateDriverDataSize = sizeof *c;
+   return (NTSTATUS)g_kmt.escape(&e);
+}
+
+static void
+kmt_request(VDEC_KMD_CALL *c, unsigned ioctl, unsigned out_size)
+{
+   memset(c, 0, sizeof *c);
+   c->Code = MW_ESCAPE_VDEC_CALL;
+   c->Version = VDEC_KMD_VERSION;
+   c->Ioctl = ioctl;
+   c->OutSize = out_size;
+}
+
+/* 0 when maliwddm answered; *k its counters. */
+static int
+kmd_counters(VDEC_KMD_COUNTERS *k)
+{
+   static VDEC_KMD_CALL c;
+
+   memset(k, 0, sizeof *k);
+   if (!g_kmt.tried) {
+      HMODULE g = LoadLibraryA("gdi32.dll");
+      D3DKMT_ADAPTERINFO info[16];
+      D3DKMT_ENUMADAPTERS2 en;
+
+      g_kmt.tried = 1;
+      if (!g)
+         return -1;
+      g_kmt.enum2 = (kmt_fn)(void *)GetProcAddress(g, "D3DKMTEnumAdapters2");
+      g_kmt.create_device = (kmt_fn)(void *)GetProcAddress(g, "D3DKMTCreateDevice");
+      g_kmt.escape = (kmt_fn)(void *)GetProcAddress(g, "D3DKMTEscape");
+      if (!g_kmt.enum2 || !g_kmt.create_device || !g_kmt.escape)
+         return -1;
+      memset(&en, 0, sizeof en);
+      en.NumAdapters = 16;
+      en.pAdapters = info;
+      if (g_kmt.enum2(&en) < 0)
+         return -1;
+      for (ULONG i = 0; i < en.NumAdapters && !g_kmt.adapter; i++) {
+         g_kmt.adapter = info[i].hAdapter;
+         kmt_request(&c, VDEC_KMD_PROBE, sizeof *k);
+         if (kmt_call(0, &c) < 0 || c.Magic != VDEC_KMD_MAGIC)
+            g_kmt.adapter = 0;
+      }
+   }
+   if (!g_kmt.adapter)
+      return -1;
+   kmt_request(&c, VDEC_KMD_PROBE, sizeof *k);
+   if (kmt_call(0, &c) < 0 || c.Magic != VDEC_KMD_MAGIC)
+      return -1;
+   memcpy(k, c.Data, sizeof *k);
+   return 0;
+}
+
+/* vdpu383.sys's GET_INFO through maliwddm; 0 on success. */
+static int
+kmd_info(VDPU383_INFO *info)
+{
+   static VDEC_KMD_CALL c;
+   VDEC_KMD_COUNTERS k;
+
+   memset(info, 0, sizeof *info);
+   if (kmd_counters(&k) || !k.On)
+      return -1;
+   if (!g_kmt.device) {
+      D3DKMT_CREATEDEVICE cd;
+      memset(&cd, 0, sizeof cd);
+      cd.hAdapter = g_kmt.adapter;
+      if (g_kmt.create_device(&cd) < 0)
+         return -1;
+      g_kmt.device = cd.hDevice;
+   }
+   kmt_request(&c, IOCTL_VDPU383_GET_INFO, sizeof *info);
+   if (kmt_call(1, &c) < 0 || c.Magic != VDEC_KMD_MAGIC || c.Status < 0)
+      return -1;
+   memcpy(info, c.Data, c.Returned < sizeof *info ? c.Returned : sizeof *info);
+   return 0;
+}
+
+/* vdpu383.sys's run counter: through \\.\VDPU383 if this process may
+ * open it (an administrator, or UserAccess), else through maliwddm. */
 static int
 driver_runs(unsigned *runs)
 {
@@ -172,14 +279,53 @@ driver_runs(unsigned *runs)
    DWORD got = 0;
    BOOL ok;
 
-   if (h == INVALID_HANDLE_VALUE)
-      return -1;
+   if (h == INVALID_HANDLE_VALUE) {
+      if (kmd_info(&info))
+         return -1;
+      *runs = info.runs;
+      return 0;
+   }
    memset(&info, 0, sizeof info);
    ok = DeviceIoControl(h, IOCTL_VDPU383_GET_INFO, NULL, 0, &info, sizeof info, &got, NULL);
    CloseHandle(h);
    if (!ok)
       return -1;
    *runs = info.runs;
+   return 0;
+}
+
+/* vdectest kmd: whether the decoder goes through maliwddm, and the counters
+ * that show it does (exit 0 when the path is on). */
+static int
+kmd_report(void)
+{
+   VDEC_KMD_COUNTERS k;
+   VDPU383_INFO info;
+
+   if (kmd_counters(&k)) {
+      printf("maliwddm decoder path: no adapter answers (maliwddm without C2, or not this adapter)\n");
+      return 2;
+   }
+   printf("maliwddm decoder path: %s; sessions %u open, %u made; %u calls, %u decodes; %u refused "
+          "(last 0x%08x, process %u)\n", k.On ? "on" : "off (UmdVideo or UmdVideoKmd 0)", k.Sessions,
+          k.SessionsMade, k.Calls, k.Runs, k.Refused, (unsigned)k.LastStatus, k.LastPid);
+   if (!k.On)
+      return 1;
+   if (kmd_info(&info)) {
+      printf("vdpu383.sys: no answer through maliwddm (decoder off in firmware, or vdpu383.sys missing)\n");
+      return 1;
+   }
+   printf("vdpu383.sys: interface %u, IOMMU %s, runs %u, timeouts %u\n", info.interface_version,
+          info.iommu ? "on" : "off", info.runs, info.timeouts);
+   printf("vdpu383.sys imports %u made or refreshed, %u taken back by the display driver, %u failed\n",
+          info.imports, info.revokes, info.import_failures);
+   if (info.interface_version >= 4)
+      printf("vdpu383.sys sessions: %u open, %u made, %u decodes through them, %u refused, "
+             "directory switched %u times, UserAccess %u\n", info.sessions, info.sessions_made,
+             info.session_runs, info.session_refused, info.domain_switches, info.user_access);
+   else
+      printf("vdpu383.sys: interface %u, no sessions (needs woa-rk3576 c2-decode-via-kmd)\n",
+             info.interface_version);
    return 0;
 }
 
@@ -627,8 +773,11 @@ main(int argc, char **argv)
    int probe_only = 0, have_runs, rc, chromium = 0, mf = 0;
 
    memset(&t, 0, sizeof t);
+   if (argc >= 2 && !strcmp(argv[1], "kmd"))
+      return kmd_report();
    if (argc < 3) {
-      fprintf(stderr, "usage: vdectest <umd.dll|hw> <stream.264|--probe> [--ref f.yuv] [--fake] [-n N] [-o f.yuv]\n");
+      fprintf(stderr, "usage: vdectest <umd.dll|hw> <stream.264|--probe> [--ref f.yuv] [--fake] [-n N] [-o f.yuv]\n"
+                      "       vdectest kmd   (the decoder path through maliwddm and its counters)\n");
       return 1;
    }
    for (int i = 2; i < argc; i++) {
