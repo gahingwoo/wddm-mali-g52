@@ -24,6 +24,7 @@ on:
       - 'include/**'
       - 'video/**'
       - 'tools/windows/cltest/**'
+      - 'ci/meson-rust-dedup.py'
   workflow_dispatch:
 
 permissions:
@@ -101,7 +102,10 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install meson ninja mako pyyaml packaging
+          # meson pinned: ci\meson-rust-dedup.py edits this version's backend.
+          python -m pip install meson==1.12.1 ninja mako pyyaml packaging
+          python ci\meson-rust-dedup.py
+          if ($LASTEXITCODE) { throw 'meson patch failed' }
           $u = 'https://github.com/lexxmark/winflexbison/releases/download/v2.5.25/win_flex_bison-2.5.25.zip'
           Invoke-WebRequest $u -OutFile wfb.zip
           Expand-Archive wfb.zip -DestinationPath C:\winflexbison
@@ -313,6 +317,30 @@ jobs:
           & "$p\bin\bindgen.exe" --version
           Get-ChildItem "$p\lib" -Filter *.lib | Format-Table Name, Length
 
+      - name: libxml2, which the LLVM release names as a system library
+        shell: pwsh
+        run: |
+          # llvm-config --system-libs lists xml2s.lib (the release was built
+          # with libxml2 for llvm-mt), and every program linked with LLVM's
+          # static libraries asks for it (run 45762628292, mesa_clc.exe).
+          git clone -q --depth 1 --branch v2.13.8 https://github.com/GNOME/libxml2.git xml2
+          if ($LASTEXITCODE) { throw 'libxml2 clone failed' }
+          cmake -S xml2 -B xml2-b -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DCMAKE_POLICY_DEFAULT_CMP0091=NEW `
+            -DBUILD_SHARED_LIBS=OFF -DLIBXML2_WITH_ICONV=OFF -DLIBXML2_WITH_LZMA=OFF -DLIBXML2_WITH_ZLIB=OFF `
+            -DLIBXML2_WITH_PYTHON=OFF -DLIBXML2_WITH_PROGRAMS=OFF -DLIBXML2_WITH_TESTS=OFF `
+            -DLIBXML2_WITH_HTTP=OFF -DLIBXML2_WITH_FTP=OFF
+          if ($LASTEXITCODE) { throw 'libxml2 cmake failed' }
+          ninja -C xml2-b
+          if ($LASTEXITCODE) { throw 'libxml2 build failed' }
+          New-Item -ItemType Directory -Force C:\xml2 | Out-Null
+          $l = Get-ChildItem xml2-b -Filter '*.lib' | Select-Object -First 1
+          if (-not $l) { throw 'no libxml2 .lib' }
+          Copy-Item $l.FullName C:\xml2\xml2s.lib
+          Copy-Item $l.FullName C:\xml2\libxml2s.lib
+          "LIB=C:\xml2;$env:LIB" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "$($l.Name) as C:\xml2\xml2s.lib"
+
       - name: Mesa source
         shell: pwsh
         run: |
@@ -355,6 +383,10 @@ jobs:
           # whose major does not match the translator's (run 45759617805).
           $env:CMAKE_PREFIX_PATH = 'C:/llvm;C:/cldeps'
           $env:LLVM_DIR = 'C:/llvm/lib/cmake/llvm'
+          # bindgen parses rusticl's C++ headers with the release's libclang
+          # (20); this runner's MSVC STL wants clang 22 unless told
+          # otherwise (run 45762628292, rusticl_llvm_bindings.rs).
+          "BINDGEN_EXTRA_CLANG_ARGS=-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           Get-Content native.ini
           meson setup build mesa --backend=ninja --native-file native.ini `
             -Dbuildtype=debugoptimized -Db_vscrt=mt '-Drust_args=-Ctarget-feature=+crt-static' `
@@ -371,7 +403,7 @@ jobs:
             -Degl=disabled -Dglx=disabled -Dgbm=disabled `
             '-Dvideo-codecs=' -Dmicrosoft-clc=disabled -Dspirv-to-dxil=false `
             -Dzstd=disabled -Dshader-cache=disabled -Dbuild-tests=false `
-            "-Dc_args=-DHAVE_FUNC_ATTRIBUTE_PACKED -D_wassert=mali_wassert" "-Dcpp_args=-DHAVE_FUNC_ATTRIBUTE_PACKED -D_wassert=mali_wassert"
+            "-Dc_args=-DHAVE_FUNC_ATTRIBUTE_PACKED -D_wassert=mali_wassert -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH" "-Dcpp_args=-DHAVE_FUNC_ATTRIBUTE_PACKED -D_wassert=mali_wassert -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH"
           if ($LASTEXITCODE) { if (Test-Path build\meson-logs\meson-log.txt) { Get-Content build\meson-logs\meson-log.txt -Tail 150 }; throw 'meson setup failed' }
           $v = Select-String -Path build\meson-logs\meson-log.txt -Pattern 'Run-time dependency LLVM .* found: YES (\S+)' | Select-Object -Last 1
           Write-Host "LLVM: $($v.Line)"
