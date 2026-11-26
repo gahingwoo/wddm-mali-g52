@@ -1,0 +1,188 @@
+diff --git a/src/gallium/auxiliary/pipe-loader/meson.build b/src/gallium/auxiliary/pipe-loader/meson.build
+index a4a13c0..f3736fa 100644
+--- a/src/gallium/auxiliary/pipe-loader/meson.build
++++ b/src/gallium/auxiliary/pipe-loader/meson.build
+@@ -12,6 +12,11 @@ files_pipe_loader = files(
+ libpipe_loader_defines = []
+ libpipe_loader_links = []
+ 
++# wddm-mali-g52: the Mali on Windows, where there is no libdrm.
++if host_machine.system() == 'windows' and with_gallium_panfrost
++  files_pipe_loader += files('pipe_loader_malikm.c')
++endif
++
+ if dep_libdrm.found()
+   files_pipe_loader += files('pipe_loader_drm.c')
+   libpipe_loader_links += libloader
+diff --git a/src/gallium/auxiliary/pipe-loader/pipe_loader.c b/src/gallium/auxiliary/pipe-loader/pipe_loader.c
+index d0664cc..aba50ed 100644
+--- a/src/gallium/auxiliary/pipe-loader/pipe_loader.c
++++ b/src/gallium/auxiliary/pipe-loader/pipe_loader.c
+@@ -42,6 +42,9 @@
+ #endif
+ 
+ static int (*backends[])(struct pipe_loader_device **, int) = {
++#if defined(_WIN32) && defined(GALLIUM_PANFROST)
++   &pipe_loader_malikm_probe,
++#endif
+ #ifdef HAVE_LIBDRM
+    &pipe_loader_drm_probe,
+ #endif
+diff --git a/src/gallium/auxiliary/pipe-loader/pipe_loader_malikm.c b/src/gallium/auxiliary/pipe-loader/pipe_loader_malikm.c
+new file mode 100644
+index 0000000..12f8e70
+--- /dev/null
++++ b/src/gallium/auxiliary/pipe-loader/pipe_loader_malikm.c
+@@ -0,0 +1,137 @@
++/*
++ * Copyright 2026 wddm-mali-g52 contributors
++ * SPDX-License-Identifier: MIT
++ */
++
++/*
++ * The Mali-G52 behind the maliwddm adapter as a pipe-loader device
++ * (wddm-mali-g52, Windows only). There is no libdrm and no /dev/dri on
++ * Windows, so pipe_loader_drm is not built; this backend stands in for it
++ * with one device, driver name "panfrost", whose screen is Panfrost on the
++ * libdrm shim in libpankmod (win32-compat/malikm_drm.c). The shim opens the
++ * adapter itself through the D3DKMT system calls, as it does for the OpenGL
++ * ICD (mesa-patches/0060), since an OpenCL process has no Direct3D runtime
++ * device either.
++ *
++ * Off switches: MALIKM_OPENCL=0 in the environment, or the DWORD
++ * HKLM\SOFTWARE\wddm-mali-g52\OpenCL = 0. Either one makes the probe find
++ * nothing, so an OpenCL program sees no Mali platform device at all.
++ */
++
++#if defined(_WIN32) && defined(GALLIUM_PANFROST)
++
++#include <windows.h>
++#include <io.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++#include "pipe_loader_priv.h"
++
++#include "panfrost/drm/panfrost_drm_public.h"
++#include "target-helpers/inline_debug_helper.h"
++#include "util/driconf.h"
++#include "util/macros.h"
++#include "util/u_memory.h"
++
++int malikm_open(void);
++
++static const driOptionDescription malikm_pan_driconf[] = {
++#include "panfrost/driinfo_panfrost.h"
++};
++
++static bool
++malikm_opencl_disabled(void)
++{
++   const char *env = getenv("MALIKM_OPENCL");
++   if (env && *env == '0')
++      return true;
++
++   DWORD v = 1, size = sizeof(v);
++   if (RegGetValueA(HKEY_LOCAL_MACHINE, "SOFTWARE\\wddm-mali-g52", "OpenCL",
++                    RRF_RT_REG_DWORD, NULL, &v, &size) == ERROR_SUCCESS && v == 0)
++      return true;
++   return false;
++}
++
++/* An fd for panfrost_drm_screen_create, or -1 when there is no Mali. The
++ * screen takes its own duplicate; the caller closes this one. */
++static int
++malikm_fd(void)
++{
++   int fd = malikm_open();
++
++   if (fd < 0) {
++      /* MALIKM_FAKE: the shim emulates the kernel driver in this process
++       * (CI, where there is no Mali). */
++      const char *fake = getenv("MALIKM_FAKE");
++      if (fake && *fake && *fake != '0')
++         fd = _open("NUL", _O_RDWR);
++   }
++   return fd;
++}
++
++static struct pipe_screen *
++pipe_loader_malikm_create_screen(struct pipe_loader_device *dev,
++                                 const struct pipe_screen_config *config,
++                                 bool sw_vk)
++{
++   (void)dev;
++   (void)sw_vk;
++
++   int fd = malikm_fd();
++   if (fd < 0)
++      return NULL;
++
++   struct pipe_screen *screen = panfrost_drm_screen_create(fd, config);
++   _close(fd);
++   return screen ? debug_screen_wrap(screen) : NULL;
++}
++
++static const struct driOptionDescription *
++pipe_loader_malikm_get_driconf(struct pipe_loader_device *dev, unsigned *count)
++{
++   (void)dev;
++   *count = ARRAY_SIZE(malikm_pan_driconf);
++   return malikm_pan_driconf;
++}
++
++static void
++pipe_loader_malikm_release(struct pipe_loader_device **dev)
++{
++   pipe_loader_base_release(dev);
++}
++
++static const struct pipe_loader_ops pipe_loader_malikm_ops = {
++   .create_screen = pipe_loader_malikm_create_screen,
++   .get_driconf = pipe_loader_malikm_get_driconf,
++   .release = pipe_loader_malikm_release,
++};
++
++int
++pipe_loader_malikm_probe(struct pipe_loader_device **devs, int ndev)
++{
++   if (malikm_opencl_disabled())
++      return 0;
++
++   /* The probe only checks that the adapter is there; the screen opens it
++    * again when it is created. */
++   int fd = malikm_fd();
++   if (fd < 0)
++      return 0;
++   _close(fd);
++
++   if (ndev < 1)
++      return 1;
++
++   struct pipe_loader_device *dev = CALLOC_STRUCT(pipe_loader_device);
++   if (!dev)
++      return 0;
++   dev->type = PIPE_LOADER_DEVICE_PLATFORM;
++   dev->driver_name = "panfrost";
++   dev->ops = &pipe_loader_malikm_ops;
++   devs[0] = dev;
++   return 1;
++}
++
++#endif
+diff --git a/src/gallium/auxiliary/pipe-loader/pipe_loader_priv.h b/src/gallium/auxiliary/pipe-loader/pipe_loader_priv.h
+index 0963ee5..fa6466a 100644
+--- a/src/gallium/auxiliary/pipe-loader/pipe_loader_priv.h
++++ b/src/gallium/auxiliary/pipe-loader/pipe_loader_priv.h
+@@ -66,4 +66,10 @@ struct pipe_loader_ops {
+ void
+ pipe_loader_base_release(struct pipe_loader_device **dev);
+ 
++#if defined(_WIN32) && defined(GALLIUM_PANFROST)
++/* The Mali behind the maliwddm adapter (pipe_loader_malikm.c). */
++int
++pipe_loader_malikm_probe(struct pipe_loader_device **devs, int ndev);
++#endif
++
+ #endif /* PIPE_LOADER_PRIV_H */

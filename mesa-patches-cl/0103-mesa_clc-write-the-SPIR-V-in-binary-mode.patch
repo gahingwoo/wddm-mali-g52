@@ -1,0 +1,19 @@
+mesa_clc: write the SPIR-V in binary mode
+
+On Windows "w" opens a file in text mode and every 0x0a byte of the SPIR-V
+becomes 0x0d 0x0a; vtn_bindgen2 then finds a size that is not a multiple
+of 4 and the libpan kernels do not build (opencl.yml, run 45763641107).
+
+diff --git a/src/compiler/clc/mesa_clc.c b/src/compiler/clc/mesa_clc.c
+index 155ea4d..8557e84 100644
+--- a/src/compiler/clc/mesa_clc.c
++++ b/src/compiler/clc/mesa_clc.c
+@@ -180,7 +180,7 @@ main(int argc, char **argv)
+       return 1;
+    }
+ 
+-   FILE *fp = fopen(outfile, "w");
++   FILE *fp = fopen(outfile, "wb");
+    fwrite(final_spirv.data, final_spirv.size, 1, fp);
+    fclose(fp);
+ 

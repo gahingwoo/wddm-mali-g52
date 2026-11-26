@@ -246,11 +246,68 @@ jobs:
             sleep 60
           done
 
+  cl:
+    # The OpenCL ICD for the package: opencl.yml's build of the same inputs,
+    # found as the umd job finds mesa.yml's. Optional: with no such build the
+    # package is made without OpenCL (the INF's [opencl] lines are taken
+    # out), so OpenCL never holds back the Direct3D and OpenGL drivers.
+    name: find the OpenCL build of this commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      run_id: ${{ steps.find.outputs.run_id }}
+      sha: ${{ steps.find.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Find
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ART: malicl-arm64
+        run: |
+          inputs=(.github/workflows/opencl.yml .github/opencl mesa-patches mesa-patches-cl win32-compat include video tools/windows/cltest)
+          deadline=$(( $(date +%s) + 50 * 60 ))
+          while :; do
+            : > runs.tsv
+            for page in 1 2; do
+              gh api "repos/$GITHUB_REPOSITORY/actions/workflows/opencl.yml/runs?per_page=100&page=$page" \
+                --jq '.workflow_runs[] | [.id, .head_sha, .status, .head_branch] | @tsv' >> runs.tsv 2>/dev/null || true
+            done
+            found= pending=
+            while IFS=$'\t' read -r id sha status branch; do
+              git cat-file -e "$sha^{commit}" 2>/dev/null || continue
+              git diff --quiet "$sha" HEAD -- "${inputs[@]}" || continue
+              if [ "$status" != completed ]; then pending="$pending $id"; continue; fi
+              n=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts?name=$ART" \
+                    --jq '[.artifacts[] | select(.expired | not)] | length' < /dev/null)
+              if [ "$n" -gt 0 ]; then found="$id $sha $branch"; break; fi
+            done < runs.tsv
+            if [ -n "$found" ]; then
+              set -- $found
+              echo "OpenCL run $1 ($3, $2) built the OpenCL inputs of $GITHUB_SHA"
+              echo "run_id=$1" >> "$GITHUB_OUTPUT"
+              echo "sha=$2" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ -z "$pending" ] || [ "$(date +%s)" -gt "$deadline" ]; then
+              echo "::warning::no OpenCL build for this commit's inputs; the package has no OpenCL ICD"
+              echo "run_id=" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "waiting for OpenCL run(s)$pending"
+            sleep 60
+          done
+
   package:
     # maliwddm.inf + maliwddm.sys + maliumd_arm64.dll, one catalog, all
     # signed with one test certificate that goes into the package as a .cer.
     name: maliwddm package with its UMD (ARM64, test-signed)
-    needs: [driver, umd]
+    needs: [driver, umd, cl]
     runs-on: windows-2022
     permissions:
       contents: read
@@ -307,6 +364,13 @@ jobs:
           name: mesa-vulkan-panvk-arm64
           path: vk
           run-id: ${{ needs.umd.outputs.run_id }}
+      # The OpenCL ICD, when opencl.yml built this commit's inputs.
+      - uses: actions/download-artifact@v4
+        if: needs.cl.outputs.run_id != ''
+        with:
+          name: malicl-arm64
+          path: cl
+          run-id: ${{ needs.cl.outputs.run_id }}
           github-token: ${{ github.token }}
 
       - name: Assemble and sign
@@ -329,6 +393,21 @@ jobs:
           Copy-Item glx86\libgallium_wgl.dll "$drv\maligl_x86.dll"
           # VulkanDriverName names malivk.json; the DLL is beside it.
           Copy-Item vk\malivk_arm64.dll, vk\malivk.json $drv
+          # OpenCL: the ICD and the Khronos loader.
+          # Without them the INF's [opencl] lines go.
+          $clFiles = @('malicl_arm64.dll', 'OpenCL.dll')
+          if (Test-Path cl\malicl_arm64.dll) {
+            foreach ($f in $clFiles) { Copy-Item "cl\$f" $drv }
+            $signCl = @("$drv\malicl_arm64.dll", "$drv\OpenCL.dll")
+            "HAS_OPENCL=1" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            Write-Host 'OpenCL ICD: in the package'
+          } else {
+            $inf = "$drv\maliwddm.inf"
+            (Get-Content $inf) | Where-Object { $_ -notmatch '; \[opencl\]' } | Set-Content -Encoding ascii $inf
+            $signCl = @()
+            "HAS_OPENCL=0" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            Write-Host 'OpenCL ICD: none for this commit, [opencl] lines removed from the INF'
+          }
           $kits = 'C:\Program Files (x86)\Windows Kits\10'
           $st   = Join-Path $kits "bin\$env:WDK_VERSION\x86\signtool.exe"
           $i2c  = Join-Path $kits "bin\$env:WDK_VERSION\x86\inf2cat.exe"
@@ -340,7 +419,7 @@ jobs:
           "CERT_THUMBPRINT=$($cert.Thumbprint)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "CERT_NOTAFTER=$($cert.NotAfter.ToString('yyyy-MM-dd'))" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           # Embedded signatures first, then the catalog over the signed files.
-          & $st sign /fd sha256 /f C:\t.pfx /p $pw "$drv\maliwddm.sys" "$drv\maliumd_arm64.dll" "$drv\maliumd_fwd.dll" "$drv\maliumd_x64.dll" "$drv\maliumd_x86.dll" "$drv\maligl_fwd.dll" "$drv\maligl_arm64.dll" "$drv\maligl_x64.dll" "$drv\maligl_x86.dll" "$drv\malivk_arm64.dll"
+          & $st sign /fd sha256 /f C:\t.pfx /p $pw "$drv\maliwddm.sys" "$drv\maliumd_arm64.dll" "$drv\maliumd_fwd.dll" "$drv\maliumd_x64.dll" "$drv\maliumd_x86.dll" "$drv\maligl_fwd.dll" "$drv\maligl_arm64.dll" "$drv\maligl_x64.dll" "$drv\maligl_x86.dll" "$drv\malivk_arm64.dll" @signCl
           if ($LASTEXITCODE) { throw "signtool failed: $LASTEXITCODE" }
           $iv = (Get-ChildItem $kits -Recurse -Filter infverif.exe -ErrorAction SilentlyContinue |
                    Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1).FullName
@@ -371,7 +450,9 @@ jobs:
           certutil -f -addstore TrustedPublisher wddm-mali-g52-test.cer | Out-Null
           # 1. Each file's hash is in the catalog, and the catalog's
           #    signature verifies.
-          foreach ($f in 'maliwddm.inf', 'maliwddm.sys', 'maliwddm.man', 'maliumd_arm64.dll', 'maliumd_fwd.dll', 'maliumd_x64.dll', 'maliumd_x86.dll', 'maligl_fwd.dll', 'maligl_arm64.dll', 'maligl_x64.dll', 'maligl_x86.dll', 'malivk_arm64.dll', 'malivk.json') {
+          $members = @('maliwddm.inf', 'maliwddm.sys', 'maliwddm.man', 'maliumd_arm64.dll', 'maliumd_fwd.dll', 'maliumd_x64.dll', 'maliumd_x86.dll', 'maligl_fwd.dll', 'maligl_arm64.dll', 'maligl_x64.dll', 'maligl_x86.dll', 'malivk_arm64.dll', 'malivk.json')
+          if ($env:HAS_OPENCL -eq '1') { $members += 'malicl_arm64.dll', 'OpenCL.dll' }
+          foreach ($f in $members) {
             & $st verify /pa /q /c $cat "$drv\$f"
             if ($LASTEXITCODE) { throw "$f is not in $cat, or the catalog does not verify" }
             Write-Host "in the catalog: $f"
@@ -405,6 +486,8 @@ jobs:
         env:
           MESA_RUN: ${{ needs.umd.outputs.run_id }}
           MESA_SHA: ${{ needs.umd.outputs.sha }}
+          CL_RUN: ${{ needs.cl.outputs.run_id }}
+          CL_SHA: ${{ needs.cl.outputs.sha }}
         run: |
           $rel = 'rel\wddm-mali-g52-driver-arm64'
           New-Item -ItemType Directory -Force -Path "$rel\driver", "$rel\symbols" | Out-Null
@@ -418,6 +501,13 @@ jobs:
           # The Vulkan check (docs/VULKAN.md section 9).
           Copy-Item vk\vkprobe.exe $rel
           Copy-Item vk\malivk_arm64.pdb "$rel\symbols\" -ErrorAction SilentlyContinue
+          # OpenCL tests (docs/OPENCL.md): cltest, clinfo.
+          if (Test-Path cl\cltest.exe) {
+            New-Item -ItemType Directory -Force "$rel\opencl" | Out-Null
+            Copy-Item cl\cltest.exe, tools\windows\cltest\cltest.cmd "$rel\opencl\"
+            Copy-Item cl\clinfo.exe "$rel\opencl\" -ErrorAction SilentlyContinue
+            Copy-Item cl\malicl_arm64.pdb "$rel\symbols\" -ErrorAction SilentlyContinue
+          }
           Copy-Item umd\libgallium_d3d10.pdb "$rel\symbols\" -ErrorAction SilentlyContinue
           Copy-Item kmd\symbols\maliwddm.pdb "$rel\symbols\" -ErrorAction SilentlyContinue
           $info = @(
@@ -428,6 +518,7 @@ jobs:
             "  Commit:              $env:GITHUB_SHA ($env:GITHUB_REF_NAME)",
             "  CI run:              $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID",
             "  UMD from Mesa run:   $env:MESA_RUN (commit $env:MESA_SHA)",
+            "  OpenCL ICD:          $(if ($env:HAS_OPENCL -eq '1') { "opencl.yml run $env:CL_RUN (commit $env:CL_SHA)" } else { 'not in this build' })",
             "  Certificate:         CN=wddm-mali-g52 test signing, SHA1 $env:CERT_THUMBPRINT,",
             "                       valid until $env:CERT_NOTAFTER; made for this CI run only",
             ''
