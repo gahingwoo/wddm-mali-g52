@@ -1,0 +1,38 @@
+rusticl: the GL export is a HANDLE on Windows
+
+mesa_glinterop_export_out has win32_handle instead of dmabuf_fd under
+_WIN32. There is no GL sharing on this build; this only makes it compile
+(opencl.yml, run 45765580605).
+
+diff --git a/src/gallium/frontends/rusticl/core/gl.rs b/src/gallium/frontends/rusticl/core/gl.rs
+index 5c01220..64f8c9d 100644
+--- a/src/gallium/frontends/rusticl/core/gl.rs
++++ b/src/gallium/frontends/rusticl/core/gl.rs
+@@ -427,6 +427,9 @@ impl GLExportManager {
+ 
+ impl Drop for GLExportManager {
+     fn drop(&mut self) {
++        // On Windows the export is a HANDLE (win32_handle), and nothing
++        // here exports one: no GL sharing there.
++        #[cfg(not(windows))]
+         unsafe {
+             close(self.export_out.dmabuf_fd);
+         }
+diff --git a/src/gallium/frontends/rusticl/core/memory.rs b/src/gallium/frontends/rusticl/core/memory.rs
+index 45f01b5..17950d7 100644
+--- a/src/gallium/frontends/rusticl/core/memory.rs
++++ b/src/gallium/frontends/rusticl/core/memory.rs
+@@ -1074,8 +1074,12 @@ impl MemBase {
+             )
+         };
+ 
++        #[cfg(not(windows))]
++        let gl_handle = export_out.dmabuf_fd as u32;
++        #[cfg(windows)]
++        let gl_handle = export_out.win32_handle as usize as u32;
+         let imported_gl_tex = context.import_gl_buffer(
+-            export_out.dmabuf_fd as u32,
++            gl_handle,
+             export_out.modifier,
+             mem_type,
+             export_in.target,
