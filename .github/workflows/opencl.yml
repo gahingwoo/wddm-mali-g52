@@ -500,6 +500,22 @@ jobs:
           }
           $fails = @()
 
+          # 0. Does the ICD load at all, and what does the loader say about
+          # it (run 45766510359: 0 platforms, no message).
+          Add-Type -Namespace W -Name K -MemberDefinition '[DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)] public static extern System.IntPtr LoadLibraryW(string p); [DllImport("kernel32.dll", CharSet=CharSet.Ansi)] public static extern System.IntPtr GetProcAddress(System.IntPtr m, string n);'
+          $h = [W.K]::LoadLibraryW($env:OCL_ICD_FILENAMES)
+          $le = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+          Write-Host "LoadLibrary(malicl_arm64.dll): $h (error $le)"
+          if ($h -ne [IntPtr]::Zero) { Write-Host "clIcdGetPlatformIDsKHR at $([W.K]::GetProcAddress($h, 'clIcdGetPlatformIDsKHR'))" }
+          $env:OCL_ICD_ENABLE_TRACE = '1'
+          $env:RUSTICL_ENABLE = 'swrast'
+          $env:RUSTICL_DEBUG = 'program'
+          $p = Start-Process -FilePath $exe -ArgumentList 'list' -NoNewWindow -PassThru -Wait `
+                 -RedirectStandardOutput trace.out -RedirectStandardError trace.err -WorkingDirectory (Resolve-Path out).Path
+          Write-Host "== trace (cltest list, OCL_ICD_ENABLE_TRACE=1): exit code $($p.ExitCode)"
+          Get-Content trace.out, trace.err -ErrorAction SilentlyContinue | Select-Object -First 80 | Out-Host
+          Remove-Item Env:OCL_ICD_ENABLE_TRACE, Env:RUSTICL_ENABLE, Env:RUSTICL_DEBUG
+
           # 1. As on a machine with no Mali, or with OpenCL unused: the
           # platform is there, Panfrost finds no adapter, no device, no
           # crash.
@@ -556,6 +572,7 @@ jobs:
           path: |
             *.out
             *.err
+            trace.*
             *-hang.txt
             *-crash.txt
             clinfo-softpipe.txt
