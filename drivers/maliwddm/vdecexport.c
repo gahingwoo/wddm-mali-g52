@@ -136,7 +136,16 @@ void MwVdecStart(MW_ADAPTER *A)
         return;
     }
     RtlInitUnicodeString(&name, VDPU383_IMPORT_CALLBACK_NAME);
-    InitializeObjectAttributes(&oa, &name, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    /* OBJ_PERMANENT: ExCreateCallback closes the handle it opened, and a
+     * temporary object loses its name when its last handle closes, so
+     * without it vdpu383.sys never finds the object by name (board,
+     * 2026-11-26: every import failed with STATUS_NOT_FOUND, stage 5)
+     * while our pointer and registration still worked. A permanent object
+     * keeps the name; after our ExUnregisterCallback it has no callback
+     * and vdpu383.sys's ExNotifyCallback finds nobody, which it treats as
+     * a refused import. */
+    InitializeObjectAttributes(&oa, &name,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE | OBJ_PERMANENT, NULL, NULL);
     st = ExCreateCallback(&cb, &oa, TRUE, FALSE);
     if (!NT_SUCCESS(st)) {
         MwLog(A, L"VdecExport", (ULONG)st);
