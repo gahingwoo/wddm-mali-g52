@@ -6,13 +6,19 @@ board test are in [docs/VIDEO-DECODE.md](../docs/VIDEO-DECODE.md).
 
 - `vdec.c`, `vdec.h`: DXVA H.264, HEVC Main, VP9 profile 0 and AV1 Main
   (8 bit) pictures decoded through vdpu383.sys's bring-up interface, one
-  decoder surface per DXVA surface index; a fake decoder for CI
+  decoder surface per DXVA surface index; each call an escape to maliwddm
+  (`vdec_kmd.h`, docs/CHROMIUM-VIDEO.md C2), or straight to the device when
+  that path is off; a fake decoder for CI
   (`D3D10UMD_VDEC_FAKE=1`); a register log (`D3D10UMD_VDEC_REGLOG=<file>`)
   that tests/vdec-host and mesa.yml compare with vdpu383test's.
+- `vdec_kmd.h`: the escape (`MW_ESCAPE_VDEC_CALL`) and the check maliwddm
+  makes of it (`drivers/maliwddm/vdecproxy.c`).
 - `vdpu383/`: copied unchanged from
   [woa-rk3576](https://github.com/gahingwoo/woa-rk3576) at c89b79d (AV1
-  frame_refs[i].Index read as a slot; interface version 3, imports)
-  (`drivers/video/vdpu383/lib`, `vdpu383_ioctl.h` and `vdpu383_import.h`:
+  frame_refs[i].Index read as a slot; interface version 3, imports);
+  `vdpu383_ioctl.h` and `vdpu383_check.h` (interface 4, sessions) at
+  41e5de1 (`drivers/video/vdpu383/lib`, `vdpu383_ioctl.h`, `vdpu383_check.h`
+  and `vdpu383_import.h`:
   the driver maps buffers through the decoder's IOMMU by default, and with
   version 3 imports the pages of a maliwddm allocation for zero copy;
   `vdpu383_import.h` is the kernel interface maliwddm's vdecexport.c
@@ -38,7 +44,8 @@ e0e62f53651b80e9009b41df1e83958067f84cd3b0ded9ef6afaf00d3d698568  lib/vdpu383_vp
 10eca42edffed73a2869bbbf57f1732d353742ba9a341829d8313d0f1eebc007  lib/vdpu383_av1.c
 81d91d1a583f3a8f336f9d81051fc49c27141b4e8e26f3f590a7e99e5d633681  lib/vdpu383_av1.h
 a4294a22a13b5fa5eadbd1ab5ec8452a7a89e6937bf318a72d7f1abb0a9976d2  lib/vdpu383_av1_cdf.c
-1b6d5bdd18cd56415a6852e20eebf7012d5a010cb980eb724c1472455e86f38f  vdpu383_ioctl.h
+7be03e75a7bba5abf6309e8028954811c6f58ce67508a79a71e1e3d70a7ac0ed  vdpu383_ioctl.h
+1b56a98a971c4ab9913bec17b21ed94d96cb3636d35d0a668a2c1eb2d588ac9b  vdpu383_check.h
 fa934aab5719c7271eab227328871a62f1f8f735fb50560fc46d5cdb4c362760  vdpu383_import.h
 ```
 
@@ -56,7 +63,7 @@ states it):
 | `lib/vdpu383_vp9_probs.c` (probability tables) | mainline Linux v4l2-vp9.c, Collabora (values from libvpx) | GPL-2.0 |
 | `lib/vdpu383_av1.c` (registers, global record, buffer handling) | ported from MPP hal_av1d_vdpu383.c, hal_av1d_com.c, codec/dec/av1 | Apache-2.0 OR MIT, used as MIT; the file GPL-2.0-only |
 | `lib/vdpu383_av1_cdf.c` (default CDFs) | MPP hal_av1d_com.c | Apache-2.0 OR MIT, used as MIT; the file GPL-2.0-only |
-| the rest of `lib/`, `vdpu383_ioctl.h` | written for woa-rk3576 | GPL-2.0-only |
+| the rest of `lib/`, `vdpu383_ioctl.h`, `vdpu383_check.h` | written for woa-rk3576 | GPL-2.0-only |
 
 ## The parsers and test streams
 

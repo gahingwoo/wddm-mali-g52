@@ -26,8 +26,11 @@
  * 3: IOCTL_VDPU383_IMPORT (another driver's pages, a display driver's
  * texture, at IO addresses of the decoder), VDPU383_RUN_REVOKED, the import
  * counters of VDPU383_INFO (in what were reserved words). A version 2
- * program works unchanged. */
-#define VDPU383_INTERFACE_VERSION   3
+ * program works unchanged.
+ * 4: sessions (vdpu383_check.h): file objects another driver opens from
+ * kernel mode for one process, each with an IOMMU directory of its own;
+ * their counters in VDPU383_INFO. Nothing changes for a user-mode handle. */
+#define VDPU383_INTERFACE_VERSION   4
 
 #ifndef CTL_CODE
 #define CTL_CODE(t, f, m, a) (((t) << 16) | ((a) << 14) | ((f) << 2) | (m))
@@ -90,7 +93,16 @@ typedef struct VDPU383_INFO {
     unsigned int imports;               /* imports made or refreshed */
     unsigned int revokes;               /* imports the exporter took back */
     unsigned int import_failures;
-    unsigned int reserved2[2];
+    /* version 4; a session is told no physical addresses or register
+     * contents (link, mmu_dte, mmu_last_fault_addr, sram_dma, iommu_dt_dma,
+     * last_irq, last_status, warmup.buffer_dma read 0) */
+    unsigned int sessions;              /* open now */
+    unsigned int session_runs;          /* decodes through sessions */
+    unsigned int sessions_made;
+    unsigned int session_refused;       /* calls a session may not make, sessions over the limit */
+    unsigned int domain_switches;       /* IOMMU directory changes between sessions */
+    unsigned int user_access;           /* Device Parameters UserAccess in force */
+    unsigned int reserved3[2];
 } VDPU383_INFO;
 
 /* Register access: offsets are bytes into the 4 KiB block, 4-aligned. */

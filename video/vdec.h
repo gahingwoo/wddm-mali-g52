@@ -4,8 +4,11 @@
  * VDPU383.
  *
  * Milestone V3a (docs/VIDEO-DECODE.md): the decoder is driven through
- * vdpu383.sys (woa-rk3576, drivers/video/vdpu383) from the process that
- * decodes, with the bring-up interface vdpu383test proved on the board:
+ * vdpu383.sys (woa-rk3576, drivers/video/vdpu383) for the process that
+ * decodes, with the bring-up interface vdpu383test proved on the board.
+ * Each call goes through maliwddm (vdec_kmd.h, docs/CHROMIUM-VIDEO.md C2:
+ * an escape, made by the KMD in a session of vdpu383.sys of its own), or,
+ * when that path is off, straight to \\.\VDPU383 (UserAccess). The calls:
  * buffers from IOCTL_VDPU383_ALLOC (IO addresses through the decoder's
  * IOMMU, or physically contiguous with the driver's Iommu 0; the same to
  * this code), the register file built here by the same library
@@ -88,6 +91,12 @@ typedef struct vdec_picture {
     unsigned width, height;     /* the picture (H.264: macroblocks * 16; HEVC, VP9, AV1: as coded) */
 } vdec_picture;
 
+/* How the decoder is reached (vdec_stats.path; vdec.c, "transport") */
+#define VDEC_PATH_NONE      0
+#define VDEC_PATH_DIRECT    1   /* \\.\VDPU383 opened by this process (UserAccess) */
+#define VDEC_PATH_KMD       2   /* through maliwddm, MW_ESCAPE_VDEC_CALL */
+#define VDEC_PATH_MEM       3   /* the fake in ordinary memory (CI) */
+
 typedef struct vdec_stats {
     unsigned pictures;          /* decoded by this process */
     unsigned errors;            /* run failed, timed out or reported an error */
@@ -103,6 +112,9 @@ typedef struct vdec_stats {
     unsigned import_retries;    /* refused imports asked again (every 64th use, D3D10UMD_VDEC_IMPORT_RETRY) */
     unsigned last_import_error; /* GetLastError() of the last refused import (1168 STATUS_NOT_FOUND, ...) */
     unsigned last_import_pages; /* the pages it asked for */
+    unsigned path;              /* VDEC_PATH_* */
+    unsigned kmd_calls;         /* escapes to maliwddm made by this process */
+    unsigned session_runs;      /* vdpu383.sys's decodes through sessions (all processes), 0 if unknown */
 } vdec_stats;
 
 /*
@@ -127,6 +139,17 @@ typedef struct vdec_target {
 /* 1 when a decoder can be opened in this process (the device or the fake);
  * cached after the first call. */
 int vdec_available(void);
+
+/*
+ * The escape to maliwddm for VDEC_PATH_KMD (vdec_kmd.h): data is a
+ * VDEC_KMD_CALL of size bytes, with_device 0 for VDEC_KMD_PROBE on the
+ * adapter alone; returns the escape's NTSTATUS. On Windows it is
+ * D3DKMTEscape on a device of this process's own; a test sets its own
+ * (before vdec_available), which then takes every call, with the fake
+ * pattern too when D3D10UMD_VDEC_FAKE is 1.
+ */
+typedef long (*vdec_escape_fn)(void *ctx, int with_device, void *data, unsigned size);
+void vdec_set_escape(vdec_escape_fn fn, void *ctx);
 
 /* A decoder for pictures up to width x height (luma pixels). For VP9 and
  * AV1 the surfaces are sized for that once (frames may change size within

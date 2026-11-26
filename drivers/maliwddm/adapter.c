@@ -1772,6 +1772,8 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_VDEC_EXPORT_DATA))
             return STATUS_INVALID_PARAMETER;
         return MwEscapeVdecExport(a, Esc, (MW_ESCAPE_VDEC_EXPORT_DATA *)Esc->pPrivateDriverData);
+    case MW_ESCAPE_VDEC_CALL:
+        return MwEscapeVdecCall(a, Esc);
     case MW_ESCAPE_GPU_INFO:
         if (Esc->PrivateDriverDataSize < sizeof(MW_ESCAPE_GPU_INFO_DATA))
             return STATUS_INVALID_PARAMETER;
