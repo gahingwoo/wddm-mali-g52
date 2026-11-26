@@ -33,8 +33,8 @@ USBDP PHY AUX ----------+  SBU1/SBU2 （按插入方向由 GPIO4_C4/C5 偏置）
 DW DP 控制器 DP0 0x27E40000 (PD_VO1) <-- VOP2 VP1 (DP0_IF_CTRL 0x18C)
 ```
 
-- **DP 控制器**：Synopsys DW DP，主线里的 `rockchip,rk3576-dp`（`drivers/gpu/drm/bridge/synopsys/dw-dp.c`、`rockchip/dw_dp-rockchip.c`），RK3576 上是 dual pixel 模式，每条 lane 最高 8.1 Gb/s。在 PD_VO1 里；时钟为 pclk_dp0、clk_aux16mhz_0（GPLL / 74）、aclk_dp0。
-- **PHY**：DRD0 后面的 USB/DP 组合 PHY（`drivers/phy/rockchip/phy-rockchip-usbdp.c`）。固件本来就在 ExitBootServices 时初始化它的 USB3 部分，两个 pad 复用给 USB、两个给 DP（主线默认的 Type-C 映射），所以加 DP 时不用复位 USB3。
+- **DP 控制器**：Synopsys DW DP，主线里的 `rockchip,rk3576-dp`（Linux 的 `drivers/gpu/drm/bridge/synopsys/dw-dp.c`、`rockchip/dw_dp-rockchip.c`），RK3576 上是 dual pixel 模式，每条 lane 最高 8.1 Gb/s。在 PD_VO1 里；时钟为 pclk_dp0、clk_aux16mhz_0（GPLL / 74）、aclk_dp0。
+- **PHY**：DRD0 后面的 USB/DP 组合 PHY（Linux 的 `drivers/phy/rockchip/phy-rockchip-usbdp.c`）。固件本来就在 ExitBootServices 时初始化它的 USB3 部分，两个 pad 复用给 USB、两个给 DP（主线默认的 Type-C 映射），所以加 DP 时不用复位 USB3。
 - **VOP2**：任何一个 port 都能驱动 DP0。VP0 归 HDMI；HdmiExtend 下 VP2 归泰山派的屏；DP 用 **VP1**（最大 2560x1600，vendor 内核里 dclk 上限 300 MHz）、Esmart1（AXI 总线 0，已有的 scan-out IOMMU 设置覆盖它），dclk_vp1 来自 **VPLL**，别的东西都不用它（VP0 用 HDMI PHY 的 PLL，VP2 用 CPLL）。
 - **HPD**：USB-C 上没有 HPD 线。对方通过 PD 消息（DP Status、Attention）报告 HPD。RK3576 上，只要 PHY 驱动这么设置，控制器的 HPD 输入就来自 VO1_GRF_SOC_CON0 的第 10/11 位。
 

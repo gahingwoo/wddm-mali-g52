@@ -54,7 +54,7 @@ DW DP controller DP0 0x27E40000 (PD_VO1) <-- VOP2 VP1 (DP0_IF_CTRL 0x18C)
   dual pixel mode on the RK3576, up to 8.1 Gb/s a lane. In PD_VO1; clocks
   pclk_dp0, clk_aux16mhz_0 (GPLL / 74), aclk_dp0.
 - **PHY**: the USB/DP combo PHY behind DRD0
-  (`drivers/phy/rockchip/phy-rockchip-usbdp.c`). The firmware already brings
+  (Linux `drivers/phy/rockchip/phy-rockchip-usbdp.c`). The firmware already brings
   its USB3 half up at ExitBootServices with two pads muxed to USB and two to
   DP (mainline's default Type-C mapping), so DP is added next to USB3
   without resetting it.

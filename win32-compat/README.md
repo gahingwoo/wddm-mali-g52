@@ -8,7 +8,7 @@ of a buffer object, as DeviceIoControl calls on `\\.\MaliG52`, the device of
 the Mali kernel driver in `drivers/malikm`. The driver keeps Linux Panfrost's
 uAPI semantics, so Panfrost's own Linux kernel backend (`panfrost_kmod.c`) runs
 as it is. The ABI between the two is `include/malikm_ioctl.h`, which CI copies
-next to these headers. `mesa-patches/0015` links the shim into Panfrost's kmod
+next to these headers. `mesa-patches/0015-panfrost-kmod-windows-malikm-shim.patch` links the shim into Panfrost's kmod
 library.
 
 The same file is the kernel backend of the Vulkan driver (panvk,
