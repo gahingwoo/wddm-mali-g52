@@ -1,0 +1,98 @@
+diff --git a/src/panfrost/vulkan/panvk_vX_device.c b/src/panfrost/vulkan/panvk_vX_device.c
+index 5e54c68..803cc6b 100644
+--- a/src/panfrost/vulkan/panvk_vX_device.c
++++ b/src/panfrost/vulkan/panvk_vX_device.c
+@@ -10,6 +10,9 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#ifdef _WIN32
++struct util_sync_provider *panvk_win32_sync_provider(int drm_fd);
++#endif
+ #include "drm-uapi/panthor_drm.h"
+ 
+ #include "vk_cmd_enqueue_entrypoints.h"
+@@ -491,8 +494,16 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
+ #endif
+ 
+ #if PAN_ARCH <= 9
++   /* Windows (maliwddm): no grow-on-fault, the heap is allocated whole, and
++    * the KMD's one aperture segment is 1 GB for the whole machine. 32 MB is
++    * what the Direct3D and OpenGL drivers use (mesa-patches/0053). */
++#ifdef _WIN32
++   const size_t tiler_heap_size = 32 * 1024 * 1024;
++#else
++   const size_t tiler_heap_size = 128 * 1024 * 1024;
++#endif
+    result = panvk_priv_bo_create(
+-      device, 128 * 1024 * 1024,
++      device, tiler_heap_size,
+       PAN_KMOD_BO_FLAG_NO_MMAP | PAN_KMOD_BO_FLAG_ALLOC_ON_FAULT,
+       VK_SYSTEM_ALLOCATION_SCOPE_DEVICE, &device->tiler_heap);
+    if (result != VK_SUCCESS)
+@@ -535,6 +546,13 @@ panvk_per_arch(create_device)(struct panvk_physical_device *physical_device,
+ 
+    device->drm_fd = device->kmod.dev->fd;
+    vk_device_set_drm_fd(&device->vk, device->kmod.dev->fd);
++#ifdef _WIN32
++   /* This file is built without HAVE_LIBDRM, so the inline above found no
++    * libdrm and left the device without a sync provider. The shim is
++    * libdrm here (see panvk_win32_sync.c). */
++   if (!device->vk.sync)
++      device->vk.sync = panvk_win32_sync_provider(device->kmod.dev->fd);
++#endif
+ 
+ 
+    result = panvk_precomp_init(device);
+diff --git a/src/panfrost/vulkan/panvk_vX_physical_device.c b/src/panfrost/vulkan/panvk_vX_physical_device.c
+index dd8b768..8b0a7c8 100644
+--- a/src/panfrost/vulkan/panvk_vX_physical_device.c
++++ b/src/panfrost/vulkan/panvk_vX_physical_device.c
+@@ -117,6 +117,9 @@ panvk_per_arch(get_physical_device_extensions)(
+       .KHR_shader_untyped_pointers = PAN_ARCH >= 9,
+       .KHR_spirv_1_4 = PAN_ARCH >= 10,
+       .KHR_storage_buffer_storage_class = true,
++#ifdef VK_USE_PLATFORM_WIN32_KHR
++      .KHR_swapchain = true,
++#endif
+ #ifdef PANVK_USE_WSI_PLATFORM
+       .KHR_present_id = true,
+       .KHR_present_id2 = true,
+diff --git a/src/panfrost/vulkan/panvk_wsi.c b/src/panfrost/vulkan/panvk_wsi.c
+index 1b4acc0..43ea034 100644
+--- a/src/panfrost/vulkan/panvk_wsi.c
++++ b/src/panfrost/vulkan/panvk_wsi.c
+@@ -28,6 +28,9 @@ panvk_wsi_proc_addr(VkPhysicalDevice physicalDevice, const char *pName)
+ static bool
+ panvk_can_present_on_device(VkPhysicalDevice pdevice, int fd)
+ {
++#ifdef _WIN32
++   return true;
++#endif
+    drmDevicePtr device;
+    if (drmGetDevice2(fd, 0, &device) != 0)
+       return false;
+@@ -47,11 +50,22 @@ panvk_wsi_init(struct panvk_physical_device *physical_device)
+       to_panvk_instance(physical_device->vk.instance);
+    VkResult result;
+ 
++   /* Windows: no D3D12 queue, so the Win32 WSI takes its CPU swap chain:
++    * each image is copied by the GPU into a host-visible buffer, which is
++    * blitted to the window with GDI. sw_device makes the present wait for
++    * that copy's fence before reading the buffer, keeps the WSI from asking
++    * for dma-buf exports, and skips creating a DXGI factory and a
++    * DirectComposition device that would go unused. */
++#ifdef _WIN32
++   const bool sw_device = true;
++#else
++   const bool sw_device = false;
++#endif
+    result = wsi_device_init(&physical_device->wsi_device,
+                             panvk_physical_device_to_handle(physical_device),
+                             panvk_wsi_proc_addr, &instance->vk.alloc, -1,
+                             &instance->drirc.options,
+-                            &(struct wsi_device_options){.sw_device = false});
++                            &(struct wsi_device_options){.sw_device = sw_device});
+    if (result != VK_SUCCESS)
+       return result;
+ 

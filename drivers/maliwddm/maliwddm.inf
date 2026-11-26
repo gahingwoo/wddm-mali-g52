@@ -59,6 +59,8 @@ maligl_fwd.dll    = 1
 maligl_arm64.dll  = 1
 maligl_x64.dll    = 1
 maligl_x86.dll    = 1
+malivk_arm64.dll  = 1
+malivk.json       = 1
 malicl_arm64.dll   = 1 ; [opencl]
 OpenCL.dll         = 1 ; [opencl]
 
@@ -81,6 +83,11 @@ maliwddm.sys
 ; directive installs a counter manifest; maliwddm-counters.cmd install runs
 ; lodctr /m on this copy. The driver provides the counters either way.
 maliwddm.man
+; The Vulkan ICD, Mesa's panvk on Panfrost (docs/VULKAN.md): its manifest
+; and the DLL the manifest names by a relative path, both in the driver
+; store. ARM64 processes only for now.
+malivk_arm64.dll
+malivk.json
 
 ; 0x00004000 is COPYFLG_IN_USE_RENAME: when dwm.exe or LogonUI.exe has the
 ; old maliumd.dll loaded, setup renames it and puts the new one in place at
@@ -146,6 +153,13 @@ HKR,,OpenGLFlags,%REG_DWORD%,1
 HKR,,OpenGLDriverNameWow,%REG_SZ%,maligl_x86.dll
 HKR,,OpenGLVersionWow,%REG_DWORD%,1
 HKR,,OpenGLFlagsWow,%REG_DWORD%,1
+; The Vulkan loader reads these from the adapter's key (it finds the key
+; through DXGI): the full path of the ICD's JSON manifest, for 64-bit
+; processes. %13% is the driver store directory of this package. No
+; VulkanDriverNameWow: there is no 32-bit build. panvk itself still turns the
+; G52 down unless PAN_I_WANT_A_BROKEN_VULKAN_DRIVER is set, so with this
+; entry and nothing else a program sees no Vulkan device.
+HKR,,VulkanDriverName,%REG_MULTI_SZ%,%13%\malivk.json
 ; The Khronos loader reads this from the adapter's key (D3DKMTQueryAdapterInfo
 ; with KMTQAITYPE_QUERYREGISTRY, and through the device's software key with
 ; CM_Open_DevNode_Key) and loads the ICD it names. x64 and x86 processes are

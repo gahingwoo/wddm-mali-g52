@@ -1,0 +1,193 @@
+diff --git a/src/panfrost/vulkan/panvk_instance.c b/src/panfrost/vulkan/panvk_instance.c
+index ac8be25..12c6f56 100644
+--- a/src/panfrost/vulkan/panvk_instance.c
++++ b/src/panfrost/vulkan/panvk_instance.c
+@@ -10,6 +10,7 @@
+  */
+ 
+ #include "util/build_id.h"
++#include "git_sha1.h"
+ #include "panvk_drirc.h"
+ #include "util/mesa-blake3.h"
+ #include "util/os_misc.h"
+@@ -102,6 +103,13 @@ static const struct vk_instance_extension_table panvk_instance_extensions = {
+    .KHR_surface_maintenance1 = true,
+    .EXT_surface_maintenance1 = true,
+ #endif
++#ifdef VK_USE_PLATFORM_WIN32_KHR
++   /* The Win32 WSI's CPU swap chain (panvk_wsi.c). Not the present-wait and
++    * timing extensions of PANVK_USE_WSI_PLATFORM: that swap chain has none. */
++   .KHR_get_surface_capabilities2 = true,
++   .KHR_surface = true,
++   .KHR_win32_surface = true,
++#endif
+ #ifdef VK_USE_PLATFORM_DISPLAY_KHR
+    .KHR_display = true,
+    .EXT_acquire_drm_display = true,
+@@ -155,6 +163,36 @@ panvk_physical_device_try_create(struct vk_instance *vk_instance,
+    return VK_SUCCESS;
+ }
+ 
++#ifdef _WIN32
++/* No drmGetDevices2 on Windows: the one Mali is the device the libdrm shim
++ * opens (malikm_open in panvk_physical_device.c), described as Linux would
++ * describe it, a platform device with a render node. No Mali, or one panvk
++ * turns down, is no physical device rather than an error. */
++static VkResult
++panvk_enumerate_win32(struct vk_instance *vk_instance)
++{
++   static char render_node[] = "maliwddm";
++   char *nodes[DRM_NODE_MAX] = {0};
++   struct _drmDevice drm_device = {0};
++   struct vk_physical_device *pdevice;
++
++   nodes[DRM_NODE_RENDER] = render_node;
++   drm_device.nodes = nodes;
++   drm_device.available_nodes = 1 << DRM_NODE_RENDER;
++   drm_device.bustype = DRM_BUS_PLATFORM;
++
++   VkResult result =
++      panvk_physical_device_try_create(vk_instance, &drm_device, &pdevice);
++   if (result == VK_ERROR_INCOMPATIBLE_DRIVER)
++      return VK_SUCCESS;
++   if (result != VK_SUCCESS)
++      return result;
++
++   list_addtail(&pdevice->link, &vk_instance->physical_devices.list);
++   return VK_SUCCESS;
++}
++#endif
++
+ static void
+ panvk_destroy_physical_device(struct vk_physical_device *device)
+ {
+@@ -213,6 +251,7 @@ panvk_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
+ 
+    panvk_debug_init();
+ 
++#ifndef _WIN32
+    const struct build_id_note *note =
+       build_id_find_nhdr_for_addr(panvk_CreateInstance);
+    if (!note) {
+@@ -225,6 +264,7 @@ panvk_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
+       return panvk_errorf(NULL, VK_ERROR_INITIALIZATION_FAILED,
+                           "build-id too short.  It needs to be a SHA");
+    }
++#endif
+ 
+    pAllocator = pAllocator ?: vk_default_allocator();
+    instance = vk_zalloc(pAllocator, sizeof(*instance), 8,
+@@ -253,8 +293,12 @@ panvk_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
+       .priv = &instance->vk.alloc,
+    };
+ 
++#ifdef _WIN32
++   instance->vk.physical_devices.enumerate = panvk_enumerate_win32;
++#else
+    instance->vk.physical_devices.try_create_for_drm =
+       panvk_physical_device_try_create;
++#endif
+    instance->vk.physical_devices.destroy = panvk_destroy_physical_device;
+ 
+    if (PANVK_DEBUG(STARTUP))
+@@ -263,7 +307,17 @@ panvk_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
+    VG(VALGRIND_CREATE_MEMPOOL(instance, 0, false));
+ 
+    STATIC_ASSERT(sizeof(instance->driver_build_sha) == BLAKE3_KEY_LEN);
++#ifdef _WIN32
++   /* A PE file has no ELF build-id note. The version and the git commit
++    * name the build instead: driverUUID and the pipeline cache key change
++    * with every Mesa release or commit the package is built from. */
++   {
++      static const char id[] = "panvk " PACKAGE_VERSION MESA_GIT_SHA1 " " __DATE__ " " __TIME__;
++      _mesa_blake3_compute(id, sizeof(id) - 1, instance->driver_build_sha);
++   }
++#else
+    copy_build_id_to_sha1(instance->driver_build_sha, note);
++#endif
+ 
+    *pInstance = panvk_instance_to_handle(instance);
+ 
+diff --git a/src/panfrost/vulkan/panvk_physical_device.c b/src/panfrost/vulkan/panvk_physical_device.c
+index 8021aa9..d87e518 100644
+--- a/src/panfrost/vulkan/panvk_physical_device.c
++++ b/src/panfrost/vulkan/panvk_physical_device.c
+@@ -12,6 +12,11 @@
+  */
+ 
+ #include <sys/stat.h>
++#ifdef _WIN32
++#include <io.h>
++#include <fcntl.h>
++#include <string.h>
++#endif
+ 
+ #include "util/disk_cache.h"
+ #include "util/os_misc.h"
+@@ -78,7 +83,20 @@ create_kmod_dev(struct panvk_physical_device *device,
+    drmVersionPtr version;
+    int fd;
+ 
++#ifdef _WIN32
++   /* The libdrm shim's fd: maliwddm through D3DKMT (or malikm). In CI,
++    * MALIKM_FAKE makes the shim emulate the kernel driver in-process, on
++    * any fd. The Vulkan driver wants syncobjs with a state of their own;
++    * see malikm_syncobj_state in the shim. */
++   fd = malikm_open();
++   if (fd < 0 && os_get_option("MALIKM_FAKE") &&
++       strcmp(os_get_option("MALIKM_FAKE"), "0") != 0)
++      fd = _open("NUL", _O_RDWR);
++   if (fd >= 0)
++      malikm_syncobj_state(1);
++#else
+    fd = open(path, O_RDWR | O_CLOEXEC);
++#endif
+    if (fd < 0) {
+       return panvk_errorf(instance, VK_ERROR_INCOMPATIBLE_DRIVER,
+                           "failed to open device %s", path);
+@@ -124,6 +142,12 @@ get_drm_device_ids(struct panvk_physical_device *device,
+                    const struct panvk_instance *instance,
+                    drmDevicePtr drm_device)
+ {
++#ifdef _WIN32
++   /* No device nodes: VK_EXT_physical_device_drm reports none. */
++   device->drm.render_rdev = 0;
++   device->drm.primary_rdev = 0;
++   return VK_SUCCESS;
++#endif
+    struct stat st;
+ 
+    if (stat(drm_device->nodes[DRM_NODE_RENDER], &st)) {
+@@ -234,9 +258,15 @@ get_device_heaps(struct panvk_physical_device *device,
+    int host_coherent_not_cached_idx = -1;
+    int host_cached_not_coherent_idx = -1;
+ 
+-   const uint64_t heap_size =
++   uint64_t heap_size =
+       os_get_gpu_heap_size(instance->drirc.misc.heap_memory_percent,
+                            &instance->drirc.misc.heap_memory_percent);
++#ifdef _WIN32
++   /* maliwddm has one aperture segment of 1 GB for every process on the
++    * machine (MW_SEGMENT_SIZE), DWM's buffers included: a heap sized from
++    * system memory would promise what VidMm cannot make resident. */
++   heap_size = MIN2(heap_size, 1ull << 30);
++#endif
+ 
+    device->memory.heap_count = 1;
+    device->memory.heaps[0] = (VkMemoryHeap){
+@@ -487,6 +517,15 @@ panvk_physical_device_init(struct panvk_physical_device *device,
+ 
+    device->vk.supported_sync_types = device->sync_types;
+ 
++#ifdef _WIN32
++   /* The Vulkan loader matches physical devices to DXGI adapters by LUID
++    * (vk_icdEnumerateAdapterPhysicalDevices). */
++   if (malikm_adapter_luid(device->vk.properties.deviceLUID)) {
++      device->vk.properties.deviceLUIDValid = true;
++      device->vk.properties.deviceNodeMask = 1;
++   }
++#endif
++
+    result = panvk_wsi_init(device);
+    if (result != VK_SUCCESS)
+       goto fail;

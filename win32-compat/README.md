@@ -11,5 +11,15 @@ as it is. The ABI between the two is `include/malikm_ioctl.h`, which CI copies
 next to these headers. `mesa-patches/0015` links the shim into Panfrost's kmod
 library.
 
-Not implemented: PRIME (dma-buf) import and export, syncobj fds and timelines
-(Panthor only), anonymous and file mappings. They fail with `ENOSYS`.
+The same file is the kernel backend of the Vulkan driver (panvk,
+`mesa-patches/vulkan/`, docs/VULKAN.md). For it the shim also answers
+`drmGetCap`, `drmGetDevice2` and the syncobj ioctls panvk makes directly,
+and, when panvk asks for it with `malikm_syncobj_state(1)`, keeps a state per
+syncobj (unsignalled, signalled, or pending on a submission) instead of
+treating every wait as a wait for idle. The Direct3D UMD and the OpenGL ICD
+never turn that on. `sched.h` and `sys/sysmacros.h` are for the Vulkan
+runtime and panvk only.
+
+Not implemented: PRIME (dma-buf) import and export, opaque syncobj fds and
+timelines (Panthor only), anonymous and file mappings. They fail with
+`ENOSYS`.
