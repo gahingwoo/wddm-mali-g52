@@ -237,9 +237,9 @@ typedef struct _MW_UMD_ADAPTER_INFO {
 /* MW_UMD_ADAPTER_INFO.Redirect. The files C:\mali\redirect and
  * C:\mali\noredirect still win over it in the UMD. */
 #define MW_UMD_REDIRECT_UNSAID  0       /* an older KMD: the UMD keeps patch 0076's default */
-#define MW_UMD_REDIRECT_NONE    1       /* no process (the default at WDDM 2.x) */
+#define MW_UMD_REDIRECT_NONE    1       /* no process */
 #define MW_UMD_REDIRECT_BROWSERS 2      /* msedge, chrome, msedgewebview2, d3dprobe (the default at 1.3) */
-#define MW_UMD_REDIRECT_ALL     3       /* every process */
+#define MW_UMD_REDIRECT_ALL     3       /* every process (the default at WDDM 2.x) */
 
 /* The KMD's counters, for tests and bring-up. */
 typedef struct _MW_ESCAPE_STATS_DATA {

@@ -7,6 +7,7 @@ on:
     paths:
       - 'tools/windows/d2dtext.cpp'
       - 'tools/windows/d3dparts.cpp'
+      - 'tools/windows/presenttest.cpp'
       - 'tools/windows/gsso.cpp'
       - 'tools/windows/copytest.cpp'
       - 'tools/windows/emucheck.cpp'
@@ -40,6 +41,15 @@ jobs:
           if ($LASTEXITCODE) { throw 'd3dparts build failed' }
           .\out\d3dparts.exe warp
           if ($LASTEXITCODE) { throw "d3dparts on WARP failed ($LASTEXITCODE)" }
+          cl /nologo /W4 /EHsc /O2 /MT /I include tools\windows\presenttest.cpp /Fe:out\presenttest.exe
+          if ($LASTEXITCODE) { throw 'presenttest build failed' }
+          # The runner's session may have no composed desktop, so only the
+          # build has to pass; the logs show what WARP made of each model.
+          foreach ($v in 'gdi', 'discard', 'flipdiscard') {
+            .\out\presenttest.exe $v 2 "out\presenttest-$v-warp.txt" warp
+            "presenttest $v on WARP: exit $LASTEXITCODE"
+          }
+          $global:LASTEXITCODE = 0
           cl /nologo /EHsc /O2 /MT tools\windows\gsso.cpp /Fe:out\gsso.exe
           if ($LASTEXITCODE) { throw 'gsso build failed' }
           .\out\gsso.exe warp gs

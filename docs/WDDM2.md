@@ -593,6 +593,6 @@ The fallback rules are in section 2. To check them on a board:
    confirm". Boot normally: the counts return to 0.
 3. `maliwddm-counters check`: `WDDM version` 20, `WDDM fallback reason` 0.
 
-Known issue at 2.0 outside this driver's start path: browser redirection
-froze the session, so at 2.x no process gets it by default (`UmdRedirect`,
-[EDGE-PRESENT.md](EDGE-PRESENT.md), "The WDDM 2.0 session hang").
+Fixed on 2026-11-27: with DXGI redirection, a flip model swap chain froze
+the session at 2.0 ([EDGE-PRESENT.md](EDGE-PRESENT.md), "The WDDM 2.0
+session hang"). Every process gets redirection at 2.x now (`UmdRedirect`).

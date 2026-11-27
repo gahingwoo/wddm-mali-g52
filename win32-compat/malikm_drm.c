@@ -807,6 +807,9 @@ munmap(void *addr, size_t len)
  */
 
 typedef NTSTATUS (APIENTRY *KMT_FN)(void *);
+static KMT_FN kmt_resolve(const char *name);
+static void cb_begin(const char *name, unsigned a);
+static long cb_end(const char *name, long hr, unsigned a, unsigned b);
 static struct {
    KMT_FN CreateDevice, DestroyDevice, CreateContext, CreateAllocation, DestroyAllocation,
           Lock, Unlock, Render, Escape, EnumAdapters2, WaitForIdle;
@@ -837,6 +840,8 @@ struct wbo {
    /* The BO of a decoder output texture (malikm_vdec_mark): exportable, so
     * that Panfrost keeps this BO for the texture and does not cache it. */
    int vdec;
+   /* Opened from another process (a surface the compositor reads). */
+   int opened;
 };
 static struct wbo *wbo;
 static uint32_t wbo_cap;
@@ -1396,7 +1401,8 @@ w_make_resident(D3DKMT_HANDLE h)
    mr.AllocationList = &h;
    mr.PriorityList = &priority;
    if (ddi.on) {
-      HRESULT hr = ddi.cb.pfnMakeResidentCb(ddi.device, &mr);
+      cb_begin("MakeResident", (unsigned)h);
+      HRESULT hr = cb_end("MakeResident", ddi.cb.pfnMakeResidentCb(ddi.device, &mr), (unsigned)h, 0);
       st = hr == E_PENDING ? (NTSTATUS)0x00000103 : (hr >= 0 ? 0 : (NTSTATUS)hr);
    } else {
       st = kmt.MakeResident(&mr);
@@ -1424,7 +1430,8 @@ w_destroy(D3DKMT_HANDLE h)
       D3DDDICB_DEALLOCATE d = {0};
       d.NumAllocations = 1;
       d.HandleList = &h;
-      ddi.cb.pfnDeallocateCb(ddi.device, &d);
+      cb_begin("Deallocate", (unsigned)h);
+      cb_end("Deallocate", ddi.cb.pfnDeallocateCb(ddi.device, &d), (unsigned)h, 0);
       return;
    }
    D3DKMT_DESTROYALLOCATION da = {0};
@@ -1434,6 +1441,82 @@ w_destroy(D3DKMT_HANDLE h)
    kmt.DestroyAllocation(&da);
 }
 
+/*
+ * The runtime callbacks this shim made last, and the one in flight on each
+ * thread. A device the runtime removes (malikm_note_removed) says which
+ * callback it was removed in and what the ones before it answered: on
+ * 2026-11-27 dwm.exe's device was removed inside a present with no failed
+ * callback in the log, because only some of them were checked.
+ */
+#define CB_RING 48
+struct cb_note {
+   DWORD tick, tid;
+   const char *name;
+   long hr;
+   unsigned a, b;
+   void *device;
+};
+static struct cb_note cb_ring[CB_RING];
+static volatile LONG cb_ring_next;
+static __declspec(thread) const char *cb_flight;
+static __declspec(thread) unsigned cb_flight_a;
+static __declspec(thread) unsigned cb_flight_b;
+
+static void
+cb_begin(const char *name, unsigned a)
+{
+   cb_flight = name;
+   cb_flight_a = a;
+}
+
+static long
+cb_end(const char *name, long hr, unsigned a, unsigned b)
+{
+   struct cb_note *n = &cb_ring[(ULONG)InterlockedIncrement(&cb_ring_next) % CB_RING];
+   n->tick = GetTickCount();
+   n->tid = GetCurrentThreadId();
+   n->name = name;
+   n->hr = hr;
+   n->a = a;
+   n->b = b;
+   n->device = (void *)ddi.device;
+   cb_flight = NULL;
+   return hr;
+}
+
+/* The execution state dxgkrnl keeps for every device of this process, at a
+ * removal. The runtime has the kernel handle of its device and this shim
+ * does not, so every handle value is tried: D3DKMT handles are an index
+ * from bit 6 up and two bits on top, and a value that is no device is
+ * refused. 1 active, 2 reset, 3 hung, 4 stopped, 5 out of memory, 6 DMA
+ * fault, 7 DMA page fault (D3DKMT_DEVICEEXECUTION_STATE). */
+static void
+log_device_states(void)
+{
+   static KMT_FN get;
+   unsigned found = 0;
+
+   if (!get)
+      get = kmt_resolve("GetDeviceState");
+   if (!get)
+      return;
+   for (unsigned top = 0; top < 4; top++) {
+      for (unsigned idx = 1; idx < 4096 && found < 12; idx++) {
+         D3DKMT_GETDEVICESTATE st;
+         memset(&st, 0, sizeof(st));
+         st.hDevice = (D3DKMT_HANDLE)((top << 30) | (idx << 6));
+         st.StateType = D3DKMT_DEVICESTATE_EXECUTION;
+         if (get(&st) < 0)
+            continue;
+         found++;
+         DebugPrintf("removed:   kernel device 0x%x: execution state %d\n", (unsigned)st.hDevice,
+                     (int)st.ExecutionState);
+      }
+   }
+   if (!found)
+      DebugPrintf("removed:   no kernel device answered GetDeviceState\n");
+}
+
 static void *
 w_lock(D3DKMT_HANDLE h)
 {
@@ -1441,7 +1524,8 @@ w_lock(D3DKMT_HANDLE h)
       D3DDDICB_LOCK l = {0};
       l.hAllocation = h;
       l.Flags.IgnoreSync = 1;
-      HRESULT lhr = ddi.cb.pfnLockCb(ddi.device, &l);
+      cb_begin("Lock", (unsigned)h);
+      HRESULT lhr = cb_end("Lock", ddi.cb.pfnLockCb(ddi.device, &l), (unsigned)h, 0);
       if (lhr < 0) {
          static volatile LONG said = 0;
          if (InterlockedIncrement(&said) <= 64)
@@ -1465,7 +1549,8 @@ w_unlock(D3DKMT_HANDLE h)
       D3DDDICB_UNLOCK u = {0};
       u.NumAllocations = 1;
       u.phAllocations = &h;
-      ddi.cb.pfnUnlockCb(ddi.device, &u);
+      cb_begin("Unlock", (unsigned)h);
+      cb_end("Unlock", ddi.cb.pfnUnlockCb(ddi.device, &u), (unsigned)h, 0);
       return;
    }
    D3DKMT_UNLOCK u = {0};
@@ -1485,7 +1570,9 @@ w_render_inner(UINT commandLength, UINT allocations)
       r.hContext = ddi.context;
       r.CommandLength = commandLength;
       r.NumAllocations = allocations;
-      HRESULT rhr = ddi.cb.pfnRenderCb(ddi.device, &r);
+      cb_begin("Render", allocations);
+      cb_flight_b = commandLength;
+      HRESULT rhr = cb_end("Render", ddi.cb.pfnRenderCb(ddi.device, &r), allocations, commandLength);
       if (rhr < 0) {
          /* A failed submission is where a device the runtime removes would
           * show first (Edge's GPU process, 2026-11-22): always in the log. */
@@ -1509,7 +1596,9 @@ w_render_inner(UINT commandLength, UINT allocations)
          sig.hContext = ddi.context;
          sig.Flags.EnqueueCpuEvent = 1;
          sig.CpuEventHandle = ev;
-         if (ddi.cb.pfnSignalSynchronizationObject2Cb(ddi.device, &sig) >= 0) {
+         cb_begin("SignalSynchronizationObject2", 0);
+         if (cb_end("SignalSynchronizationObject2",
+                    ddi.cb.pfnSignalSynchronizationObject2Cb(ddi.device, &sig), 0, 0) >= 0) {
             if (ddi.last_event)
                CloseHandle(ddi.last_event);
             ddi.last_event = ev;
@@ -1678,6 +1767,32 @@ struct wchain {
 
 static struct wbo *wddm_bo(uint32_t h);
 
+/*
+ * A surface opened from another process is listed as read. dxgkrnl gives
+ * the compositor read-only access to the buffers of a flip model swap
+ * chain, and at WDDM 1.2 and later VIDMM_GLOBAL::ReferenceDmaBuffer
+ * answers a write to such an allocation with STATUS_ACCESS_DENIED: the
+ * render fails, the runtime removes the device (its callback still says
+ * S_OK), and at WDDM 2.0 dwm.exe's teardown then hung the session
+ * (2026-11-25 and 2026-11-27, docs/EDGE-PRESENT.md). Every allocation was
+ * listed as written until then. The flag does nothing else here: at 2.x
+ * residency is asked for at creation, at 1.3 a read reference pages in
+ * as well. C:\\mali\\open-write brings the old list back, to compare.
+ * Read once a process.
+ */
+static int
+open_read(void)
+{
+   static int on = -1;
+   if (on < 0) {
+      on = GetFileAttributesA("C:\\mali\\open-write") == INVALID_FILE_ATTRIBUTES;
+      if (!on)
+         DebugPrintf("switch C:\\mali\\open-write: present, opened surfaces are listed as"
+                     " written (dxgkrnl refuses that for flip model buffers)\n");
+   }
+   return on;
+}
+
 /* One render with these chains, in order: their BOs first, then every other
  * live BO. Under wddm_lock. */
 static int
@@ -1710,7 +1825,8 @@ wsubmit(const struct wchain *c, unsigned chains)
          }
          memset(&walloc[n], 0, sizeof(walloc[n]));
          walloc[n].hAllocation = bo->h;
-         walloc[n].WriteOperation = 1;
+         /* Written, except a surface opened from another process. */
+         walloc[n].WriteOperation = !(bo->opened && open_read());
          n++;
       }
    }
@@ -2093,7 +2209,9 @@ malikm_present_allocation(void *hRTDevice, unsigned src_allocation, unsigned dst
       p.hContext = ddi.context;
       unsigned long long t0 = malikm_perf_now();
       uint64_t slow_t0 = mali_slow_now();
-      hr = ddi.dxgi->pfnPresentCb(ddi.device, &p);
+      cb_begin("Present", (unsigned)p.hSrcAllocation);
+      hr = cb_end("Present", ddi.dxgi->pfnPresentCb(ddi.device, &p), (unsigned)p.hSrcAllocation,
+                  (unsigned)p.hDstAllocation);
       malikm_perf_add(4 /* present-cb */, t0);
       MALI_SLOW(slow_t0, "present-cb", "pfnPresentCb 0x%x -> 0x%x, 0x%08lx", src_allocation,
                 dst_allocation, (unsigned long)hr);
@@ -2137,7 +2255,10 @@ malikm_present_d3dddi_rows(const void *map, unsigned stride, unsigned w, unsigne
                            void *dxgi_context)
 {
    int ret = -1;
-   HRESULT hr = E_FAIL;
+   /* With no surface to present from (it could not be made or locked):
+    * out of memory, which the runtime takes from a DXGI DDI without
+    * removing the device. PresentImpl returns this. */
+   HRESULT hr = E_OUTOFMEMORY;
    D3DKMT_HANDLE src = 0, dst = 0;
 
    wlock(__func__);
@@ -2196,7 +2317,9 @@ malikm_present_d3dddi_rows(const void *map, unsigned stride, unsigned w, unsigne
       p.pDXGIContext = dxgi_context;
       p.hContext = ddi.context;
       unsigned long long t0 = malikm_perf_now();
-      hr = ddi.dxgi->pfnPresentCb(ddi.device, &p);
+      cb_begin("Present", (unsigned)p.hSrcAllocation);
+      hr = cb_end("Present", ddi.dxgi->pfnPresentCb(ddi.device, &p), (unsigned)p.hSrcAllocation,
+                  (unsigned)p.hDstAllocation);
       malikm_perf_add(4 /* present-cb */, t0);
    }
    present_result = hr;
@@ -2241,7 +2364,9 @@ malikm_present_d3dddi(const void *bgrx, unsigned w, unsigned h, void *dxgi_conte
          p.pDXGIContext = dxgi_context;
          p.hContext = ddi.context;
          t0 = malikm_perf_now();
-         hr = ddi.dxgi->pfnPresentCb(ddi.device, &p);
+         cb_begin("Present", (unsigned)p.hSrcAllocation);
+      hr = cb_end("Present", ddi.dxgi->pfnPresentCb(ddi.device, &p), (unsigned)p.hSrcAllocation,
+                  (unsigned)p.hDstAllocation);
          malikm_perf_add(4 /* present-cb */, t0);
       }
       present_result = hr;
@@ -2286,7 +2411,9 @@ malikm_present_d3dddi(const void *bgrx, unsigned w, unsigned h, void *dxgi_conte
    p.hSrcAllocation = ddi.present;
    p.pDXGIContext = dxgi_context;
    p.hContext = ddi.context;
-   HRESULT hr = ddi.dxgi->pfnPresentCb(ddi.device, &p);
+   cb_begin("Present", (unsigned)p.hSrcAllocation);
+   HRESULT hr = cb_end("Present", ddi.dxgi->pfnPresentCb(ddi.device, &p), (unsigned)p.hSrcAllocation,
+                  (unsigned)p.hDstAllocation);
    ret = hr >= 0 ? 0 : -1;
    if (InterlockedIncrement(&said) <= 20)
       DebugPrintf("present: %ux%u, pfnPresentCb 0x%08lx, DXGI context %p\n", w, h,
@@ -2605,19 +2732,103 @@ malikm_primary_begin_create(void *hRTDevice, void *hRTResource, unsigned w, unsi
    shared_next.vidpn_source = vidpn_source;
 }
 
-/* RotateResourceIdentities gave the primary on this allocation to another
- * runtime resource: it is that resource's deallocation that returns it. */
+/* RotateResourceIdentities gave the primary, or the shared swap chain
+ * buffer, on this allocation to another runtime resource: it is that
+ * resource's deallocation that returns it. */
 void
 malikm_primary_rebind(void *hRTDevice, unsigned allocation, void *hRTResource)
 {
    wlock(__func__);
    if (wselect_rt(hRTDevice)) {
       for (uint32_t i = 0; i < wbo_cap; i++) {
-         if (wbo[i].h == allocation && wbo[i].primary && !wbo[i].released)
+         if (wbo[i].h == allocation && (wbo[i].primary || wbo[i].rt_resource) &&
+             !wbo[i].released)
             wbo[i].rt_resource = hRTResource;
       }
    }
    wunlock();
+}
+
+/*
+ * A device removed inside pfnRenderCb: the runtime does not say what
+ * D3DKMTRender answered, and its callback returns S_OK. Ask the kernel
+ * again, on the same context and buffers, with a command maliwddm refuses:
+ * STATUS_INVALID_PARAMETER (0xC000000D) then means dxgkrnl took the
+ * allocation list and reached the driver, anything else is dxgkrnl's own
+ * refusal. Then each allocation alone, as written and as read, to find the
+ * one it refuses. Nothing is queued: the refused command runs no job.
+ */
+static void
+render_probe(unsigned allocations, unsigned command_length)
+{
+   static KMT_FN render;
+   static volatile LONG done;
+   MW_COMMAND saved_cmd;
+   D3DDDI_ALLOCATIONLIST saved_first;
+   D3DDDI_ALLOCATIONLIST *list;
+   D3DKMT_RENDER r;
+   NTSTATUS st;
+   unsigned refused = 0;
+
+   if (!ddi.on || !wcmd || !walloc || !allocations || allocations > walloc_size ||
+       wcmd_size < sizeof(MW_COMMAND) || InterlockedIncrement(&done) > 2)
+      return;
+   if (!render)
+      render = kmt_resolve("Render");
+   if (!render)
+      return;
+   list = malloc(allocations * sizeof(*list));
+   if (!list)
+      return;
+   memcpy(list, walloc, allocations * sizeof(*list));
+   saved_cmd = *(MW_COMMAND *)wcmd;
+   saved_first = walloc[0];
+   memset(wcmd, 0xFF, sizeof(MW_COMMAND));       /* no MW_CMD_JOB: refused by MwRender */
+
+   memset(&r, 0, sizeof(r));
+   r.hContext = (D3DKMT_HANDLE)(uintptr_t)ddi.context;
+   r.CommandLength = sizeof(MW_COMMAND);
+   r.AllocationCount = allocations;
+   st = render(&r);
+   DebugPrintf("removed:   D3DKMTRender again, context 0x%x, %u allocations (%u command bytes"
+               " were sent), a refused command: 0x%08lx\n", (unsigned)r.hContext, allocations,
+               command_length, (unsigned long)st);
+   for (unsigned i = 0; i < allocations && refused < 12; i++) {
+      NTSTATUS w, rd;
+      struct wbo *bo = NULL;
+
+      for (uint32_t k = 0; k < wbo_cap && !bo; k++)
+         if (wbo[k].h == list[i].hAllocation)
+            bo = &wbo[k];
+      memset(&walloc[0], 0, sizeof(walloc[0]));
+      walloc[0].hAllocation = list[i].hAllocation;
+      walloc[0].WriteOperation = 1;
+      memset(&r, 0, sizeof(r));
+      r.hContext = (D3DKMT_HANDLE)(uintptr_t)ddi.context;
+      r.CommandLength = sizeof(MW_COMMAND);
+      r.AllocationCount = 1;
+      w = render(&r);
+      walloc[0].WriteOperation = 0;
+      memset(&r, 0, sizeof(r));
+      r.hContext = (D3DKMT_HANDLE)(uintptr_t)ddi.context;
+      r.CommandLength = sizeof(MW_COMMAND);
+      r.AllocationCount = 1;
+      rd = render(&r);
+      if (w == (NTSTATUS)0xC000000D && rd == (NTSTATUS)0xC000000D)
+         continue;
+      refused++;
+      DebugPrintf("removed:   allocation %u of %u, 0x%x (%s%s%s, %llu bytes): written 0x%08lx,"
+                  " read 0x%08lx\n", i, allocations, (unsigned)list[i].hAllocation,
+                  bo && bo->opened ? "opened" : bo && bo->rt_resource ? "runtime resource" : "own",
+                  bo && bo->primary ? ", primary" : "", bo && bo->released ? ", released" : "",
+                  bo ? (unsigned long long)bo->size : 0ull, (unsigned long)w, (unsigned long)rd);
+   }
+   if (!refused)
+      DebugPrintf("removed:   no allocation is refused alone (0xC000000D for each, written and"
+                  " read)\n");
+   walloc[0] = saved_first;
+   *(MW_COMMAND *)wcmd = saved_cmd;
+   free(list);
 }
 
 /* The runtime removed this device (it moved the device's function table,
@@ -2661,6 +2872,19 @@ malikm_note_removed(void *hRTDevice)
       DebugPrintf("removed:   %u BOs live (%u of runtime resources, %u of them given back"
                   " but still held)\n", live, shared, opened_released);
    }
+   DebugPrintf("removed:   callback in flight on this thread: %s (0x%x)\n",
+               cb_flight ? cb_flight : "none", cb_flight ? cb_flight_a : 0);
+   for (unsigned k = 1; k <= CB_RING; k++) {
+      const struct cb_note *c = &cb_ring[((ULONG)cb_ring_next + k) % CB_RING];
+      if (!c->name)
+         continue;
+      DebugPrintf("removed:   callback %lu ms before, thread %lu, device %p: %s(0x%x, 0x%x) 0x%08lx\n",
+                  (unsigned long)(now - c->tick), (unsigned long)c->tid, c->device, c->name, c->a,
+                  c->b, (unsigned long)c->hr);
+   }
+   log_device_states();
+   if (nested && cb_flight && !strcmp(cb_flight, "Render"))
+      render_probe(cb_flight_a, cb_flight_b);
    /* The notes are this shim's own small array: read without the lock, a
     * note being written shows half old, half new, nothing worse. */
    for (unsigned k = 0; k < SUBMIT_NOTES; k++) {
@@ -2738,7 +2962,8 @@ malikm_shared_destroy(void *hRTDevice, void *hRTResource)
          held++;
       }
       d.hResource = hRTResource;
-      hr = ddi.cb.pfnDeallocateCb((HANDLE)hRTDevice, &d);
+      cb_begin("Deallocate(resource)", held);
+      hr = cb_end("Deallocate(resource)", ddi.cb.pfnDeallocateCb((HANDLE)hRTDevice, &d), held, 0);
       MALI_SLOW(slow_t0, "shared-destroy", "resource %p, %u buffer(s) held, pfnDeallocateCb 0x%08lx",
                 hRTResource, held, (unsigned long)hr);
       DebugPrintf("shared destroy: resource %p device %p, idle %d, %u buffer(s) still held,"
@@ -2925,6 +3150,7 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
          wbo[h - 1].rt_resource = shared_next.rt_resource;
          wbo[h - 1].rt_device = shared_next.device;
          wbo[h - 1].primary = shared == SHARED_PRIMARY;
+         wbo[h - 1].opened = shared == SHARED_OPEN;
          shared_next.allocation = ai.hAllocation;
          shared_next.done = 1;
       }

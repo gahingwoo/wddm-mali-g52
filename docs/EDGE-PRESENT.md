@@ -9,14 +9,16 @@ Settings: see [SETTINGS.md](SETTINGS.md). The ones that matter here are
 
 ## State
 
-- At WDDM 1.3 with redirection for the browsers (`UmdRedirect` 2, the
-  1.3 default), Edge renders on the Mali and DWM stays up.
-- At WDDM 2.x (`UmdRedirect` 1, the 2.x default), Edge's GPU process
-  gets the Mali at feature level 10_1, but its first present to a
-  composition swap chain removes the device. After three GPU process
-  restarts Edge falls back to software. The desktop is not affected.
-- At WDDM 2.x with redirection for the browsers (`UmdRedirect` 2), the
-  whole session froze once. See "The WDDM 2.0 session hang".
+- At WDDM 2.x every process gets redirection (`UmdRedirect` 3, the 2.x
+  default since 2026-11-27). Blt model and flip model swap chains on a
+  window reach the screen, and Edge renders on the Mali with
+  DirectComposition and with `--disable-direct-composition`. Board
+  results: "Board result, 2026-11-27".
+- At WDDM 1.3 the browsers get redirection (`UmdRedirect` 2, the 1.3
+  default), Edge renders on the Mali and DWM stays up.
+- Without redirection at 2.x a D3D11 window shows nothing, and a
+  composition swap chain's present removes the device. See "Without
+  redirection".
 
 ## How it works
 
@@ -30,13 +32,42 @@ Who gets S_OK, first match wins:
 2. `C:\mali\redirect` exists: every process.
 3. `UmdRedirect`: 1 no process, 2 the browsers (msedge.exe, chrome.exe,
    msedgewebview2.exe, d3dprobe.exe, matched by process name), 3 every
-   process. Absent: 1 at WDDM 2.x, 2 at 1.3. A KMD that predates the
+   process. Absent: 3 at WDDM 2.x, 2 at 1.3. A KMD that predates the
    field answers 0, and the UMD then gives it to the browsers.
 
 `UmdRedirect` is read at each adapter query, so a change applies to
 processes started after it, with no reboot. The UMD log says which case
 applied, for example `CreateDevice: done, DXGI_STATUS_NO_REDIRECTION (a
 browser, but UmdRedirect 1)`.
+
+### With redirection
+
+- A blt model swap chain (DISCARD, SEQUENTIAL) keeps a private back
+  buffer. Each present copies the frame into an allocation of the
+  device's and hands it to `pfnPresentCb`; dxgkrnl has maliwddm blt it
+  into the window's surface (`DxgkDdiPresent`, a CPU copy, one for each
+  present).
+- A flip model swap chain (FLIP_SEQUENTIAL, FLIP_DISCARD, and every
+  composition swap chain) has shared buffers. A present names the
+  buffer's own allocation, DWM opens the buffers and samples them, and
+  `DxgkDdiPresent` is not called. RotateResourceIdentities exchanges the
+  buffers, views and allocations of the resources (patch 0087).
+- dxgkrnl gives DWM read-only access to those buffers. The shim lists a
+  surface opened from another process as read (`WriteOperation` 0). See
+  "The WDDM 2.0 session hang" for what a write did.
+- The DXGI Blt DDI (a present between surfaces of different size, format
+  or sample count) is carried out on the GPU (patch 0087).
+- Present returns the result of `pfnPresentCb` for every kind of
+  surface. With no surface to present from it returns E_OUTOFMEMORY,
+  which the runtime accepts.
+
+### Without redirection
+
+At WDDM 2.0 a present from a window swap chain, blt or flip model,
+returns S_OK and shows nothing: dxgkrnl does not call `DxgkDdiPresent`
+and DWM is not told (presenttest, 2026-11-27: the window shows the
+wallpaper, 0 driver blts). This was the white Edge window with
+`--disable-direct-composition`.
 
 A composition swap chain (what Chromium's `SwapChainImageBacking` and
 DirectComposition use) can only present to DWM, through its shared
@@ -45,10 +76,8 @@ buffers. Without redirection `pfnPresentCb` refuses that present with
 the runtime removes the device with reason 0x887A0020
 (DXGI_ERROR_DRIVER_INTERNAL_ERROR). Edge then logs `Present1 failed ...
 (0x887A0005)`, `DComp commit failed: SolidColorSurfacePoolCreateSurface`
-and ANGLE `testDeviceLost: HRESULT 0x887A0020`. Swap chains on a window
-(FLIP_DISCARD, FLIP_SEQUENTIAL, DISCARD) present fine without
-redirection. The UMD does not hide the failure: S_OK from a refused
-present would give a blank Edge window instead of a software fallback.
+and ANGLE `testDeviceLost: HRESULT 0x887A0020`, and falls back to
+software after three GPU process restarts.
 
 ### Errors the runtime accepts
 
@@ -84,17 +113,6 @@ up itself, removes the device with 0x887A0020. So the UMD:
 
 ## Known issues
 
-- At 2.x, composition swap chains fail as described above, so Edge runs
-  in software. `--disable-direct-composition` makes ANGLE present
-  through a window swap chain instead; that is a test of this reading,
-  not a fix for users.
-- With redirection on, DWM's device was removed by the user-mode runtime
-  about 30 ms after DWM opened a composition buffer a browser had just
-  presented (WDDM 1.3). dxgkrnl's trace showed no device error. DWM then
-  rebuilt its device; after too many losses dwmcore fails fast with
-  0x8898008D (MILERR_NO_HARDWARE_DEVICE). The cause is not known. The
-  `removed:` and `recent:` lines in dwm.exe's UMD log are where to read
-  it.
 - Edge's own GPU process at 2.0 once logged `DCompositionCreateDevice3
   failed: Access is denied (0x80070005)` and a window swap chain failing
   with 0x887A0022, which `d3dprobe sandbox` does not reproduce even with
@@ -147,24 +165,46 @@ ends with `edge path: device alive` when everything passed.
 
 ## The WDDM 2.0 session hang
 
-With redirection for the browsers at WDDM 2.0, Edge froze the session
-within seconds: the debug port never answered, Edge processes could not
-be killed, DWM stopped using CPU, GPU counter queries hung, `shutdown /r`
-never finished. There was no TDR and no LiveKernelReport.
+With redirection, a flip model swap chain froze the session at WDDM 2.0
+within seconds (Edge on 2026-11-25, `presenttest flipseq` on
+2026-11-27): the application and dwm.exe could not be killed, DWM
+stopped using CPU, `shutdown /r` never finished, and stopping an ETW
+session on dxgkrnl hung too. There was no TDR: maliwddm was idle, its
+last calls CloseAllocation and SetVidPnSourceVisibility(FALSE) from
+dwm.exe.
 
-A live dump showed maliwddm idle (no thread inside a DDI, every fence
-completed, no fault), so dxgkrnl had nothing to time out. dxgkrnl's last
-calls were OpenAllocation, Escape, Render, a paging buffer,
-DestroyAllocation, CloseAllocation, SetPointerPosition and
-SetVidPnSourceVisibility(FALSE) within 14 ms; after that only vsync DPCs.
-37 GUI threads waited in win32k on one ERESOURCE whose owner was not in
-the dump. The reading that fits, not proven: DWM lost its device right
-after opening a browser's buffer, let go of the screen, and a thread in
-the DWM restart path holds the win32k lock.
+**Cause.** The shim listed every allocation a job names with
+`WriteOperation` 1. dxgkrnl gives the compositor read-only access to
+the buffers of a flip model swap chain, and at WDDM 1.2 and later
+`VIDMM_GLOBAL::ReferenceDmaBuffer` (dxgmms2 22621) answers a written
+entry for such an allocation with STATUS_ACCESS_DENIED. So DWM's first
+job that sampled an application's flip buffer failed in D3DKMTRender.
+The runtime's `pfnRenderCb` returns S_OK for that and removes the
+device, which is why no failed callback was ever in the log. DWM then
+tore its device down. At 1.3 it built a new one and lost it again at the
+next frame (the removals of 2026-11-23, and 0x8898008D after enough of
+them); at 2.0 the teardown never returned.
 
-What the driver does about it:
+**Evidence.** dwm.exe's UMD log of 2026-11-27 (package 2.20.40.786):
+the removal is inside `Render`, right after it opened the two buffers,
+every earlier callback S_OK, and dxgkrnl reports every device of the
+process as active. With opened surfaces listed as read, the same test
+shows the picture and DWM keeps its device: `presenttest`, seven
+models, and Edge with DirectComposition.
 
-- `UmdRedirect` defaults to 1 (no redirection) at 2.x.
+**Fix.** The shim lists a surface opened from another process as read.
+`C:\mali\open-write` brings the old list back, to compare (read once
+a process, so reboot; it freezes the session at the first flip model
+present).
+
+What the driver records for the next removal or freeze:
+
+- The shim keeps the last 48 runtime callbacks with their results. When
+  the runtime removes a device, the UMD log gets `removed:` lines: the
+  callback in flight, the callbacks before it, dxgkrnl's execution state
+  of every device of the process, and, for a removal inside `Render`,
+  dxgkrnl's answer to the same allocation list and to each allocation
+  alone, written and read (0xC000000D means dxgkrnl accepted it).
 - The KMD notes every DDI entered below DISPATCH_LEVEL with the caller's
   image name, pid and tid. Every second the watchdog writes, under
   `Device Parameters\maliwddm\Probe2000`: `Wd_Recent` (last twelve:
@@ -174,11 +214,52 @@ What the driver does about it:
   to `Prev_*` first.
 - The package carries `maliwddm.pdb` in `symbols\`.
 
-If it happens (for example while testing `UmdRedirect` 2): over SSH,
-`reg query ...\Probe2000 /v Wd_Recent` and `/v Wd_Stall`; then
-`taskkill /f /im dwm.exe` and note whether the desktop comes back and
-Edge exits. After a power cycle, save every `Prev_*` value before
-anything else. Undo with `reg delete ... /v UmdRedirect /f`.
+Not known: what dwm.exe's teardown waits for at 2.0. Any other removal
+of DWM's device while an application holds flip buffers may freeze the
+session the same way. To go back to no redirection:
+`reg add ...\Device Parameters /v UmdRedirect /t REG_DWORD /d 1`.
+
+## Board result, 2026-11-27
+
+TaishanPi 3M, WDDM 2.0, HDMI 2560x1440, package 3.9.16.812 with its
+defaults (no `UmdRedirect` value, no switch files).
+`tools/windows/presenttest.cpp`: one window cleared to a colour and
+presented for some seconds; `sdc` is the centre pixel read from the
+screen DC.
+
+| Model | Device | Before (no redirection) | After |
+|---|---|---|---|
+| GDI control | none | yellow | yellow |
+| D3D11CreateDeviceAndSwapChain, DISCARD | Mali | wallpaper | orange, 61 presents/s, one driver blt each |
+| DISCARD | Mali | wallpaper | red, 61/s, one driver blt each |
+| SEQUENTIAL | Mali | wallpaper | green, 63/s, one driver blt each |
+| FLIP_SEQUENTIAL | Mali | wallpaper; with redirection the session froze | blue, 62/s, no driver blt |
+| FLIP_DISCARD | Mali | wallpaper | cyan, 62/s |
+| FLIP_SEQUENTIAL, WS_EX_NOREDIRECTIONBITMAP | Mali | wallpaper | purple, 62/s |
+| FLIP_DISCARD, WS_EX_NOREDIRECTIONBITMAP | Mali | wallpaper | teal, 62/s |
+| DISCARD, FLIP_SEQUENTIAL | WARP | red, blue | red, blue |
+
+Every HRESULT was S_OK before and after; dwm.exe kept its PID.
+
+Edge 158, a fresh profile, edge://gpu read over the debug port, then
+https://example.com:
+
+| | Direct composition | Compositing, WebGL, Canvas | Crash count | Page |
+|---|---|---|---|---|
+| `--disable-direct-composition` | false | Hardware accelerated | 0 | drawn |
+| no flags | true | Hardware accelerated | 0 | drawn |
+
+Both: ANGLE on D3D11, the Mali, feature level 11_0, Software Rendering
+No.
+
+Also on that boot: FurMark (GpuTest, OpenGL, 1280x720 windowed) for 150 s
+with no TDR, and `shutdown /r` completed.
+
+Not explained: on the package before this one, without redirection, the
+board reset about 2 s into the D3D11 test that followed a run with
+Desktop Duplication, three times out of three, with no bugcheck
+recorded. With redirection the same sequence ran three times without a
+reset, and Desktop Duplication read the window's colour.
 
 ## Collecting evidence
 

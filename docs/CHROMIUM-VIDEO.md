@@ -286,10 +286,11 @@ presents through composition swap chains, which this UMD has failed
 before ([EDGE-PRESENT.md](EDGE-PRESENT.md)). `--disable-direct-composition`
 keeps the HWND swap chain path.
 
-At WDDM 2.x the browsers get no redirection by default (`UmdRedirect`,
-see EDGE-PRESENT.md, "The WDDM 2.0 session hang"), so Edge's GPU process
-has no working present and falls back to software, where there is no
-D3D11 decoder. C1 is therefore tested at WDDM 1.3.
+Until 2026-11-27 the browsers got no redirection at WDDM 2.x, Edge's GPU
+process had no working composition present and fell back to software, so
+C1 was tested at WDDM 1.3 or with `--disable-direct-composition`. Since
+then every process gets redirection at 2.x and Edge needs no flag
+(EDGE-PRESENT.md).
 
 Edge flags:
 

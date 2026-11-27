@@ -35,7 +35,7 @@ noted. Details in [D3D11-UMD.md](D3D11-UMD.md).
 | `UmdFeatureLevel` | 0xa000 | Passed to the UMD; not used by it. |
 | `UmdDxgi12` | 0 | Reserved for the DXGI 1.2 DDI; not used. |
 | `UmdMsaa` | 1 | Multisample answers. 0: none. 1: only in msedge.exe, chrome.exe, msedgewebview2.exe, d3dprobe.exe. 2: every process. 4 and 5 act as 1 and 2. Reboot to change. |
-| `UmdRedirect` | 1 at WDDM 2.x, 2 at 1.3 | DXGI redirection. 1: no process. 2: the browsers above, by name. 3: every process. At 2.x, 2 froze the session ([EDGE-PRESENT.md](EDGE-PRESENT.md#the-wddm-20-session-hang)). The files `C:\mali\noredirect` and `C:\mali\redirect` override it. |
+| `UmdRedirect` | 3 at WDDM 2.x, 2 at 1.3 | DXGI redirection. 1: no process (at 2.x a D3D11 window then shows nothing). 2: the browsers above, by name. 3: every process. See [EDGE-PRESENT.md](EDGE-PRESENT.md). The files `C:\mali\noredirect` and `C:\mali\redirect` override it. |
 | `UmdReportFL11` | 1 | 0: off. 1: feature level 11_0 and the D3D11.1 interface for Chromium's GPU process only (`--type=gpu-process`). See [CHROMIUM-VIDEO.md](CHROMIUM-VIDEO.md). |
 | `UmdCopyOnGpu` | 1 | Texture copies on the GPU. 0: on the CPU. |
 | `UmdReadbackOneCopy` | 1 | A read-back present copies the frame once. |
