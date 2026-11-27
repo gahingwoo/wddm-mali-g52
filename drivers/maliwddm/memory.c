@@ -439,11 +439,19 @@ NTSTATUS APIENTRY MwGetStandardAllocationDriverData(IN_CONST_HANDLE hAdapter,
         h = Arg->pCreateShadowSurfaceData->Height;
         f = Arg->pCreateShadowSurfaceData->Format;
         pitch = &Arg->pCreateShadowSurfaceData->Pitch;
+        flags |= MW_ALLOC_CACHED | MW_ALLOC_CPU;
         break;
     case D3DKMDT_STANDARDALLOCATION_STAGINGSURFACE:
         w = Arg->pCreateStagingSurfaceData->Width;
         h = Arg->pCreateStagingSurfaceData->Height;
         pitch = &Arg->pCreateStagingSurfaceData->Pitch;
+        /* The surface a window's blt present lands in: maliwddm blts the
+         * frame into it and dxgkrnl then copies it out again on the CPU,
+         * in the presenting thread. Write-combined, that copy was 35 ms of
+         * a 2560x1440 present (2026-11-27). The GPU never sees a shadow or
+         * staging surface here (no GDI acceleration, and a present into
+         * one is the CPU's), so cached pages need no maintenance. */
+        flags |= MW_ALLOC_CACHED | MW_ALLOC_CPU;
         break;
     default:
         return STATUS_NOT_SUPPORTED;
@@ -564,7 +572,7 @@ static NTSTATUS BuildPaging1x(MW_ADAPTER *a, DXGKARG_BUILDPAGINGBUFFER *Arg)
         /* Cached pages: VidMm filled them through the CPU's caches, and a
          * dirty line written back later would land on what the GPU has
          * drawn since. To memory now, and out of the caches. */
-        if (alloc->Mapped && (alloc->Flags & MW_ALLOC_CACHED)) {
+        if (alloc->Mapped && (alloc->Flags & (MW_ALLOC_CACHED | MW_ALLOC_CPU)) == MW_ALLOC_CACHED) {
             PUCHAR va = (PUCHAR)MmGetSystemAddressForMdlSafe(Arg->MapApertureSegment.pMdl,
                                                              NormalPagePriority | MdlMappingNoExecute);
             if (va != NULL)

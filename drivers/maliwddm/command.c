@@ -486,7 +486,7 @@ static void DoPresentPinned(MW_ADAPTER *A, const MW_PRESENT_OP *Op, PMDL SrcMdl,
         srcPitch = (LONG)(Op->Src->Pitch ? Op->Src->Pitch : Op->Src->Width * 4);
         /* A cached source the GPU drew into: the CPU's caches hold the
          * frame before it (cache.asm). The rows this present reads. */
-        if ((Op->Src->Flags & MW_ALLOC_CACHED) && srcW > 0 && srcH > 0) {
+        if ((Op->Src->Flags & (MW_ALLOC_CACHED | MW_ALLOC_CPU)) == MW_ALLOC_CACHED && srcW > 0 && srcH > 0) {
             LONG top = Op->SrcRect.top < 0 ? 0 : Op->SrcRect.top;
             LONG bottom = Op->SrcRect.bottom > srcH ? srcH : Op->SrcRect.bottom;
             if (bottom > top)

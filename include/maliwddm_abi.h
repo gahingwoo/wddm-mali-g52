@@ -30,6 +30,9 @@ typedef __int32 mw_s32;
 #define MW_ALLOC_CACHED         0x4     /* backed by cached pages: the surface a windowed present
                                          * is copied from on the CPU (maliwddm invalidates the
                                          * CPU caches before it reads). Never mapped by the UMD. */
+#define MW_ALLOC_CPU            0x8     /* with MW_ALLOC_CACHED: only the CPU reads and writes it
+                                         * (dxgkrnl's shadow and staging surfaces), so nothing
+                                         * has to be invalidated. Set by maliwddm alone. */
 
 typedef struct _MW_ALLOCATION_INFO {
     mw_u32 Version;                     /* MW_ABI_VERSION */
