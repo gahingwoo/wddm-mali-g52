@@ -1460,6 +1460,7 @@ static struct cb_note cb_ring[CB_RING];
 static volatile LONG cb_ring_next;
 static __declspec(thread) const char *cb_flight;
 static __declspec(thread) unsigned cb_flight_a;
+static __declspec(thread) unsigned cb_flight_b;
 
 static void
 cb_begin(const char *name, unsigned a)
@@ -1570,6 +1571,7 @@ w_render_inner(UINT commandLength, UINT allocations)
       r.CommandLength = commandLength;
       r.NumAllocations = allocations;
       cb_begin("Render", allocations);
+      cb_flight_b = commandLength;
       HRESULT rhr = cb_end("Render", ddi.cb.pfnRenderCb(ddi.device, &r), allocations, commandLength);
       if (rhr < 0) {
          /* A failed submission is where a device the runtime removes would
@@ -2734,6 +2736,88 @@ malikm_primary_rebind(void *hRTDevice, unsigned allocation, void *hRTResource)
    wunlock();
 }
 
+/*
+ * A device removed inside pfnRenderCb: the runtime does not say what
+ * D3DKMTRender answered, and its callback returns S_OK. Ask the kernel
+ * again, on the same context and buffers, with a command maliwddm refuses:
+ * STATUS_INVALID_PARAMETER (0xC000000D) then means dxgkrnl took the
+ * allocation list and reached the driver, anything else is dxgkrnl's own
+ * refusal. Then each allocation alone, as written and as read, to find the
+ * one it refuses. Nothing is queued: the refused command runs no job.
+ */
+static void
+render_probe(unsigned allocations, unsigned command_length)
+{
+   static KMT_FN render;
+   static volatile LONG done;
+   MW_COMMAND saved_cmd;
+   D3DDDI_ALLOCATIONLIST saved_first;
+   D3DDDI_ALLOCATIONLIST *list;
+   D3DKMT_RENDER r;
+   NTSTATUS st;
+   unsigned refused = 0;
+
+   if (!ddi.on || !wcmd || !walloc || !allocations || allocations > walloc_size ||
+       wcmd_size < sizeof(MW_COMMAND) || InterlockedIncrement(&done) > 2)
+      return;
+   if (!render)
+      render = kmt_resolve("Render");
+   if (!render)
+      return;
+   list = malloc(allocations * sizeof(*list));
+   if (!list)
+      return;
+   memcpy(list, walloc, allocations * sizeof(*list));
+   saved_cmd = *(MW_COMMAND *)wcmd;
+   saved_first = walloc[0];
+   memset(wcmd, 0xFF, sizeof(MW_COMMAND));       /* no MW_CMD_JOB: refused by MwRender */
+
+   memset(&r, 0, sizeof(r));
+   r.hContext = (D3DKMT_HANDLE)(uintptr_t)ddi.context;
+   r.CommandLength = sizeof(MW_COMMAND);
+   r.AllocationCount = allocations;
+   st = render(&r);
+   DebugPrintf("removed:   D3DKMTRender again, context 0x%x, %u allocations (%u command bytes"
+               " were sent), a refused command: 0x%08lx\n", (unsigned)r.hContext, allocations,
+               command_length, (unsigned long)st);
+   for (unsigned i = 0; i < allocations && refused < 12; i++) {
+      NTSTATUS w, rd;
+      struct wbo *bo = NULL;
+
+      for (uint32_t k = 0; k < wbo_cap && !bo; k++)
+         if (wbo[k].h == list[i].hAllocation)
+            bo = &wbo[k];
+      memset(&walloc[0], 0, sizeof(walloc[0]));
+      walloc[0].hAllocation = list[i].hAllocation;
+      walloc[0].WriteOperation = 1;
+      memset(&r, 0, sizeof(r));
+      r.hContext = (D3DKMT_HANDLE)(uintptr_t)ddi.context;
+      r.CommandLength = sizeof(MW_COMMAND);
+      r.AllocationCount = 1;
+      w = render(&r);
+      walloc[0].WriteOperation = 0;
+      memset(&r, 0, sizeof(r));
+      r.hContext = (D3DKMT_HANDLE)(uintptr_t)ddi.context;
+      r.CommandLength = sizeof(MW_COMMAND);
+      r.AllocationCount = 1;
+      rd = render(&r);
+      if (w == (NTSTATUS)0xC000000D && rd == (NTSTATUS)0xC000000D)
+         continue;
+      refused++;
+      DebugPrintf("removed:   allocation %u of %u, 0x%x (%s%s%s, %llu bytes): written 0x%08lx,"
+                  " read 0x%08lx\n", i, allocations, (unsigned)list[i].hAllocation,
+                  bo && bo->opened ? "opened" : bo && bo->rt_resource ? "runtime resource" : "own",
+                  bo && bo->primary ? ", primary" : "", bo && bo->released ? ", released" : "",
+                  bo ? (unsigned long long)bo->size : 0ull, (unsigned long)w, (unsigned long)rd);
+   }
+   if (!refused)
+      DebugPrintf("removed:   no allocation is refused alone (0xC000000D for each, written and"
+                  " read)\n");
+   walloc[0] = saved_first;
+   *(MW_COMMAND *)wcmd = saved_cmd;
+   free(list);
+}
+
 /* The runtime removed this device (it moved the device's function table,
  * RelocateDeviceFuncs). Nothing here can learn why; what this device last
  * submitted, and which runtime resources each submission named, goes into
@@ -2786,6 +2870,8 @@ malikm_note_removed(void *hRTDevice)
                   c->b, (unsigned long)c->hr);
    }
    log_device_states();
+   if (nested && cb_flight && !strcmp(cb_flight, "Render"))
+      render_probe(cb_flight_a, cb_flight_b);
    /* The notes are this shim's own small array: read without the lock, a
     * note being written shows half old, half new, nothing worse. */
    for (unsigned k = 0; k < SUBMIT_NOTES; k++) {
