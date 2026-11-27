@@ -1767,14 +1767,28 @@ struct wchain {
 
 static struct wbo *wddm_bo(uint32_t h);
 
+/*
+ * A surface opened from another process is listed as read. dxgkrnl gives
+ * the compositor read-only access to the buffers of a flip model swap
+ * chain, and at WDDM 1.2 and later VIDMM_GLOBAL::ReferenceDmaBuffer
+ * answers a write to such an allocation with STATUS_ACCESS_DENIED: the
+ * render fails, the runtime removes the device (its callback still says
+ * S_OK), and at WDDM 2.0 dwm.exe's teardown then hung the session
+ * (2026-11-25 and 2026-11-27, docs/EDGE-PRESENT.md). Every allocation was
+ * listed as written until then. The flag does nothing else here: at 2.x
+ * residency is asked for at creation, at 1.3 a read reference pages in
+ * as well. C:\\mali\\open-write brings the old list back, to compare.
+ * Read once a process.
+ */
 static int
 open_read(void)
 {
    static int on = -1;
    if (on < 0) {
-      on = GetFileAttributesA("C:\\mali\\open-read") != INVALID_FILE_ATTRIBUTES;
-      if (on)
-         DebugPrintf("switch C:\\mali\\open-read: present, opened surfaces are listed as read\n");
+      on = GetFileAttributesA("C:\\mali\\open-write") == INVALID_FILE_ATTRIBUTES;
+      if (!on)
+         DebugPrintf("switch C:\\mali\\open-write: present, opened surfaces are listed as"
+                     " written (dxgkrnl refuses that for flip model buffers)\n");
    }
    return on;
 }
@@ -1811,8 +1825,7 @@ wsubmit(const struct wchain *c, unsigned chains)
          }
          memset(&walloc[n], 0, sizeof(walloc[n]));
          walloc[n].hAllocation = bo->h;
-         /* A test switch: C:\\mali\\open-read lists a surface opened from
-          * another process as read, not written. Read once a process. */
+         /* Written, except a surface opened from another process. */
          walloc[n].WriteOperation = !(bo->opened && open_read());
          n++;
       }
