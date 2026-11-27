@@ -27,7 +27,7 @@ milestones ran on the ArmSoM CM5-IO. Switches and defaults:
 | Panel and HDMI as an extended desktop (`HdmiExtend`) | off by default | [DUAL-DISPLAY.md](docs/DUAL-DISPLAY.md) |
 | 702 MHz GPU clock on a 775 mV rail, thermal guard | board-tested | [PERF.md](docs/PERF.md) |
 | GPU temperature and counters in Task Manager | board-tested | [PERFDATA.md](docs/PERFDATA.md) |
-| Edge and Chrome page rendering on the GPU | blocked (software fallback) | [EDGE-PRESENT.md](docs/EDGE-PRESENT.md) |
+| Edge and Chrome page rendering on the GPU, Direct3D 11 windows (blt and flip model) | board-tested | [EDGE-PRESENT.md](docs/EDGE-PRESENT.md) |
 | Video decode, H.264, HEVC, VP9, AV1, zero copy (`UmdVideo`), in Edge, Chrome and mpv | board-tested, on by default | [VIDEO-DECODE.md](docs/VIDEO-DECODE.md), [CHROMIUM-VIDEO.md](docs/CHROMIUM-VIDEO.md) |
 | Feature level 11_0 for Chromium's video decoder (`UmdReportFL11`) | board-tested, on by default | [CHROMIUM-VIDEO.md](docs/CHROMIUM-VIDEO.md) |
 | OpenCL (rusticl) | board-tested | [OPENCL.md](docs/OPENCL.md) |
@@ -36,6 +36,14 @@ milestones ran on the ArmSoM CM5-IO. Switches and defaults:
 
 Known limit: a heavy program makes the whole desktop wait.
 All docs: [docs/](docs/README.md).
+
+## Milestones
+
+2026-11-27: Microsoft Edge hardware accelerated on the Mali-G52 (WDDM 2.0), TaishanPi 3M
+
+![edge://gpu on the TaishanPi 3M: compositing, WebGL and video decode hardware accelerated, ANGLE on the Mali-G52](docs/imgs/tspi3m-2026-11-27-edge-gpu.webp)
+
+![Edge rendering a page on the Mali-G52 at 2560x1440](docs/imgs/tspi3m-2026-11-27-edge-page.webp)
 
 ## Installing
 
