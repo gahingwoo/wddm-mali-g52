@@ -48,10 +48,15 @@ All docs: [docs/](docs/README.md).
 ## Installing
 
 Needs Windows 11 23H2 on ARM64, test signing on (Secure Boot off), and
-[edk2-rk3576](https://github.com/gahingwoo/edk2-rk3576) firmware, which
-powers the GPU and describes it in ACPI as `RKCP7402`. CI's
-`wddm-mali-g52-driver-arm64` artifact is the driver package; the steps are
-in [INSTALL.txt](drivers/maliwddm/INSTALL.txt). No Visual C++ runtime is
+[edk2-rk3576 0.5.0](https://github.com/gahingwoo/edk2-rk3576/releases/tag/0.5.0)
+or later, which powers the GPU and describes it in ACPI as `RKCP7402`.
+
+The driver is in the driver package of
+[woa-rk3576 0.5.0](https://github.com/gahingwoo/woa-rk3576/releases/tag/0.5.0)
+(`rk3576-drivers-arm64-0.5.0.zip`, `install.cmd /online <board>`). Edge and
+Chrome need no extra switch. CI's `wddm-mali-g52-driver-arm64` artifact is
+the newest untested build; the steps are in
+[INSTALL.txt](drivers/maliwddm/INSTALL.txt). No Visual C++ runtime is
 needed: the user-mode driver has the C runtime linked in.
 
 Everything is built in GitHub CI; there is no local Windows toolchain.
