@@ -4,7 +4,7 @@
 // run, cleared to a colour of the variant's own and presented for a few
 // seconds, every HRESULT logged.
 //
-//   presenttest.exe <variant> [seconds] [log] [warp]
+//   presenttest.exe <variant> [seconds] [log|-] [warp] [nodup]
 //
 // Variants (colour in brackets):
 //   gdi          a GDI window, FillRect in WM_PAINT, no D3D (yellow)
@@ -19,7 +19,8 @@
 // While it presents, the window's centre pixel is read three ways:
 //   wdc  GetPixel on the window's DC (the redirection bitmap, if any);
 //   sdc  GetPixel on the screen DC;
-//   dup  DXGI Desktop Duplication, the composed output DWM scans out.
+//   dup  DXGI Desktop Duplication, the composed output DWM scans out
+//        (left out with nodup).
 // With a maliwddm adapter it also logs the KMD's present counters
 // (MW_ESCAPE_STATS) before and after.
 //
@@ -291,9 +292,13 @@ int main(int argc, char **argv)
 {
     const char *vname = argc > 1 ? argv[1] : "discard";
     int seconds = argc > 2 ? atoi(argv[2]) : 8;
-    bool warp = argc > 4 && !strcmp(argv[4], "warp");
+    bool warp = false, nodup = false;
+    for (int i = 4; i < argc; i++) {
+        warp |= !strcmp(argv[i], "warp");
+        nodup |= !strcmp(argv[i], "nodup");
+    }
     if (argc > 3 && strcmp(argv[3], "-"))
-        g_log = fopen(argv[3], "w");
+        fopen_s(&g_log, argv[3], "w");
     for (const Variant &v : kVariants)
         if (!strcmp(v.name, vname))
             g_v = &v;
@@ -303,7 +308,8 @@ int main(int argc, char **argv)
     }
     SetProcessDPIAware();
     find_mw();
-    say("presenttest %s, %d s, %s", g_v->name, seconds, warp ? "WARP" : "hardware");
+    say("presenttest %s, %d s, %s%s", g_v->name, seconds, warp ? "WARP" : "hardware",
+        nodup ? ", no duplication" : "");
     MW_ESCAPE_STATS_DATA k0 = {}, k1 = {};
     kmd_stats("before", &k0);
 
@@ -442,7 +448,8 @@ int main(int argc, char **argv)
             ReleaseDC(NULL, sdc);
             say("sample %u at %llu ms, frame %u: wdc %s sdc %s", sampled, el, frames, pix(cw, a, sizeof(a)),
                  pix(cs, b, sizeof(b)));
-            dup_sample(centre, sampled ? "late" : "early");
+            if (!nodup)
+                dup_sample(centre, sampled ? "late" : "early");
             sampled++;
         }
     }
