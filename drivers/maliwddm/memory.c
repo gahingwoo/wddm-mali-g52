@@ -279,6 +279,7 @@ static NTSTATUS NewAllocation(MW_ADAPTER *A, const MW_ALLOCATION_INFO *In, DXGK_
         return STATUS_GRAPHICS_NO_VIDEO_MEMORY;
     }
 
+    MwAllocLive(A, alloc);
     MemCreated(A, alloc);
     A->Allocations++;
     if (A->Hdmi.Switch && (alloc->Flags & MW_ALLOC_PRIMARY)) {
@@ -302,11 +303,18 @@ static NTSTATUS NewAllocation(MW_ADAPTER *A, const MW_ALLOCATION_INFO *In, DXGK_
     Out->AllocationPriority = D3DDDI_ALLOCATIONPRIORITY_NORMAL;
     Out->Flags.Value = 0;
     Out->Flags.CpuVisible = TRUE;
+    /* VidMm backs an allocation with write-combined pages unless told
+     * otherwise, and the CPU reads those at about 100 MB/s: a 2560x1440
+     * present took 80 ms in the blt alone (2026-11-27). */
+    if (In->Flags & MW_ALLOC_CACHED)
+        Out->Flags.Cached = TRUE;
     return STATUS_SUCCESS;
 }
 
 static void FreeAllocation(MW_ADAPTER *A, MW_ALLOCATION *Alloc)
 {
+    /* no present finds it any more, and one that is copying finishes */
+    MwAllocDead(A, Alloc);
     /* the video decoder lets go of its pages first (vdecexport.c) */
     MwVdecGone(A, Alloc, MW_VDEC_GONE_DESTROY);
     MemDestroyed(A, Alloc);
@@ -553,6 +561,15 @@ static NTSTATUS BuildPaging1x(MW_ADAPTER *a, DXGKARG_BUILDPAGINGBUFFER *Arg)
         if (alloc->Mapped)
             MwScanMap(a, alloc, pfn, pages);
         ExReleaseFastMutex(&a->MmuLock);
+        /* Cached pages: VidMm filled them through the CPU's caches, and a
+         * dirty line written back later would land on what the GPU has
+         * drawn since. To memory now, and out of the caches. */
+        if (alloc->Mapped && (alloc->Flags & MW_ALLOC_CACHED)) {
+            PUCHAR va = (PUCHAR)MmGetSystemAddressForMdlSafe(Arg->MapApertureSegment.pMdl,
+                                                             NormalPagePriority | MdlMappingNoExecute);
+            if (va != NULL)
+                MwDcCleanInvalidate(va + (SIZE_T)alloc->MdlPage * PAGE_SIZE, (SIZE_T)pages << PAGE_SHIFT);
+        }
         /* an export of the pages it had before ends (vdecexport.c) */
         MwVdecGone(a, alloc, MW_VDEC_GONE_MAP);
         a->Maps++;

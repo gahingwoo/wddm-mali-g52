@@ -78,6 +78,15 @@ typedef struct _MW_ALLOCATION {
      * allocation to the video decoder (vdecexport.c), under VdecLock. */
     ULONG MdlPages;
     struct _MW_VDEC_EXPORT *Vdec;
+    /* Every allocation there is, in A->LiveAllocs under A->LiveLock, with
+     * a number of its own. A present is carried out at SubmitCommand from
+     * pointers taken at DxgkDdiPresent, and dxgkrnl had destroyed one of
+     * them in between (bugcheck 0x7E in AllocationVa, 2026-11-27): the
+     * present looks its allocations up here and pins them while it copies
+     * (MwAllocPin). Destroying and unmapping wait for the pins. */
+    LIST_ENTRY Live;
+    ULONG64 Serial;
+    volatile LONG Pins;
 } MW_ALLOCATION;
 
 /* One process's GPU memory (memory.c). Pid 0 is a free entry. */
@@ -333,6 +342,7 @@ typedef struct _MW_PRESENT_OP {
     ULONG Color;
     ULONG Rotate;               /* degrees to rotate into the framebuffer (rotate.h), 0 none */
     MW_ALLOCATION *Src, *Dst;
+    ULONG64 SrcSerial, DstSerial;   /* MW_ALLOCATION.Serial at DxgkDdiPresent */
     RECT SrcRect, DstRect;
     ULONG NumRects;             /* 0: DstRect alone */
     RECT Rects[MW_MAX_RECTS];   /* destination sub-rectangles */
@@ -635,6 +645,10 @@ struct _MW_ADAPTER {
     PKTHREAD CopyThread;
     KEVENT CopyEvent;
     FAST_MUTEX CopyLock;
+    KSPIN_LOCK LiveLock;        /* LiveAllocs, LiveSerial, and Mdl going to NULL */
+    LIST_ENTRY LiveAllocs;
+    ULONG64 LiveSerial;
+    ULONG PresentGone;          /* presents dropped: an allocation was destroyed first */
     volatile LONG CopyBusy;
     volatile BOOLEAN CopyStop;
     PHYSICAL_ADDRESS ShownAddr;
@@ -940,6 +954,11 @@ void MwScanUnmap(MW_ADAPTER *A, struct _MW_ALLOCATION *P);
 NTSTATUS MwScanSet(MW_ADAPTER *A, MW_ESCAPE_SCANOUT_DATA *D);
 void MwCommandInit(MW_ADAPTER *A);
 void MwCopyForget(MW_ADAPTER *A, struct _MW_ALLOCATION *Alloc, BOOLEAN Freed);
+void MwAllocLive(MW_ADAPTER *A, struct _MW_ALLOCATION *Alloc);
+void MwAllocDead(MW_ADAPTER *A, struct _MW_ALLOCATION *Alloc);
+void MwAllocNoPages(MW_ADAPTER *A, struct _MW_ALLOCATION *Alloc);
+void MwDcClean(PVOID Va, SIZE_T Length);            /* cache.asm */
+void MwDcCleanInvalidate(PVOID Va, SIZE_T Length);
 void MwCommandStop(MW_ADAPTER *A);
 void MwArmPoll(MW_ADAPTER *A);
 void MwCommandSettings(MW_ADAPTER *A);

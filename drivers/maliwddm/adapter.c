@@ -1594,6 +1594,7 @@ static void Stats(MW_ADAPTER *A, MW_ESCAPE_STATS_DATA *D, UINT Size)
     D->PresentBlts = A->PresentBlts;
     D->PresentFills = A->PresentFills;
     D->PresentSkips = A->PresentSkips;
+    D->PresentGone = A->PresentGone;
     /* Callers built before these existed pass the shorter structure. */
     if (Size >= RTL_SIZEOF_THROUGH_FIELD(MW_ESCAPE_STATS_DATA, FlipCopySkips)) {
         D->Vsyncs = A->Vsyncs;
@@ -1845,6 +1846,7 @@ static NTSTATUS APIENTRY MwEscape(IN_CONST_HANDLE hAdapter, const DXGKARG_ESCAPE
         MwLog(a, L"T_FlipCopies", a->FlipCopies);
         MwLog(a, L"T_FlipCopySkips", a->FlipCopySkips);
         MwLog(a, L"T_PresentFlips", a->PresentFlips);
+        MwLog(a, L"T_PresentGone", a->PresentGone);
         MwLog(a, L"T_Presents", a->Presents);
         /* Rotation (display.c): the path's degrees, and how many flips and
          * presents the driver itself turned on the CPU. At 90 or 270 with

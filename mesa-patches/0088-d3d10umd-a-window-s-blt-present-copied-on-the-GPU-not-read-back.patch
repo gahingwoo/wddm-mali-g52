@@ -1,0 +1,225 @@
+diff --git a/src/gallium/frontends/d3d10umd/DxgiFns.cpp b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+index 78bd454..bc1bcea 100644
+--- a/src/gallium/frontends/d3d10umd/DxgiFns.cpp
++++ b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+@@ -129,6 +129,47 @@ PresentImpl(DXGI_DDI_ARG_PRESENT *pPresentData)
+       return hr;
+    }
+ 
++   /*
++    * A window's blt model back buffer: copied on the GPU into the surface
++    * the kernel driver blts from (PresentCopyEnsure), and the GPU waited
++    * for, since that blt is the CPU's and does not queue behind the copy.
++    */
++   if (!pSrcResource->present_allocation && !pDstResource &&
++       PresentCopyEnsure(device, pSrcResource)) {
++      struct pipe_resource *src = pSrcResource->resource;
++      struct pipe_resource *dst = pSrcResource->present_copy;
++      struct pipe_blit_info info;
++
++      memset(&info, 0, sizeof info);
++      info.src.resource = src;
++      info.src.format = util_format_linear(src->format);
++      info.src.box.width = src->width0;
++      info.src.box.height = src->height0;
++      info.src.box.depth = 1;
++      info.dst.resource = dst;
++      info.dst.format = dst->format;
++      info.dst.box.width = dst->width0;
++      info.dst.box.height = dst->height0;
++      info.dst.box.depth = 1;
++      info.mask = PIPE_MASK_RGBA;
++      info.filter = PIPE_TEX_FILTER_NEAREST;
++      t0 = d3d10_perf_now();
++      device->pipe->blit(device->pipe, &info);
++      device->pipe->flush(device->pipe, NULL, 0);
++      d3d10_perf_add(D3D10_PERF_FLUSH, t0);
++      t0 = d3d10_perf_now();
++      d3d10_wait_idle(device->hDevice);
++      d3d10_perf_add(D3D10_PERF_IDLE_IN_PRESENT, t0);
++      HRESULT hr = (HRESULT)d3d10_present_allocation(device->hDevice,
++                                                     pSrcResource->present_copy_allocation, 0,
++                                                     pPresentData->pDXGIContext);
++      if (hr != S_OK)
++         DebugPrintf("Present: GPU copy surface, result 0x%08lx\n", (unsigned long)hr);
++      mali_count_add(MALI_COUNT_PRESENT_DIRECT, 0, count_t0);
++      d3d10_perf_frame();
++      return hr;
++   }
++
+    d3d10_present_target(device->hDevice, pSrcResource->present_allocation,
+                         pDstResource ? pDstResource->present_allocation : 0, 1);
+    device->pipe->screen->flush_frontbuffer(device->pipe->screen, device->pipe, 
+diff --git a/src/gallium/frontends/d3d10umd/Resource.cpp b/src/gallium/frontends/d3d10umd/Resource.cpp
+index d9610a8..7a594c9 100644
+--- a/src/gallium/frontends/d3d10umd/Resource.cpp
++++ b/src/gallium/frontends/d3d10umd/Resource.cpp
+@@ -234,6 +234,85 @@ RotateByExchange(void)
+ }
+ 
+ 
++/*
++ * A window's blt model present, without reading the frame back.
++ *
++ * The frame used to be mapped, copied row by row into an allocation of the
++ * device's, and that blted by maliwddm into DWM's surface for the window:
++ * two CPU passes over the frame, both reading write-combined memory at
++ * about 100 MB/s. At 2560x1440 that was 100 ms and 80 ms a present, Edge
++ * with --disable-direct-composition at 4 frames a second (2026-11-27).
++ *
++ * Instead the back buffer is copied on the GPU into a linear BGRX surface
++ * whose buffer is an allocation the kernel driver knows the size and
++ * pitch of and VidMm backs with cached pages (MW_ALLOC_CACHED): one CPU
++ * pass is left, the kernel's, reading at memory speed. Nothing maps that
++ * surface in user mode. C:\mali\present-readback brings the old path
++ * back, to compare.
++ */
++static bool
++PresentOnGpu(void)
++{
++   static int state = -1;
++
++   if (state < 0)
++      state = SwitchFileAbsent("C:\\mali\\present-readback",
++                               "absent, a window's blt present is copied on the GPU",
++                               "present, a window's blt present is read back on the CPU");
++   return state != 0;
++}
++
++
++bool
++PresentCopyEnsure(struct Device *pDevice, struct Resource *pResource)
++{
++   struct pipe_context *pipe = pDevice->pipe;
++   struct pipe_screen *screen = pipe->screen;
++   struct pipe_resource *src = pResource->resource;
++   struct pipe_resource templat;
++   unsigned pitch, allocation, stride = 0;
++
++   if (pResource->present_copy)
++      return true;
++   if (pResource->present_copy_failed || !PresentOnGpu())
++      return false;
++   pResource->present_copy_failed = true;      /* until it has worked */
++   if (!src || pResource->buffer || src->target != PIPE_TEXTURE_2D || src->array_size > 1 ||
++       src->depth0 > 1 || util_format_is_depth_or_stencil(src->format) ||
++       !screen->is_format_supported(screen, PIPE_FORMAT_B8G8R8X8_UNORM, PIPE_TEXTURE_2D, 0, 0,
++                                    PIPE_BIND_RENDER_TARGET))
++      return false;
++
++   memset(&templat, 0, sizeof templat);
++   templat.target = PIPE_TEXTURE_2D;
++   templat.format = PIPE_FORMAT_B8G8R8X8_UNORM;
++   templat.width0 = src->width0;
++   templat.height0 = src->height0;
++   templat.depth0 = 1;
++   templat.array_size = 1;
++   templat.usage = PIPE_USAGE_DEFAULT;
++   templat.bind = PIPE_BIND_RENDER_TARGET | PIPE_BIND_SHARED;
++   pitch = align(templat.width0 * 4, 64);
++
++   d3d10_present_begin_create(pDevice->hDevice, templat.width0, templat.height0, pitch);
++   pResource->present_copy = screen->resource_create(screen, &templat);
++   allocation = d3d10_shared_end();
++   if (!pResource->present_copy || !allocation ||
++       !MarkResourceShared(pipe, pResource->present_copy, &stride) || stride != pitch) {
++      DebugPrintf("present: no GPU copy surface for %ux%u (resource %p, allocation 0x%x, pitch %u"
++                  " of %u): the frame is read back\n", templat.width0, templat.height0,
++                  pResource->present_copy, allocation, stride, pitch);
++      pipe_resource_reference(&pResource->present_copy, NULL);
++      return false;
++   }
++   pResource->present_copy_allocation = allocation;
++   pResource->present_copy_failed = false;
++   DebugPrintf("present: GPU copy surface %ux%u pitch %u, allocation 0x%x\n", templat.width0,
++               templat.height0, pitch, allocation);
++   return true;
++}
++
++
+ bool
+ PresentWaitsForGpu(void)
+ {
+@@ -983,6 +1062,12 @@ DestroyResource(D3D10DDI_HDEVICE hDevice,       // IN
+    VideoNv12DestroyPlanes(pResource);
+    VideoNv12ZeroCopyForget(pResource);
+ 
++   if (pResource->present_copy) {
++      pipe->flush(pipe, NULL, 0);
++      pipe_resource_reference(&pResource->present_copy, NULL);
++      pResource->present_copy_allocation = 0;
++   }
++
+    if (pResource->direct_primary) {
+       /* The buffer is the runtime's allocation, as a shared resource's is:
+        * the same order. The allocation is the one the runtime counts as
+diff --git a/src/gallium/frontends/d3d10umd/State.h b/src/gallium/frontends/d3d10umd/State.h
+index 3ed4937..2afded3 100644
+--- a/src/gallium/frontends/d3d10umd/State.h
++++ b/src/gallium/frontends/d3d10umd/State.h
+@@ -310,6 +310,9 @@ enum {
+ void d3d10_primary_begin_create(void *hRTDevice, void *hRTResource, unsigned w, unsigned h,
+                                 unsigned pitch, unsigned vidpn_source);
+ void d3d10_primary_rebind(void *hRTDevice, unsigned allocation, void *hRTResource);
++/* The surface a windowed present is blted from by the kernel driver: the
++ * buffer the driver creates between this and d3d10_shared_end. */
++void d3d10_present_begin_create(void *hRTDevice, unsigned w, unsigned h, unsigned pitch);
+ void d3d10_wait_idle(void *hRTDevice);
+ void d3d10_note_removed(void *hRTDevice);
+ unsigned long long d3d10_perf_now(void);
+@@ -329,6 +332,13 @@ struct Resource
+    /* For a primary on the hardware runtime: the allocation the runtime
+     * presents, 0 otherwise. See d3d10_primary_create(). */
+    unsigned present_allocation;
++   /* A window's blt model back buffer, on the hardware runtime: the linear
++    * BGRX surface a present copies the frame into on the GPU, and its
++    * allocation, which the kernel driver blts from (PresentCopyEnsure,
++    * Resource.cpp). Made at the first present. */
++   struct pipe_resource *present_copy;
++   unsigned present_copy_allocation;
++   bool present_copy_failed;
+    /* For a shared resource on the hardware runtime, created or opened: the
+     * runtime's resource, whose allocation the driver's buffer is, and that
+     * allocation. NULL and 0 otherwise. */
+@@ -393,6 +403,9 @@ struct Resource
+  *   present-wait   a present of a rendered-into primary first waits for the
+  *                  GPU, instead of leaving the order to the scheduler */
+ bool PrimaryRenderedInto(void);
++struct Device;
++struct Resource;
++bool PresentCopyEnsure(struct Device *pDevice, struct Resource *pResource);
+ bool RotateByExchange(void);
+ bool PresentWaitsForGpu(void);
+ 
+diff --git a/src/gallium/targets/d3d10umd/d3d10_gdi.c b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+index 1c1da05..6ce62a2 100644
+--- a/src/gallium/targets/d3d10umd/d3d10_gdi.c
++++ b/src/gallium/targets/d3d10umd/d3d10_gdi.c
+@@ -242,6 +242,7 @@ long malikm_present_allocation(void *hRTDevice, unsigned src_allocation, unsigne
+ void malikm_primary_begin_create(void *hRTDevice, void *hRTResource, unsigned w, unsigned h,
+                                  unsigned pitch, unsigned vidpn_source);
+ void malikm_primary_rebind(void *hRTDevice, unsigned allocation, void *hRTResource);
++void malikm_present_begin_create(void *hRTDevice, unsigned w, unsigned h, unsigned pitch);
+ int malikm_wait_idle(void *hRTDevice);
+ void malikm_note_removed(void *hRTDevice);
+ int malikm_vdec_mark(void *hRTDevice, unsigned gem);
+@@ -285,6 +286,19 @@ d3d10_primary_begin_create(void *hRTDevice, void *hRTResource, unsigned w, unsig
+ #endif
+ }
+ 
++/* The surface a windowed present is blted from: the buffer the driver
++ * creates between this and d3d10_shared_end is an allocation maliwddm knows
++ * the size and pitch of. See malikm_drm.c. */
++void
++d3d10_present_begin_create(void *hRTDevice, unsigned w, unsigned h, unsigned pitch)
++{
++#ifdef GALLIUM_PANFROST
++   malikm_present_begin_create(hRTDevice, w, h, pitch);
++#else
++   (void)hRTDevice; (void)w; (void)h; (void)pitch;
++#endif
++}
++
+ /* After a rotation: this allocation now belongs to this runtime resource. */
+ void
+ d3d10_primary_rebind(void *hRTDevice, unsigned allocation, void *hRTResource)
