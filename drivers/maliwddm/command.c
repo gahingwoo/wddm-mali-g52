@@ -220,6 +220,13 @@ NTSTATUS APIENTRY MwRender(IN_CONST_HANDLE hContext, DXGKARG_RENDER *Arg)
     }
     priv->Count = count;
     priv->Reserved = MW_DMA_MAGIC;
+    /* dxgkrnl hands the private data out again as it is. What a present
+     * left here was carried out once more at this render's submission, and
+     * at every render after it until the next present: a second and third
+     * full blt of each frame (750 blts for 250 presents, presenttest,
+     * 2026-11-27), and, once the window's surfaces had been destroyed, a
+     * blt between freed allocations (the bugcheck 0x7E of that day). */
+    RtlZeroMemory(&priv->Present, sizeof(priv->Present));
 
     PatchEveryAllocation(Arg->AllocationListSize, &Arg->pPatchLocationListOut, Arg->PatchLocationListOutSize);
     MarkDmaBuffer(&Arg->pDmaBuffer);
