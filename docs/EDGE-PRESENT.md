@@ -221,7 +221,8 @@ session the same way. To go back to no redirection:
 
 ## Board result, 2026-11-27
 
-TaishanPi 3M, WDDM 2.0, HDMI 2560x1440, `UmdRedirect` 3.
+TaishanPi 3M, WDDM 2.0, HDMI 2560x1440, package 3.9.16.812 with its
+defaults (no `UmdRedirect` value, no switch files).
 `tools/windows/presenttest.cpp`: one window cleared to a colour and
 presented for some seconds; `sdc` is the centre pixel read from the
 screen DC.
@@ -250,6 +251,15 @@ https://example.com:
 
 Both: ANGLE on D3D11, the Mali, feature level 11_0, Software Rendering
 No.
+
+Also on that boot: FurMark (GpuTest, OpenGL, 1280x720 windowed) for 150 s
+with no TDR, and `shutdown /r` completed.
+
+Not explained: on the package before this one, without redirection, the
+board reset about 2 s into the D3D11 test that followed a run with
+Desktop Duplication, three times out of three, with no bugcheck
+recorded. With redirection the same sequence ran three times without a
+reset, and Desktop Duplication read the window's colour.
 
 ## Collecting evidence
 
