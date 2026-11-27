@@ -27,6 +27,12 @@ typedef __int32 mw_s32;
 /* Allocation private data (D3DDDI_ALLOCATIONINFO.pPrivateDriverData). */
 #define MW_ALLOC_NOEXEC         0x1     /* not shader code: may lie anywhere, XN */
 #define MW_ALLOC_PRIMARY        0x2     /* scan-out capable (step d) */
+#define MW_ALLOC_CACHED         0x4     /* backed by cached pages: the surface a windowed present
+                                         * is copied from on the CPU (maliwddm invalidates the
+                                         * CPU caches before it reads). Never mapped by the UMD. */
+#define MW_ALLOC_CPU            0x8     /* with MW_ALLOC_CACHED: only the CPU reads and writes it
+                                         * (dxgkrnl's shadow and staging surfaces), so nothing
+                                         * has to be invalidated. Set by maliwddm alone. */
 
 typedef struct _MW_ALLOCATION_INFO {
     mw_u32 Version;                     /* MW_ABI_VERSION */
@@ -262,7 +268,8 @@ typedef struct _MW_ESCAPE_STATS_DATA {
     mw_u32 Patches, PatchAllocations, PatchPatchLocations, PatchSegment0;
     mw_u64 PatchAddress0;
     /* Presents carried out on the CPU, and skipped (no pages known). */
-    mw_u32 PresentBlts, PresentFills, PresentSkips, Reserved0;
+    mw_u32 PresentBlts, PresentFills, PresentSkips;
+    mw_u32 PresentGone;                 /* dropped: an allocation was destroyed before the submission */
     /* Emulated vsyncs, flips (SetVidPnSourceAddress), and flips whose
      * primary was copied to the framebuffer or could not be. */
     mw_u32 Vsyncs, Flips, FlipCopies, FlipCopySkips;

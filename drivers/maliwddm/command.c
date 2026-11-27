@@ -220,6 +220,13 @@ NTSTATUS APIENTRY MwRender(IN_CONST_HANDLE hContext, DXGKARG_RENDER *Arg)
     }
     priv->Count = count;
     priv->Reserved = MW_DMA_MAGIC;
+    /* dxgkrnl hands the private data out again as it is. What a present
+     * left here was carried out once more at this render's submission, and
+     * at every render after it until the next present: a second and third
+     * full blt of each frame (750 blts for 250 presents, presenttest,
+     * 2026-11-27), and, once the window's surfaces had been destroyed, a
+     * blt between freed allocations (the bugcheck 0x7E of that day). */
+    RtlZeroMemory(&priv->Present, sizeof(priv->Present));
 
     PatchEveryAllocation(Arg->AllocationListSize, &Arg->pPatchLocationListOut, Arg->PatchLocationListOutSize);
     MarkDmaBuffer(&Arg->pDmaBuffer);
@@ -291,6 +298,9 @@ NTSTATUS APIENTRY MwPresent(IN_CONST_HANDLE hContext, DXGKARG_PRESENT *Arg)
          * no allocation. */
         op->Src = (MW_ALLOCATION *)Arg->pAllocationList[DXGK_PRESENT_SOURCE_INDEX].hDeviceSpecificAllocation;
         op->Dst = (MW_ALLOCATION *)Arg->pAllocationList[DXGK_PRESENT_DESTINATION_INDEX].hDeviceSpecificAllocation;
+        /* Which allocations those were, for the look-up at submission. */
+        op->SrcSerial = op->Src != NULL ? op->Src->Serial : 0;
+        op->DstSerial = op->Dst != NULL ? op->Dst->Serial : 0;
         op->SrcRect = Arg->SrcRect;
         op->DstRect = Arg->DstRect;
         op->NumRects = Arg->SubRectCnt <= MW_MAX_RECTS ? Arg->SubRectCnt : 0;
@@ -314,13 +324,94 @@ NTSTATUS APIENTRY MwPresent(IN_CONST_HANDLE hContext, DXGKARG_PRESENT *Arg)
     return STATUS_SUCCESS;
 }
 
+/* ---- allocations a present may still use ---- */
+
+void MwAllocLive(MW_ADAPTER *A, MW_ALLOCATION *Alloc)
+{
+    KIRQL irql;
+
+    Alloc->Pins = 0;
+    KeAcquireSpinLock(&A->LiveLock, &irql);
+    Alloc->Serial = ++A->LiveSerial;
+    InsertTailList(&A->LiveAllocs, &Alloc->Live);
+    KeReleaseSpinLock(&A->LiveLock, irql);
+}
+
+static void WaitForPins(MW_ALLOCATION *Alloc)
+{
+    /* A pin lasts one frame's copy. PASSIVE_LEVEL (DestroyAllocation,
+     * BuildPagingBuffer). */
+    for (ULONG i = 0; Alloc->Pins != 0 && i < 20000; i++) {
+        if (KeGetCurrentIrql() < DISPATCH_LEVEL) {
+            LARGE_INTEGER ms;
+            ms.QuadPart = -10000;
+            KeDelayExecutionThread(KernelMode, FALSE, &ms);
+        } else {
+            KeStallExecutionProcessor(50);
+        }
+    }
+}
+
+/* Destroyed: no present finds it from here on, and the ones copying
+ * finish first. */
+void MwAllocDead(MW_ADAPTER *A, MW_ALLOCATION *Alloc)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&A->LiveLock, &irql);
+    RemoveEntryList(&Alloc->Live);
+    InitializeListHead(&Alloc->Live);
+    KeReleaseSpinLock(&A->LiveLock, irql);
+    WaitForPins(Alloc);
+}
+
+/* Its pages are going back to VidMm (UNMAP_APERTURE_SEGMENT): a present
+ * that starts now sees no pages, one that is copying finishes first. */
+void MwAllocNoPages(MW_ADAPTER *A, MW_ALLOCATION *Alloc)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&A->LiveLock, &irql);
+    Alloc->Mdl = NULL;
+    KeReleaseSpinLock(&A->LiveLock, irql);
+    WaitForPins(Alloc);
+}
+
+/* The allocation a present named, if it is still that one. Pinned: undo
+ * with Unpin. The MDL is returned as it is under the lock (NULL: not
+ * resident). */
+static BOOLEAN AllocPin(MW_ADAPTER *A, MW_ALLOCATION *Alloc, ULONG64 Serial, PMDL *Mdl)
+{
+    KIRQL irql;
+    BOOLEAN found = FALSE;
+
+    KeAcquireSpinLock(&A->LiveLock, &irql);
+    for (LIST_ENTRY *e = A->LiveAllocs.Flink; e != &A->LiveAllocs; e = e->Flink) {
+        if (CONTAINING_RECORD(e, MW_ALLOCATION, Live) == Alloc) {
+            found = (BOOLEAN)(Alloc->Serial == Serial);
+            break;
+        }
+    }
+    if (found) {
+        InterlockedIncrement(&Alloc->Pins);
+        *Mdl = Alloc->Mdl;
+    }
+    KeReleaseSpinLock(&A->LiveLock, irql);
+    return found;
+}
+
+static void Unpin(MW_ALLOCATION *Alloc)
+{
+    InterlockedDecrement(&Alloc->Pins);
+}
+
 /* The CPU view of a resident allocation, or NULL. */
-static PUCHAR AllocationVa(MW_ALLOCATION *Alloc)
+static PUCHAR AllocationVa(MW_ALLOCATION *Alloc, PMDL Mdl)
 {
     PUCHAR va;
-    if (Alloc == NULL || Alloc->Mdl == NULL)
+    if (Alloc == NULL || Mdl == NULL)
         return NULL;
-    va = (PUCHAR)MmGetSystemAddressForMdlSafe(Alloc->Mdl, NormalPagePriority | MdlMappingNoExecute);
+    va = (PUCHAR)MmGetSystemAddressForMdlSafe(Mdl, NormalPagePriority | MdlMappingNoExecute);
     return va != NULL ? va + (SIZE_T)Alloc->MdlPage * PAGE_SIZE : NULL;
 }
 
@@ -332,8 +423,9 @@ static void ClipRect(RECT *R, LONG W, LONG H)
     if (R->bottom > H) R->bottom = H;
 }
 
-/* Carry out a present on the CPU. 32-bit pixels only. */
-static void DoPresent(MW_ADAPTER *A, const MW_PRESENT_OP *Op)
+/* Carry out a present on the CPU. 32-bit pixels only. Both allocations
+ * are pinned (DoPresent). */
+static void DoPresentPinned(MW_ADAPTER *A, const MW_PRESENT_OP *Op, PMDL SrcMdl, PMDL DstMdl)
 {
     PUCHAR dst, src = NULL;
     LONG dstW, dstH, dstPitch, srcPitch = 0, srcW = 0, srcH = 0;
@@ -374,7 +466,7 @@ static void DoPresent(MW_ADAPTER *A, const MW_PRESENT_OP *Op)
         dstH = (LONG)lh;
         dstPitch = (LONG)A->Fb.Pitch;
     } else {
-        dst = AllocationVa(Op->Dst);
+        dst = AllocationVa(Op->Dst, DstMdl);
         if (dst == NULL) {
             A->PresentSkips++;
             return;
@@ -384,7 +476,7 @@ static void DoPresent(MW_ADAPTER *A, const MW_PRESENT_OP *Op)
         dstPitch = (LONG)(Op->Dst->Pitch ? Op->Dst->Pitch : Op->Dst->Width * 4);
     }
     if (Op->Kind == MW_PRESENT_BLT) {
-        src = AllocationVa(Op->Src);
+        src = AllocationVa(Op->Src, SrcMdl);
         if (src == NULL) {
             A->PresentSkips++;
             return;
@@ -392,6 +484,14 @@ static void DoPresent(MW_ADAPTER *A, const MW_PRESENT_OP *Op)
         srcW = (LONG)Op->Src->Width;
         srcH = (LONG)Op->Src->Height;
         srcPitch = (LONG)(Op->Src->Pitch ? Op->Src->Pitch : Op->Src->Width * 4);
+        /* A cached source the GPU drew into: the CPU's caches hold the
+         * frame before it (cache.asm). The rows this present reads. */
+        if ((Op->Src->Flags & (MW_ALLOC_CACHED | MW_ALLOC_CPU)) == MW_ALLOC_CACHED && srcW > 0 && srcH > 0) {
+            LONG top = Op->SrcRect.top < 0 ? 0 : Op->SrcRect.top;
+            LONG bottom = Op->SrcRect.bottom > srcH ? srcH : Op->SrcRect.bottom;
+            if (bottom > top)
+                MwDcCleanInvalidate(src + (SIZE_T)top * srcPitch, (SIZE_T)(bottom - top) * srcPitch);
+        }
     }
 
     for (ULONG i = 0; i < n; i++) {
@@ -446,6 +546,32 @@ static void DoPresent(MW_ADAPTER *A, const MW_PRESENT_OP *Op)
     if (rot != 0)
         A->RotPresents++;
     MwTickAdd(&A->PresentBltTicks, &longest, t0);
+}
+
+/* The allocations are the ones DxgkDdiPresent saw only if they are still
+ * in the list with the same number: dxgkrnl can destroy either before the
+ * present's DMA buffer is submitted, and the structure is freed then. */
+static void DoPresent(MW_ADAPTER *A, const MW_PRESENT_OP *Op)
+{
+    PMDL srcMdl = NULL, dstMdl = NULL;
+    BOOLEAN src = FALSE, dst = FALSE;
+    BOOLEAN needSrc = (BOOLEAN)(Op->Kind == MW_PRESENT_BLT && Op->Src != NULL);
+
+    if (Op->Dst != NULL)
+        dst = AllocPin(A, Op->Dst, Op->DstSerial, &dstMdl);
+    if (needSrc)
+        src = AllocPin(A, Op->Src, Op->SrcSerial, &srcMdl);
+    if ((Op->Dst != NULL && !dst) || (needSrc && !src) ||
+        (Op->Kind == MW_PRESENT_BLT && Op->Src == NULL)) {
+        A->PresentGone++;
+        A->PresentSkips++;
+    } else {
+        DoPresentPinned(A, Op, srcMdl, dstMdl);
+    }
+    if (src)
+        Unpin(Op->Src);
+    if (dst)
+        Unpin(Op->Dst);
 }
 
 NTSTATUS APIENTRY MwPatch(IN_CONST_HANDLE hAdapter, const DXGKARG_PATCH *Arg)
@@ -1092,7 +1218,9 @@ void MwCopyForget(MW_ADAPTER *A, MW_ALLOCATION *Alloc, BOOLEAN Freed)
         /* HdmiExtend's source 1; NULL without it. */
         InterlockedCompareExchangePointer((PVOID volatile *)&A->Hdmi.S2.ScanAlloc, NULL, Alloc);
     } else {
-        Alloc->Mdl = NULL;
+        /* Mdl = NULL, once the presents copying from it are done; under
+         * CopyLock still, for the copy thread. */
+        MwAllocNoPages(A, Alloc);
     }
     ExReleaseFastMutex(&A->CopyLock);
 }
@@ -1104,6 +1232,8 @@ void MwCommandInit(MW_ADAPTER *A)
 
     A->Stopping = FALSE;
     ExInitializeFastMutex(&A->CopyLock);
+    KeInitializeSpinLock(&A->LiveLock);
+    InitializeListHead(&A->LiveAllocs);
     KeInitializeEvent(&A->CopyEvent, SynchronizationEvent, FALSE);
     A->CopyStop = FALSE;
     InitializeObjectAttributes(&oa, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);

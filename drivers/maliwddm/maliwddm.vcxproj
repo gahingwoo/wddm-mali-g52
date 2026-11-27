@@ -87,6 +87,11 @@
     <ClCompile Include="..\common\maligpu.c" />
   </ItemGroup>
 
+  <!-- DC CVAC / DC CIVAC, which have no compiler intrinsic (armasm64) -->
+  <ItemGroup>
+    <MASM Include="cache.asm" />
+  </ItemGroup>
+
   <ItemGroup>
     <Inf Include="maliwddm.inf" />
   </ItemGroup>

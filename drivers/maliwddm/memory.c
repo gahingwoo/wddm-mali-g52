@@ -279,6 +279,7 @@ static NTSTATUS NewAllocation(MW_ADAPTER *A, const MW_ALLOCATION_INFO *In, DXGK_
         return STATUS_GRAPHICS_NO_VIDEO_MEMORY;
     }
 
+    MwAllocLive(A, alloc);
     MemCreated(A, alloc);
     A->Allocations++;
     if (A->Hdmi.Switch && (alloc->Flags & MW_ALLOC_PRIMARY)) {
@@ -302,11 +303,18 @@ static NTSTATUS NewAllocation(MW_ADAPTER *A, const MW_ALLOCATION_INFO *In, DXGK_
     Out->AllocationPriority = D3DDDI_ALLOCATIONPRIORITY_NORMAL;
     Out->Flags.Value = 0;
     Out->Flags.CpuVisible = TRUE;
+    /* VidMm backs an allocation with write-combined pages unless told
+     * otherwise, and the CPU reads those at about 100 MB/s: a 2560x1440
+     * present took 80 ms in the blt alone (2026-11-27). */
+    if (In->Flags & MW_ALLOC_CACHED)
+        Out->Flags.Cached = TRUE;
     return STATUS_SUCCESS;
 }
 
 static void FreeAllocation(MW_ADAPTER *A, MW_ALLOCATION *Alloc)
 {
+    /* no present finds it any more, and one that is copying finishes */
+    MwAllocDead(A, Alloc);
     /* the video decoder lets go of its pages first (vdecexport.c) */
     MwVdecGone(A, Alloc, MW_VDEC_GONE_DESTROY);
     MemDestroyed(A, Alloc);
@@ -431,11 +439,19 @@ NTSTATUS APIENTRY MwGetStandardAllocationDriverData(IN_CONST_HANDLE hAdapter,
         h = Arg->pCreateShadowSurfaceData->Height;
         f = Arg->pCreateShadowSurfaceData->Format;
         pitch = &Arg->pCreateShadowSurfaceData->Pitch;
+        flags |= MW_ALLOC_CACHED | MW_ALLOC_CPU;
         break;
     case D3DKMDT_STANDARDALLOCATION_STAGINGSURFACE:
         w = Arg->pCreateStagingSurfaceData->Width;
         h = Arg->pCreateStagingSurfaceData->Height;
         pitch = &Arg->pCreateStagingSurfaceData->Pitch;
+        /* The surface a window's blt present lands in: maliwddm blts the
+         * frame into it and dxgkrnl then copies it out again on the CPU,
+         * in the presenting thread. Write-combined, that copy was 35 ms of
+         * a 2560x1440 present (2026-11-27). The GPU never sees a shadow or
+         * staging surface here (no GDI acceleration, and a present into
+         * one is the CPU's), so cached pages need no maintenance. */
+        flags |= MW_ALLOC_CACHED | MW_ALLOC_CPU;
         break;
     default:
         return STATUS_NOT_SUPPORTED;
@@ -553,6 +569,15 @@ static NTSTATUS BuildPaging1x(MW_ADAPTER *a, DXGKARG_BUILDPAGINGBUFFER *Arg)
         if (alloc->Mapped)
             MwScanMap(a, alloc, pfn, pages);
         ExReleaseFastMutex(&a->MmuLock);
+        /* Cached pages: VidMm filled them through the CPU's caches, and a
+         * dirty line written back later would land on what the GPU has
+         * drawn since. To memory now, and out of the caches. */
+        if (alloc->Mapped && (alloc->Flags & (MW_ALLOC_CACHED | MW_ALLOC_CPU)) == MW_ALLOC_CACHED) {
+            PUCHAR va = (PUCHAR)MmGetSystemAddressForMdlSafe(Arg->MapApertureSegment.pMdl,
+                                                             NormalPagePriority | MdlMappingNoExecute);
+            if (va != NULL)
+                MwDcCleanInvalidate(va + (SIZE_T)alloc->MdlPage * PAGE_SIZE, (SIZE_T)pages << PAGE_SHIFT);
+        }
         /* an export of the pages it had before ends (vdecexport.c) */
         MwVdecGone(a, alloc, MW_VDEC_GONE_MAP);
         a->Maps++;

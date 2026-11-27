@@ -842,6 +842,10 @@ struct wbo {
    int vdec;
    /* Opened from another process (a surface the compositor reads). */
    int opened;
+   /* The surface a window's blt present is copied into and maliwddm blts
+    * from (malikm_present_begin_create): exportable, like vdec, so that
+    * Panfrost marks it shared and neither caches nor replaces its BO. */
+   int present;
 };
 static struct wbo *wbo;
 static uint32_t wbo_cap;
@@ -2576,7 +2580,7 @@ wddm_bo_is_resource(int fd, uint32_t handle)
    wlock(__func__);
    wselect_fd(fd);
    struct wbo *bo = wddm_bo(handle);
-   ret = bo && ((bo->rt_resource && !bo->released) || bo->vdec);
+   ret = bo && ((bo->rt_resource && !bo->released) || bo->vdec || bo->present);
    wunlock();
    return ret;
 }
@@ -2659,6 +2663,7 @@ malikm_vdec_export(void *hRTDevice, unsigned gem, unsigned long long *token, uns
 #define SHARED_CREATE 1
 #define SHARED_OPEN   2
 #define SHARED_PRIMARY 3        /* malikm_primary_begin_create, below */
+#define SHARED_PRESENT 4        /* malikm_present_begin_create, below */
 #define SHARED_PRIV_MAX 128
 
 static __declspec(thread) struct {
@@ -2730,6 +2735,29 @@ malikm_primary_begin_create(void *hRTDevice, void *hRTResource, unsigned w, unsi
    shared_next.h = h;
    shared_next.pitch = pitch;
    shared_next.vidpn_source = vidpn_source;
+}
+
+/*
+ * The surface a window's blt model present is copied into on the GPU and
+ * blted from by maliwddm (d3d10umd PresentCopyEnsure). The buffer Panfrost
+ * creates between this call and malikm_shared_end is an allocation of this
+ * device's like any other BO, with two differences: maliwddm is told its
+ * size and pitch, as it is for the allocation the read-back path presents
+ * from, and MW_ALLOC_CACHED has VidMm back it with cached pages, which the
+ * kernel reads at memory speed. It belongs to no runtime resource and goes
+ * away at its GEM_CLOSE. Nothing may map it in user mode: the CPU's caches
+ * are not coherent with what the GPU writes, and only maliwddm invalidates
+ * them.
+ */
+void
+malikm_present_begin_create(void *hRTDevice, unsigned w, unsigned h, unsigned pitch)
+{
+   memset(&shared_next, 0, sizeof(shared_next));
+   shared_next.mode = SHARED_PRESENT;
+   shared_next.device = hRTDevice;
+   shared_next.w = w;
+   shared_next.h = h;
+   shared_next.pitch = pitch;
 }
 
 /* RotateResourceIdentities gave the primary, or the shared swap chain
@@ -2926,7 +2954,8 @@ malikm_shared_end(void)
    if (shared_next.mode && !shared_next.done)
       DebugPrintf("shared %s: resource %p: no buffer was made on the allocation\n",
                   shared_next.mode == SHARED_CREATE ? "create" :
-                  shared_next.mode == SHARED_PRIMARY ? "primary" : "open",
+                  shared_next.mode == SHARED_PRIMARY ? "primary" :
+                  shared_next.mode == SHARED_PRESENT ? "present" : "open",
                   shared_next.rt_resource);
    memset(&shared_next, 0, sizeof(shared_next));
    return ret;
@@ -3011,7 +3040,8 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
 
       /* The primary's buffer holds all its rows; anything smaller made
        * first is something else. */
-      if (shared == SHARED_PRIMARY && sz < (uint64_t)shared_next.pitch * shared_next.h)
+      if ((shared == SHARED_PRIMARY || shared == SHARED_PRESENT) &&
+          sz < (uint64_t)shared_next.pitch * shared_next.h)
          shared = 0;
 
       memset(&priv, 0, sizeof(priv));
@@ -3113,6 +3143,15 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
          if (hr < 0)
             return -MK_ENOMEM;
       } else {
+         if (shared == SHARED_PRESENT) {
+            /* Described to maliwddm, which blts a present from it, and on
+             * cached pages. A KMD that does not know the flag ignores it. */
+            priv.pi.Flags = MW_ALLOC_NOEXEC | MW_ALLOC_CACHED;
+            priv.pi.Width = shared_next.w;
+            priv.pi.Height = shared_next.h;
+            priv.pi.Pitch = shared_next.pitch;
+            priv.pi.Format = D3DDDIFMT_X8R8G8B8;
+         }
          if (w_create(&ai) < 0)
             return -MK_ENOMEM;
          where.hAllocation = ai.hAllocation;
@@ -3131,7 +3170,9 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
          uint32_t cap = wbo_cap ? wbo_cap * 2 : 256;
          struct wbo *n = realloc(wbo, cap * sizeof(*n));
          if (!n) {
-            if (shared == SHARED_CREATE || shared == SHARED_PRIMARY) {
+            if (shared == SHARED_PRESENT) {
+               w_destroy(ai.hAllocation);
+            } else if (shared == SHARED_CREATE || shared == SHARED_PRIMARY) {
                D3DDDICB_DEALLOCATE d = {0};
                d.hResource = shared_next.rt_resource;
                ddi.cb.pfnDeallocateCb(shared_next.device, &d);
@@ -3146,7 +3187,12 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
          wbo_cap = cap;
       }
       wbo[h - 1] = (struct wbo){ai.hAllocation, where.Size, where.GpuVa, NULL};
-      if (shared) {
+      if (shared == SHARED_PRESENT) {
+         /* A BO of this device's own; only the handle goes back. */
+         wbo[h - 1].present = 1;
+         shared_next.allocation = ai.hAllocation;
+         shared_next.done = 1;
+      } else if (shared) {
          wbo[h - 1].rt_resource = shared_next.rt_resource;
          wbo[h - 1].rt_device = shared_next.device;
          wbo[h - 1].primary = shared == SHARED_PRIMARY;

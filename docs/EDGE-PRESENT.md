@@ -43,10 +43,11 @@ browser, but UmdRedirect 1)`.
 ### With redirection
 
 - A blt model swap chain (DISCARD, SEQUENTIAL) keeps a private back
-  buffer. Each present copies the frame into an allocation of the
-  device's and hands it to `pfnPresentCb`; dxgkrnl has maliwddm blt it
-  into the window's surface (`DxgkDdiPresent`, a CPU copy, one for each
-  present).
+  buffer. Each present copies it on the GPU into a linear BGRX surface,
+  waits for the GPU and hands that surface's allocation to
+  `pfnPresentCb`; dxgkrnl has maliwddm blt it into a staging surface
+  (`DxgkDdiPresent`, a CPU copy) and copies that out again itself. See
+  "Blt presents: the crash and the lag".
 - A flip model swap chain (FLIP_SEQUENTIAL, FLIP_DISCARD, and every
   composition swap chain) has shared buffers. A present names the
   buffer's own allocation, DWM opens the buffers and samples them, and
@@ -219,6 +220,47 @@ of DWM's device while an application holds flip buffers may freeze the
 session the same way. To go back to no redirection:
 `reg add ...\Device Parameters /v UmdRedirect /t REG_DWORD /d 1`.
 
+## Blt presents: the crash and the lag
+
+Found on 2026-11-27 with package 3.9.16.812, the first where every
+window's blt present goes through `DxgkDdiPresent`. Edge takes this path
+with `--disable-direct-composition`.
+
+**The crash.** Bugcheck 0x7E (0xC0000005) in maliwddm `AllocationVa`,
+called from `MwSubmitCommand`, two minutes into browsing: read over KD
+(`kd-bugcheck.py`), the `MW_ALLOCATION` it used had been freed (its
+`Mdl` field held 0x4afec19181d16d76). `MwRender` filled the commands of
+a DMA buffer's private data and left the rest as it found it, and
+dxgkrnl reuses that memory: the renders after a blt present carried the
+present's operation too and `MwSubmitCommand` carried it out again, with
+the allocations of the earlier present, which a resize or a closed tab
+had destroyed by then. presenttest showed the repeats: 250 presents, 250
+`DxgkDdiPresent`, 747 blts.
+
+- `MwRender` clears the present operation.
+- Every allocation is in a list with a number of its own. A present
+  looks its two allocations up at submission and pins them while it
+  copies; DestroyAllocation and UNMAP_APERTURE_SEGMENT wait for the
+  pins. A present whose allocation is gone is dropped (`T_PresentGone`).
+
+**The lag.** Edge with the flag scrolled at 4.4 frames a second at
+2560x1440. Each present was: the frame read back from the back buffer
+(100 ms), copied into an allocation, blted by maliwddm into dxgkrnl's
+staging surface (80 ms, and repeated by the bug above), and copied out
+of that by dxgkrnl (35 ms). All of these read write-combined memory,
+which the CPU reads at about 100 to 300 MB/s.
+
+- The back buffer is copied on the GPU into a surface on an allocation
+  VidMm backs with cached pages (`MW_ALLOC_CACHED`, Mesa patch 0088).
+  The GPU is not coherent with the CPU caches, so maliwddm cleans and
+  invalidates the rows before it reads them (`cache.asm`, DC CIVAC).
+  `C:\mali\present-readback` brings the read-back path back.
+- dxgkrnl's shadow and staging surfaces are on cached pages too
+  (`MW_ALLOC_CPU`: only the CPU reads and writes them here).
+
+DirectComposition (Edge without the flag) has no copy at all and stays
+the faster path. Numbers: "Board result, 2026-11-27, blt presents".
+
 ## Board result, 2026-11-27
 
 TaishanPi 3M, WDDM 2.0, HDMI 2560x1440, package 3.9.16.812 with its
@@ -260,6 +302,35 @@ board reset about 2 s into the D3D11 test that followed a run with
 Desktop Duplication, three times out of three, with no bugcheck
 recorded. With redirection the same sequence ran three times without a
 reset, and Desktop Duplication read the window's colour.
+
+## Board result, 2026-11-27, blt presents
+
+Package 5.59.40.53 (63d9f20), WDDM 2.0, Edge 158 maximized on a long
+local page, scrolled 30 pixels in each animation frame for 12 s; frames a
+second, and the median time between frames.
+
+| | TaishanPi 3M, 2560x1440 | CM5-IO, 1920x1080 |
+|---|---|---|
+| `--disable-direct-composition`, package 3.9.16.812 (CM5-IO: 4.38.6.832, the read-back path) | 4.4, 209 ms | 10.5, 96 ms |
+| `--disable-direct-composition`, this package | 32.4, 33 ms | 44.1, 17 ms |
+| no flags (DirectComposition), 3.9.16.812 (CM5-IO: 4.38.6.832) | 59.9, 17 ms | 33.3, 35 ms |
+| no flags, this package | 59.7, 16 ms | 36.9, 25 ms |
+
+On both boards with this package:
+
+- Edge with the flag, 11 minutes of navigating (local page, Wikipedia,
+  Bing, example.com, edge://gpu), scrolling and resizing: no bugcheck, no
+  TDR, dwm.exe kept its PID. With 3.9.16.812 the TaishanPi 3M
+  bugchecked after 2 minutes of the same.
+- presenttest, eight models and two on WARP: every colour right, one
+  driver blt for each blt present.
+- TaishanPi 3M: 12 rounds of restoring, resizing and maximizing Edge's
+  window with the flag, frames after each; FurMark (GpuTest, 1280x720)
+  150 s, 729 points, no TDR.
+
+Chromium stops drawing a window it takes to be hidden, and it does when
+Windows turns the display off: a test that scrolls for longer than the
+display's idle time needs `powercfg /change monitor-timeout-ac 0`.
 
 ## Collecting evidence
 
