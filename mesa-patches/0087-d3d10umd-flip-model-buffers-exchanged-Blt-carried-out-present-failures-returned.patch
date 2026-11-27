@@ -1,0 +1,222 @@
+diff --git a/src/gallium/frontends/d3d10umd/DxgiFns.cpp b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+index ef44870..78bd454 100644
+--- a/src/gallium/frontends/d3d10umd/DxgiFns.cpp
++++ b/src/gallium/frontends/d3d10umd/DxgiFns.cpp
+@@ -39,6 +39,7 @@
+ #include "Debug.h"
+ 
+ #include "util/format/u_format.h"
++#include "util/u_inlines.h"
+ #include "util/mali_slow.h"
+ #include "util/mali_count.h"
+ 
+@@ -137,14 +138,17 @@ PresentImpl(DXGI_DDI_ARG_PRESENT *pPresentData)
+ 
+    /* What the runtime made of it. DXGI acts on this (a changed present mode,
+     * an occluded window); returning S_OK regardless hid every failure. */
+-   if (pSrcResource->present_allocation) {
++   /* Also for a surface that is no primary (a window's blt model back
++    * buffer): its present goes through pfnPresentCb as well, and a failure
++    * there was answered with S_OK until 2026-11-27. A present that did not
++    * go through the runtime (GDI, the software runtime) leaves S_OK. */
++   {
+       HRESULT hr = (HRESULT)d3d10_present_result();
+       if (hr != S_OK)
+-         DebugPrintf("Present: result 0x%08lx\n", (unsigned long)hr);
++         DebugPrintf("Present: result 0x%08lx%s\n", (unsigned long)hr,
++                     pSrcResource->present_allocation ? "" : " (no primary)");
+       return hr;
+    }
+-
+-   return S_OK;
+ }
+ 
+ 
+@@ -286,23 +290,47 @@ RotateByExchangingBuffers(DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *Rotate)
+    Resource *res[ROTATE_MAX];
+    struct pipe_resource *old[ROTATE_MAX];
+    unsigned old_allocation[ROTATE_MAX];
++   unsigned old_shared[ROTATE_MAX];
+    bool old_direct[ROTATE_MAX];
++   bool shared;
+ 
+    if (n > ROTATE_MAX)
+       return false;
++   /*
++    * Primaries, or the shared buffers of a flip model swap chain on a
++    * window or for composition (created here, never opened): all of one
++    * kind. The shared ones were rotated by copying until 2026-11-27: three
++    * copies of a whole buffer at each present, and every present then
++    * named the first buffer's allocation, the one the compositor was still
++    * reading while the next frame was drawn into it.
++    */
++   shared = n > 0 && CastResource(Rotate->pResources[0]) &&
++            !CastResource(Rotate->pResources[0])->primary;
+    for (UINT i = 0; i < n; ++i) {
+       res[i] = CastResource(Rotate->pResources[i]);
+-      if (!res[i] || !res[i]->primary || !res[i]->resource)
++      if (!res[i] || !res[i]->resource)
++         return false;
++      if (shared ? (res[i]->primary || !res[i]->shared_rt_resource || !res[i]->shared_allocation ||
++                    res[i]->nv12)
++                 : !res[i]->primary)
+          return false;
+       for (UINT k = 0; k < res[i]->NumSubResources; ++k)
+          if (res[i]->transfers[k])
+             return false;          /* mapped: its transfer names the buffer */
+    }
++   if (shared) {
++      /* What is drawn so far belongs to the buffers as they are named now. */
++      static volatile LONG said = 0;
++      if (InterlockedIncrement(&said) <= 4)
++         DebugPrintf("rotate: %u shared buffers exchanged (allocations 0x%x 0x%x ...)\n", n,
++                     res[0]->shared_allocation, n > 1 ? res[1]->shared_allocation : 0);
++   }
+ 
+    for (UINT i = 0; i < n; ++i) {
+       old[i] = NULL;
+       pipe_resource_reference(&old[i], res[i]->resource);
+       old_allocation[i] = res[i]->present_allocation;
++      old_shared[i] = res[i]->shared_allocation;
+       old_direct[i] = res[i]->direct_primary;
+    }
+    for (UINT i = 0; i < n; ++i) {
+@@ -314,6 +342,13 @@ RotateByExchangingBuffers(DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *Rotate)
+       if (res[i]->direct_primary)
+          d3d10_primary_rebind(pDevice->hDevice, res[i]->present_allocation,
+                               res[i]->rt_resource);
++      if (shared) {
++         /* The runtime's resource stays with the Resource; the allocation
++          * it is destroyed through follows the buffer. */
++         res[i]->shared_allocation = old_shared[from];
++         d3d10_primary_rebind(pDevice->hDevice, res[i]->shared_allocation,
++                              res[i]->shared_rt_resource);
++      }
+    }
+ 
+    /* The views. */
+@@ -507,11 +542,86 @@ RotateResourceIdentitiesImpl( DXGI_DDI_ARG_ROTATE_RESOURCE_IDENTITIES *RotateRes
+ HRESULT APIENTRY
+ _Blt(DXGI_DDI_ARG_BLT *Blt)
+ {
+-   LOG_UNSUPPORTED_ENTRYPOINT();
+-   /* Not carried out: counted (m5test perf), since DXGI uses it for a
+-    * present between surfaces of different sizes or formats. */
++   LOG_ENTRYPOINT();
++   /* Counted (m5test perf): DXGI uses it for a present between surfaces of
++    * different sizes, formats or sample counts, for one into a window's
++    * redirection surface. It was not carried out until 2026-11-27, and
++    * such a present showed whatever the destination held. */
+    mali_count_add(MALI_COUNT_BLT, 0, 0);
+ 
++   Device *pDevice = CastDevice(Blt->hDevice);
++   Resource *pDst = CastResource(Blt->hDstResource);
++   Resource *pSrc = CastResource(Blt->hSrcResource);
++   static volatile LONG said = 0;
++   bool say = InterlockedIncrement(&said) <= 8;
++
++   if (!pDevice || !pDst || !pSrc || !pDst->resource || !pSrc->resource ||
++       pDst->buffer || pSrc->buffer) {
++      if (say)
++         DebugPrintf("Blt: nothing to copy between %p and %p\n", pSrc, pDst);
++      return S_OK;
++   }
++
++   struct pipe_context *pipe = pDevice->pipe;
++   struct pipe_resource *src = pSrc->resource, *dst = pDst->resource;
++   unsigned src_level = pSrc->MipLevels ? Blt->SrcSubresource % pSrc->MipLevels : 0;
++   unsigned dst_level = pDst->MipLevels ? Blt->DstSubresource % pDst->MipLevels : 0;
++   unsigned src_layer = pSrc->MipLevels ? Blt->SrcSubresource / pSrc->MipLevels : 0;
++   unsigned dst_layer = pDst->MipLevels ? Blt->DstSubresource / pDst->MipLevels : 0;
++   struct pipe_blit_info info;
++
++   memset(&info, 0, sizeof info);
++   info.src.resource = src;
++   info.src.level = src_level;
++   info.src.format = src->format;
++   info.src.box.x = 0;
++   info.src.box.y = 0;
++   info.src.box.z = src_layer;
++   info.src.box.width = u_minify(src->width0, src_level);
++   info.src.box.height = u_minify(src->height0, src_level);
++   info.src.box.depth = 1;
++   info.dst.resource = dst;
++   info.dst.level = dst_level;
++   info.dst.format = dst->format;
++   info.dst.box.x = Blt->DstLeft;
++   info.dst.box.y = Blt->DstTop;
++   info.dst.box.z = dst_layer;
++   info.dst.box.width = (int)Blt->DstRight - (int)Blt->DstLeft;
++   info.dst.box.height = (int)Blt->DstBottom - (int)Blt->DstTop;
++   info.dst.box.depth = 1;
++   info.mask = PIPE_MASK_RGBA;
++   info.filter = (info.dst.box.width != info.src.box.width ||
++                  info.dst.box.height != info.src.box.height) ? PIPE_TEX_FILTER_LINEAR
++                                                              : PIPE_TEX_FILTER_NEAREST;
++
++   if (say)
++      DebugPrintf("Blt: flags 0x%x rotate %u, src %ux%u fmt %u samples %u -> dst %d,%d %dx%d"
++                  " fmt %u\n", (unsigned)Blt->Flags.Value, (unsigned)Blt->Rotate,
++                  info.src.box.width, info.src.box.height, (unsigned)src->format,
++                  (unsigned)src->nr_samples, info.dst.box.x, info.dst.box.y,
++                  info.dst.box.width, info.dst.box.height, (unsigned)dst->format);
++   if (info.dst.box.width <= 0 || info.dst.box.height <= 0)
++      return S_OK;
++   /* A turned blt (a rotated output) is not carried out: only full-screen
++    * swap chains ask for one, and those are flipped here. */
++   if (Blt->Rotate > DXGI_DDI_MODE_ROTATION_IDENTITY)
++      return S_OK;
++
++   if (src->nr_samples <= 1 && src->format == dst->format &&
++       info.filter == PIPE_TEX_FILTER_NEAREST) {
++      pipe->resource_copy_region(pipe, dst, dst_level, info.dst.box.x, info.dst.box.y, dst_layer,
++                                 src, src_level, &info.src.box);
++      return S_OK;
++   }
++   if (!pipe->screen->is_format_supported(pipe->screen, dst->format, dst->target,
++                                          dst->nr_samples, dst->nr_storage_samples,
++                                          PIPE_BIND_RENDER_TARGET)) {
++      if (say)
++         DebugPrintf("Blt: the destination format %u is no render target; not carried out\n",
++                     (unsigned)dst->format);
++      return S_OK;
++   }
++   pipe->blit(pipe, &info);
+    return S_OK;
+ }
+ 
+diff --git a/src/gallium/frontends/d3d10umd/OutputMerger.cpp b/src/gallium/frontends/d3d10umd/OutputMerger.cpp
+index 251fe77..2b8a34f 100644
+--- a/src/gallium/frontends/d3d10umd/OutputMerger.cpp
++++ b/src/gallium/frontends/d3d10umd/OutputMerger.cpp
+@@ -137,7 +137,7 @@ CreateRenderTargetView(
+    /* A rotation of the swap chain gives a primary another buffer; the view
+     * has to follow it. */
+    Resource *pResource = CastResource(pCreateRenderTargetView->hDrvResource);
+-   if (pResource && pResource->primary) {
++   if (pResource && (pResource->primary || pResource->shared_rt_resource)) {
+       pRTView->owner = pResource;
+       pRTView->next = pResource->rtvs;
+       pResource->rtvs = pRTView;
+diff --git a/src/gallium/frontends/d3d10umd/Shader.cpp b/src/gallium/frontends/d3d10umd/Shader.cpp
+index da9f93b..6770c8e 100644
+--- a/src/gallium/frontends/d3d10umd/Shader.cpp
++++ b/src/gallium/frontends/d3d10umd/Shader.cpp
+@@ -1368,7 +1368,7 @@ CreateShaderResourceView(
+    /* A rotation of the swap chain gives a primary another buffer; the view
+     * has to follow it. */
+    Resource *pResource = CastResource(pCreateSRView->hDrvResource);
+-   if (pResource && pResource->primary && pSRView->handle) {
++   if (pResource && (pResource->primary || pResource->shared_rt_resource) && pSRView->handle) {
+       pSRView->owner = pResource;
+       pSRView->next = pResource->srvs;
+       pResource->srvs = pSRView;
+@@ -1483,7 +1483,7 @@ CreateShaderResourceView1(
+    /* A rotation of the swap chain gives a primary another buffer; the view
+     * has to follow it. */
+    Resource *pResource = CastResource(pCreateSRView->hDrvResource);
+-   if (pResource && pResource->primary && pSRView->handle) {
++   if (pResource && (pResource->primary || pResource->shared_rt_resource) && pSRView->handle) {
+       pSRView->owner = pResource;
+       pSRView->next = pResource->srvs;
+       pResource->srvs = pSRView;
