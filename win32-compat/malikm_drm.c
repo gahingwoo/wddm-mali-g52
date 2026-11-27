@@ -842,6 +842,10 @@ struct wbo {
    int vdec;
    /* Opened from another process (a surface the compositor reads). */
    int opened;
+   /* The surface a window's blt present is copied into and maliwddm blts
+    * from (malikm_present_begin_create): exportable, like vdec, so that
+    * Panfrost marks it shared and neither caches nor replaces its BO. */
+   int present;
 };
 static struct wbo *wbo;
 static uint32_t wbo_cap;
@@ -2576,7 +2580,7 @@ wddm_bo_is_resource(int fd, uint32_t handle)
    wlock(__func__);
    wselect_fd(fd);
    struct wbo *bo = wddm_bo(handle);
-   ret = bo && ((bo->rt_resource && !bo->released) || bo->vdec);
+   ret = bo && ((bo->rt_resource && !bo->released) || bo->vdec || bo->present);
    wunlock();
    return ret;
 }
@@ -3185,6 +3189,7 @@ wddm_drm(uint32_t nr, uint8_t *b, uint32_t size)
       wbo[h - 1] = (struct wbo){ai.hAllocation, where.Size, where.GpuVa, NULL};
       if (shared == SHARED_PRESENT) {
          /* A BO of this device's own; only the handle goes back. */
+         wbo[h - 1].present = 1;
          shared_next.allocation = ai.hAllocation;
          shared_next.done = 1;
       } else if (shared) {
