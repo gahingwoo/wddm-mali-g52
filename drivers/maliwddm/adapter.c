@@ -1218,13 +1218,16 @@ static NTSTATUS UmdAdapterInfo(MW_ADAPTER *A, const DXGKARG_QUERYADAPTERINFO *In
     u.VirtualMode = 0;                  /* WDDM 1.3, physical (WDDM2.md P2 sets it) */
     u.KmdBuild = MW_BUILD;
     u.Msaa = MwSetting(A, L"UmdMsaa", 1);
-    /* UmdRedirect: at WDDM 2.0 the browsers' redirection froze the whole
-     * session on the TaishanPi 3M (2026-11-25, docs/EDGE-PRESENT.md, "The
-     * WDDM 2.0 session hang"), so at 2.x no process gets it by default;
-     * at 1.3 the browsers keep it (round 6 passed). Read at each query:
-     * a new value applies to processes started after it is set. */
+    /* UmdRedirect: every process at WDDM 2.x since 2026-11-27. Without
+     * redirection a D3D11 window showed nothing at 2.0 (every present
+     * S_OK, no DxgkDdiPresent) and a composition swap chain's present was
+     * refused. The session freeze that made the 2.x default "no process"
+     * on 2026-11-25 was the UMD listing the flip buffers dwm.exe opens as
+     * written (docs/EDGE-PRESENT.md); that is fixed in the shim. At 1.3
+     * the browsers keep it, as tested there. Read at each query: a new
+     * value applies to processes started after it is set. */
     u.Redirect = MwSetting(A, L"UmdRedirect",
-                           MwWddmProbe != 0 ? MW_UMD_REDIRECT_NONE : MW_UMD_REDIRECT_BROWSERS);
+                           MwWddmProbe != 0 ? MW_UMD_REDIRECT_ALL : MW_UMD_REDIRECT_BROWSERS);
     if (u.Redirect > MW_UMD_REDIRECT_ALL)
         u.Redirect = MW_UMD_REDIRECT_NONE;
     /* UmdReportFL11 (default 1 since 2026-11-26, board-tested with Edge

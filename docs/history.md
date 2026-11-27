@@ -92,6 +92,9 @@ history of `docs/`.
   session (a win32k lock, driver idle). `UmdRedirect` 1 became the 2.x
   default and the watchdog `Wd_*` values were added. Edge falls back to
   software at 2.x.
+- 2026-11-27: the freeze and the white Edge window explained and fixed
+  (EDGE-PRESENT.md): the UMD listed the flip buffers DWM opens as written,
+  which dxgkrnl refuses. `UmdRedirect` 3 is the 2.x default.
 
 ## Display
 

@@ -59,7 +59,7 @@ started afterwards without a reboot or reinstall.
 | `VirtualMode` | | 0: physical addressing. 1 would select D3DWDDM2_0 |
 | `KmdBuild` | | the CI run that built the KMD |
 | `Msaa` | `UmdMsaa` | who gets multisample answers ([EDGE-CREATEDEVICE.md](EDGE-CREATEDEVICE.md)) |
-| `Redirect` | `UmdRedirect` | who gets DXGI redirection: 1 none, 2 browsers, 3 all; default 1 at WDDM 2.x and 2 at 1.3; 0 from an older KMD ([EDGE-PRESENT.md](EDGE-PRESENT.md)) |
+| `Redirect` | `UmdRedirect` | who gets DXGI redirection: 1 none, 2 browsers, 3 all; default 3 at WDDM 2.x and 2 at 1.3; 0 from an older KMD ([EDGE-PRESENT.md](EDGE-PRESENT.md)) |
 | `ReportFl11` | `UmdReportFL11` | 1: feature level 11_0 for Chromium's GPU process |
 | `Reserved[4]` | | zero |
 
