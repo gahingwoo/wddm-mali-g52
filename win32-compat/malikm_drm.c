@@ -1445,6 +1445,43 @@ w_destroy(D3DKMT_HANDLE h)
    kmt.DestroyAllocation(&da);
 }
 
+/* Several allocations in one call: what wdead_flush hands back after an
+ * idle, up to WDEAD_FLUSH of them. One pfnDeallocateCb for each cost dwm.exe
+ * 6.7 ms apiece in dxgkrnl at WDDM 2.0 on the TaishanPi 3M (2026-11-28,
+ * slow log: destroy-closed 429 ms for 64, inside a flush when Start
+ * closed), and the whole frame waited. A negative answer means none was
+ * destroyed, and the caller frees them one by one as before. */
+static long
+w_destroy_n(const D3DKMT_HANDLE *h, uint32_t n)
+{
+   if (ddi.on) {
+      D3DDDICB_DEALLOCATE d = {0};
+      d.NumAllocations = n;
+      d.HandleList = h;
+      cb_begin("Deallocate", n);
+      return cb_end("Deallocate", ddi.cb.pfnDeallocateCb(ddi.device, &d), n, 1);
+   }
+   D3DKMT_DESTROYALLOCATION da = {0};
+   da.hDevice = wdevice;
+   da.phAllocationList = h;
+   da.AllocationCount = n;
+   return kmt.DestroyAllocation(&da) >= 0 ? 0 : -1;
+}
+
+/* C:\\mali\\dealloc-one: free closed allocations one call each, as before
+ * 2026-11-28. Read once a process. */
+static int
+dead_batch(void)
+{
+   static int on = -1;
+   if (on < 0) {
+      on = GetFileAttributesA("C:\\mali\\dealloc-one") == INVALID_FILE_ATTRIBUTES;
+      if (!on)
+         DebugPrintf("switch C:\\mali\\dealloc-one: present, closed allocations are freed one call each\n");
+   }
+   return on;
+}
+
 /*
  * The runtime callbacks this shim made last, and the one in flight on each
  * thread. A device the runtime removes (malikm_note_removed) says which
@@ -1714,6 +1751,8 @@ wddm_poll_idle(void)
 static void
 wdead_flush(void)
 {
+   if (wdead_n > 1 && dead_batch() && w_destroy_n(wdead, wdead_n) >= 0)
+      wdead_n = 0;              /* all of them in one call */
    for (uint32_t i = 0; i < wdead_n; i++)
       w_destroy(wdead[i]);
    if (wdead_n && trace_on())

@@ -31,8 +31,11 @@ setting. Take three runs per configuration at least.
 - Primaries are linear (no AFBC, no tiling). The memory segment is
   `CacheCoherent = FALSE`, so user-mode views are write-combined and CPU
   reads of them are slow.
-- The vsync is a 16 ms timer, not the VOP2's interrupt. A flip is reported
-  at the next tick.
+- The vsync is a timer, not the VOP2's interrupt: a high-resolution timer
+  at the committed mode's own period (`vsync_calc.h`; `VsyncTimer` 0 gives
+  the old 16 ms timer). A flip is reported at the next tick. The timer
+  keeps the rate, not the phase: nothing ties it to the VOP2's real
+  vertical blank.
 - One job chain runs at a time on the whole machine. Each render lists
   every live buffer of the device (up to 256), and the KMD patches each.
 - A window's own present (not DWM's) is a read-back present: the UMD maps
@@ -391,7 +394,8 @@ After a TDR:
 
 ## Known issues and not done
 
-- Vsync is a 16 ms timer, not the VOP2's interrupt; tearing has not been
+- Vsync is a timer at the mode's rate, not the VOP2's interrupt, so its
+  phase against the real vertical blank is arbitrary; tearing has not been
   looked for with a test pattern. A VOP2 interrupt in the DSDT was
   followed by WHEA errors in October 2026.
 - Nothing in Windows keeps the VOP2's clocks and power domain on.
