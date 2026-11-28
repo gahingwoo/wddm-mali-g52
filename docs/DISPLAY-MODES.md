@@ -167,10 +167,12 @@ main SYSTEM hive loaded. Deleting the value returns to the default.
   writes the sink's SCDC TMDS_Config (1/40 clock ratio and scrambling),
   enables the controller's scrambler (`SCRAMB_CONFIG0`) and waits 100 ms,
   as Linux dw-hdmi-qp does with bf01e0353815; the PHY's lanes are at 1/40
-  already. Every 2 s the poll thread reads SCDC Scrambler_Status and
-  writes TMDS_Config again if the sink lost it (`Scr_Lost`,
-  `Scr_Rewrites`), which covers a monitor power cycle or a replug the
-  debounce missed. Traces: `Mset_ScrScdc`, `Mset_ScrStatus`.
+  already. Every 2 s the poll thread reads SCDC TMDS_Config and writes it
+  again if the sink lost it (`Scr_LostCfg`, `Scr_Rewrites`), which covers
+  a monitor power cycle or a replug the debounce missed. Traces:
+  `Mset_ScrScdc`, `Mset_ScrStatus` (Scrambler_Status), `Mset_ScrFlags` and
+  `Scr_Flags` (SCDC Status_Flags_0: bit 0 clock detected, bits 1 to 3
+  channels locked; `Scr_Flags` also has Scrambler_Status in bits 8 to 15).
   `HdmiScrambling` 0 keeps every mode at or below 340 MHz.
 - The VOP2 scaler registers come from mainline and the vendor kernel and
   are checked on the host only; the panel's list too.

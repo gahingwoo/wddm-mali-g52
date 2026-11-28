@@ -530,6 +530,9 @@ static void Msg(DDC_MSG *M, UCHAR Addr, BOOLEAN Read, ULONG Len, UCHAR *Buf)
 #define SCDC_TMDS_RATIO_40      (1u << 1)
 #define SCDC_SCRAMBLING_EN      (1u << 0)
 #define SCDC_SCRAMBLER_STATUS   0x21
+#define SCDC_SINK_VERSION       0x01
+#define SCDC_SOURCE_VERSION     0x02
+#define SCDC_STATUS_FLAGS_0     0x40    /* bit 0 clock detected, 1..3 channel 0..2 locked */
 
 /* DwHdmiQpI2cXfer. */
 static NTSTATUS DdcXfer(DDC *D, DDC_MSG *M, ULONG N)
@@ -665,27 +668,40 @@ NTSTATUS MwHdmiReadEdid(MW_ADAPTER *A, UCHAR *Buf, ULONG Max, ULONG *Len)
 }
 
 /* The poll thread's check of a scrambled mode (hpd.c ScrambleCheck), under
- * HwLock: SCDC Scrambler_Status bit 0. When the sink has lost it,
- * TMDS_CONFIG is written again. 0: fine, or no answer; 1: lost and the
- * write failed; 2: lost and written again. */
+ * HwLock. What says the sink still expects scrambling is TMDS_Config
+ * (the vendor kernel's test after a plug): a sink that was power cycled or
+ * replugged has it back at 0, and is told again. Scrambler_Status is not
+ * used: on the AOC Q27B3S2 it read 0 at 1440p100 while TMDS_Config kept
+ * 0x03, and rewriting it every 2 s changed nothing. 0: fine, or no
+ * answer; 1: lost and the write failed; 2: lost and written again. The
+ * status flags (clock detected, channels locked) and Scrambler_Status go
+ * to the trace when they change. */
 ULONG MwHdmiScrambleCheck(MW_ADAPTER *A)
 {
+    MW_HDMI *H = &A->Hdmi;
     DDC d;
-    UCHAR status = 0, cfg = 0;
-    ULONG gates;
+    UCHAR cfg = 0, flags = 0, status = 0;
+    ULONG gates, seen;
 
-    if (!MwHdmiPowered(A) || !Clocked(&A->Hdmi, &gates))
+    if (!MwHdmiPowered(A) || !Clocked(H, &gates))
         return 0;
     RtlZeroMemory(&d, sizeof(d));
     d.A = A;
-    d.C = A->Hdmi.Ctl;
-    d.Deadline = Now100ns() + 200 * 10000ull;
-    if (!NT_SUCCESS(ScdcRead(&d, SCDC_SCRAMBLER_STATUS, &status)) || (status & 1))
+    d.C = H->Ctl;
+    d.Deadline = Now100ns() + 300 * 10000ull;
+    if (NT_SUCCESS(ScdcRead(&d, SCDC_STATUS_FLAGS_0, &flags)) &&
+        NT_SUCCESS(ScdcRead(&d, SCDC_SCRAMBLER_STATUS, &status))) {
+        seen = 0x10000u | (ULONG)status << 8 | flags;
+        if (seen != H->ScrSeen) {
+            H->ScrSeen = seen;
+            MwLog(A, L"Scr_Flags", seen);
+        }
+    }
+    if (!NT_SUCCESS(ScdcRead(&d, SCDC_TMDS_CONFIG, &cfg)) || (cfg & 3) == 3)
         return 0;
-    /* Read once more: a single bad read is not a lost lock. */
-    (void)ScdcRead(&d, SCDC_TMDS_CONFIG, &cfg);
+    /* Read once more: one bad read is not a lost setting. */
     d.Deadline = Now100ns() + 200 * 10000ull;
-    if (!NT_SUCCESS(ScdcRead(&d, SCDC_SCRAMBLER_STATUS, &status)) || (status & 1))
+    if (!NT_SUCCESS(ScdcRead(&d, SCDC_TMDS_CONFIG, &cfg)) || (cfg & 3) == 3)
         return 0;
     MwLog(A, L"Scr_LostCfg", cfg);
     d.Deadline = Now100ns() + 200 * 10000ull;
@@ -1149,10 +1165,14 @@ static NTSTATUS HdmiSetup(MSET *M, const MW_TIMING *T, const MW_VP_REGS *R)
      * the new clock and data. The lanes are already at 1/40
      * (PhyTmdsModeConfig). */
     if (scr) {
-        UCHAR rb = 0xFF, status = 0xFF;
+        UCHAR rb = 0xFF, status = 0xFF, flags = 0xFF, ver = 0;
         NTSTATUS ss = STATUS_UNSUCCESSFUL;
         Step(M, 13);
         M->D.Deadline = KeQueryInterruptTime() + 500 * 10000ull;
+        /* Source_Version, as the vendor kernel writes it first: the
+         * smaller of the sink's and 1. */
+        if (NT_SUCCESS(ScdcRead(&M->D, SCDC_SINK_VERSION, &ver)))
+            (void)ScdcWrite(&M->D, SCDC_SOURCE_VERSION, ver < 1 ? ver : 1);
         for (ULONG i = 0; i < 3; i++) {
             ss = ScdcWrite(&M->D, SCDC_TMDS_CONFIG, SCDC_TMDS_RATIO_40 | SCDC_SCRAMBLING_EN);
             if (NT_SUCCESS(ss))
@@ -1165,9 +1185,13 @@ static NTSTATUS HdmiSetup(MSET *M, const MW_TIMING *T, const MW_VP_REGS *R)
             (void)ScdcRead(&M->D, SCDC_TMDS_CONFIG, &rb);
         M->D.Deadline = KeQueryInterruptTime() + 200 * 10000ull;
         (void)ScdcRead(&M->D, SCDC_SCRAMBLER_STATUS, &status);
+        (void)ScdcRead(&M->D, SCDC_STATUS_FLAGS_0, &flags);
         MwLog(M->A, L"Mset_ScrScdc", NT_SUCCESS(ss) ? rb : (ULONG)ss);
         MwLog(M->A, L"Mset_ScrStatus", status);
+        MwLog(M->A, L"Mset_ScrFlags", flags);
+        MwLog(M->A, L"Mset_ScrSinkVer", ver);
         H->Scrambling = TRUE;
+        H->ScrSeen = 0;
         H->NextScrCheck = KeQueryInterruptTime() + 3000ull * 10000;
     }
 

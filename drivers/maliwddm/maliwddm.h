@@ -190,7 +190,7 @@ typedef struct _MW_HDMI {
     BOOLEAN Default60;          /* HdmiDefault60: the preferred mode is the largest size at 60 Hz */
     BOOLEAN ScrambleSetting;    /* HdmiScrambling (default 1): modes above 340 MHz for a sink with SCDC */
     volatile BOOLEAN Scrambling; /* the mode on the wire is scrambled (hdmi.c) */
-    ULONG ScrChecks, ScrLost, ScrRewrites;
+    ULONG ScrChecks, ScrLost, ScrRewrites, ScrSeen;
     ULONG64 NextScrCheck;
     ULONG HdmiChild;            /* the HDMI child's id: 0 on an HDMI boot, 1 next to the panel */
     ULONG Children;
