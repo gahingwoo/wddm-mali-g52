@@ -1163,21 +1163,45 @@ static LONGLONG VsyncWant(const MW_ADAPTER *A)
                                    A->TimingTotalW, A->TimingTotalH);
 }
 
-/* VsyncTimer 1: (re)arm the high-resolution timer at the mode's period,
- * first tick one period from now. FALSE when it is not in use. */
-static BOOLEAN VsyncExArm(MW_ADAPTER *A)
+/* VsyncTimer 1: the high-resolution timer, one shot at a time, each tick
+ * aimed at Base + n periods of interrupt time. A periodic ExSetTimer
+ * counted each period from when the last tick fired, which is up to a
+ * clock interrupt late: on the board it kept 17.04 ms for a 16.67 ms
+ * period. Here a late tick does not move the next one. */
+static void VsyncExNext(MW_ADAPTER *A)
 {
     EXT_SET_PARAMETERS sp;
+    LONGLONG p = A->VsyncArmed, now = (LONGLONG)KeQueryInterruptTime(), due;
+
+    if (p <= 0)
+        return;
+    A->VsyncN++;
+    due = A->VsyncBase + A->VsyncN * p;
+    if (due <= now) {
+        /* Missed one or more (a debugger, a long DPC): next one ahead. */
+        A->VsyncN = (now - A->VsyncBase) / p + 1;
+        due = A->VsyncBase + A->VsyncN * p;
+        A->VsyncLate++;
+    }
+    ExInitializeSetTimerParameters(&sp);
+    ExSetTimer(A->VsyncEx, -(due - now), 0, &sp);
+}
+
+/* (Re)arm at the mode's period, the first tick one period from now.
+ * FALSE when it is not in use. */
+static BOOLEAN VsyncExArm(MW_ADAPTER *A)
+{
     LONGLONG p;
 
     if (A->VsyncMode == 0 || A->VsyncEx == NULL)
         return FALSE;
     p = VsyncWant(A);
-    ExInitializeSetTimerParameters(&sp);
+    A->VsyncBase = (LONGLONG)KeQueryInterruptTime();
+    A->VsyncN = 0;
     InterlockedExchange64(&A->VsyncArmed, p);
-    ExSetTimer(A->VsyncEx, -p, p, &sp);
     InterlockedIncrement(&A->VsyncRearms);
     MwLog(A, L"VsyncPeriod100ns", (ULONG)p);
+    VsyncExNext(A);
     return TRUE;
 }
 
@@ -1187,30 +1211,34 @@ static void VsyncExCancel(MW_ADAPTER *A)
 {
     if (A->VsyncEx == NULL)
         return;
-    ExCancelTimer(A->VsyncEx, NULL);
+    /* Armed 0 first: a callback running now then sets no next tick. */
     InterlockedExchange64(&A->VsyncArmed, 0);
+    ExCancelTimer(A->VsyncEx, NULL);
     if (KeGetCurrentIrql() == PASSIVE_LEVEL) {
         LARGE_INTEGER ms;
         ms.QuadPart = -10000;
         while (A->VsyncInCb != 0)
             KeDelayExecutionThread(KernelMode, FALSE, &ms);
+        ExCancelTimer(A->VsyncEx, NULL);
     }
 }
 
 /* The high-resolution timer's tick, at DISPATCH_LEVEL: the same work as
- * the KTIMER's DPC. Every 64th tick it looks whether the mode's period
- * changed (a mode set does not turn the interrupt off and on). */
+ * the KTIMER's DPC, then the next tick. Every 64th tick it looks whether
+ * the mode's period changed (a mode set does not turn the interrupt off
+ * and on). */
 static VOID VsyncExCallback(PEX_TIMER Timer, PVOID Context)
 {
     MW_ADAPTER *a = (MW_ADAPTER *)Context;
     UNREFERENCED_PARAMETER(Timer);
 
     InterlockedIncrement(&a->VsyncInCb);
-    if (!a->Stopping && a->VsyncOn) {
+    if (!a->Stopping && a->VsyncOn && a->VsyncArmed != 0) {
         VsyncDpc(NULL, a, NULL, NULL);
-        if ((a->Vsyncs & 63) == 0 && a->VsyncOn && !a->Stopping &&
-            MwVsyncRearm((mwv_u64)a->VsyncArmed, (mwv_u64)VsyncWant(a)))
+        if ((a->Vsyncs & 63) == 0 && MwVsyncRearm((mwv_u64)a->VsyncArmed, (mwv_u64)VsyncWant(a)))
             (void)VsyncExArm(a);
+        else
+            VsyncExNext(a);
     }
     InterlockedDecrement(&a->VsyncInCb);
 }

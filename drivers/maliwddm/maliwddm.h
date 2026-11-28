@@ -525,6 +525,8 @@ struct _MW_ADAPTER {
     volatile LONG64 VsyncArmed; /* the period armed, 100 ns; 0 none */
     volatile LONG VsyncInCb;    /* ExTimer callbacks running, for the stop */
     volatile LONG VsyncRearms;
+    LONGLONG VsyncBase, VsyncN; /* interrupt time of tick 0, ticks since */
+    ULONG VsyncLate;            /* ticks found already due, skipped */
     PHYSICAL_ADDRESS ScanAddr;
     struct _MW_ALLOCATION *volatile ScanAlloc;
     struct _MW_ALLOCATION *ShownAlloc;
