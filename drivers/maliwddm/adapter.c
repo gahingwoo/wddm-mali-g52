@@ -986,6 +986,7 @@ static NTSTATUS APIENTRY MwRemoveDevice(IN_CONST_PVOID Context)
         MwBacklightStop(a);
     }
     KeFlushQueuedDpcs();
+    MwCommandFree(a);
     MwProbeStop(a);
     ExFreePoolWithTag(a, MW_TAG);
     return STATUS_SUCCESS;

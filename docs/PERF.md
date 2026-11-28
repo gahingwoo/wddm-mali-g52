@@ -16,10 +16,31 @@ slower.
 | The same at 702 MHz (SPLL / 1) | 334 to 336 points, GPU about 87% busy |
 | The same at 198 MHz (the firmware's clock) | 106 points |
 | Window drag, DWM | GPU 12 to 15% busy; bound by the CPU's submit path. DWM submit CPU per job 0.20 to 0.23 ms with `UmdMergeSubmit` on, 0.29 to 0.33 ms off |
+| Window drag, 2560x1440 at 60 Hz, 14 s, gaps between DWM frames (`dwmprobe`) | 16 ms timer: p99 33 to 35 ms, 22 to 26 gaps over 1.5 periods. Mode-rate timer: p99 16.8 ms, 0 to 4 gaps. DWM presents 53 to 54 a second with either timer |
 | Scan-out on (default) | every flip scanned out, none copied; up to 268 presents in 5 s while dragging |
 
 The desktop's numbers move by tens of percent between runs of the same
 setting. Take three runs per configuration at least.
+
+## The vsync timer, 2026-11-28
+
+TaishanPi 3M, WDDM 2.0, AOC monitor at 2560x1440 60 Hz, three runs each.
+DWM's frame times are read with `DwmGetCompositionTimingInfo` in the
+user's session while a script drags an Explorer window in a circle.
+
+- The 16 ms KTIMER fired on the 15.625 ms clock tick: 62.5 ticks a second,
+  mostly 15.6 ms apart with a 31.3 ms gap about 1.6 times a second. DWM
+  estimated the refresh at 52 to 68 Hz. A 1 ms system timer resolution
+  (any program can ask for it) made the ticks 16 ms apart, still 62.5 Hz
+  against a 60 Hz monitor.
+- With `VsyncTimer` 1 the ticks are 16666 us apart (longest 19 ms), DWM
+  reads 59.96 to 60.05 Hz, and the frame gaps during a drag are 16.67 ms
+  with a p99 of 16.8 ms, with transparency and animations off and on.
+- DWM presents about as many frames as before (53 to 54 a second while
+  dragging); what changed is that they are evenly spaced.
+- Edge scrolling (`long.html`, DirectComposition): 59 to 60 frames a
+  second either way, 95th percentile 18.9 to 22.3 ms before, 17.0 to
+  17.1 ms after.
 
 ## How a present works
 
@@ -31,8 +52,11 @@ setting. Take three runs per configuration at least.
 - Primaries are linear (no AFBC, no tiling). The memory segment is
   `CacheCoherent = FALSE`, so user-mode views are write-combined and CPU
   reads of them are slow.
-- The vsync is a 16 ms timer, not the VOP2's interrupt. A flip is reported
-  at the next tick.
+- The vsync is a timer, not the VOP2's interrupt: a high-resolution timer
+  at the committed mode's own period (`vsync_calc.h`; `VsyncTimer` 0 gives
+  the old 16 ms timer). A flip is reported at the next tick. The timer
+  keeps the rate, not the phase: nothing ties it to the VOP2's real
+  vertical blank.
 - One job chain runs at a time on the whole machine. Each render lists
   every live buffer of the device (up to 256), and the KMD patches each.
 - A window's own present (not DWM's) is a read-back present: the UMD maps
@@ -391,7 +415,8 @@ After a TDR:
 
 ## Known issues and not done
 
-- Vsync is a 16 ms timer, not the VOP2's interrupt; tearing has not been
+- Vsync is a timer at the mode's rate, not the VOP2's interrupt, so its
+  phase against the real vertical blank is arbitrary; tearing has not been
   looked for with a test pattern. A VOP2 interrupt in the DSDT was
   followed by WHEA errors in October 2026.
 - Nothing in Windows keeps the VOP2's clocks and power domain on.

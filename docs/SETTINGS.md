@@ -102,6 +102,7 @@ Read at adapter start. Details in [PERF.md](PERF.md) and
 | `PerfData` | 1 | 0: do not answer Task Manager's temperature and clock queries (WDDM 2.x). |
 | `TimeSlice` | 0 | Time slice in ms with soft-stop preemption, at most 1000. 0: preempt only between DMA buffers. |
 | `PollMs` | 1 | Job status poll period while work is in flight, 1 to 50. |
+| `VsyncTimer` | 1 | The emulated vsync keeps the mode's own refresh period on a high-resolution timer. 0: a 16 ms timer, as before 2026-11-28. |
 | `PreemptAnswer` | 1 | 0: ignore node-0 preemption requests at `TimeSlice` 0. For A/B tests only; it causes TDRs. |
 
 ## Parameters (service key)
@@ -157,6 +158,7 @@ variables are not read.
 | `D3D10UMD_VDEC_PATH` | `direct`: open `\\.\VDPU383` and not maliwddm; `kmd`: maliwddm only. Unset: maliwddm, else the device. |
 | `D3D10UMD_NV12_ALIAS=0` | NV12 plane views are copies of the texture, not aliases of it. |
 | `C:\mali\vdec-shared-copy` | Shared decoder textures (Chromium's) are copied into, not decoded into. |
+| `C:\mali\dealloc-one` | Closed allocations are freed one `pfnDeallocateCb` each instead of all in one call. Slow; to compare. |
 | `C:\mali\present-readback` | A window's blt present reads the frame back on the CPU instead of copying it on the GPU ([EDGE-PRESENT.md](EDGE-PRESENT.md)). Slow; to compare. |
 | `C:\mali\open-write` | Surfaces opened from another process are listed as written. Freezes the session at the first flip model present; to compare. |
 | `MALIKM_FAKE=1` | No device: the shim answers every call itself ([M3.md](M3.md)). 2 also logs each call. |
