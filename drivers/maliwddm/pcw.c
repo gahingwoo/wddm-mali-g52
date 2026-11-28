@@ -42,6 +42,21 @@ typedef struct _MW_PCW_GPU_VALUES {
     ULONG WddmFallbackReason;
 } MW_PCW_GPU_VALUES;
 
+/*
+ * The ctrpp helpers register with PCW_CURRENT_VERSION, which the 26100 WDK
+ * makes PCW_VERSION_2 (build 20348 and later). Windows 10 19041's
+ * PcwRegister takes only PCW_VERSION_1 and fails anything else with
+ * STATUS_INVALID_PARAMETER_2 (PcwRegister = 0xc00000f0 in the trace on the
+ * CM5-IO Windows 10 19045), so the counters never existed there. Ask for
+ * the version the running kernel knows; Windows 11 keeps PCW_VERSION_2.
+ */
+static ULONG MwPcwVersion(void)
+{
+    return RtlIsNtDdiVersionAvailable(NTDDI_WIN10_FE) ? PCW_VERSION_2 : PCW_VERSION_1;
+}
+#undef PCW_CURRENT_VERSION
+#define PCW_CURRENT_VERSION MwPcwVersion()
+
 #pragma warning(push)
 #pragma warning(disable: 4201 4214)
 #include "maliwddmCounters.h"
