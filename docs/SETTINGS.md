@@ -84,7 +84,8 @@ Read at adapter start. Details in [HDMI-HPD.md](HDMI-HPD.md),
 | `HdmiExclusive` | 1 | Level 3 on a DSI boot: the panel is reported gone while HDMI is connected. 0: report both (HDMI stays black with one source). Ignored with `HdmiExtend` 1. |
 | `HdmiDefault60` | 1 | Level 3: the preferred mode is the largest size at the rate nearest 60 Hz. 0: the monitor's preferred timing. |
 | `HdmiExtend` | 0 | 1, on a DSI boot with `HdmiHpd` 3 set by hand: panel and HDMI as an extended desktop. Not run on a board. |
-| `HdmiMaxPixels` | 4096000 (2560x1600) | Size of the level 3 framebuffer; larger modes are not offered. 1280x720 to 4096x2304. |
+| `HdmiMaxPixels` | 8294400 (3840x2160) | Size of the level 3 framebuffer; larger modes are not offered. 1280x720 to 4096x2304. When that much contiguous memory is not there at start, 2560x1600 (`Hpd_ReserveFellBack`). |
+| `HdmiScrambling` | 1 | Level 3: modes above 340 MHz TMDS (up to 600) with HDMI 2.0 scrambling, for a sink whose EDID has SCDC. 0: nothing above 340 MHz. |
 | `UsbcDp` | 0 | 1, on an HDMI boot with `HdmiHpd` 3: a monitor on USB-C (DisplayPort Alt Mode) as a second display. Needs the firmware option "USB-C DisplayPort (experimental)" too. Not run on a board. [USBC-DP.md](USBC-DP.md). |
 
 ### GPU clock, temperature, scheduling

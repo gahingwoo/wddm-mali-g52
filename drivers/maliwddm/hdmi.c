@@ -149,6 +149,7 @@ enum { M_IOC = 1, M_GPIO4 = 2, M_VO0 = 4, M_PHYGRF = 8, M_PHY = 16, M_CTL = 32, 
 #define HDCP2LOGIC_CONFIG0      0x8e0
 #define HDCP2_BYPASS            (1u << 0)
 #define SCRAMB_CONFIG0          0x960
+#define SCRAMB_EN               (1u << 0)
 #define LINK_CONFIG0            0x968
 #define OPMODE_FRL_4LANES       (1u << 8)
 #define OPMODE_DVI              (1u << 4)
@@ -525,6 +526,13 @@ static void Msg(DDC_MSG *M, UCHAR Addr, BOOLEAN Read, ULONG Len, UCHAR *Buf)
 #define DDC_SEGMENT_ADDR    0x30
 #define DDC_ADDR            0x50
 #define SCDC_ADDR           0x54
+#define SCDC_TMDS_CONFIG        0x20
+#define SCDC_TMDS_RATIO_40      (1u << 1)
+#define SCDC_SCRAMBLING_EN      (1u << 0)
+#define SCDC_SCRAMBLER_STATUS   0x21
+#define SCDC_SINK_VERSION       0x01
+#define SCDC_SOURCE_VERSION     0x02
+#define SCDC_STATUS_FLAGS_0     0x40    /* bit 0 clock detected, 1..3 channel 0..2 locked */
 
 /* DwHdmiQpI2cXfer. */
 static NTSTATUS DdcXfer(DDC *D, DDC_MSG *M, ULONG N)
@@ -657,6 +665,47 @@ NTSTATUS MwHdmiReadEdid(MW_ADAPTER *A, UCHAR *Buf, ULONG Max, ULONG *Len)
     MwLog(A, L"Edid_Nacks", d.Nacks);
     MwLog(A, L"Edid_Ms", (ULONG)((Now100ns() - t0) / 10000));
     return st;
+}
+
+/* The poll thread's check of a scrambled mode (hpd.c ScrambleCheck), under
+ * HwLock. What says the sink still expects scrambling is TMDS_Config
+ * (the vendor kernel's test after a plug): a sink that was power cycled or
+ * replugged has it back at 0, and is told again. Scrambler_Status is not
+ * used: on the AOC Q27B3S2 it read 0 at 1440p100 while TMDS_Config kept
+ * 0x03, and rewriting it every 2 s changed nothing. 0: fine, or no
+ * answer; 1: lost and the write failed; 2: lost and written again. The
+ * status flags (clock detected, channels locked) and Scrambler_Status go
+ * to the trace when they change. */
+ULONG MwHdmiScrambleCheck(MW_ADAPTER *A)
+{
+    MW_HDMI *H = &A->Hdmi;
+    DDC d;
+    UCHAR cfg = 0, flags = 0, status = 0;
+    ULONG gates, seen;
+
+    if (!MwHdmiPowered(A) || !Clocked(H, &gates))
+        return 0;
+    RtlZeroMemory(&d, sizeof(d));
+    d.A = A;
+    d.C = H->Ctl;
+    d.Deadline = Now100ns() + 300 * 10000ull;
+    if (NT_SUCCESS(ScdcRead(&d, SCDC_STATUS_FLAGS_0, &flags)) &&
+        NT_SUCCESS(ScdcRead(&d, SCDC_SCRAMBLER_STATUS, &status))) {
+        seen = 0x10000u | (ULONG)status << 8 | flags;
+        if (seen != H->ScrSeen) {
+            H->ScrSeen = seen;
+            MwLog(A, L"Scr_Flags", seen);
+        }
+    }
+    if (!NT_SUCCESS(ScdcRead(&d, SCDC_TMDS_CONFIG, &cfg)) || (cfg & 3) == 3)
+        return 0;
+    /* Read once more: one bad read is not a lost setting. */
+    d.Deadline = Now100ns() + 200 * 10000ull;
+    if (!NT_SUCCESS(ScdcRead(&d, SCDC_TMDS_CONFIG, &cfg)) || (cfg & 3) == 3)
+        return 0;
+    MwLog(A, L"Scr_LostCfg", cfg);
+    d.Deadline = Now100ns() + 200 * 10000ull;
+    return NT_SUCCESS(ScdcWrite(&d, SCDC_TMDS_CONFIG, SCDC_TMDS_RATIO_40 | SCDC_SCRAMBLING_EN)) ? 2 : 1;
 }
 
 /* ---- clocks and resets (HdmiTxIomux, without the board's GPIO) ---- */
@@ -847,7 +896,7 @@ static NTSTATUS PhyTmdsModeConfig(MW_HDMI *H, ULONG BitRate, ULONG *Status)
     PhyW(H, 0x116, 0x00);
     PhyW(H, 0x117, 0x00);
     PhyW(H, 0x200, 0x06);
-    if (BitRate >= 3400000) {
+    if (BitRate > 3400000) {
         PhyW(H, 0x201, 0x00);                   /* 1/40 bit rate clock */
         PhyW(H, 0x202, 0x00);
         PhyW(H, 0x203, 0x0f);
@@ -1019,11 +1068,17 @@ static NTSTATUS HdmiSetup(MSET *M, const MW_TIMING *T, const MW_VP_REGS *R)
     MW_HDMI *H = M->H;
     PUCHAR c = H->Ctl;
     ULONG bitrate = T->Clock * 10, st = 0;
+    BOOLEAN scr = MwHdmiScrambled(T);
     MW_ROPLL cfg;
     NTSTATUS s;
 
     if (!MwRopllFor(bitrate, &cfg))
         return STATUS_NOT_SUPPORTED;
+    /* Above 340 MHz only scrambled, and only to a sink with SCDC
+     * (MwEdidLimitsHf offers such modes on no other). */
+    if (scr && !(H->ScrambleSetting && H->Sink.Scdc))
+        return STATUS_NOT_SUPPORTED;
+    H->Scrambling = FALSE;
 
     /* [0] interrupts masked, the timer base at 396 MHz; [0b] the I2C master
      * again for it. */
@@ -1102,6 +1157,43 @@ static NTSTATUS HdmiSetup(MSET *M, const MW_TIMING *T, const MW_VP_REGS *R)
     if (!NT_SUCCESS(s))
         return s;
     Ms(5);
+
+    /* [10b] Above 340 MHz (dw-hdmi-qp's dw_hdmi_qp_set_scrambling, Linux
+     * bf01e0353815, which reached 1440p100 on this AOC): TMDS_CONFIG
+     * TMDS_Bit_Clock_Ratio and Scrambling_Enable on the sink over SCDC, then
+     * the controller's scrambler; the sink takes up to 100 ms to lock to
+     * the new clock and data. The lanes are already at 1/40
+     * (PhyTmdsModeConfig). */
+    if (scr) {
+        UCHAR rb = 0xFF, status = 0xFF, flags = 0xFF, ver = 0;
+        NTSTATUS ss = STATUS_UNSUCCESSFUL;
+        Step(M, 13);
+        M->D.Deadline = KeQueryInterruptTime() + 500 * 10000ull;
+        /* Source_Version, as the vendor kernel writes it first: the
+         * smaller of the sink's and 1. */
+        if (NT_SUCCESS(ScdcRead(&M->D, SCDC_SINK_VERSION, &ver)))
+            (void)ScdcWrite(&M->D, SCDC_SOURCE_VERSION, ver < 1 ? ver : 1);
+        for (ULONG i = 0; i < 3; i++) {
+            ss = ScdcWrite(&M->D, SCDC_TMDS_CONFIG, SCDC_TMDS_RATIO_40 | SCDC_SCRAMBLING_EN);
+            if (NT_SUCCESS(ss))
+                break;
+            Us(2000);
+        }
+        Wr(c, SCRAMB_CONFIG0, SCRAMB_EN);
+        Ms(100);
+        if (NT_SUCCESS(ss))
+            (void)ScdcRead(&M->D, SCDC_TMDS_CONFIG, &rb);
+        M->D.Deadline = KeQueryInterruptTime() + 200 * 10000ull;
+        (void)ScdcRead(&M->D, SCDC_SCRAMBLER_STATUS, &status);
+        (void)ScdcRead(&M->D, SCDC_STATUS_FLAGS_0, &flags);
+        MwLog(M->A, L"Mset_ScrScdc", NT_SUCCESS(ss) ? rb : (ULONG)ss);
+        MwLog(M->A, L"Mset_ScrStatus", status);
+        MwLog(M->A, L"Mset_ScrFlags", flags);
+        MwLog(M->A, L"Mset_ScrSinkVer", ver);
+        H->Scrambling = TRUE;
+        H->ScrSeen = 0;
+        H->NextScrCheck = KeQueryInterruptTime() + 3000ull * 10000;
+    }
 
     /* [11] AVMUTE cleared: GCP with CLEAR_AVMUTE, after 50 ms (vendor U-Boot). */
     Ms(50);
@@ -1315,6 +1407,7 @@ NTSTATUS MwHdmiDsiRestore(MW_ADAPTER *A, ULONG FbAddr, ULONG Pitch)
     MW_VP_REGS r;
     ULONG div;
 
+    H->Scrambling = FALSE;          /* HDMI is no longer driven */
     if (!H->HavePanel || !MwHdmiPowered(A)) {
         MwLog(A, L"Dsi_Status", (ULONG)STATUS_DEVICE_NOT_READY);
         return STATUS_DEVICE_NOT_READY;
