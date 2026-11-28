@@ -7,12 +7,13 @@
  * Until 2026-11-28 that timer was KeSetTimerEx with a 16 ms period: 62.5
  * ticks a second against a monitor at 59.95 or 60 Hz, and at the default
  * 15.625 ms clock tick most ticks were 15.6 ms apart with a 31.3 ms gap
- * among them. DWM composed one frame a tick, so a frame the VOP2 never
- * showed every 400 ms or so and a doubled one at each long gap: a steady
- * window drag stuttered at a full frame rate.
+ * among them. DWM measured its refresh at 52 to 68 Hz, and a window
+ * drag at 2560x1440 had 22 to 26 frame gaps over 1.5 periods in 14 s
+ * (TaishanPi 3M, 2026-11-28); with this timer 0 to 4.
  *
  * Now the period is the committed mode's own refresh, in 100 ns units, on
- * a high-resolution timer (ExSetTimer). MwVsyncPeriod gives 0 for a rate
+ * a high-resolution timer, each tick aimed at a multiple of the period
+ * (command.c). MwVsyncPeriod gives 0 for a rate
  * it does not believe (outside 20 to 240 Hz), and MwVsyncChoose then falls
  * back to the next source and at last to 60 Hz.
  */
