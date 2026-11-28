@@ -518,6 +518,13 @@ struct _MW_ADAPTER {
     KTIMER VsyncTimer;
     KDPC VsyncDpc;
     volatile LONG VsyncOn;
+    /* VsyncTimer 1 (default): a high-resolution timer at the committed
+     * mode's own period (vsync_calc.h) instead of VsyncTimer's 16 ms. */
+    PEX_TIMER VsyncEx;
+    ULONG VsyncMode;            /* setting VsyncTimer: 0 the 16 ms KTIMER, 1 the mode's rate */
+    volatile LONG64 VsyncArmed; /* the period armed, 100 ns; 0 none */
+    volatile LONG VsyncInCb;    /* ExTimer callbacks running, for the stop */
+    volatile LONG VsyncRearms;
     PHYSICAL_ADDRESS ScanAddr;
     struct _MW_ALLOCATION *volatile ScanAlloc;
     struct _MW_ALLOCATION *ShownAlloc;
@@ -960,6 +967,7 @@ void MwAllocNoPages(MW_ADAPTER *A, struct _MW_ALLOCATION *Alloc);
 void MwDcClean(PVOID Va, SIZE_T Length);            /* cache.asm */
 void MwDcCleanInvalidate(PVOID Va, SIZE_T Length);
 void MwCommandStop(MW_ADAPTER *A);
+void MwCommandFree(MW_ADAPTER *A);     /* RemoveDevice: the vsync timer */
 void MwArmPoll(MW_ADAPTER *A);
 void MwCommandSettings(MW_ADAPTER *A);
 NTSTATUS MwPerfSnapshot(MW_ADAPTER *A, MW_ESCAPE_PERF_DATA *D);   /* PASSIVE; the queue's part */

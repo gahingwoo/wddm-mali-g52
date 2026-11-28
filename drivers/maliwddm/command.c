@@ -34,6 +34,7 @@
  */
 #include "maliwddm.h"
 #include "wddm2.h"
+#include "vsync_calc.h"
 
 #define MW_DMA_MAGIC            0x4D57444Du /* 'MWDM' in the private data */
 #define MW_DMA_BUFFER_SIZE      (16 * 1024)
@@ -66,6 +67,9 @@ void MwCommandSettings(MW_ADAPTER *A)
     A->PollMs = v < 1 ? 1 : v > MW_POLL_MAX_MS ? MW_POLL_MAX_MS : v;
     /* PreemptAnswer (default 1): see MwPreemptCommand. */
     A->PreemptAnswer = MwSetting(A, L"PreemptAnswer", 1) != 0;
+    /* VsyncTimer (default 1): the emulated vsync at the mode's own rate on
+     * a high-resolution timer. 0: the 16 ms KTIMER it always was. */
+    A->VsyncMode = MwSetting(A, L"VsyncTimer", 1) != 0 ? 1 : 0;
     A->SliceRead = TRUE;
 }
 
@@ -1152,6 +1156,65 @@ static VOID VsyncDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
         a->Dxgk.DxgkCbQueueDpc(a->Dxgk.DeviceHandle);
 }
 
+/* The period the emulated vsync should keep now (vsync_calc.h). */
+static LONGLONG VsyncWant(const MW_ADAPTER *A)
+{
+    return (LONGLONG)MwVsyncChoose(A->Hdmi.Switch, A->Hdmi.RefNum, A->Hdmi.RefDen, A->TimingPixelRate,
+                                   A->TimingTotalW, A->TimingTotalH);
+}
+
+/* VsyncTimer 1: (re)arm the high-resolution timer at the mode's period,
+ * first tick one period from now. FALSE when it is not in use. */
+static BOOLEAN VsyncExArm(MW_ADAPTER *A)
+{
+    EXT_SET_PARAMETERS sp;
+    LONGLONG p;
+
+    if (A->VsyncMode == 0 || A->VsyncEx == NULL)
+        return FALSE;
+    p = VsyncWant(A);
+    ExInitializeSetTimerParameters(&sp);
+    InterlockedExchange64(&A->VsyncArmed, p);
+    ExSetTimer(A->VsyncEx, -p, p, &sp);
+    InterlockedIncrement(&A->VsyncRearms);
+    MwLog(A, L"VsyncPeriod100ns", (ULONG)p);
+    return TRUE;
+}
+
+/* Cancels it and waits for a callback already running (PASSIVE_LEVEL in
+ * MwCommandStop; from ControlInterrupt only the cancel). */
+static void VsyncExCancel(MW_ADAPTER *A)
+{
+    if (A->VsyncEx == NULL)
+        return;
+    ExCancelTimer(A->VsyncEx, NULL);
+    InterlockedExchange64(&A->VsyncArmed, 0);
+    if (KeGetCurrentIrql() == PASSIVE_LEVEL) {
+        LARGE_INTEGER ms;
+        ms.QuadPart = -10000;
+        while (A->VsyncInCb != 0)
+            KeDelayExecutionThread(KernelMode, FALSE, &ms);
+    }
+}
+
+/* The high-resolution timer's tick, at DISPATCH_LEVEL: the same work as
+ * the KTIMER's DPC. Every 64th tick it looks whether the mode's period
+ * changed (a mode set does not turn the interrupt off and on). */
+static VOID VsyncExCallback(PEX_TIMER Timer, PVOID Context)
+{
+    MW_ADAPTER *a = (MW_ADAPTER *)Context;
+    UNREFERENCED_PARAMETER(Timer);
+
+    InterlockedIncrement(&a->VsyncInCb);
+    if (!a->Stopping && a->VsyncOn) {
+        VsyncDpc(NULL, a, NULL, NULL);
+        if ((a->Vsyncs & 63) == 0 && a->VsyncOn && !a->Stopping &&
+            MwVsyncRearm((mwv_u64)a->VsyncArmed, (mwv_u64)VsyncWant(a)))
+            (void)VsyncExArm(a);
+    }
+    InterlockedDecrement(&a->VsyncInCb);
+}
+
 /* Copies the current primary to the framebuffer when the vsync DPC asks,
  * and then lets the next vsync report that flip. It reads which primary
  * under CopyLock, so an allocation freed meanwhile is not touched. */
@@ -1247,6 +1310,18 @@ void MwCommandInit(MW_ADAPTER *A)
     KeInitializeDpc(&A->PollDpc, PollDpc, A);
     KeInitializeTimer(&A->VsyncTimer);
     KeInitializeDpc(&A->VsyncDpc, VsyncDpc, A);
+    /* Without it (it cannot fail but for memory) VsyncTimer 1 falls back
+     * to the KTIMER. */
+    A->VsyncEx = ExAllocateTimer(VsyncExCallback, A, EX_TIMER_HIGH_RESOLUTION);
+}
+
+/* RemoveDevice: after MwCommandStop; waits for a callback still running. */
+void MwCommandFree(MW_ADAPTER *A)
+{
+    if (A->VsyncEx != NULL) {
+        ExDeleteTimer(A->VsyncEx, TRUE, TRUE, NULL);
+        A->VsyncEx = NULL;
+    }
 }
 
 void MwCommandStop(MW_ADAPTER *A)
@@ -1256,6 +1331,7 @@ void MwCommandStop(MW_ADAPTER *A)
     KeCancelTimer(&A->PollTimer);
     InterlockedExchange(&A->VsyncOn, 0);
     KeCancelTimer(&A->VsyncTimer);
+    VsyncExCancel(A);
     KeFlushQueuedDpcs();
     InterlockedExchange(&A->PollArmed, 0);
     /* A preemption request still waiting is not answered: dxgkrnl is
@@ -1630,11 +1706,14 @@ NTSTATUS APIENTRY MwControlInterrupt(IN_CONST_HANDLE hAdapter, IN_CONST_DXGK_INT
         if (InterlockedExchange(&a->VsyncOn, 1) == 0) {
             LARGE_INTEGER due;
             a->LastVsyncTick = 0;       /* the gap while it was off is not a period */
-            due.QuadPart = -166667;           /* 16.7 ms, relative */
-            KeSetTimerEx(&a->VsyncTimer, due, 16, &a->VsyncDpc);
+            if (!VsyncExArm(a)) {
+                due.QuadPart = -166667;           /* 16.7 ms, relative */
+                KeSetTimerEx(&a->VsyncTimer, due, 16, &a->VsyncDpc);
+            }
         }
     } else if (InterlockedExchange(&a->VsyncOn, 0) != 0) {
         KeCancelTimer(&a->VsyncTimer);
+        VsyncExCancel(a);
     }
     MwLog(a, L"VsyncOn", (ULONG)a->VsyncOn);
     return STATUS_SUCCESS;
