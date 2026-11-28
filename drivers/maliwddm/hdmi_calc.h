@@ -56,10 +56,15 @@ typedef struct _MW_TIMING {
     mwh_u8  Fw;
 } MW_TIMING;
 
-/* The TMDS character rate the firmware will drive: 8 bits per component,
- * no scrambling (DwHdmiQpSetup writes SCRAMB_CONFIG0 0 and SCDC TMDS_CONFIG
- * 0), so 340 MHz is the ceiling (memory: project_rk3576_hdmi_340mhz_cap). */
-#define MW_HDMI_MAX_CLOCK_KHZ   340000u
+/* TMDS character rates, 8 bits per component. Up to 340 MHz without
+ * scrambling, as the firmware drives every mode. Above it, to 600 MHz, the
+ * sink must be told over SCDC to expect scrambling and the 1/40 TMDS bit
+ * clock ratio, and the controller scrambles (hdmi.c, HdmiScrambling): only
+ * for a sink whose HF-VSDB or HF-SCDB says SCDC_Present and gives a
+ * Max_TMDS_Character_Rate above 340 MHz (MwEdidLimitsHf). */
+#define MW_HDMI_MAX_CLOCK_KHZ   600000u
+#define MW_HDMI_TMDS14_MAX_KHZ  340000u
+#define MwHdmiScrambled(T)      ((T)->Clock > MW_HDMI_TMDS14_MAX_KHZ)
 #define MW_HDMI_MIN_CLOCK_KHZ   25000u
 #define MW_VP0_MAX_W            4096u
 #define MW_VP0_MAX_H            2304u
@@ -91,7 +96,7 @@ MW_HC_INLINE int MwTimingEqual(const MW_TIMING *A, const MW_TIMING *B)
  *
  * The AVI InfoFrame carries the VIC of the mode (LcdGraphicsOutputDxe sets
  * ConnectorState->DisplayModeVic from the EDID's mode list). Only modes at
- * or below 340 MHz, progressive. 93..95 are 4K at 24/25/30 Hz, which the
+ * or below 340 MHz, progressive, and 96 and 97 (594 MHz, scrambled). 93..95 are 4K at 24/25/30 Hz, which the
  * firmware sends as HDMI VICs 3..1 in the vendor InfoFrame instead. */
 typedef struct _MW_CEA_MODE {
     mwh_u8 Vic;
@@ -114,6 +119,9 @@ static const MW_CEA_MODE MwCeaModes[] = {
     { 93, 297000, 3840, 5116, 5204, 5500, 2160, 2168, 2178, 2250, 1 },
     { 94, 297000, 3840, 4896, 4984, 5280, 2160, 2168, 2178, 2250, 1 },
     { 95, 297000, 3840, 4016, 4104, 4400, 2160, 2168, 2178, 2250, 1 },
+    /* 4K at 50 and 60 Hz, 594 MHz: only with scrambling (MwEdidLimitsHf). */
+    { 96, 594000, 3840, 4896, 4984, 5280, 2160, 2168, 2178, 2250, 1 },
+    { 97, 594000, 3840, 4016, 4104, 4400, 2160, 2168, 2178, 2250, 1 },
     /* CTA-861-G table 1, the rest of what fits 340 MHz progressive. */
     { 41, 148500, 1280, 1720, 1760, 1980,  720,  725,  730,  750, 1 },
     { 47, 148500, 1280, 1390, 1430, 1650,  720,  725,  730,  750, 1 },
@@ -196,11 +204,27 @@ typedef struct _MW_SINK {
     mwh_u8 Scdc;            /* HF-SCDB, OUI C4-5D-D8, SCDC_Present */
     mwh_u8 BasicAudio;      /* CEA byte 3 bit 6 (DwHdmiQpAudioSinkHasBasicAudio) */
     mwh_u8 RgbQs;           /* video capability block, QS: selectable RGB range */
+    mwh_u32 HfMaxKhz;       /* HF-VSDB or HF-SCDB Max_TMDS_Character_Rate, kHz; 0 none */
 } MW_SINK;
+
+/* An HDMI Forum block, the HF-VSDB (vendor block, OUI C4-5D-D8) or the
+ * HF-SCDB (extended tag 0x79): both have the version in d[4], the
+ * Max_TMDS_Character_Rate in 5 MHz units in d[5] and SCDC_Present in d[6]
+ * bit 7. 0 when this data block is neither. */
+MW_HC_INLINE int MwHfBlock(const mwh_u8 *D, mwh_u32 Len)
+{
+    mwh_u32 tag = D[0] >> 5;
+    if (Len < 7)
+        return 0;
+    if (tag == 3 && D[1] == 0xD8 && D[2] == 0x5D && D[3] == 0xC4)
+        return 1;
+    return tag == 7 && D[1] == 0x79;
+}
 
 MW_HC_INLINE void MwEdidSink(const mwh_u8 *E, mwh_u32 Len, MW_SINK *S)
 {
     S->IsHdmi = S->Scdc = S->BasicAudio = S->RgbQs = 0;
+    S->HfMaxKhz = 0;
     for (mwh_u32 b = 1; (b + 1) * 128 <= Len && b <= 4; b++) {
         const mwh_u8 *x = E + b * 128;
         mwh_u32 end = x[2], off;
@@ -219,8 +243,12 @@ MW_HC_INLINE void MwEdidSink(const mwh_u8 *E, mwh_u32 Len, MW_SINK *S)
                 S->RgbQs = 1;                               /* VCDB: extended tag 0 */
             if (tag == 3 && len >= 4 && d[1] == 0x03 && d[2] == 0x0C && d[3] == 0x00)
                 S->IsHdmi = 1;
-            if (tag == 3 && len >= 7 && d[1] == 0xD8 && d[2] == 0x5D && d[3] == 0xC4 && (d[6] & 0x80))
-                S->Scdc = 1;
+            if (MwHfBlock(d, len)) {
+                if (d[6] & 0x80)
+                    S->Scdc = 1;
+                if ((mwh_u32)d[5] * 5000u > S->HfMaxKhz)
+                    S->HfMaxKhz = (mwh_u32)d[5] * 5000u;
+            }
             off += len;
         }
     }
@@ -230,7 +258,7 @@ MW_HC_INLINE void MwEdidSink(const mwh_u8 *E, mwh_u32 Len, MW_SINK *S)
 MW_HC_INLINE int MwHdptxCanDo(mwh_u32 BitRateKbps);
 
 /* Is this a timing hdmi.c may program: progressive, 8 bpc at or below
- * 340 MHz, within VP0's limits and the reserved framebuffer, a 4-pixel
+ * 600 MHz (above 340 only where MwEdidLimitsHf allows it), within VP0's limits and the reserved framebuffer, a 4-pixel
  * aligned width (Vop2ModeFixup would otherwise widen the active line past
  * the primary), and a TMDS rate the PHY can lock to. */
 MW_HC_INLINE int MwTimingUsable(const MW_TIMING *T, mwh_u32 MaxPixels)
@@ -252,8 +280,8 @@ MW_HC_INLINE int MwTimingUsable(const MW_TIMING *T, mwh_u32 MaxPixels)
  *
  * Everything the EDID says the monitor takes, at every refresh rate it
  * lists, that this driver can drive: progressive, 8 bpc RGB, TMDS clock no
- * higher than the sink allows and no higher than 340 MHz (no scrambling,
- * see MW_HDMI_MAX_CLOCK_KHZ), a width of whole 4-pixel groups, within VP0
+ * higher than the sink allows, and no higher than 340 MHz unless the sink
+ * takes scrambling and the caller allows it (MwEdidLimitsHf), a width of whole 4-pixel groups, within VP0
  * and the reserved framebuffer, and a rate the PHY's ROPLL can make
  * (MwTimingUsable). In this order, the first being the monitor's preferred
  * mode (what the firmware picks):
@@ -341,7 +369,8 @@ MW_HC_INLINE void MwHdmiDefaultFirst(MW_TIMING *M, mwh_u32 N)
 }
 
 /* What the EDID limits: the TMDS clock (the HDMI VSDB's Max_TMDS_Clock when
- * it gives one, never above 340 MHz) and the display range limits
+ * it gives one, never above 340 MHz; with Hf, the HDMI Forum block's rate
+ * up to 600 MHz for a sink with SCDC) and the display range limits
  * descriptor, if there is one. A sink with no VSDB gets no lower cap, as
  * in Linux (max_tmds_clock 0): the base block alone (a DDC read that got
  * no extension) must not lose the monitor's own 241 MHz mode. */
@@ -351,9 +380,11 @@ typedef struct _MW_EDID_LIMITS {
     mwh_u32 MinVHz, MaxVHz, MinHKhz, MaxHKhz, RangeMaxClock;   /* RangeMaxClock in kHz, 0 none */
 } MW_EDID_LIMITS;
 
-MW_HC_INLINE void MwEdidLimits(const mwh_u8 *E, mwh_u32 Len, MW_EDID_LIMITS *L)
+MW_HC_INLINE void MwEdidLimitsHf(const mwh_u8 *E, mwh_u32 Len, MW_EDID_LIMITS *L, int Hf)
 {
-    L->MaxClock = MW_HDMI_MAX_CLOCK_KHZ;
+    MW_SINK sink;
+
+    L->MaxClock = MW_HDMI_TMDS14_MAX_KHZ;
     L->HaveRange = 0;
     L->MinVHz = L->MaxVHz = L->MinHKhz = L->MaxHKhz = L->RangeMaxClock = 0;
     if (E == 0 || Len < 128)
@@ -391,6 +422,15 @@ MW_HC_INLINE void MwEdidLimits(const mwh_u8 *E, mwh_u32 Len, MW_EDID_LIMITS *L)
             off += len;
         }
     }
+    /* As Linux: the larger of the two, the HDMI Forum rate once above 340. */
+    MwEdidSink(E, Len, &sink);
+    if (Hf && sink.Scdc && sink.HfMaxKhz > MW_HDMI_TMDS14_MAX_KHZ)
+        L->MaxClock = sink.HfMaxKhz < MW_HDMI_MAX_CLOCK_KHZ ? sink.HfMaxKhz : MW_HDMI_MAX_CLOCK_KHZ;
+}
+
+MW_HC_INLINE void MwEdidLimits(const mwh_u8 *E, mwh_u32 Len, MW_EDID_LIMITS *L)
+{
+    MwEdidLimitsHf(E, Len, L, 0);
 }
 
 /* Inside the range limits descriptor, for a mode the EDID does not list as
@@ -603,14 +643,15 @@ MW_HC_INLINE void MwCeaAdd(MW_TIMING *Out, mwh_u32 *N, mwh_u32 Max, mwh_u32 Vic,
     }
 }
 
-MW_HC_INLINE mwh_u32 MwHdmiModes(const mwh_u8 *E, mwh_u32 Len, mwh_u32 MaxPixels,
-                                 MW_TIMING *Out, mwh_u32 Max)
+/* Hf: modes above 340 MHz for a sink that takes scrambling (HdmiScrambling). */
+MW_HC_INLINE mwh_u32 MwHdmiModesHf(const mwh_u8 *E, mwh_u32 Len, mwh_u32 MaxPixels,
+                                   MW_TIMING *Out, mwh_u32 Max, int Hf)
 {
     mwh_u32 n = 0;
     MW_TIMING t;
     MW_EDID_LIMITS lim;
 
-    MwEdidLimits(E, Len, &lim);
+    MwEdidLimitsHf(E, Len, &lim, Hf);
     if (Len >= 128) {
         /* 1. detailed timings */
         for (mwh_u32 b = 0; (b + 1) * 128 <= Len && b <= 4; b++) {
@@ -704,6 +745,12 @@ MW_HC_INLINE mwh_u32 MwHdmiModes(const mwh_u8 *E, mwh_u32 Len, mwh_u32 MaxPixels
     MwCeaAdd(Out, &n, Max, 16, MaxPixels, &lim, 0);
     MwCeaAdd(Out, &n, Max, 4, MaxPixels, &lim, 0);
     return n;
+}
+
+MW_HC_INLINE mwh_u32 MwHdmiModes(const mwh_u8 *E, mwh_u32 Len, mwh_u32 MaxPixels,
+                                 MW_TIMING *Out, mwh_u32 Max)
+{
+    return MwHdmiModesHf(E, Len, MaxPixels, Out, Max, 0);
 }
 
 /* ---- the HDPTX PHY's ROPLL (PhyRockchipSamsungHdptxHdmi.c) ---- */

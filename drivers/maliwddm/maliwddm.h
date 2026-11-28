@@ -188,6 +188,10 @@ typedef struct _MW_HDMI {
     BOOLEAN Expose;             /* the HDMI child is reported hot-plug aware */
     BOOLEAN Switch;             /* level 3: the driver sets modes */
     BOOLEAN Default60;          /* HdmiDefault60: the preferred mode is the largest size at 60 Hz */
+    BOOLEAN ScrambleSetting;    /* HdmiScrambling (default 1): modes above 340 MHz for a sink with SCDC */
+    volatile BOOLEAN Scrambling; /* the mode on the wire is scrambled (hdmi.c) */
+    ULONG ScrChecks, ScrLost, ScrRewrites;
+    ULONG64 NextScrCheck;
     ULONG HdmiChild;            /* the HDMI child's id: 0 on an HDMI boot, 1 next to the panel */
     ULONG Children;
 
@@ -980,6 +984,7 @@ void MwHdmiUnmap(MW_ADAPTER *A);
 BOOLEAN MwHdmiPowered(MW_ADAPTER *A);
 BOOLEAN MwHdmiReadHpd(MW_ADAPTER *A, ULONG *Raw);
 NTSTATUS MwHdmiReadEdid(MW_ADAPTER *A, UCHAR *Buf, ULONG Max, ULONG *Len);
+ULONG MwHdmiScrambleCheck(MW_ADAPTER *A);  /* hdmi.c: 0 fine, 1 lost, 2 lost and written again */
 NTSTATUS MwHdmiModeSet(MW_ADAPTER *A, const MW_TIMING *T, ULONG FbAddr, ULONG Pitch);
 NTSTATUS MwHdmiDsiRestore(MW_ADAPTER *A, ULONG FbAddr, ULONG Pitch);
 NTSTATUS MwHdmiPanelToVp2(MW_ADAPTER *A, ULONG FbAddr, ULONG Pitch, BOOLEAN FromVp0);

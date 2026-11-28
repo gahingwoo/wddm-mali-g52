@@ -22,7 +22,8 @@ Offered, in this order:
 
 1. Detailed timings: base block, CTA-861 and DisplayID extensions (type I
    and VII, where 120 and 144 Hz modes usually are).
-2. CTA-861 VICs: every progressive VIC up to 340 MHz, each 24, 30, 60 or
+2. CTA-861 VICs: every progressive VIC up to 340 MHz (594 MHz 4K with
+   scrambling), each 24, 30, 60 or
    120 Hz VIC also at its 1000/1001 rate.
 3. Standard timings: the VESA DMT timing of that size and rate, else CVT
    reduced blanking, only when the EDID has a range limits descriptor and
@@ -35,7 +36,7 @@ lit. Modes are dropped unless:
 
 | Limit | Value | Why |
 |---|---|---|
-| TMDS clock | at most 340 MHz | 8 bpc RGB, no HDMI 2.0 scrambling |
+| TMDS clock | at most 340 MHz; up to 600 MHz with HDMI 2.0 scrambling | above 340 only for a sink whose HF-VSDB or HF-SCDB has SCDC_Present and a higher Max_TMDS_Character_Rate, and `HdmiScrambling` on |
 | Sink TMDS clock | the HDMI VSDB's Max_TMDS_Clock, when given | older HDMI 1.x sinks |
 | PHY | `MwRopllFor` finds a ROPLL setting | table, else calculated |
 | Width | multiple of 4 | VOP2 widens other widths past the primary |
@@ -162,11 +163,15 @@ main SYSTEM hive loaded. Deleting the value returns to the default.
 
 ## Known issues
 
-- 2560x1440@100 (398 MHz) and anything above 340 MHz need HDMI 2.0
-  scrambling, not written: the sink's HF-VSDB, SCDC TMDS_Config over DDC
-  with Scrambler_Status read back, the controller's `SCRAMB_CONFIG0`, the
-  PHY's 1/40 clock pattern, and redoing it after every hot-plug. To port
-  from mainline dw-hdmi-qp once Ciocaltea's series lands (Linux 7.5).
+- Above 340 MHz (2560x1440@100 at 398 MHz, 4K at 594 MHz) the mode set
+  writes the sink's SCDC TMDS_Config (1/40 clock ratio and scrambling),
+  enables the controller's scrambler (`SCRAMB_CONFIG0`) and waits 100 ms,
+  as Linux dw-hdmi-qp does with bf01e0353815; the PHY's lanes are at 1/40
+  already. Every 2 s the poll thread reads SCDC Scrambler_Status and
+  writes TMDS_Config again if the sink lost it (`Scr_Lost`,
+  `Scr_Rewrites`), which covers a monitor power cycle or a replug the
+  debounce missed. Traces: `Mset_ScrScdc`, `Mset_ScrStatus`.
+  `HdmiScrambling` 0 keeps every mode at or below 340 MHz.
 - The VOP2 scaler registers come from mainline and the vendor kernel and
   are checked on the host only; the panel's list too.
 - A flip of a primary of the old size right after a commit is copied and

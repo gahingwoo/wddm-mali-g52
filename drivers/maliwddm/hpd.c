@@ -124,7 +124,13 @@ void MwHpdSettings(MW_ADAPTER *A)
      * Like HdmiExtend it needs the driver's own mode sets (level 3). */
     H->Dp.Setting = MwSetting(A, L"UsbcDp", 0) != 0;
     MwLog(A, L"Dp_Setting", H->Dp.Setting);
-    H->ResMaxPixels = MwSetting(A, L"HdmiMaxPixels", 2560 * 1600);
+    /* HdmiScrambling (default 1): TMDS above 340 MHz with scrambling, for a
+     * sink whose EDID says it takes it (hdmi_calc.h MwEdidLimitsHf). */
+    H->ScrambleSetting = MwSetting(A, L"HdmiScrambling", 1) != 0;
+    MwLog(A, L"Hpd_Scrambling", H->ScrambleSetting);
+    /* 3840x2160 by default: a 33 MB framebuffer, which MwHpdReserve
+     * lowers to 2560x1600 when that much contiguous memory is not there. */
+    H->ResMaxPixels = MwSetting(A, L"HdmiMaxPixels", 3840 * 2160);
     if (H->ResMaxPixels > MW_VP0_MAX_W * MW_VP0_MAX_H)
         H->ResMaxPixels = MW_VP0_MAX_W * MW_VP0_MAX_H;
     if (H->ResMaxPixels < 1280 * 720)
@@ -158,6 +164,13 @@ NTSTATUS MwHpdReserve(MW_ADAPTER *A)
     hi.QuadPart = 0xFFFFFFFFll;
     none.QuadPart = 0;
     H->ResVa = (PUCHAR)MmAllocateContiguousMemorySpecifyCache(n, lo, hi, none, MmWriteCombined);
+    if (H->ResVa == NULL && H->ResMaxPixels > 2560 * 1600) {
+        /* What it always was before 3840x2160 became the default. */
+        H->ResMaxPixels = 2560 * 1600;
+        n = ((SIZE_T)H->ResMaxPixels * 4 + PAGE_SIZE - 1) & ~((SIZE_T)PAGE_SIZE - 1);
+        H->ResVa = (PUCHAR)MmAllocateContiguousMemorySpecifyCache(n, lo, hi, none, MmWriteCombined);
+        MwLog(A, L"Hpd_ReserveFellBack", 1);
+    }
     if (H->ResVa != NULL) {
         H->ResPa = MmGetPhysicalAddress(H->ResVa);
         H->ResBytes = n;
@@ -255,7 +268,7 @@ static void UpdateEdid(MW_ADAPTER *A, const UCHAR *E, ULONG Len)
     same = !H->Dsi && (H->EdidSize == 0 ||
                        (H->HaveBootEdid && RtlCompareMemory(H->BootEdid, H->Edid, 128) == 128));
     if (H->Switch)
-        n = MwHdmiModes(H->Edid, H->EdidSize, H->ResMaxPixels, m, MW_HDMI_MODES);
+        n = MwHdmiModesHf(H->Edid, H->EdidSize, H->ResMaxPixels, m, MW_HDMI_MODES, H->ScrambleSetting);
     H->ModeCount = 0;
     if (same) {
         MW_TIMING fw = H->FwTiming, known;
@@ -526,6 +539,36 @@ static void DpPoll(MW_ADAPTER *A)
     IndicateOne(A, MW_DPX_DP, there, L"Dp_Indicate");
 }
 
+/* A scrambled mode: once every 2 s, does the sink still descramble (SCDC
+ * Scrambler_Status)? A sink that lost it (a power cycle of the monitor, a
+ * replug the HPD debounce did not see) is told again. Trace: Scr_Checks,
+ * Scr_Lost, Scr_Rewrites. */
+static void ScrambleCheck(MW_ADAPTER *A)
+{
+    MW_HDMI *H = &A->Hdmi;
+    ULONG64 now = KeQueryInterruptTime();
+    ULONG r;
+
+    if (now < H->NextScrCheck)
+        return;
+    H->NextScrCheck = now + 2000ull * 10000;
+    if (H->Busy)
+        return;
+    Lock(&H->HwLock);
+    r = H->Scrambling && !H->Busy ? MwHdmiScrambleCheck(A) : 0;
+    Unlock(&H->HwLock);
+    H->ScrChecks++;
+    if (r == 1) {
+        H->ScrLost++;
+        MwLog(A, L"Scr_Lost", H->ScrLost);
+    } else if (r == 2) {
+        H->ScrRewrites++;
+        MwLog(A, L"Scr_Rewrites", H->ScrRewrites);
+    }
+    if ((H->ScrChecks & 31) == 1)
+        MwLog(A, L"Scr_Checks", H->ScrChecks);
+}
+
 static VOID HpdThread(PVOID Context)
 {
     MW_ADAPTER *a = (MW_ADAPTER *)Context;
@@ -541,6 +584,8 @@ static VOID HpdThread(PVOID Context)
         if (H->Stop)
             break;
         Periodic(a);
+        if (H->Scrambling && H->Connected)
+            ScrambleCheck(a);
         if (H->Dp.On)
             DpPoll(a);
         hpd = MwHdmiReadHpd(a, &raw);

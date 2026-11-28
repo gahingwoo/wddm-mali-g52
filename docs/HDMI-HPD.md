@@ -197,7 +197,8 @@ hive loaded (`reg load`).
 
 - One VidPN source unless `HdmiExtend` is on: no extended desktop on a DSI
   boot. Clone and extend VidPNs are refused.
-- No HDMI 2.0 scrambling: nothing above 340 MHz TMDS. 4-pixel-unaligned
+- Above 340 MHz TMDS only with scrambling, for a sink with SCDC
+  ([DISPLAY-MODES.md](DISPLAY-MODES.md)). 4-pixel-unaligned
   widths (1366) and interlaced modes are not offered.
 - A monitor swap faster than the 1 s debounce is not seen as an unplug.
 - After a hand-back (driver disabled while HDMI is on the driver's
