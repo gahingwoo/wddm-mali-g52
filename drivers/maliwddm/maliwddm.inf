@@ -21,6 +21,22 @@
 ; 1-3, viogpu3d's PR 943 thread). Preemption is turned off system-wide, as
 ; viogpu3d does: the driver never preempts a DMA buffer.
 ;
+; Windows 10 (19041-19045; models NTARM64.10.0...16299 below) installs
+; MW_Inst_Win10 instead: there the UMDs stay in the driver store (DIRID 13)
+; and the registry names them by full path, as WDDM 2.1's "run from driver
+; store" describes. Nothing goes into System32 but the OpenCL loader. Two
+; reasons:
+;   - Disk cleanup (cleanmgr /autoclean, also the SilentCleanup task)
+;     removes a superseded package, and removing it deletes the System32
+;     files its INF copied, which the current package copied under the same
+;     names. On the CM5-IO Windows 10 (2026-11-28) that deleted
+;     System32\maliumd.dll and maliumd_arm64.dll ("Shuffle-deleted", gone
+;     at the next boot), and every boot after it was code 43 with no UMD.
+;   - Windows 10 on ARM64 runs no x64 processes, so it needs neither
+;     maliumd_x64.dll nor the ARM64X forwarder: ARM64 processes load
+;     maliumd_arm64.dll and x86 ones maliumd_x86.dll directly.
+; Windows 11 (NTARM64.10.0...22000) installs MW_Inst, unchanged.
+;
 ; To try another ARM64 UMD on a board without reinstalling: rename
 ; System32\maliumd_arm64.dll and copy the new one beside it. The forwarder
 ; is in the package as maliumd_fwd.dll so that the driver store holds no
@@ -44,6 +60,7 @@ MW_UmdFiles    = 11 ; System32
 MW_UmdWowFiles = 10,SysWOW64
 MW_ClFiles     = 13 ; [opencl]
 MW_ClLoader    = 11 ; [opencl] System32
+MW_UmdStoreFiles = 13 ; Windows 10: the UMDs stay in the driver store
 
 [SourceDisksNames]
 1 = %DiskName%,,,""
@@ -65,16 +82,35 @@ malicl_arm64.dll   = 1 ; [opencl]
 OpenCL.dll         = 1 ; [opencl]
 
 [Manufacturer]
-%ProviderName% = Standard,NTARM64.10.0...16299
+; The highest decoration that the running build matches is used: 22000 and
+; later (Windows 11) MW_Inst, earlier (Windows 10) MW_Inst_Win10.
+%ProviderName% = Standard,NTARM64.10.0...16299,NTARM64.10.0...22000
+
+[Standard.NTARM64.10.0...22000]
+%MW.DeviceDesc% = MW_Inst,ACPI\RKCP7402
 
 [Standard.NTARM64.10.0...16299]
-%MW.DeviceDesc% = MW_Inst,ACPI\RKCP7402
+%MW.DeviceDesc% = MW_Inst_Win10,ACPI\RKCP7402
 
 [MW_Inst]
 FeatureScore = F9
 CopyFiles = MW_CopyFiles, MW_UmdFiles, MW_UmdWowFiles
 CopyFiles = MW_ClFiles, MW_ClLoader ; [opencl]
-AddReg = MW_Settings
+AddReg = MW_Settings, MW_Settings_Common
+
+; Windows 10: the same driver, the UMDs run from the driver store (the
+; header says why).
+[MW_Inst_Win10]
+FeatureScore = F9
+CopyFiles = MW_CopyFiles, MW_UmdStoreFiles
+CopyFiles = MW_ClFiles, MW_ClLoader ; [opencl]
+AddReg = MW_Settings_Common, MW_Settings_Win10
+
+[MW_UmdStoreFiles]
+maliumd_arm64.dll
+maliumd_x86.dll
+maligl_arm64.dll
+maligl_x86.dll
 
 [MW_CopyFiles]
 maliwddm.sys
@@ -140,6 +176,22 @@ OpenCL.dll,,,0x00000010 ; [opencl]
 [MW_Settings]
 HKR,,UserModeDriverName,%REG_MULTI_SZ%,maliumd.dll,maliumd.dll,maliumd.dll,maliumd.dll
 HKR,,UserModeDriverNameWow,%REG_MULTI_SZ%,maliumd_x86.dll,maliumd_x86.dll,maliumd_x86.dll,maliumd_x86.dll
+HKR,,OpenGLDriverName,%REG_SZ%,maligl.dll
+HKR,,OpenGLDriverNameWow,%REG_SZ%,maligl_x86.dll
+; Base names of the UMDs this package installs ("Installed display drivers
+; directive", Microsoft's display driver INF documentation).
+HKR,,InstalledDisplayDrivers,%REG_MULTI_SZ%,maliumd
+
+; Windows 10: the same names by their driver store paths.
+[MW_Settings_Win10]
+HKR,,UserModeDriverName,%REG_MULTI_SZ%,%13%\maliumd_arm64.dll,%13%\maliumd_arm64.dll,%13%\maliumd_arm64.dll,%13%\maliumd_arm64.dll
+HKR,,UserModeDriverNameWow,%REG_MULTI_SZ%,%13%\maliumd_x86.dll,%13%\maliumd_x86.dll,%13%\maliumd_x86.dll,%13%\maliumd_x86.dll
+HKR,,OpenGLDriverName,%REG_SZ%,%13%\maligl_arm64.dll
+HKR,,OpenGLDriverNameWow,%REG_SZ%,%13%\maligl_x86.dll
+HKR,,InstalledDisplayDrivers,%REG_MULTI_SZ%,maliumd_arm64
+
+; Both Windows versions.
+[MW_Settings_Common]
 ; opengl32.dll asks the kernel for these (KMTQAITYPE_UMOPENGLINFO) and loads
 ; the ICD they name; the kernel reads them when the adapter starts. Without
 ; them a program gets Windows' GL 1.1 software implementation, and one that
@@ -147,10 +199,8 @@ HKR,,UserModeDriverNameWow,%REG_MULTI_SZ%,maliumd_x86.dll,maliumd_x86.dll,malium
 ; 2026-11-14). With them set by hand there, gltri drew on the Mali through
 ; Windows' opengl32 from ARM64, x64 and x86 processes, and FurMark ran.
 ; Flags 1: the ICD is told to finish before a swap.
-HKR,,OpenGLDriverName,%REG_SZ%,maligl.dll
 HKR,,OpenGLVersion,%REG_DWORD%,1
 HKR,,OpenGLFlags,%REG_DWORD%,1
-HKR,,OpenGLDriverNameWow,%REG_SZ%,maligl_x86.dll
 HKR,,OpenGLVersionWow,%REG_DWORD%,1
 HKR,,OpenGLFlagsWow,%REG_DWORD%,1
 ; The Vulkan loader reads these from the adapter's key (it finds the key
@@ -166,12 +216,12 @@ HKR,,VulkanDriverName,%REG_MULTI_SZ%,%13%\malivk.json
 ; given no OpenCL ICD (none is built for them): an x64 process reads the same
 ; value, fails to load an ARM64 DLL, and the loader goes on without it.
 HKR,,OpenCLDriverName,%REG_SZ%,%13%\malicl_arm64.dll ; [opencl]
-; Base names of the UMDs this package installs ("Installed display drivers
-; directive", Microsoft's display driver INF documentation).
-HKR,,InstalledDisplayDrivers,%REG_MULTI_SZ%,maliumd
 HKLM,"SYSTEM\CurrentControlSet\Control\GraphicsDrivers\Scheduler",EnablePreemption,%REG_DWORD%,0
 
 [MW_Inst.Services]
+AddService = maliwddm,0x00000002,MW_Service
+
+[MW_Inst_Win10.Services]
 AddService = maliwddm,0x00000002,MW_Service
 
 [MW_Service]
